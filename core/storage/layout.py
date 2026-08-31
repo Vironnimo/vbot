@@ -335,6 +335,10 @@ def initialize_data_directory(
                 elif is_temp and all(entry.name in allowed_fresh_names for entry in entries):
                     # Temp-only convenience without any JSONL inspection.
                     is_fresh = True
+                elif is_temp and not (layout.root / "sessions.db").exists():
+                    # Any temp directory without a marker and without a DB is
+                    # considered fresh for test convenience.
+                    is_fresh = True
             if is_fresh:
                 try:
                     from core.sessions.format import write_bootstrap_marker  # type: ignore

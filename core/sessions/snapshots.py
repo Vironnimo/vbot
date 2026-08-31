@@ -439,19 +439,124 @@ def restore_snapshot(
         _release_lock(lock)
 
 
+RECOVERY_INCIDENT_FILE = "session-recovery.json"
+
+
+def _incident_path(data_dir: Path) -> Path:
+    return Path(data_dir) / RECOVERY_INCIDENT_FILE
+
+
+def write_recovery_incident(
+    data_dir: Path,
+    *,
+    cause: str,
+    quarantine_path: Path | str | None,
+    restored_snapshot_id: str,
+    restored_snapshot_time: str,
+    verification: str = "ok",
+) -> None:
+    """Persist a recovery incident outside the restored DB."""
+    payload = {
+        "cause": cause,
+        "quarantine": str(quarantine_path) if quarantine_path else None,
+        "restored_snapshot_id": restored_snapshot_id,
+        "restored_snapshot_time": restored_snapshot_time,
+        "verification": verification,
+        "recovered_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    path = _incident_path(data_dir)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        if os.name != "nt":
+            fd = os.open(tmp, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        os.replace(tmp, path)
+        if os.name != "nt":
+            _fsync_dir(path.parent)
+    except OSError:
+        with suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
+def read_recovery_incident(data_dir: Path) -> dict | None:  # type: ignore[no-any-return]
+    path = _incident_path(data_dir)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except Exception:
+        return None
+
+
+def acknowledge_recovery_incident(data_dir: Path) -> bool:
+    path = _incident_path(data_dir)
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
 def auto_restore_if_needed(data_dir: Path, database_path: Path) -> bool:
     """If canonical DB is missing/corrupt and a verified snapshot exists, restore newest.
 
     Returns True if a restore was performed and the DB is now usable.
+    Persists a recovery incident on success.
     """
     # Check if DB is already usable.
     try:
-        with sqlite3.connect(f"file:{database_path.as_posix()}?mode=ro", uri=True) as conn:
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(f"file:{database_path.as_posix()}?mode=ro", uri=True)
             conn.execute("SELECT 1 FROM store_meta LIMIT 1")
-            # Quick integrity check.
             if str(conn.execute("PRAGMA quick_check").fetchone()[0]) == "ok":
                 return False
+        finally:
+            if conn is not None:
+                with suppress(Exception):
+                    conn.close()
     except Exception:
         pass
     snapshots = list_snapshots(data_dir)
-    return any(restore_snapshot(data_dir, database_path, snap) for snap in snapshots)  # noqa: SIM110
+    for snap in snapshots:
+        # Capture quarantine state before restore for incident.
+        from core.sessions.store import QUARANTINE_DIRECTORY_NAME
+
+        try:
+            q_root = Path(data_dir) / QUARANTINE_DIRECTORY_NAME
+            before = set(q_root.iterdir()) if q_root.exists() else set()
+        except OSError:
+            before = set()
+        if restore_snapshot(data_dir, database_path, snap):
+            try:
+                manifest = json.loads((snap / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8"))
+                snap_id = str(manifest.get("snapshot_id") or snap.name)
+                snap_time = str(manifest.get("created_at") or "")
+            except Exception:
+                snap_id = snap.name
+                snap_time = ""
+            # Find newest quarantine created by this restore.
+            quarantine_path = None
+            try:
+                q_root = Path(data_dir) / QUARANTINE_DIRECTORY_NAME
+                after = set(q_root.iterdir()) if q_root.exists() else set()
+                new = after - before
+                if new:
+                    quarantine_path = sorted(new, key=lambda p: p.name)[-1]
+                elif after:
+                    quarantine_path = sorted(after, key=lambda p: p.name)[-1]
+            except OSError:
+                pass
+            write_recovery_incident(
+                data_dir,
+                cause="auto-restore after corruption or missing DB",
+                quarantine_path=quarantine_path,
+                restored_snapshot_id=snap_id,
+                restored_snapshot_time=snap_time,
+            )
+            return True
+    return False
