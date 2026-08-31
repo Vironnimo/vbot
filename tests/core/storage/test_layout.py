@@ -89,10 +89,9 @@ def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> No
 
     assert (data_dir / ".env").read_bytes() == environment_bytes
     assert (data_dir / "settings.json").read_bytes() == settings_bytes
-    # A fresh pytest temp directory with no marker is auto-initialized
-    # even when it already contains .env/settings.json, so the first call
-    # creates the current-format marker.
-    assert first.created_files == (data_dir / "session-store.json",)
+    # A pre-created root is not a genuinely new root, so initialization does
+    # not manufacture Session-store authorization for it.
+    assert first.created_files == ()
     assert second.created_directories == ()
     assert second.created_files == ()
 

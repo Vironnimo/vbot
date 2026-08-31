@@ -186,6 +186,7 @@ _PACKAGE_NAME = "vbot"
 _UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
+_SESSION_SNAPSHOT_INTERVAL_S = 300.0
 
 
 def _detect_vbot_version() -> str:
@@ -463,6 +464,7 @@ class Runtime:
         self._projects: ProjectStore | None = None
         self._snapshot_periodic_thread: threading.Thread | None = None
         self._snapshot_stop_event: threading.Event | None = None
+        self._last_session_snapshot_revisions: tuple[int, int] | None = None
         self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
@@ -499,9 +501,6 @@ class Runtime:
 
         self._started_at = datetime.now(UTC)
         self._startup_id = str(uuid4())
-        self.logger = self._log_manager.get_logger("core")
-        self.logger.info("Runtime startup initiated")
-
         resources_path = self._resolve_resources_path()
 
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
@@ -509,6 +508,8 @@ class Runtime:
         if storage is None:
             raise RuntimeError("Storage service not available")
         self._storage.ensure_directories()
+        self.logger = self._log_manager.get_logger("core")
+        self.logger.info("Runtime startup initiated")
         self._storage.temporary_files.start()
         settings = self._storage.load_settings()
         attachment_max_size_bytes = self._positive_size_setting(
@@ -583,7 +584,7 @@ class Runtime:
                 self._storage.data_dir,
                 store_path=self._storage.layout.sessions_db_path,
             )
-            self._take_startup_backup()
+            self._take_startup_snapshot()
             self._agents = AgentStore(
                 self._storage.data_dir,
                 template_dir=resources_path / "workspace-templates",
@@ -930,7 +931,6 @@ class Runtime:
         self._log_shutdown()
         self._started = False
         self._stop_periodic_snapshots()
-        self._snapshot_on_shutdown()
 
         if self._extensions is not None:
             self._extensions.fire_shutdown_blocking()
@@ -951,6 +951,7 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             self._storage.temporary_files.stop()
+        self._snapshot_on_shutdown()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -962,7 +963,6 @@ class Runtime:
         self._log_shutdown()
         self._started = False
         self._stop_periodic_snapshots()
-        self._snapshot_on_shutdown()
 
         if self._extensions is not None:
             await self._extensions.fire_shutdown()
@@ -991,6 +991,7 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
+        self._snapshot_on_shutdown()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -1220,89 +1221,72 @@ class Runtime:
         value = config.get(name, {})
         return value if isinstance(value, dict) else {}
 
-    def _take_startup_backup(self) -> None:
-        """Best-effort rotating Session backup at server start; never blocks.
-
-        The snapshot runs on a worker thread with a bounded budget so a large
-        Session database or a slow disk delays startup by at most a few
-        seconds and a backup failure never blocks the server from starting.
-        """
-        from core.sessions.backup import BACKUP_KEEP_COUNT, create_startup_snapshot
-
-        assert self._storage is not None, "Storage service not available"
-        assert self._chat_sessions is not None, "Session service not available"
-        assert self.logger is not None, "Core logger not available"
-
-        snapshot = self._chat_sessions.backup_snapshot
-        database_path = self._storage.layout.sessions_db_path
-        data_dir = self._storage.data_dir
-        logger = self.logger
-        result: list[str] = []
-
-        def run() -> None:
-            try:
-                outcome = create_startup_snapshot(snapshot, database_path, data_dir)
-                # Also create a verified snapshot for auto-restore (best-effort).
-                try:
-                    from core.sessions.format import read_session_store_marker
-                    from core.sessions.snapshots import create_snapshot as create_verified
-
-                    marker = read_session_store_marker(data_dir)
-                    db_id = str(marker["database_id"]) if marker else None
-                    create_verified(data_dir, database_path, snapshot, database_id=db_id)
-                except Exception:
-                    pass
-            except Exception as error:  # noqa: BLE001 - backup must never block startup
-                logger.error(
-                    "Session backup snapshot failed unexpectedly: %s: %s",
-                    type(error).__name__,
-                    error,
-                )
-                return
-            if outcome is not None:
-                result.append(str(outcome))
-
-        worker = threading.Thread(target=run, name="session-backup", daemon=True)
-        worker.start()
-        worker.join(timeout=3.0)
-        if worker.is_alive():
-            assert self.logger is not None
-            self.logger.info(
-                "Session backup snapshot still running in the background; "
-                "keeping the last %s startup snapshots",
-                BACKUP_KEEP_COUNT,
-            )
-        elif result:
-            assert self.logger is not None
-            self.logger.info("Session backup snapshot: %s", result[0])
-        # Start periodic verified snapshots (best-effort, coalesced).
+    def _take_startup_snapshot(self) -> None:
+        """Capture one verified startup snapshot and then start cadence ownership."""
+        outcome = self._capture_session_snapshot(reason="startup")
+        if outcome is not None and self.logger is not None:
+            self.logger.info("Session snapshot created: %s", outcome)
         self._start_periodic_snapshots()
 
+    def _capture_session_snapshot(self, *, reason: str) -> Path | None:
+        if self._storage is None or self._chat_sessions is None:
+            return None
+        from core.sessions.format import read_session_store_marker
+        from core.sessions.snapshots import create_snapshot
+
+        data_dir = self._storage.data_dir
+        database_path = self._storage.layout.sessions_db_path
+        marker = read_session_store_marker(data_dir)
+        database_id = None if marker is None else str(marker["database_id"])
+        before = self._chat_sessions.snapshot_revisions()
+        outcome = create_snapshot(
+            data_dir,
+            database_path,
+            self._chat_sessions.backup_snapshot,
+            database_id=database_id,
+            reason=reason,
+        )
+        if outcome is None:
+            if self.logger is not None:
+                self.logger.warning("Session snapshot was not created: reason=%s", reason)
+            return None
+        after = self._chat_sessions.snapshot_revisions()
+        if before == after:
+            self._last_session_snapshot_revisions = after
+        else:
+            self._last_session_snapshot_revisions = None
+        return outcome
+
     def _start_periodic_snapshots(self) -> None:
-        """Periodically snapshot the canonical DB while dirty (5 min cadence)."""
+        """Own one revision-aware periodic snapshot worker for the Runtime lifecycle."""
         if self._storage is None or self._chat_sessions is None:
             return
         if self._snapshot_periodic_thread is not None:
             return
         self._snapshot_stop_event = threading.Event()
-        data_dir = self._storage.data_dir
-        database_path = self._storage.layout.sessions_db_path
-        snapshot_fn = self._chat_sessions.backup_snapshot
 
         def loop() -> None:
             assert self._snapshot_stop_event is not None
-            while not self._snapshot_stop_event.wait(300.0):
+            while not self._snapshot_stop_event.wait(_SESSION_SNAPSHOT_INTERVAL_S):
+                if self._chat_sessions is None:
+                    return
+                if (
+                    self._last_session_snapshot_revisions is not None
+                    and self._chat_sessions.snapshot_revisions()
+                    == self._last_session_snapshot_revisions
+                ):
+                    continue
                 try:
-                    from core.sessions.format import read_session_store_marker
-                    from core.sessions.snapshots import create_snapshot
+                    self._capture_session_snapshot(reason="periodic")
+                except Exception as error:
+                    if self.logger is not None:
+                        self.logger.error(
+                            "Session periodic snapshot failed: %s: %s",
+                            type(error).__name__,
+                            error,
+                        )
 
-                    marker = read_session_store_marker(data_dir)
-                    db_id = str(marker["database_id"]) if marker else None
-                    create_snapshot(data_dir, database_path, snapshot_fn, database_id=db_id)
-                except Exception:
-                    pass
-
-        thread = threading.Thread(target=loop, name="session-snapshot-periodic", daemon=True)
+        thread = threading.Thread(target=loop, name="session-snapshot-periodic")
         thread.start()
         self._snapshot_periodic_thread = thread
 
@@ -1310,28 +1294,28 @@ class Runtime:
         if self._snapshot_stop_event is not None:
             self._snapshot_stop_event.set()
         if self._snapshot_periodic_thread is not None:
-            with suppress(Exception):
-                self._snapshot_periodic_thread.join(timeout=1.0)
+            self._snapshot_periodic_thread.join()
         self._snapshot_periodic_thread = None
         self._snapshot_stop_event = None
 
     def _snapshot_on_shutdown(self) -> None:
-        """Best-effort snapshot on graceful shutdown if dirty."""
+        """Capture changed canonical revisions after producers have stopped."""
         if self._storage is None or self._chat_sessions is None:
             return
         try:
-            from core.sessions.format import read_session_store_marker
-            from core.sessions.snapshots import create_snapshot
-
-            data_dir = self._storage.data_dir
-            database_path = self._storage.layout.sessions_db_path
-            marker = read_session_store_marker(data_dir)
-            db_id = str(marker["database_id"]) if marker else None
-            create_snapshot(
-                data_dir, database_path, self._chat_sessions.backup_snapshot, database_id=db_id
-            )
-        except Exception:
-            pass
+            revisions = self._chat_sessions.snapshot_revisions()
+            if revisions == self._last_session_snapshot_revisions:
+                return
+            outcome = self._capture_session_snapshot(reason="shutdown")
+            if outcome is not None and self.logger is not None:
+                self.logger.info("Session shutdown snapshot created: %s", outcome)
+        except Exception as error:
+            if self.logger is not None:
+                self.logger.error(
+                    "Session shutdown snapshot failed: %s: %s",
+                    type(error).__name__,
+                    error,
+                )
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:

@@ -126,6 +126,11 @@ def _validate_marker(raw: str, path: Path) -> dict[str, Any]:
         raise SessionStorageFormatError(
             f"Session store marker has an invalid schema version: {path}"
         )
+    if schema_version > SCHEMA_VERSION:
+        raise SessionStorageFormatError(
+            f"Session store marker is from a newer vBot: schema version {schema_version} "
+            f"at {path} exceeds supported {SCHEMA_VERSION}"
+        )
     return payload
 
 

@@ -6,16 +6,12 @@ from __future__ import annotations
 import builtins
 import json
 import logging
-import os
-import queue
-import random
+import re
 import sqlite3
-import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from contextlib import closing, contextmanager, suppress
+from contextlib import contextmanager, suppress
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,13 +19,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions.errors import (
+    FtsHealth,
+    QuarantineResult,
     SessionStorageFormatError,
     SessionStoreCorruptError,
+    SessionStoreSchemaMismatchError,
     SessionStoreUnavailableError,
 )
 from core.sessions.format import (
     MARKER_STATE_BOOTSTRAP,
-    MARKER_STATE_READY,
     publish_ready_marker,
     read_session_store_marker,
     validate_session_store_paths,
@@ -37,18 +35,16 @@ from core.sessions.format import (
 from core.sessions.schema import (
     APPLICATION_ID,
     DATABASE_ID_META_KEY,
-    FTS_HIGH_WATER_KEY,
-    FTS_PROGRESS_KEY,
+    FTS_COMPLETED_HIGH_WATER_KEY,
+    FTS_DEGRADED_REASON_KEY,
+    FTS_GENERATION_KEY,
     FTS_SQL,
     FTS_SQL_FALLBACK,
     FTS_STALE_KEY,
     FTS_STORAGE_VERSION,
     FTS_STORAGE_VERSION_KEY,
-    JOURNAL_MODE_DELETE,
-    JOURNAL_MODE_WAL,
-    MINIMUM_SQLITE_VERSION,
+    FTS_TARGET_HIGH_WATER_KEY,
     SCHEMA_CONVERSION_FLOOR,
-    SCHEMA_SQL,
     SCHEMA_VERSION,
     reconcile_schema,
 )
@@ -56,9 +52,7 @@ from core.sessions.sqlite_runtime import (
     ACTIVITY_WRITE_PATIENCE_S,
     TRANSCRIPT_WRITE_PATIENCE_S,
     WRITE_PATIENCE_S,
-    _on_disk_journal_mode,
-    apply_wal_with_fallback,
-    connect_tracked,
+    SQLiteRuntime,
 )
 
 if TYPE_CHECKING:
@@ -68,219 +62,304 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger("vbot.sessions")
 
 JsonObject = dict[str, Any]
-READ_CONNECTION_LIMIT = 8
+
+
+_FTS_BATCH_SIZE = 100
+_FTS_REBUILD_THROTTLE_S = 0.01
+_FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
+
+
+def _fts_meta(connection: sqlite3.Connection, key: str) -> str | None:
+    row = connection.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _set_fts_meta(connection: sqlite3.Connection, key: str, value: str) -> None:
+    connection.execute("INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (key, value))
+
+
+def _search_projection(message_json: str) -> str:
+    """Build the Recall-owned text projection without indexing raw JSON."""
+    message = _message_from_json(message_json)
+    from core.recall.canonical import (
+        SESSION_RECALL_CONVERSATION_ROLES,
+        is_recall_artifact_message,
+        message_search_text,
+    )
+    from core.sessions.sessions import is_skill_context_note
+
+    if (
+        message.role not in SESSION_RECALL_CONVERSATION_ROLES
+        or is_recall_artifact_message(message)
+        or is_skill_context_note(message)
+    ):
+        return ""
+    return message_search_text(message)
+
+
+def _fts_table_exists(connection: sqlite3.Connection) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'"
+        ).fetchone()
+        is not None
+    )
+
+
+def _fts_content_exists(connection: sqlite3.Connection) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_search'"
+        ).fetchone()
+        is not None
+    )
+
+
+def _drop_fts_triggers(connection: sqlite3.Connection) -> None:
+    for trigger in ("messages_fts_insert", "messages_fts_delete", "messages_fts_update"):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+
+
+def _fts_coverage_ok(connection: sqlite3.Connection) -> tuple[bool, str | None]:
+    if not _fts_table_exists(connection) or not _fts_content_exists(connection):
+        return False, "FTS tables are missing"
+    missing_projection = connection.execute(
+        """
+        SELECT 1
+        FROM messages AS m
+        LEFT JOIN message_search AS ms ON ms.message_key = m.message_key
+        WHERE ms.message_key IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if missing_projection is not None:
+        return False, "canonical Messages are missing FTS projections"
+    missing_index = connection.execute(
+        """
+        SELECT 1
+        FROM message_search AS ms
+        LEFT JOIN messages_fts AS f ON f.rowid = ms.message_key
+        WHERE ms.search_text <> '' AND f.rowid IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if missing_index is not None:
+        return False, "FTS rows are missing searchable projections"
+    unexpected_index = connection.execute(
+        """
+        SELECT 1
+        FROM messages_fts AS f
+        LEFT JOIN message_search AS ms ON ms.message_key = f.rowid
+        WHERE ms.message_key IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if unexpected_index is not None:
+        return False, "FTS contains rows outside the searchable projection"
+    return True, None
+
+
+def _fts_health_from_connection(connection: sqlite3.Connection) -> FtsHealth:
+    if not _fts_table_exists(connection) or not _fts_content_exists(connection):
+        return FtsHealth(state="unavailable", reason="FTS tables are missing")
+    storage_version = _fts_meta(connection, FTS_STORAGE_VERSION_KEY)
+    generation = _fts_meta(connection, FTS_GENERATION_KEY)
+    target = _fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY)
+    completed = _fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY)
+    stale = _fts_meta(connection, FTS_STALE_KEY)
+    reason = _fts_meta(connection, FTS_DEGRADED_REASON_KEY)
+    if storage_version != str(FTS_STORAGE_VERSION):
+        return FtsHealth(
+            state="degraded",
+            reason="FTS storage version is missing or unsupported",
+            generation=generation,
+        )
+    if not generation:
+        return FtsHealth(state="degraded", reason="FTS rebuild generation is missing")
+    try:
+        target_value = int(target) if target is not None else -1
+        completed_value = int(completed) if completed is not None else -1
+    except (TypeError, ValueError):
+        return FtsHealth(
+            state="degraded",
+            reason="FTS high-water metadata is malformed",
+            generation=generation,
+        )
+    if target_value < 0 or completed_value < 0 or completed_value > target_value:
+        return FtsHealth(
+            state="degraded",
+            reason="FTS high-water metadata is invalid",
+            generation=generation,
+            target_high_water=target_value,
+            completed_high_water=completed_value,
+        )
+    coverage_ok, coverage_reason = _fts_coverage_ok(connection)
+    if stale is not None or completed_value != target_value or not coverage_ok:
+        rebuilding = stale == "rebuilding" or completed_value != target_value
+        return FtsHealth(
+            state="rebuilding" if rebuilding else "degraded",
+            reason=reason or stale or coverage_reason or "FTS coverage is incomplete",
+            generation=generation,
+            target_high_water=target_value,
+            completed_high_water=completed_value,
+        )
+    return FtsHealth(
+        state="healthy",
+        generation=generation,
+        target_high_water=target_value,
+        completed_high_water=completed_value,
+    )
+
+
+def _fts_rebuild_boundary(stage: str, high_water: int) -> None:
+    if _FTS_REBUILD_HOOK is not None:
+        _FTS_REBUILD_HOOK(stage, high_water)
 
 
 def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
-    """Best-effort creation of the external-content FTS index.
-
-    Trigram may be unavailable in some SQLite builds; fallback to plain FTS5.
-    If both fail, mark the FTS stale so canonical scan remains correct and
-    canonical writes are never blocked by derived-index health.
-    """
+    """Create or repair the derived FTS projection without weakening canonical storage."""
     try:
-        exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-        ).fetchone()
-        if exists is not None:
-            # Ensure storage version is recorded.
-            row = connection.execute(
-                "SELECT value FROM store_meta WHERE key=?", (FTS_STORAGE_VERSION_KEY,)
-            ).fetchone()
-            if row is None or str(row[0]) != str(FTS_STORAGE_VERSION):
-                with suppress(sqlite3.Error):
-                    connection.execute(
-                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                        (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
-                    )
+        health = _fts_health_from_connection(connection)
+        if health.available:
             return
-        # Try trigram first, then plain FTS5.
+        if _fts_table_exists(connection):
+            _drop_fts_triggers(connection)
+            connection.execute("DROP TABLE IF EXISTS messages_fts")
         try:
             connection.executescript(FTS_SQL)
-            with suppress(sqlite3.Error):
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
-                )
-                connection.execute("DELETE FROM store_meta WHERE key=?", (FTS_STALE_KEY,))
-                # Backfill existing messages into message_search if needed.
-                _backfill_message_search(connection)
         except sqlite3.Error:
-            try:
-                connection.executescript(FTS_SQL_FALLBACK)
-                with suppress(sqlite3.Error):
-                    connection.execute(
-                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                        (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
-                    )
-                    connection.execute("DELETE FROM store_meta WHERE key=?", (FTS_STALE_KEY,))
-                    _backfill_message_search(connection)
-            except sqlite3.Error as exc:
-                with suppress(Exception):
-                    connection.execute(
-                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                        (FTS_STALE_KEY, "1"),
-                    )
-                _LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
-    except Exception as exc:  # pragma: no cover - diagnostic only
-        _LOGGER.debug("FTS ensure failed: %s", exc)
+            connection.execute("DROP TABLE IF EXISTS messages_fts")
+            connection.executescript(FTS_SQL_FALLBACK)
+        _set_fts_meta(connection, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
+        _set_fts_meta(connection, FTS_GENERATION_KEY, uuid.uuid4().hex)
+        _set_fts_meta(connection, FTS_STALE_KEY, "rebuilding")
+        _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
+        connection.commit()
+        _backfill_message_search(connection)
+        _finish_fts_rebuild(connection)
+    except sqlite3.Error as exc:
+        _set_fts_meta(connection, FTS_STALE_KEY, "1")
+        _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, f"FTS unavailable: {exc}")
+        connection.commit()
+        _LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
 
 
 def _backfill_message_search(connection: sqlite3.Connection) -> None:
-    """Chunked, resumable backfill of message_search from messages.
-
-    Inserts missing rows in batches of 100, advancing progress/high_water
-    in the same transaction as each batch, throttling between chunks to cap
-    write duty cycle. Resumable via store_meta progress keys.
-    """
+    """Populate missing canonical projections in committed bounded batches."""
+    generation = _fts_meta(connection, FTS_GENERATION_KEY) or uuid.uuid4().hex
+    _set_fts_meta(connection, FTS_GENERATION_KEY, generation)
+    previous = _fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY)
     try:
-        # Ensure progress keys exist.
-        with suppress(sqlite3.Error):
-            if (
-                connection.execute(
-                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
-                ).fetchone()
-                is None
-            ):
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_HIGH_WATER_KEY, "0"),
-                )
-            if (
-                connection.execute(
-                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_PROGRESS_KEY,)
-                ).fetchone()
-                is None
-            ):
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_PROGRESS_KEY, "0"),
-                )
-        # Fast path: nothing to do.
-        total = int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
-        if total == 0:
-            return
-        search_total = int(connection.execute("SELECT COUNT(*) FROM message_search").fetchone()[0])
-        if search_total == total:
-            # Already complete — ensure high_water/progress reflect max.
-            max_key = connection.execute(
-                "SELECT IFNULL(MAX(message_key),0) FROM message_search"
-            ).fetchone()[0]
-            with suppress(sqlite3.Error):
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_HIGH_WATER_KEY, str(max_key)),
-                )
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_PROGRESS_KEY, str(max_key)),
-                )
-            return
-        # Initialize high_water to current max before backfill if still 0.
-        row = connection.execute(
-            "SELECT value FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
-        ).fetchone()
-        high_water = int(row[0]) if row and str(row[0]).isdigit() else 0
-        if high_water == 0:
-            max_existing = int(
-                connection.execute(
-                    "SELECT IFNULL(MAX(message_key),0) FROM message_search"
-                ).fetchone()[0]
-            )
-            # Use max_existing as base; new inserts will be > high_water.
-            high_water = max_existing
-            with suppress(sqlite3.Error):
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_HIGH_WATER_KEY, str(high_water)),
-                )
-        # Chunked insert of missing (session_key, seq) pairs.
-        while True:
-            # Claim next batch in a transaction.
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-            except sqlite3.Error:
-                break
-            try:
-                rows = connection.execute(
-                    """
-                    SELECT session_key, seq, message_json FROM messages
-                    WHERE (session_key, seq) NOT IN (SELECT session_key, seq FROM message_search)
-                    LIMIT 100
-                    """
-                ).fetchall()
-                if not rows:
-                    connection.execute("COMMIT")
-                    break
-                for session_key, seq, message_json in rows:
-                    connection.execute(
-                        "INSERT INTO message_search(session_key, seq, search_text) VALUES (?, ?, ?)",
-                        (session_key, seq, message_json),
-                    )
-                new_progress = int(
-                    connection.execute(
-                        "SELECT IFNULL(MAX(message_key),0) FROM message_search"
-                    ).fetchone()[0]
-                )
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_PROGRESS_KEY, str(new_progress)),
-                )
-                connection.execute("COMMIT")
-            except sqlite3.Error as exc:
-                with suppress(sqlite3.Error):
-                    if connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                _LOGGER.warning("FTS backfill chunk failed: %s", exc)
-                break
-            # Throttle to cap duty cycle (~10ms per chunk).
-            time.sleep(0.01)
-        # Finalize high_water/progress when complete.
+        completed = max(0, int(previous)) if previous is not None else 0
+    except ValueError:
+        completed = 0
+    target = int(
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+    )
+    _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
+    _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(completed))
+    connection.commit()
+    while True:
+        target = max(
+            target,
+            int(
+                connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[
+                    0
+                ]
+            ),
+        )
+        _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
+        connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
         try:
-            remaining = int(
+            rows = connection.execute(
+                """
+                SELECT m.message_key, m.message_json
+                FROM messages AS m
+                LEFT JOIN message_search AS ms ON ms.message_key = m.message_key
+                WHERE ms.message_key IS NULL AND m.message_key <= ?
+                ORDER BY m.message_key
+                LIMIT ?
+                """,
+                (target, _FTS_BATCH_SIZE),
+            ).fetchall()
+            if not rows:
+                connection.execute("COMMIT")
+                break
+            batch_max = int(rows[-1][0])
+            _fts_rebuild_boundary("before_batch_commit", batch_max)
+            for row in rows:
                 connection.execute(
-                    "SELECT COUNT(*) FROM messages WHERE (session_key, seq) NOT IN (SELECT session_key, seq FROM message_search)"
-                ).fetchone()[0]
+                    "INSERT INTO message_search (message_key, search_text) VALUES (?, ?)",
+                    (int(row[0]), _search_projection(str(row[1]))),
+                )
+            _set_fts_meta(
+                connection,
+                FTS_COMPLETED_HIGH_WATER_KEY,
+                str(max(completed, batch_max)),
             )
-            if remaining == 0:
-                final = int(
-                    connection.execute(
-                        "SELECT IFNULL(MAX(message_key),0) FROM message_search"
-                    ).fetchone()[0]
-                )
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_HIGH_WATER_KEY, str(final)),
-                )
-                connection.execute(
-                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-                    (FTS_PROGRESS_KEY, str(final)),
-                )
-        except sqlite3.Error:
-            pass
-    except sqlite3.Error as exc:
-        _LOGGER.warning("FTS backfill failed: %s", exc)
+            connection.execute("COMMIT")
+            completed = max(completed, batch_max)
+            _fts_rebuild_boundary("after_batch_commit", batch_max)
+        except BaseException:
+            with suppress(BaseException):
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+            raise
+        time.sleep(_FTS_REBUILD_THROTTLE_S)
 
 
-def _detach_fts(connection: sqlite3.Connection) -> None:
-    """Atomically detach the derived FTS index after corruption.
+def _finish_fts_rebuild(connection: sqlite3.Connection) -> None:
+    """Rebuild FTS rows and clear stale only after explicit coverage checks."""
+    connection.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+    coverage_ok, coverage_reason = _fts_coverage_ok(connection)
+    if not coverage_ok:
+        _set_fts_meta(
+            connection,
+            FTS_DEGRADED_REASON_KEY,
+            coverage_reason or "FTS coverage is incomplete",
+        )
+        connection.commit()
+        return
+    final_target = int(
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+    )
+    _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(final_target))
+    _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(final_target))
+    _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "")
+    connection.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
+    _fts_rebuild_boundary("after_final_clear", final_target)
+    connection.commit()
 
-    Removes sync triggers and the virtual table, sets the stale breadcrumb,
-    and leaves canonical tables untouched. A later open will rebuild.
-    """
-    try:
-        with suppress(sqlite3.Error):
-            connection.execute(
-                "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (FTS_STALE_KEY, "1")
-            )
-        for trigger in ("messages_fts_insert", "messages_fts_delete", "messages_fts_update"):
-            with suppress(sqlite3.Error):
-                connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-        with suppress(sqlite3.Error):
-            connection.execute("DROP TABLE IF EXISTS messages_fts")
-        _LOGGER.warning("Session FTS detached after corruption; canonical writes continue")
-    except Exception as exc:  # pragma: no cover
-        _LOGGER.debug("FTS detach failed: %s", exc)
+
+def _detach_fts(connection: sqlite3.Connection, reason: str = "FTS write failed") -> None:
+    """Mark FTS degraded and remove only its virtual table/triggers."""
+    with suppress(sqlite3.Error):
+        _set_fts_meta(connection, FTS_STALE_KEY, "1")
+        _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, reason)
+        _drop_fts_triggers(connection)
+        connection.execute("DROP TABLE IF EXISTS messages_fts")
+    _LOGGER.warning("Session FTS detached after corruption; canonical writes continue")
+
+
+def _insert_message_search(connection: sqlite3.Connection, message_key: int, payload: str) -> None:
+    """Maintain the derived projection inside the canonical write transaction."""
+    if not _fts_content_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
+        return
+    connection.execute(
+        "INSERT INTO message_search (message_key, search_text) VALUES (?, ?)",
+        (message_key, _search_projection(payload)),
+    )
+
+
+def _mark_fts_write(connection: sqlite3.Connection) -> None:
+    if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
+        return
+    target = int(
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+    )
+    _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
+    _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(target))
 
 
 # Application-level patience is budgeted in seconds; SQLite's own busy handler is
@@ -292,560 +371,112 @@ class SessionStore:
     """One canonical SQLite database with explicit read/write snapshots."""
 
     def __init__(self, path: Path, *, _offline: bool = False) -> None:
-        self.path = path
-        self._lifetime_lock = threading.RLock()
-        self._writer_lock = threading.RLock()
-        self._closed = False
-        self._write_count = 0
-        self._read_conns_lock = threading.Lock()
-        self._read_conns_closed = False
-        self._read_open_failed_at = 0.0
-        self._read_permits = threading.BoundedSemaphore(READ_CONNECTION_LIMIT)
-        self._read_permit_exhausted = 0
-        # Offline paths bypass the current-format marker state machine. Only
-        # the standalone converter under scripts/converters/ uses this path;
-        # application Runtime always calls the marker-aware open.
-        if _offline or _is_offline_path(path):
-            self._writer = self._open_offline(path)
-        else:
-            self._writer = self._open(path)
-        # Determine WAL vs DELETE for the reader pool policy.
+        self.path = Path(path)
+        self._runtime = SQLiteRuntime(self.path)
+        self._offline = _offline
         try:
-            mode = str(self._writer.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-        except sqlite3.Error:
-            mode = JOURNAL_MODE_DELETE
-        self._wal_active = mode == JOURNAL_MODE_WAL
-        self._readers: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(
-            maxsize=READ_CONNECTION_LIMIT
-        )
-        # Pre-warm is lazy: do not open readers eagerly if we are in DELETE
-        # mode (readers would just contend). For WAL, opportunistically open
-        # a couple of pooled connections; failures degrade gracefully.
-        if self._wal_active:
-            for _ in range(min(2, READ_CONNECTION_LIMIT)):
-                try:
-                    conn = self._open_reader(path)
-                except Exception:
-                    break
-                # Acquire a permit for each pooled connection's lifetime.
-                if not self._read_permits.acquire(blocking=False):
-                    conn.close()
-                    break
-                try:
-                    self._readers.put_nowait(conn)
-                except queue.Full:
-                    conn.close()
-                    self._read_permits.release()
-                    break
-        # If eager open failed, remaining readers will be opened lazily on demand.
+            self._writer = self._open_runtime(offline=_offline)
+        except BaseException:
+            self._runtime.close()
+            raise
 
-    @classmethod
-    def _open(cls, path: Path) -> sqlite3.Connection:
-        """Open through the current-format marker state machine.
+    def _open_runtime(self, *, offline: bool) -> sqlite3.Connection:
+        if offline:
+            database_id = uuid.uuid4().hex if not self.path.exists() else None
+            writer = self._runtime.open_writer(
+                create=not self.path.exists(), database_id=database_id
+            )
+            self._reconcile_open_database(writer, expected_database_id=None)
+            return writer
 
-        The marker is the only authorization to create or open the database.
-        Every refused state raises without mutating the database or marker.
-
-        For test convenience, a completely fresh ``tmp_path`` (empty or
-        containing only a ``logs`` directory created by ``LogManager``) is
-        auto-initialized. A real production data directory without a marker
-        contains ``agents``, ``projects``, or legacy session files and is
-        not considered fresh, so the hard error is preserved.
-        """
-        validate_session_store_paths(path.parent, path)
-        marker = read_session_store_marker(path.parent)
+        validate_session_store_paths(self.path.parent, self.path)
+        marker = read_session_store_marker(self.path.parent)
         if marker is None:
-            # Fresh-root convenience without any legacy JSONL inspection.
-            # Only an empty directory or an empty temp directory with allowed
-            # names is auto-initialized. Everything else is a hard error.
-            data_dir = path.parent
-            should_try_init = False
-            if not data_dir.exists():
-                should_try_init = True
-            else:
-                try:
-                    entries = list(data_dir.iterdir())
-                except OSError:
-                    entries = None
-                if entries is not None:
-                    if not entries:
-                        should_try_init = True
-                    else:
-                        try:
-                            temp_base = Path(tempfile.gettempdir()).resolve()
-                            is_temp = data_dir.resolve().is_relative_to(temp_base)
-                        except Exception:
-                            is_temp = "pytest" in str(data_dir) or "Temp" in str(data_dir)
-                        if (
-                            is_temp
-                            and all(
-                                entry.name
-                                in {
-                                    "logs",
-                                    "skills",
-                                    "settings.json",
-                                    ".env",
-                                    ".env.example",
-                                    "extensions",
-                                    "prompts",
-                                    "recall",
-                                    "statistics",
-                                    "bootstrap",
-                                    "calendar",
-                                    "channels",
-                                    "cron",
-                                    "processes",
-                                    "terminals",
-                                    "oauth",
-                                    "artifacts",
-                                    "archive",
-                                    "agents",
-                                    "projects",
-                                    "models",
-                                    "debug",
-                                }
-                                for entry in entries
-                            )
-                            or is_temp
-                            and not (data_dir / "sessions.db").exists()
-                        ):
-                            should_try_init = True
-            if should_try_init:
-                from core.storage.layout import initialize_data_directory
-
-                with suppress(Exception):
-                    initialize_data_directory(data_dir)
-                marker = read_session_store_marker(data_dir)
-            # Test-only fallback: a DB file created directly (e.g. schema tests)
-            # contains a valid store_meta/database_id. Derive a ready marker so
-            # the test reaches the intended schema/version check instead of a
-            # generic missing-marker error. Production code never relies on this.
-            if marker is None and path.exists() and path.is_file():
-                with suppress(Exception):
-                    ro_path = f"file:{path.as_posix()}?mode=ro"
-                    with sqlite3.connect(ro_path, uri=True) as _ro_conn:
-                        _ro_conn.row_factory = sqlite3.Row  # type: ignore[assignment]
-                        try:
-                            _db_id_row = _ro_conn.execute(
-                                "SELECT value FROM store_meta WHERE key='database_id'"
-                            ).fetchone()
-                        except sqlite3.Error:
-                            _db_id_row = None
-                        if (
-                            _db_id_row is not None
-                            and isinstance(_db_id_row[0], str)
-                            and len(_db_id_row[0]) == 32
-                            and all(c in "0123456789abcdef" for c in _db_id_row[0])
-                        ):
-                            _db_id = str(_db_id_row[0])
-                            try:
-                                _version = int(
-                                    _ro_conn.execute("PRAGMA user_version").fetchone()[0]
-                                )
-                            except Exception:
-                                _version = SCHEMA_VERSION
-                            _marker_version = _version if 1 <= _version <= 100 else SCHEMA_VERSION
-                            from core.sessions.format import (
-                                _write_marker,
-                                session_store_marker_path,
-                            )
-
-                            _payload = {
-                                "format_version": 1,
-                                "state": MARKER_STATE_READY,
-                                "database_id": _db_id,
-                                "schema_version": _marker_version,
-                            }
-                            with suppress(Exception):
-                                _write_marker(session_store_marker_path(data_dir), _payload)
-                                marker = read_session_store_marker(data_dir)
-                        else:
-                            # No valid identity in store_meta (test helper
-                            # created schema without inserting a row). Generate
-                            # one and create a matching marker so the test
-                            # reaches the intended schema/version check.
-                            _db_id = uuid.uuid4().hex
-                            try:
-                                with sqlite3.connect(path, isolation_level=None) as _w_conn:
-                                    _w_conn.execute(
-                                        "INSERT OR IGNORE INTO store_meta (key, value) VALUES (?, ?)",
-                                        ("database_id", _db_id),
-                                    )
-                                    _w_conn.commit()
-                            except Exception:
-                                _db_id = None
-                            if _db_id is not None:
-                                try:
-                                    _version = int(
-                                        _ro_conn.execute("PRAGMA user_version").fetchone()[0]
-                                    )
-                                except Exception:
-                                    _version = SCHEMA_VERSION
-                                _marker_version = (
-                                    _version if 1 <= _version <= 100 else SCHEMA_VERSION
-                                )
-                                from core.sessions.format import (
-                                    _write_marker,
-                                    session_store_marker_path,
-                                )
-
-                                _payload = {
-                                    "format_version": 1,
-                                    "state": MARKER_STATE_READY,
-                                    "database_id": _db_id,
-                                    "schema_version": _marker_version,
-                                }
-                                with suppress(Exception):
-                                    _write_marker(session_store_marker_path(data_dir), _payload)
-                                    marker = read_session_store_marker(data_dir)
-            if marker is None:
-                raise SessionStorageFormatError(
-                    f"the data directory does not authorize a current-format Session store: "
-                    f"{path.parent}; initialize the data directory or install a converted "
-                    f"Session database first"
-                )
+            raise SessionStorageFormatError(
+                f"the data directory does not authorize a current-format Session store: "
+                f"{self.path.parent}; initialize the data directory or install a converted "
+                "Session database first"
+            )
+        if int(marker["schema_version"]) != SCHEMA_VERSION:
+            raise SessionStoreSchemaMismatchError(
+                "Session store marker schema does not match the Runtime: "
+                f"schema version {marker['schema_version']}"
+            )
         database_id = str(marker["database_id"])
         if marker["state"] == MARKER_STATE_BOOTSTRAP:
-            connection = cls._open_authorized(path, database_id, create_if_missing=True)
-            publish_ready_marker(path.parent, database_id)
-            return connection
-        if not path.exists():
-            # Ready without a database is snapshot-recovery territory.
-            # Try to auto-restore the newest verified snapshot before failing.
-            try:
-                from core.sessions.snapshots import auto_restore_if_needed
+            writer = self._runtime.open_writer(create=True, database_id=database_id)
+            self._reconcile_open_database(writer, expected_database_id=database_id)
+            publish_ready_marker(self.path.parent, database_id)
+            return writer
+        if not self.path.exists():
+            from core.sessions.snapshots import auto_restore_if_needed
 
-                if auto_restore_if_needed(path.parent, path):
-                    return cls._open_authorized(path, database_id, create_if_missing=False)
-            except Exception:
-                pass
-            raise SessionStoreUnavailableError(
-                f"the Session database is missing although the store is ready: {path}"
-            )
-        try:
-            return cls._open_authorized(path, database_id, create_if_missing=False)
-        except SessionStoreCorruptError as exc:
-            # Canonical corruption — try auto-restore from snapshot.
-            try:
-                from core.sessions.snapshots import auto_restore_if_needed
-
-                if auto_restore_if_needed(path.parent, path):
-                    return cls._open_authorized(path, database_id, create_if_missing=False)
-            except Exception:
-                pass
-            raise exc
-
-    @classmethod
-    def _open_authorized(
-        cls, path: Path, database_id: str, *, create_if_missing: bool
-    ) -> sqlite3.Connection:
-        if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
-            actual = ".".join(map(str, sqlite3.sqlite_version_info))
-            required = ".".join(map(str, MINIMUM_SQLITE_VERSION))
-            raise SessionStoreCorruptError(
-                f"SQLite {actual} is unsupported; Sessions require SQLite {required} or newer"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existed = path.exists()
-        try:
-            # Tracked open so raw file reads elsewhere cannot cancel POSIX locks.
-            connection = connect_tracked(path, isolation_level=None, check_same_thread=False)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            # Journal selection with Hermes filesystem and WAL-reset safeguards.
-            # Probe the current on-disk mode before attempting a switch; the
-            # fallback handles raising/silent refusal and ambiguous EIO retries.
-            previous_mode = _on_disk_journal_mode(connection)
-            mode = apply_wal_with_fallback(connection, db_label="sessions.db")
-            if mode not in {JOURNAL_MODE_WAL, JOURNAL_MODE_DELETE}:
-                raise SessionStoreCorruptError(f"cannot set Session journal mode: {mode}")
-            if previous_mode is not None and mode != previous_mode:
-                _LOGGER.info(
-                    "Session database journal mode changed from %s to %s at %s (SQLite %s)",
-                    previous_mode,
-                    mode,
-                    path,
-                    sqlite3.sqlite_version,
-                )
-            # apply_wal_with_fallback already bounded the WAL and installed the
-            # macOS barrier; ensure remaining durability pragmas are verified.
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA wal_autocheckpoint = 1000")
-            connection.execute("PRAGMA journal_size_limit = 67108864")
-            if create_if_missing and not existed:
-                # Schema and database identity commit atomically: a crash
-                # leaves either no database or one the marker identity fits.
-                # The identity is inlined because executescript cannot bind
-                # parameters; it is strictly validated 32-char hex by the
-                # marker parser before it reaches this point.
-                connection.executescript(
-                    "BEGIN IMMEDIATE;\n"
-                    + SCHEMA_SQL
-                    + f"\nPRAGMA application_id = {APPLICATION_ID};"
-                    + f"\nPRAGMA user_version = {SCHEMA_VERSION};"
-                    + "\nINSERT INTO store_meta (key, value) VALUES ('"
-                    + DATABASE_ID_META_KEY
-                    + f"', '{database_id}');\nCOMMIT;"
-                )
-                _ensure_fts_schema(connection)
-                cls._verify_connection(connection, path)
-            else:
-                cls._verify_schema_guard(connection, path)
-                cls._verify_database_identity(connection, path, database_id)
-                cls._verify_integrity(connection, path)
-                applied = reconcile_schema(connection)
-                if applied:
-                    _LOGGER.info(
-                        "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
-                    )
-                _ensure_fts_schema(connection)
-            return connection
-        except sqlite3.OperationalError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            if create_if_missing and not existed:
-                for created in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
-                    with suppress(OSError):
-                        created.unlink()
-            msg = str(exc).lower()
-            if any(
-                k in msg
-                for k in (
-                    "locked",
-                    "busy",
-                    "readonly",
-                    "read-only",
-                    "disk full",
-                    "disk i/o",
-                    "unable to open",
-                    "cannot open",
-                    "permission",
-                    "full",
-                    "no such file",
-                )
-            ):
+            if not auto_restore_if_needed(self.path.parent, self.path):
                 raise SessionStoreUnavailableError(
-                    f"Session database cannot be opened safely: {path}"
-                ) from exc
-            raise SessionStoreCorruptError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-        except sqlite3.DatabaseError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            if create_if_missing and not existed:
-                # A failed first creation under a bootstrap marker left no
-                # verified database; remove the partial artifacts so the next
-                # start can retry the authorized fresh creation.
-                for created in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
-                    with suppress(OSError):
-                        created.unlink()
-            raise SessionStoreCorruptError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-        except OSError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            raise SessionStoreUnavailableError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-
-    @classmethod
-    def _open_offline(cls, path: Path) -> sqlite3.Connection:
-        """Create/open a database without the current-format marker.
-
-        Only the standalone converter and its tests use this path. It creates
-        the declared schema plus a fresh ``store_meta`` identity when the file
-        does not exist, and verifies the existing file otherwise, without
-        consulting any marker.
-        """
-        if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
-            actual = ".".join(map(str, sqlite3.sqlite_version_info))
-            required = ".".join(map(str, MINIMUM_SQLITE_VERSION))
-            raise SessionStoreCorruptError(
-                f"SQLite {actual} is unsupported; Sessions require SQLite {required} or newer"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existed = path.exists()
-        try:
-            connection = connect_tracked(path, isolation_level=None, check_same_thread=False)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            mode = apply_wal_with_fallback(connection, db_label="sessions.db")
-            if mode not in {JOURNAL_MODE_WAL, JOURNAL_MODE_DELETE}:
-                raise SessionStoreCorruptError(f"cannot set Session journal mode: {mode}")
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA wal_autocheckpoint = 1000")
-            connection.execute("PRAGMA journal_size_limit = 67108864")
-            if not existed:
-                fresh_id = uuid.uuid4().hex
-                connection.executescript(
-                    "BEGIN IMMEDIATE;\n"
-                    + SCHEMA_SQL
-                    + f"\nPRAGMA application_id = {APPLICATION_ID};"
-                    + f"\nPRAGMA user_version = {SCHEMA_VERSION};"
-                    + "\nINSERT INTO store_meta (key, value) VALUES ('"
-                    + DATABASE_ID_META_KEY
-                    + f"', '{fresh_id}');\nCOMMIT;"
+                    f"the Session database is missing although the store is ready: {self.path}"
                 )
-                _ensure_fts_schema(connection)
-                cls._verify_connection(connection, path)
-            else:
-                cls._verify_schema_guard(connection, path)
-                # Offline files may not have a store_meta row yet (old staging
-                # databases). Create one if missing, otherwise verify it exists.
-                present = connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_meta'"
-                ).fetchone()
-                if present is None:
-                    raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
-                row = connection.execute(
-                    "SELECT value FROM store_meta WHERE key=?", (DATABASE_ID_META_KEY,)
-                ).fetchone()
-                if row is None:
-                    # Old offline DB without identity: assign one now so later
-                    # canonical open can verify it.
-                    fresh_id = uuid.uuid4().hex
-                    connection.execute(
-                        "INSERT INTO store_meta (key, value) VALUES (?, ?)",
-                        (DATABASE_ID_META_KEY, fresh_id),
-                    )
-                cls._verify_integrity(connection, path)
-                applied = reconcile_schema(connection)
-                if applied:
-                    _LOGGER.info(
-                        "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
-                    )
-                _ensure_fts_schema(connection)
-            return connection
-        except sqlite3.OperationalError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            msg = str(exc).lower()
-            if any(
-                k in msg
-                for k in (
-                    "locked",
-                    "busy",
-                    "readonly",
-                    "read-only",
-                    "disk full",
-                    "disk i/o",
-                    "unable to open",
-                    "cannot open",
-                    "permission",
-                    "full",
-                )
-            ):
-                raise SessionStoreUnavailableError(
-                    f"Session database cannot be opened safely: {path}"
-                ) from exc
-            raise SessionStoreCorruptError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-        except sqlite3.DatabaseError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            raise SessionStoreCorruptError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-        except OSError as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            raise SessionStoreUnavailableError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
-
-    @classmethod
-    def _open_reader(cls, path: Path) -> sqlite3.Connection:
         try:
-            connection = connect_tracked(
-                f"file:{path}?mode=ro",
-                tracking_path=path,
-                uri=True,
-                isolation_level=None,
-                check_same_thread=False,
+            writer = self._runtime.open_writer(expected_database_id=database_id)
+            self._reconcile_open_database(writer, expected_database_id=database_id)
+            return writer
+        except (SessionStoreCorruptError, sqlite3.DatabaseError, OSError):
+            self._runtime.close()
+            from core.sessions.snapshots import auto_restore_if_needed
+
+            if auto_restore_if_needed(self.path.parent, self.path):
+                self._runtime = SQLiteRuntime(self.path)
+                writer = self._runtime.open_writer(expected_database_id=database_id)
+                self._reconcile_open_database(writer, expected_database_id=database_id)
+                return writer
+            raise
+
+    def _reconcile_open_database(
+        self, connection: sqlite3.Connection, *, expected_database_id: str | None
+    ) -> None:
+        if expected_database_id is not None:
+            self._verify_database_identity(connection, self.path, expected_database_id)
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version != 0 and version < SCHEMA_CONVERSION_FLOOR:
+            raise SessionStoreSchemaMismatchError(
+                f"Session database schema {version} requires the offline converter"
             )
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            connection.execute("PRAGMA query_only = ON")
-            cls._verify_identity(connection, path)
-            return connection
-        except (sqlite3.DatabaseError, OSError) as exc:
-            with suppress(UnboundLocalError):
-                connection.close()
-            raise SessionStoreCorruptError(
-                f"Session database cannot be opened safely: {path}"
-            ) from exc
+        applied = reconcile_schema(connection)
+        if applied:
+            _LOGGER.info(
+                "Reconciled Session database schema at %s: %s",
+                self.path,
+                "; ".join(applied),
+            )
+        _ensure_fts_schema(connection)
+        self._verify_connection(connection, self.path)
 
     @staticmethod
     def _verify_connection(connection: sqlite3.Connection, path: Path) -> None:
-        SessionStore._verify_identity(connection, path)
         SessionStore._verify_integrity(connection, path)
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version != SCHEMA_VERSION:
+            raise SessionStoreSchemaMismatchError(
+                f"unsupported Session database version {version} at {path}"
+            )
+        application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
+        if application_id != APPLICATION_ID:
+            raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
 
     @staticmethod
     def _verify_integrity(connection: sqlite3.Connection, path: Path) -> None:
-        # quick_check covers header/b-tree structure in milliseconds without
-        # a full index walk; the exhaustive offline check remains in
-        # scripts/converters/session_db.py for suspected deep corruption.
         integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
         if str(integrity) != "ok":
             raise SessionStoreCorruptError(
                 f"Session database integrity check failed at {path}: {integrity}"
             )
-        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchone()
-        if foreign_keys is not None:
-            raise SessionStoreCorruptError(f"Session database foreign-key check failed at {path}")
-
-    @staticmethod
-    def _verify_schema_guard(connection: sqlite3.Connection, path: Path) -> None:
-        """Version header guard: additive generations reconcile, the rest fails closed."""
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > SCHEMA_VERSION:
-            raise SessionStoreCorruptError(
-                f"Session database is from a newer vBot: schema version {version} "
-                f"at {path} exceeds supported {SCHEMA_VERSION}"
-            )
-        if version < SCHEMA_CONVERSION_FLOOR:
-            raise SessionStoreCorruptError(
-                f"Session database requires offline conversion: schema version {version} "
-                f"at {path} is below the conversion floor {SCHEMA_CONVERSION_FLOOR}"
-            )
-        application_id = connection.execute("PRAGMA application_id").fetchone()[0]
-        if application_id != APPLICATION_ID:
-            raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
-
-    @staticmethod
-    def _verify_identity(connection: sqlite3.Connection, path: Path) -> None:
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version != SCHEMA_VERSION:
-            raise SessionStoreCorruptError(
-                f"unsupported Session database version {version} at {path}"
-            )
-        application_id = connection.execute("PRAGMA application_id").fetchone()[0]
-        if application_id != APPLICATION_ID:
-            raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
+        foreign_key_error = connection.execute("PRAGMA foreign_key_check").fetchone()
+        if foreign_key_error is not None:
+            raise SessionStoreCorruptError(f"Session foreign-key check failed at {path}")
 
     @staticmethod
     def _verify_database_identity(
         connection: sqlite3.Connection, path: Path, database_id: str
     ) -> None:
-        """Require the marker's database identity inside the database itself.
-
-        The check runs before schema reconciliation so a database from a
-        foreign or pre-marker store is never mutated on the way out.
-        """
-        present = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'"
-        ).fetchone()
-        if present is None:
-            raise SessionStoreCorruptError(
-                f"Session database identity is unknown at {path}; the store marker "
-                f"does not belong to this database"
-            )
         row = connection.execute(
             "SELECT value FROM store_meta WHERE key = ?", (DATABASE_ID_META_KEY,)
         ).fetchone()
@@ -868,319 +499,95 @@ class SessionStore:
             session_id=row["session_id"],
         )
 
+    # The Session domain uses this compact facade; connection ownership and
+    # synchronization live exclusively in SQLiteRuntime.
     @contextmanager
     def _transaction(self, *, write: bool, patience_s: float = WRITE_PATIENCE_S):
         if write:
-            with self._single_write_transaction() as connection:
-                yield connection
-        else:
-            with self._read_transaction() as connection:
-                yield connection
-
-    @contextmanager
-    def _single_write_transaction(self):
-        """Single-attempt writer transaction without retry. Retry is handled by _execute_write."""
-        self._writer_lock.acquire()
-        acquired = True
-        try:
-            with self._lifetime_lock:
-                if self._closed:
-                    raise ChatSessionError("Session store is closed")
-            try:
-                self._writer.execute("BEGIN IMMEDIATE")
-                yield self._writer
-                self._writer.execute("COMMIT")
-            except BaseException:
-                with suppress(sqlite3.Error):
-                    if self._writer.in_transaction:
-                        self._writer.execute("ROLLBACK")
-                raise
-            # Success — count only committed writes.
-            self._write_count += 1
-            if self._write_count % 50 == 0:
-                self._try_wal_checkpoint()
-            if self._write_count % 1000 == 0:
-                self._try_fts_merge()
-        finally:
-            if acquired:
-                self._writer_lock.release()
+            raise RuntimeError("SessionStore write transactions use _execute_write")
+        with self._runtime.read_ctx() as connection:
+            yield connection
 
     def _execute_write(
         self, func: Callable[[sqlite3.Connection], Any], patience_s: float = WRITE_PATIENCE_S
     ) -> Any:
-        """Execute func(connection) inside a retried writer transaction.
-
-        Retries only BUSY/LOCKED and the transient engine condition, plus one
-        FTS-detach retry. Uses time-based jittered budgets (20s/60s/0.5s) and
-        releases the Python lock during sleep.
-        """
-        deadline = time.monotonic() + patience_s
-        fts_detached = False
-
-        def _is_retryable(exc: BaseException) -> bool:
-            msg = str(exc).lower()
-            if isinstance(exc, sqlite3.OperationalError) and ("locked" in msg or "busy" in msg):
-                return True
-            if "no more rows available" in msg:
-                return True
-            return bool(isinstance(exc, sqlite3.DatabaseError) and "no more rows available" in msg)
-
-        def _is_fts_error(exc: BaseException) -> bool:
-            msg = str(exc).lower()
-            return "fts" in msg or "messages_fts" in msg or "message_search" in msg
-
-        def _sleep_before_retry() -> bool:
-            now = time.monotonic()
-            if now >= deadline:
-                return False
-            elapsed = now - (deadline - patience_s)
-            jitter = random.uniform(0.25, 1.0) if elapsed >= 2.0 else random.uniform(0.02, 0.15)
-            time.sleep(min(jitter, max(deadline - now, 0.001)))
-            return True
-
+        fts_retried = False
         while True:
             try:
-                with self._single_write_transaction() as connection:
-                    return func(connection)
-            except BaseException as exc:
-                if isinstance(exc, sqlite3.Error) and _is_retryable(exc):
-                    if _sleep_before_retry():
-                        continue
-                    raise SessionStoreUnavailableError(
-                        f"Session database write busy for {patience_s:.0f}s: {self.path}"
-                    ) from exc
-                if isinstance(exc, sqlite3.Error) and _is_fts_error(exc) and not fts_detached:
-                    with suppress(Exception), self._writer_lock:
-                        _detach_fts(self._writer)
-                    fts_detached = True
+                return self._runtime.execute_write(func, patience_s=patience_s)
+            except sqlite3.Error as exc:
+                message = str(exc).lower()
+                if not fts_retried and any(
+                    marker in message for marker in ("fts", "messages_fts", "message_search")
+                ):
+                    fts_retried = True
+                    with suppress(Exception):
+                        self._runtime.execute_write(_detach_fts, patience_s=patience_s)
                     continue
-                if isinstance(exc, sqlite3.Error):
-                    raise SessionStoreUnavailableError(
-                        f"Session database write failed: {self.path}"
-                    ) from exc
-                raise
+                raise SessionStoreUnavailableError(
+                    f"Session database write failed: {self.path}"
+                ) from exc
 
     def _try_wal_checkpoint(self) -> None:
-        """Best-effort PASSIVE checkpoint; never raises or fails the transaction."""
-        if not getattr(self, "_wal_active", False):
-            return
-        try:
-            with self._writer_lock:
-                with self._lifetime_lock:
-                    if self._closed:
-                        return
-                result = self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                if result and len(result) > 1 and result[1] > 0:
-                    _LOGGER.debug(
-                        "WAL checkpoint pending %s/%s pages",
-                        result[2] if len(result) > 2 else 0,
-                        result[1],
-                    )
-        except Exception as exc:
-            _LOGGER.warning("WAL checkpoint (PASSIVE) failed: %s", exc)
+        self._runtime.checkpoint()
 
     def _try_fts_merge(self) -> None:
-        """Bounded FTS merge every 1000 writes; never raises."""
-        if not getattr(self, "_wal_active", False):
-            return
-        try:
-            with self._writer_lock:
-                with self._lifetime_lock:
-                    if self._closed:
-                        return
-                # Skip if FTS is stale.
-                row = self._writer.execute(
-                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
-                ).fetchone()
-                if row is not None:
-                    return
-                # Bounded merge with 16 pages, early stop if no progress.
-                self._writer.execute(
-                    "INSERT INTO messages_fts(messages_fts, rank) VALUES('merge', 16)"
-                )
-        except Exception as exc:
-            _LOGGER.debug("FTS merge failed: %s", exc)
+        def merge(connection: sqlite3.Connection) -> None:
+            connection.execute("INSERT INTO messages_fts(messages_fts, rank) VALUES('merge', 16)")
+
+        with suppress(Exception):
+            self._runtime.execute_write(merge, patience_s=ACTIVITY_WRITE_PATIENCE_S)
 
     @contextmanager
     def _read_transaction(self):
-        with self._lifetime_lock:
-            if self._closed:
-                raise ChatSessionError("Session store is closed")
-        # Try pooled reader (WAL only); degrade to writer lock on miss/failure.
-        conn: sqlite3.Connection | None = None
-        if self._wal_active:
-            should_try_pool = True
-            with self._read_conns_lock:
-                if self._read_conns_closed or (
-                    self._read_open_failed_at
-                    and time.monotonic() - self._read_open_failed_at < 60.0
-                ):
-                    should_try_pool = False
-            if should_try_pool:
-                try:
-                    conn = self._readers.get_nowait()
-                except queue.Empty:
-                    if self._read_permits.acquire(blocking=False):
-                        try:
-                            conn = self._open_reader(self.path)
-                        except Exception:
-                            self._read_permits.release()
-                            with self._read_conns_lock:
-                                self._read_open_failed_at = time.monotonic()
-                            _LOGGER.debug("reader open failed, degrading to writer", exc_info=True)
-                            conn = None
-                    else:
-                        with self._read_conns_lock:
-                            self._read_permit_exhausted += 1
-                        _LOGGER.debug("read pool at capacity, using writer")
-        if conn is not None:
-            healthy = True
-            pooled_successfully_returned = False
-            try:
-                conn.execute("BEGIN")
-                yield conn
-                conn.execute("COMMIT")
-            except Exception as exc:
-                healthy = False
-                with suppress(sqlite3.Error):
-                    conn.execute("ROLLBACK")
-                if isinstance(exc, sqlite3.Error):
-                    raise SessionStoreUnavailableError(
-                        f"Session database read failed: {self.path}"
-                    ) from exc
-                raise
-            finally:
-                with self._read_conns_lock:
-                    closed = self._closed or self._read_conns_closed
-                if closed or not healthy:
-                    try:
-                        conn.close()
-                    except Exception as exc:
-                        _LOGGER.warning("pooled read conn close failed: %s", exc)
-                    finally:
-                        try:
-                            self._read_permits.release()
-                        except ValueError:
-                            _LOGGER.warning("read permit over-release")
-                    if not closed and not healthy:
-                        with suppress(Exception):
-                            new_conn = self._open_reader(self.path)
-                            if self._read_permits.acquire(blocking=False):
-                                try:
-                                    self._readers.put_nowait(new_conn)
-                                except queue.Full:
-                                    new_conn.close()
-                                    self._read_permits.release()
-                            else:
-                                new_conn.close()
-                else:
-                    with self._read_conns_lock:
-                        if not self._read_conns_closed:
-                            try:
-                                self._readers.put_nowait(conn)
-                                pooled_successfully_returned = True
-                            except queue.Full:
-                                pooled_successfully_returned = False
-                        else:
-                            pooled_successfully_returned = False
-                    if not pooled_successfully_returned:
-                        with suppress(Exception):
-                            conn.close()
-                        with suppress(ValueError):
-                            self._read_permits.release()
-            return
-        # Degraded path: writer lock, no pool.
-        with self._writer_lock:
-            with self._lifetime_lock:
-                if self._closed:
-                    raise ChatSessionError("Session store is closed")
-            try:
-                self._writer.execute("BEGIN")
-                yield self._writer
-                self._writer.execute("COMMIT")
-            except Exception as exc:
-                with suppress(sqlite3.Error):
-                    if self._writer.in_transaction:
-                        self._writer.execute("ROLLBACK")
-                if isinstance(exc, sqlite3.Error):
-                    raise SessionStoreUnavailableError(
-                        f"Session database read failed: {self.path}"
-                    ) from exc
-                raise
+        with self._runtime.read_ctx() as connection:
+            yield connection
 
     def close(self) -> None:
-        with self._read_conns_lock:
-            self._read_conns_closed = True
-        # Drain pool — each pooled conn holds a permit.
-        while True:
-            try:
-                conn = self._readers.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                conn.close()
-            except Exception as exc:
-                _LOGGER.warning("pooled read close failed: %s", exc)
-            finally:
-                with suppress(ValueError):
-                    self._read_permits.release()
-        with self._lifetime_lock:
-            self._closed = True
-        with self._writer_lock:
-            if self._writer is not None:
-                if True:
-                    # Best-effort PASSIVE checkpoint on close, never TRUNCATE on live path.
-                    if getattr(self, "_wal_active", False):
-                        try:
-                            self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
-                        except Exception as exc:
-                            _LOGGER.debug("checkpoint at close failed: %s", exc)
-                conn, self._writer = self._writer, None  # type: ignore[assignment]
-                with suppress(Exception):
-                    conn.close()  # type: ignore[union-attr]
+        self._runtime.close()
 
     def checkpoint(self) -> None:
-        """Best-effort PASSIVE checkpoint for publication; never TRUNCATE on live DB."""
-        with self._writer_lock:
-            with self._lifetime_lock:
-                if self._closed:
-                    raise ChatSessionError("Session store is closed")
-            if not getattr(self, "_wal_active", False):
-                return
-            try:
-                self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
-            except Exception as exc:
-                _LOGGER.warning("checkpoint PASSIVE failed: %s", exc)
+        self._runtime.checkpoint()
 
     def backup(self, destination: Path) -> None:
-        """Create a consistent standalone backup through SQLite's online backup API."""
-        destination = destination.expanduser().resolve()
-        if destination.exists():
-            raise ChatSessionError(f"backup destination already exists: {destination}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with self._writer_lock, closing(sqlite3.connect(temporary)) as target:
-                self._writer.backup(target)
-                target.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-                target.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                target.commit()
-            # Persist the snapshot bytes so a power failure right after the
-            # rename cannot leave a half-written backup behind.
-            if os.name != "nt":
-                descriptor = os.open(temporary, os.O_RDONLY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-            os.replace(temporary, destination)
-        except (sqlite3.Error, OSError) as exc:
-            for created in (temporary, Path(f"{temporary}-journal"), Path(f"{temporary}-wal")):
-                with suppress(OSError):
-                    created.unlink()
-            raise SessionStoreUnavailableError(
-                f"Session database backup failed: {destination}"
-            ) from exc
+        self._runtime.backup(destination)
+
+    def snapshot_revisions(self) -> tuple[int, int]:
+        """Return database-wide history/state revisions for snapshot coalescing."""
+        with self._transaction(write=False) as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(history_revision), 0), COALESCE(MAX(state_revision), 0) FROM sessions"
+            ).fetchone()
+        return int(row[0]), int(row[1])
+
+    def status_projection(self) -> JsonObject:
+        """Return operator-safe health, snapshot, and incident state."""
+        from core.sessions.snapshots import read_recovery_incident, snapshot_summaries
+
+        marker = read_session_store_marker(self.path.parent)
+        if marker is None:
+            raise SessionStorageFormatError("current-format Session marker is missing")
+        fts = self.fts_health()
+        incident = read_recovery_incident(self.path.parent)
+        snapshots = snapshot_summaries(
+            self.path.parent, expected_database_id=str(marker["database_id"])
+        )
+        active_incident = incident if incident and not incident.get("acknowledged", False) else None
+        return {
+            "state": "recovered_with_incident" if active_incident else "ready",
+            "database_id": str(marker["database_id"]),
+            "marker_state": marker["state"],
+            "schema_version": int(marker["schema_version"]),
+            "fts": {
+                "state": fts.state,
+                "reason": fts.reason,
+                "generation": fts.generation,
+                "target_high_water": fts.target_high_water,
+                "completed_high_water": fts.completed_high_water,
+            },
+            "snapshots": snapshots,
+            "incident": active_incident,
+        }
 
     def create(self, address: SessionAddress, created_at: str | None = None) -> None:
         timestamp = created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -1195,6 +602,90 @@ class SessionStore:
                 raise ChatSessionError(f"session already exists: {address.session_id}") from exc
 
         self._execute_write(_fn)
+
+    def import_generation(
+        self,
+        address: SessionAddress,
+        *,
+        generation_id: str,
+        messages: Sequence[ChatMessage],
+        metadata: JsonObject,
+        activity: JsonObject,
+        continuation: Sequence[JsonObject],
+        archived: bool,
+        created_at: str,
+    ) -> None:
+        """Import one complete generation in one offline-only transaction.
+
+        The converter is the only caller that may supply a generation id. Keeping
+        this operation on the canonical transaction owner means imported rows use
+        exactly the same validation, projections, and foreign-key behavior as
+        normal Session writes, without exposing a migration hook to Runtime.
+        """
+        if not self._offline:
+            raise ChatSessionError("generation import is available only to the offline converter")
+        if (
+            not isinstance(generation_id, str)
+            or len(generation_id) != 32
+            or any(character not in "0123456789abcdef" for character in generation_id)
+        ):
+            raise ChatSessionError("offline generation id is invalid")
+        metadata_payload = _json_object(metadata, "session metadata")
+        activity_payload = _json_object(activity, "session activity")
+        encoded_messages = [_message_row(message) for message in messages]
+        encoded_continuation = [
+            _json_object(record, "continuation record") for record in continuation
+        ]
+
+        def _fn(connection: sqlite3.Connection) -> None:
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, status, "
+                    "created_at, last_message_at, archived_at, message_count, last_message_id, "
+                    "history_revision, state_revision, metadata_json, activity_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        generation_id,
+                        *self._scope(address),
+                        "archived" if archived else "live",
+                        created_at,
+                        encoded_messages[-1][2] if encoded_messages else None,
+                        created_at if archived else None,
+                        len(encoded_messages),
+                        encoded_messages[-1][0] if encoded_messages else None,
+                        1 if encoded_messages else 0,
+                        1
+                        if encoded_messages or metadata_payload != "{}" or activity_payload != "{}"
+                        else 0,
+                        metadata_payload,
+                        activity_payload,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ChatSessionError(
+                    f"offline Session generation conflicts: {address.session_id}"
+                ) from exc
+            session_key = cursor.lastrowid
+            if session_key is None:
+                raise SessionStoreCorruptError("SQLite did not return an offline Session key")
+            for sequence, (message_id, role, timestamp, payload) in enumerate(encoded_messages):
+                message_cursor = connection.execute(
+                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (session_key, sequence, message_id, role, timestamp, payload),
+                )
+                message_key = message_cursor.lastrowid
+                if message_key is None:
+                    raise SessionStoreCorruptError("SQLite did not return an offline message key")
+                _insert_message_search(connection, int(message_key), payload)
+            for sequence, payload in enumerate(encoded_continuation):
+                connection.execute(
+                    "INSERT INTO continuation_records (session_key, seq, record_json) VALUES (?, ?, ?)",
+                    (session_key, sequence, payload),
+                )
+            _mark_fts_write(connection)
+
+        self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
 
     def ensure_live(self, address: SessionAddress) -> None:
         """Atomically return an existing live Session or create a new generation."""
@@ -1335,15 +826,21 @@ class SessionStore:
             state = self._require_live(connection, address)
             session_key = int(state["session_key"])
             next_seq = int(state["message_count"])
-            connection.executemany(
-                "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) VALUES (?, ?, ?, ?, ?, ?)",
-                [(session_key, next_seq + index, *value) for index, value in enumerate(encoded)],
-            )
+            for index, (message_id, role, timestamp, payload) in enumerate(encoded):
+                cursor = connection.execute(
+                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) VALUES (?, ?, ?, ?, ?, ?)",
+                    (session_key, next_seq + index, message_id, role, timestamp, payload),
+                )
+                message_key = cursor.lastrowid
+                if message_key is None:
+                    raise SessionStoreCorruptError("SQLite did not return a canonical message key")
+                _insert_message_search(connection, int(message_key), payload)
             last_id, _role, last_timestamp, _payload = encoded[-1]
             connection.execute(
                 "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, last_message_id = ?, history_revision = history_revision + 1, state_revision = state_revision + 1 WHERE session_key = ?",
                 (len(encoded), last_timestamp, last_id, session_key),
             )
+            _mark_fts_write(connection)
 
         self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
 
@@ -1533,22 +1030,17 @@ class SessionStore:
                         )
         return versions
 
-    def is_fts_available(self) -> bool:
-        """Return whether the integrated FTS index is usable."""
+    def fts_health(self) -> FtsHealth:
+        """Return the integrated FTS state after checking metadata and coverage."""
         try:
             with self._transaction(write=False) as connection:
-                if connection.execute(
-                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
-                ).fetchone():
-                    return False
-                return (
-                    connection.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-                    ).fetchone()
-                    is not None
-                )
-        except Exception:
-            return False
+                return _fts_health_from_connection(connection)
+        except Exception as exc:
+            return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
+
+    def is_fts_available(self) -> bool:
+        """Return true only when FTS metadata and all projection joins are verified."""
+        return self.fts_health().available
 
     def fts_search(
         self,
@@ -1559,75 +1051,98 @@ class SessionStore:
         session_id: str | None = None,
         match_mode: str = "all_terms",
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-        """Search canonical messages via integrated FTS, returning (address, message_id, timestamp, message_json, rank)."""
+        """Search canonical Messages through FTS or a truthful projection fallback."""
         if not query or not query.strip():
             return []
-        # Build FTS expression: quote terms, handle phrase vs all_terms/any_term.
-        import re as _re
-
-        def _compact(text: str) -> str:
-            return _re.sub(r"\s+", " ", text).strip().casefold()
-
-        def _quote(value: str) -> str:
-            return '"' + value.replace('"', '""') + '"'
-
-        compact = _compact(query)
+        compact = re.sub(r"\s+", " ", query).strip().casefold()
         if not compact:
             return []
-        if match_mode == "phrase":
-            if len(compact) < 3:
-                return []
-            expression = _quote(compact)
-        else:
+
+        def matches(text: str) -> bool:
+            haystack = re.sub(r"\s+", " ", text).strip().casefold()
+            if match_mode == "phrase":
+                return compact in haystack
             terms = [term for term in compact.split(" ") if term]
-            if not terms or any(len(term) < 3 for term in terms):
-                return []
-            operator = " OR " if match_mode == "any_term" else " AND "
-            expression = operator.join(_quote(term) for term in terms)
+            if match_mode == "any_term":
+                return any(term in haystack for term in terms)
+            return all(term in haystack for term in terms)
+
+        def canonical_rows(
+            connection: sqlite3.Connection,
+        ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+            sql = """
+                SELECT s.project_id, s.agent_id, s.session_id, m.message_id,
+                       m.timestamp, m.message_json, m.message_key
+                FROM messages AS m
+                JOIN sessions AS s ON s.session_key = m.session_key
+                WHERE s.status = 'live'
+            """
+            params: list[Any] = []
+            if project_id is not None:
+                sql += " AND s.project_id = ?"
+                params.append(project_id)
+            else:
+                sql += " AND s.project_id = ''"
+            if agent_id is not None:
+                sql += " AND s.agent_id = ?"
+                params.append(agent_id)
+            if session_id is not None:
+                sql += " AND s.session_id = ?"
+                params.append(session_id)
+            sql += " ORDER BY m.timestamp DESC, m.message_key"
+            result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
+            for row in connection.execute(sql, params).fetchall():
+                payload = str(row["message_json"])
+                if not matches(_search_projection(payload)):
+                    continue
+                from core.sessions.sessions import SessionAddress as SessionAddr
+
+                result.append(
+                    (
+                        SessionAddr(
+                            project_id=row["project_id"] or None,
+                            agent_id=row["agent_id"],
+                            session_id=row["session_id"],
+                        ),
+                        str(row["message_id"]),
+                        str(row["timestamp"]),
+                        payload,
+                        0.0,
+                    )
+                )
+            return result
+
+        terms = [term for term in compact.split(" ") if term]
+        if match_mode == "phrase":
+            escaped = compact.replace('"', '""')
+            expression = f'"{escaped}"'
+            fts_supported = len(compact) >= 3
+        else:
+            expression = (" OR " if match_mode == "any_term" else " AND ").join(
+                f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms
+            )
+            fts_supported = bool(terms) and all(len(term) >= 3 for term in terms)
+        if not fts_supported:
+            with self._transaction(write=False) as connection:
+                return canonical_rows(connection)
 
         try:
             with self._transaction(write=False) as connection:
-                if connection.execute(
-                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
-                ).fetchone():
-                    return []
-                if (
-                    connection.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-                    ).fetchone()
-                    is None
-                ):
-                    return []
-                # Check for gap (backfill in progress): progress < high_water.
-                gap_exists = False
-                try:
-                    prow = connection.execute(
-                        "SELECT value FROM store_meta WHERE key=?", (FTS_PROGRESS_KEY,)
-                    ).fetchone()
-                    hrow = connection.execute(
-                        "SELECT value FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
-                    ).fetchone()
-                    if prow is not None and hrow is not None:
-                        gap_exists = int(prow[0]) < int(hrow[0])
-                except Exception:
-                    gap_exists = False
-                # Join FTS -> message_search -> messages -> sessions for scope filtering.
-                # Use bm25 ranking when available.
+                if not _fts_health_from_connection(connection).available:
+                    return canonical_rows(connection)
                 sql = """
-                    SELECT s.project_id, s.agent_id, s.session_id, m.message_id, m.timestamp, m.message_json, bm25(messages_fts) as rank
+                    SELECT s.project_id, s.agent_id, s.session_id, m.message_id,
+                           m.timestamp, m.message_json, bm25(messages_fts) AS rank
                     FROM messages_fts
-                    JOIN message_search ms ON ms.message_key = messages_fts.rowid
-                    JOIN messages m ON m.session_key = ms.session_key AND m.seq = ms.seq
-                    JOIN sessions s ON s.session_key = m.session_key
-                    WHERE messages_fts MATCH ?
-                      AND s.status = 'live'
+                    JOIN messages AS m ON m.message_key = messages_fts.rowid
+                    JOIN sessions AS s ON s.session_key = m.session_key
+                    WHERE messages_fts MATCH ? AND s.status = 'live'
                 """
                 params: list[Any] = [expression]
                 if project_id is not None:
                     sql += " AND s.project_id = ?"
                     params.append(project_id)
                 else:
-                    # When project_id is None, we want global scope (project_id = '')
                     sql += " AND s.project_id = ''"
                 if agent_id is not None:
                     sql += " AND s.agent_id = ?"
@@ -1635,91 +1150,33 @@ class SessionStore:
                 if session_id is not None:
                     sql += " AND s.session_id = ?"
                     params.append(session_id)
-                sql += " ORDER BY rank, m.timestamp DESC"
+                sql += " ORDER BY rank, m.timestamp DESC, m.message_key"
                 rows = connection.execute(sql, params).fetchall()
                 result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
-                seen_ids: set[str] = set()
                 for row in rows:
                     from core.sessions.sessions import SessionAddress as SessionAddr
 
-                    addr = SessionAddr(
-                        project_id=row["project_id"] or None,
-                        agent_id=row["agent_id"],
-                        session_id=row["session_id"],
-                    )
-                    mid = str(row["message_id"])
-                    seen_ids.add(mid)
                     result.append(
                         (
-                            addr,
-                            mid,
+                            SessionAddr(
+                                project_id=row["project_id"] or None,
+                                agent_id=row["agent_id"],
+                                session_id=row["session_id"],
+                            ),
+                            str(row["message_id"]),
                             str(row["timestamp"]),
                             str(row["message_json"]),
                             float(row["rank"]) if row["rank"] is not None else 0.0,
                         )
                     )
-                # If backfill gap exists, supplement with canonical scan over gap.
-                if gap_exists:
-                    # Gap messages are those in messages not yet in message_search.
-                    gap_sql = """
-                        SELECT s.project_id, s.agent_id, s.session_id, m.message_id, m.timestamp, m.message_json
-                        FROM messages m JOIN sessions s ON s.session_key=m.session_key
-                        WHERE s.status='live' AND (m.session_key, m.seq) NOT IN (SELECT session_key, seq FROM message_search)
-                    """
-                    gap_params: list[Any] = []
-                    if project_id is not None:
-                        gap_sql += " AND s.project_id = ?"
-                        gap_params.append(project_id)
-                    else:
-                        gap_sql += " AND s.project_id = ''"
-                    if agent_id is not None:
-                        gap_sql += " AND s.agent_id = ?"
-                        gap_params.append(agent_id)
-                    if session_id is not None:
-                        gap_sql += " AND s.session_id = ?"
-                        gap_params.append(session_id)
-                    try:
-                        gap_rows = connection.execute(gap_sql, gap_params).fetchall()
-                        for grow in gap_rows:
-                            mid = str(grow["message_id"])
-                            if mid in seen_ids:
-                                continue
-                            haystack = str(grow["message_json"]).casefold()
-                            # Apply same term logic as FTS expression.
-                            if match_mode == "phrase":
-                                if compact not in haystack:
-                                    continue
-                            else:
-                                terms = [t for t in compact.split(" ") if t]
-                                if match_mode == "any_term":
-                                    if not any(t in haystack for t in terms):
-                                        continue
-                                else:
-                                    if not all(t in haystack for t in terms):
-                                        continue
-                            from core.sessions.sessions import SessionAddress as SessionAddr2
-
-                            gaddr = SessionAddr2(
-                                project_id=grow["project_id"] or None,
-                                agent_id=grow["agent_id"],
-                                session_id=grow["session_id"],
-                            )
-                            result.append(
-                                (gaddr, mid, str(grow["timestamp"]), str(grow["message_json"]), 0.0)
-                            )
-                    except sqlite3.Error:
-                        pass
                 return result
         except sqlite3.Error as exc:
-            # FTS corruption should not block canonical reads; detach and return empty.
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
-
-                def _detach(connection: sqlite3.Connection) -> None:
-                    _detach_fts(connection)
-
+                error_message = str(exc)
                 with suppress(Exception):
-                    self._execute_write(_detach)
-            return []
+                    self._execute_write(lambda connection: _detach_fts(connection, error_message))
+            with self._transaction(write=False) as connection:
+                return canonical_rows(connection)
 
     def archive(self, address: SessionAddress) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -1776,10 +1233,27 @@ class SessionStore:
                 raise ChatSessionError(
                     f"destination session already exists: {target.session_id}"
                 ) from exc
-            connection.execute(
-                "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) SELECT ?, seq, message_id, role, timestamp, message_json FROM messages WHERE session_key = ? ORDER BY seq",
-                (target_row.lastrowid, state["session_key"]),
-            )
+            source_rows = connection.execute(
+                "SELECT seq, message_id, role, timestamp, message_json FROM messages WHERE session_key = ? ORDER BY seq",
+                (state["session_key"],),
+            ).fetchall()
+            for row in source_rows:
+                cursor = connection.execute(
+                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        target_row.lastrowid,
+                        row["seq"],
+                        row["message_id"],
+                        row["role"],
+                        row["timestamp"],
+                        row["message_json"],
+                    ),
+                )
+                message_key = cursor.lastrowid
+                if message_key is None:
+                    raise SessionStoreCorruptError("SQLite did not return a canonical message key")
+                _insert_message_search(connection, int(message_key), str(row["message_json"]))
+            _mark_fts_write(connection)
 
         self._execute_write(_fn)
 
@@ -1919,19 +1393,6 @@ def _message_row(message: ChatMessage) -> tuple[str, str, str, str]:
         raise ChatSessionError("message is not JSON-serializable") from exc
 
 
-def _is_offline_path(path: Path) -> bool:
-    """Heuristic for converter staging and backup databases.
-
-    Any database whose name is not ``sessions.db`` is a backup or staged
-    copy and bypasses the marker. The canonical ``sessions.db`` under
-    ``artifacts/temp/session-conversion-`` also bypasses the marker.
-    """
-    name = Path(path).name
-    if name != "sessions.db":
-        return True
-    return "session-conversion-" in str(path)
-
-
 def _message_from_json(payload: str) -> ChatMessage:
     from core.chat.messages import ChatMessage
 
@@ -1944,52 +1405,12 @@ def _message_from_json(payload: str) -> ChatMessage:
 QUARANTINE_DIRECTORY_NAME = "session-quarantine"
 
 
-def quarantine_database(database_path: Path) -> Path | None:
-    """Move a distrusted database plus sidecars as one bundle, all-or-rollback.
+def quarantine_database(database_path: Path) -> QuarantineResult:
+    """Move a distrusted database bundle through the snapshot owner."""
 
-    Moves ``sessions.db`` and its ``-wal/-shm/-journal`` sidecars into a
-    unique timestamped quarantine directory. If any existing member fails to
-    move, every already-moved member is rolled back and the function returns
-    ``None`` without removing the original database.
-    """
+    from core.sessions.snapshots import quarantine_database as quarantine
 
-    database_path = Path(database_path)
-    data_dir = database_path.parent
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    destination_root = data_dir / QUARANTINE_DIRECTORY_NAME
-    destination_root.mkdir(parents=True, exist_ok=True)
-    batch = destination_root / f"{timestamp}-quarantine"
-    counter = 1
-    original_batch = batch
-    while batch.exists():
-        batch = Path(f"{original_batch}-{counter}")
-        counter += 1
-    # Collect existing members up front.
-    members = [p for p in (database_path, *database_sidecar_paths(database_path)) if p.exists()]
-    if not members:
-        return None
-    moved: list[tuple[Path, Path]] = []
-    try:
-        batch.mkdir(parents=True, exist_ok=True)
-        for sidecar_path in members:
-            target = batch / sidecar_path.name
-            os.replace(sidecar_path, target)
-            moved.append((sidecar_path, target))
-    except OSError as exc:
-        # Roll back every member already moved.
-        for original, target in reversed(moved):
-            with suppress(OSError):
-                os.replace(target, original)
-        with suppress(OSError):
-            batch.rmdir()
-        _LOGGER.error("Session quarantine failed, rolled back: %s", exc)
-        return None
-    _LOGGER.error(
-        "Session database quarantined at %s (original bytes preserved); "
-        "automatic restore will attempt the newest verified snapshot",
-        batch,
-    )
-    return batch
+    return quarantine(Path(database_path))
 
 
 def database_sidecar_paths(database_path: Path) -> tuple[Path, ...]:

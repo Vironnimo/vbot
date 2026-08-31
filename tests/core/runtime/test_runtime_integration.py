@@ -28,6 +28,7 @@ from core.recall import (
 )
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_PARAMETERS
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -359,6 +360,7 @@ async def test_runtime_start_loads_data_dir_env_for_provider_auth(
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -385,6 +387,7 @@ async def test_runtime_start_does_not_overwrite_existing_provider_environment(
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -409,6 +412,7 @@ def test_runtime_start_does_not_mutate_process_environment_when_loading_credenti
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -430,6 +434,7 @@ def test_runtime_empty_process_credential_overrides_data_dir_fallback(
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -858,6 +863,7 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
 
 def _write_settings(config: Config, payload: dict[str, object]) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps(payload),
         encoding="utf-8",

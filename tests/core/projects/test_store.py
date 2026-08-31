@@ -17,11 +17,15 @@ from core.projects.projects import (
 )
 from core.projects.store import ProjectStore, _validate_agent_id, _validate_project_id
 from core.sessions import ChatSessionManager
+from core.sessions.format import write_bootstrap_marker
 
 
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
-    return tmp_path / "data"
+    directory = tmp_path / "data"
+    directory.mkdir()
+    write_bootstrap_marker(directory)
+    return directory
 
 
 @pytest.fixture

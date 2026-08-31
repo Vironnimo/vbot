@@ -168,6 +168,31 @@ async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) 
         assert data["matches"]
 
 
+async def test_passage_index_does_not_duplicate_canonical_message_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="passage-only").append(
+        ChatMessage.user("Passage projection only", timestamp=timestamp(1))
+    )
+    monkeypatch.setattr(sessions, "is_fts_available", lambda: False)
+    recall = backend(tmp_path, sessions)
+
+    await recall.search_passages(passage_request("projection"))
+
+    with sqlite3.connect(recall.index_path) as connection:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            )
+        }
+    assert "passages" in tables
+    assert "passages_fts" in tables
+    assert "messages" not in tables
+    assert "messages_fts" not in tables
+
+
 async def test_sqlite_fts_reindexes_stale_session_after_append(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="stale-session")

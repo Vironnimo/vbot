@@ -284,69 +284,6 @@ def initialize_data_directory(
         created_files.append(layout.session_store_marker_path)
     elif not layout.root.is_dir():
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
-    else:
-        # Bootstrap is only written when this call created the root. An
-        # existing directory without a marker is a hard current-format error;
-        # Runtime never inspects legacy Session artifacts to guess why.
-        # For test convenience, an empty temp directory that pytest created
-        # before Runtime starts is still considered fresh — but no JSONL scan
-        # is performed.
-        if not layout.session_store_marker_path.exists():
-            try:
-                entries = list(layout.root.iterdir())
-            except OSError:
-                entries = None
-            is_fresh = False
-            if entries is not None:
-                import tempfile
-
-                allowed_fresh_names = {
-                    "logs",
-                    "skills",
-                    "settings.json",
-                    ".env",
-                    ".env.example",
-                    "extensions",
-                    "prompts",
-                    "recall",
-                    "statistics",
-                    "bootstrap",
-                    "calendar",
-                    "channels",
-                    "cron",
-                    "processes",
-                    "terminals",
-                    "oauth",
-                    "artifacts",
-                    "archive",
-                    "agents",
-                    "projects",
-                    "models",
-                    "debug",
-                }
-                is_temp = False
-                try:
-                    temp_base = Path(tempfile.gettempdir()).resolve()
-                    is_temp = layout.root.resolve().is_relative_to(temp_base)
-                except Exception:
-                    is_temp = "pytest" in str(layout.root) or "Temp" in str(layout.root)
-                if not entries:
-                    is_fresh = True
-                elif is_temp and all(entry.name in allowed_fresh_names for entry in entries):
-                    # Temp-only convenience without any JSONL inspection.
-                    is_fresh = True
-                elif is_temp and not (layout.root / "sessions.db").exists():
-                    # Any temp directory without a marker and without a DB is
-                    # considered fresh for test convenience.
-                    is_fresh = True
-            if is_fresh:
-                try:
-                    from core.sessions.format import write_bootstrap_marker  # type: ignore
-
-                    write_bootstrap_marker(layout.root)
-                except Exception:
-                    _write_bootstrap_marker_fallback(layout.root)
-                created_files.append(layout.session_store_marker_path)
 
     for directory in layout.directories:
         if directory.exists():
