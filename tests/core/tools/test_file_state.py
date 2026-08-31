@@ -161,7 +161,9 @@ def test_path_locks_for_different_files_do_not_block_each_other(tmp_path: Path) 
 
 
 def test_atomic_write_replaces_target_and_preserves_mode(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
+    file_root = tmp_path / "files"
+    file_root.mkdir()
+    target = file_root / "a.txt"
     target.write_bytes(b"before")
     target.chmod(0o640)
     original_mode = stat.S_IMODE(target.stat().st_mode)
@@ -170,13 +172,15 @@ def test_atomic_write_replaces_target_and_preserves_mode(tmp_path: Path) -> None
 
     assert target.read_bytes() == b"after"
     assert stat.S_IMODE(target.stat().st_mode) == original_mode
-    assert list(tmp_path.iterdir()) == [target]
+    assert list(file_root.iterdir()) == [target]
 
 
 def test_atomic_write_failure_keeps_original_and_removes_temp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    target = tmp_path / "a.txt"
+    file_root = tmp_path / "files"
+    file_root.mkdir()
+    target = file_root / "a.txt"
     target.write_bytes(b"before")
 
     def fail_replace(_source: Path, _target: Path) -> None:
@@ -188,4 +192,4 @@ def test_atomic_write_failure_keeps_original_and_removes_temp(
         atomic_write_bytes(target, b"after")
 
     assert target.read_bytes() == b"before"
-    assert list(tmp_path.iterdir()) == [target]
+    assert list(file_root.iterdir()) == [target]

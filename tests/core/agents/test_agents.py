@@ -21,6 +21,7 @@ from core.agents import (
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.settings import AgentDefaults
 from core.tools.availability import ToolAccess
 
@@ -42,7 +43,10 @@ def template_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def store(tmp_path: Path, template_dir: Path) -> AgentStore:
-    return AgentStore(tmp_path / "data", template_dir=template_dir)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    return AgentStore(data_dir, template_dir=template_dir)
 
 
 def test_agent_dataclass_is_frozen() -> None:

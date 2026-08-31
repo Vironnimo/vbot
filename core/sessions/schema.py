@@ -8,11 +8,11 @@ from dataclasses import dataclass
 
 from core.sessions.errors import SessionStoreCorruptError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # Databases below this schema version cannot be reconciled additively and
 # require the offline converter; additive generations at or above it heal in
 # place. Raise it only for destructive schema changes.
-SCHEMA_CONVERSION_FLOOR = 1
+SCHEMA_CONVERSION_FLOOR = 3
 MINIMUM_SQLITE_VERSION = (3, 37, 0)
 APPLICATION_ID = 0x56424F54
 DATABASE_ID_META_KEY = "database_id"
@@ -26,15 +26,17 @@ FTS_TRIGGERS = (
     "messages_fts_insert",
     "messages_fts_delete",
     "messages_fts_update",
-    "message_search_insert",
-    "message_search_delete",
-    "message_search_update",
 )
 FTS_STALE_KEY = "fts_stale"
-FTS_HIGH_WATER_KEY = "fts_rebuild_high_water"
-FTS_PROGRESS_KEY = "fts_rebuild_progress"
+FTS_GENERATION_KEY = "fts_rebuild_generation"
+FTS_TARGET_HIGH_WATER_KEY = "fts_rebuild_target_high_water"
+FTS_COMPLETED_HIGH_WATER_KEY = "fts_rebuild_completed_high_water"
+FTS_DEGRADED_REASON_KEY = "fts_degraded_reason"
+# Kept as aliases for callers that only need the target/progress distinction.
+FTS_HIGH_WATER_KEY = FTS_TARGET_HIGH_WATER_KEY
+FTS_PROGRESS_KEY = FTS_COMPLETED_HIGH_WATER_KEY
 FTS_STORAGE_VERSION_KEY = "fts_storage_version"
-FTS_STORAGE_VERSION = 1
+FTS_STORAGE_VERSION = 2
 FTS_TRIGRAM_TOKENIZER = "trigram"
 
 SCHEMA_SQL = """
@@ -75,15 +77,16 @@ CREATE INDEX sessions_live_scope_order
   WHERE status = 'live';
 
 CREATE TABLE messages (
+  message_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,
   seq INTEGER NOT NULL CHECK (seq >= 0),
   message_id TEXT NOT NULL,
   role TEXT NOT NULL,
   timestamp TEXT NOT NULL,
   message_json TEXT NOT NULL CHECK (json_valid(message_json) AND json_type(message_json) = 'object'),
-  PRIMARY KEY (session_key, seq),
+  UNIQUE (session_key, seq),
   FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
-) STRICT, WITHOUT ROWID;
+) STRICT;
 
 CREATE INDEX messages_by_session_time
   ON messages (session_key, timestamp, seq);
@@ -100,34 +103,12 @@ CREATE TABLE continuation_records (
 ) STRICT, WITHOUT ROWID;
 
 -- FTS content table that mirrors searchable text for each canonical message.
--- Kept separate from `messages` (which is WITHOUT ROWID) so the FTS external
--- content can use a stable integer `message_key` as `content_rowid` while
--- `messages` retains its composite (session_key, seq) primary key.
+-- `message_key` is the canonical Messages identity, not a second allocated id.
 CREATE TABLE message_search (
-  message_key INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_key INTEGER NOT NULL,
-  seq INTEGER NOT NULL,
+  message_key INTEGER PRIMARY KEY,
   search_text TEXT NOT NULL,
-  UNIQUE(session_key, seq),
-  FOREIGN KEY(session_key) REFERENCES sessions(session_key) ON DELETE CASCADE
+  FOREIGN KEY(message_key) REFERENCES messages(message_key) ON DELETE CASCADE
 ) STRICT;
-
-CREATE TRIGGER message_search_insert AFTER INSERT ON messages BEGIN
-  INSERT INTO message_search(session_key, seq, search_text)
-  VALUES (new.session_key, new.seq, new.message_json);
-END;
-
-CREATE TRIGGER message_search_delete AFTER DELETE ON messages BEGIN
-  DELETE FROM message_search WHERE session_key = old.session_key AND seq = old.seq;
-END;
-
-CREATE TRIGGER message_search_update AFTER UPDATE OF message_json ON messages
-WHEN old.message_json IS NOT new.message_json
-BEGIN
-  UPDATE message_search
-  SET search_text = new.message_json
-  WHERE session_key = new.session_key AND seq = new.seq;
-END;
 """
 
 FTS_SQL = """

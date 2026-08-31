@@ -22,6 +22,7 @@ from core.recall import CanonicalSessionRecallBackend, RecallBackendRegistry, Sq
 from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
@@ -195,6 +196,7 @@ def test_runtime_start_survives_corrupt_optional_configuration(tmp_path: Path) -
     )
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     data_dir.joinpath(".env").write_bytes(b"\xff")
     config = Config(data_dir=data_dir)
     config._data["RESOURCES_PATH"] = str(resources_dir)
@@ -327,6 +329,7 @@ def test_runtime_start_logs_inventory_counts(
 def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     """Runtime warnings emitted during startup use the managed logger contract."""
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     extra_skills_dir = config.data_dir / "extra-skills"
     broken_skill_dir = extra_skills_dir / "broken"
     broken_skill_dir.mkdir(parents=True)
@@ -432,6 +435,7 @@ def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None
 def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "sqlite_fts"}}),
         encoding="utf-8",
@@ -446,6 +450,7 @@ def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> 
 def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "team_backend"}}),
         encoding="utf-8",
@@ -463,6 +468,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
 ) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "broken_backend"}}),
         encoding="utf-8",
@@ -576,6 +582,7 @@ def test_runtime_resolve_environment_credential_prefers_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -597,6 +604,7 @@ def test_runtime_resolve_environment_credential_uses_data_dir_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -667,6 +675,7 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
     channel_dir = config.data_dir / "channels" / "tg-assistant"
     channel_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(config.data_dir)
     channel_dir.joinpath("channel.json").write_text(
         "\n".join(
             (
@@ -1165,6 +1174,7 @@ def _write_extension_with_skill(
     """Write a package extension bundling one skill under ``<ext>/skills/<name>/``."""
     ext_dir = data_dir / "extensions" / ext_name
     ext_dir.mkdir(parents=True)
+    write_bootstrap_marker(data_dir)
     ext_dir.joinpath("__init__.py").write_text("", encoding="utf-8")
     _write_test_skill(ext_dir / "skills", skill_name, description)
 
@@ -1660,6 +1670,7 @@ class _ChatRuntimeStub:
         self.projects = _StubProjects()
         self.providers = _StubProviders()
         self.provider_credentials = _StubCredentials()
+        write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs

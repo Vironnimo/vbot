@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,7 +14,6 @@ from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     compact_text,
     first_match_span,
-    is_recall_artifact_message,
     message_index_by_id,
     message_match_payload,
     message_matches_request,
@@ -38,9 +36,8 @@ from core.recall.recall import (
     RecallSearchHit,
     RecallSearchPage,
     RecallSearchRequest,
-    RecallSortMode,
 )
-from core.sessions import SessionAddress, is_skill_context_note
+from core.sessions import SessionAddress
 from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
@@ -62,7 +59,8 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 # v4 → a shared Passage FTS index powers Hybrid's literal retrieval arm.
 # v5 → canonical Session history revisions replace filesystem freshness.
 # v6 → Session generations prevent a recreated address from reusing stale rows.
-_SCHEMA_VERSION = 6
+# v7 → the disposable index owns Passage retrieval only; message search is canonical.
+_SCHEMA_VERSION = 7
 # FTS5 trigram needs at least three characters; shorter queries fall back to the canonical scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
@@ -378,9 +376,8 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             return _empty_passage_page(snapshot_id)
         with closing(self._connect()) as connection:
             self._initialize_schema(connection)
-            legacy_request = _legacy_request_for_index(request)
-            self._cleanup_missing_sessions(connection, legacy_request, summaries)
-            self._ensure_indexed(connection, legacy_request, summaries)
+            self._cleanup_missing_sessions(connection, request)
+            self._ensure_indexed(connection, request, summaries)
             rows = self._query_passages(connection, request, summaries, expression)
         has_more = len(rows) > request.limit
         hits = tuple(_passage_hit_from_row(row, request) for row in rows[: request.limit])
@@ -440,95 +437,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             total_candidate_sessions=len(summaries),
         )
 
-    def _search_page_with_sqlite(
-        self,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        expression: str,
-        snapshot_id: str,
-    ) -> RecallSearchPage:
-        if not summaries:
-            return RecallSearchPage(
-                hits=(),
-                result_type="message",
-                ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
-                snapshot_id=snapshot_id,
-                has_more=False,
-                total_candidate_sessions=0,
-            )
-        with closing(self._connect()) as connection:
-            self._initialize_schema(connection)
-            legacy_request = _legacy_request_for_index(request)
-            self._cleanup_missing_sessions(connection, legacy_request, summaries)
-            self._ensure_indexed(connection, legacy_request, summaries)
-            rows = self._query_search_page(connection, request, summaries, expression)
-        has_more = len(rows) > request.limit
-        rows = rows[: request.limit]
-        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
-        hits: list[RecallSearchHit] = []
-        for row in rows:
-            session_id = str(row["session_id"])
-            if session_id not in summaries_by_id:
-                continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(
-                    _session_address(request, session_id)
-                ).load_active()
-            messages = messages_by_session[session_id]
-            message_index = message_index_by_id(messages, str(row["message_id"]))
-            if message_index is None:
-                continue
-            message = messages[message_index]
-            if not message_matches_search_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_search_request(text, request):
-                continue
-            match_start, match_end = first_match_span(text, request.query, request.match_mode)
-            hits.append(
-                RecallSearchHit(
-                    result_type="message",
-                    session_id=session_id,
-                    message_id=str(message.id),
-                    role=str(message.role),
-                    timestamp=str(message.timestamp),
-                    text=text,
-                    score=float(row["rank"]),
-                    match_start=match_start,
-                    match_end=match_end,
-                )
-            )
-        return RecallSearchPage(
-            hits=tuple(hits),
-            result_type="message",
-            ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
-            snapshot_id=snapshot_id,
-            has_more=has_more,
-            total_candidate_sessions=len(summaries),
-        )
-
-    def _search_with_sqlite(
-        self,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> JsonObject:
-        with closing(self._connect()) as connection:
-            self._initialize_schema(connection)
-            self._cleanup_missing_sessions(connection, request, summaries)
-            self._ensure_indexed(connection, request, summaries)
-            rows = self._query_matches(connection, request, summaries, expression)
-        matches = self._hydrate_matches(request, summaries, rows)
-        truncated = len(matches) > request.limit
-        return self._message_result(
-            request,
-            matches[: request.limit],
-            searched_sessions=len(summaries),
-            total_candidates=len(summaries),
-            truncated=truncated,
-        )
-
     def _connect(self) -> sqlite3.Connection:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.index_path)
@@ -567,33 +475,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
               PRIMARY KEY (agent_id, project_id, session_id)
             );
 
-            CREATE TABLE IF NOT EXISTS messages (
-              row_id INTEGER PRIMARY KEY,
-              agent_id TEXT NOT NULL,
-              project_id TEXT NOT NULL,
-              session_id TEXT NOT NULL,
-              message_id TEXT NOT NULL,
-              message_index INTEGER NOT NULL,
-              timestamp TEXT NOT NULL,
-              role TEXT NOT NULL,
-              search_text TEXT NOT NULL,
-              UNIQUE (agent_id, project_id, session_id, message_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_session
-              ON messages(agent_id, project_id, session_id, message_index);
-
-            CREATE INDEX IF NOT EXISTS idx_messages_time
-              ON messages(agent_id, project_id, timestamp);
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
-            USING fts5(
-              search_text,
-              content='messages',
-              content_rowid='row_id',
-              tokenize='trigram'
-            );
-
             CREATE TABLE IF NOT EXISTS passages (
               row_id INTEGER PRIMARY KEY,
               agent_id TEXT NOT NULL,
@@ -628,8 +509,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     def _cleanup_missing_sessions(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest,
-        _summaries: list[JsonObject],
+        request: RecallRequest | RecallSearchRequest,
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
@@ -653,7 +533,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     def _ensure_indexed(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest,
+        request: RecallRequest | RecallSearchRequest,
         summaries: list[JsonObject],
     ) -> None:
         agent_id = request.agent_id
@@ -709,42 +589,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     ) -> None:
         with connection:
             self._delete_session_rows(connection, agent_id, scope, session_id)
-            for message_index, message in enumerate(messages):
-                if is_skill_context_note(message) or is_recall_artifact_message(message):
-                    continue
-                search_text = compact_text(message_search_text(message))
-                cursor = connection.execute(
-                    """
-                    INSERT INTO messages (
-                      agent_id,
-                      project_id,
-                      session_id,
-                      message_id,
-                      message_index,
-                      timestamp,
-                      role,
-                      search_text
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        agent_id,
-                        scope,
-                        session_id,
-                        message.id,
-                        message_index,
-                        message.timestamp,
-                        message.role,
-                        search_text,
-                    ),
-                )
-                row_id = cursor.lastrowid
-                if row_id is None:
-                    raise sqlite3.DatabaseError("failed to insert recall message row")
-                connection.execute(
-                    "INSERT INTO messages_fts(rowid, search_text) VALUES (?, ?)",
-                    (row_id, search_text),
-                )
             for passage in build_session_passages(messages):
                 cursor = connection.execute(
                     """
@@ -804,16 +648,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         scope: str,
         session_id: str,
     ) -> None:
-        row_ids = [
-            int(row["row_id"])
-            for row in connection.execute(
-                "SELECT row_id FROM messages "
-                "WHERE agent_id = ? AND project_id = ? AND session_id = ?",
-                (agent_id, scope, session_id),
-            )
-        ]
-        for row_id in row_ids:
-            connection.execute("DELETE FROM messages_fts WHERE rowid = ?", (row_id,))
         passage_row_ids = [
             int(row["row_id"])
             for row in connection.execute(
@@ -824,10 +658,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         ]
         for row_id in passage_row_ids:
             connection.execute("DELETE FROM passages_fts WHERE rowid = ?", (row_id,))
-        connection.execute(
-            "DELETE FROM messages WHERE agent_id = ? AND project_id = ? AND session_id = ?",
-            (agent_id, scope, session_id),
-        )
         connection.execute(
             "DELETE FROM passages WHERE agent_id = ? AND project_id = ? AND session_id = ?",
             (agent_id, scope, session_id),
@@ -860,105 +690,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             self._initialize_schema(connection)
             with connection:
                 self._delete_session_rows(connection, agent_id, scope, session_id)
-
-    def _query_matches(
-        self,
-        connection: sqlite3.Connection,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> list[sqlite3.Row]:
-        session_ids = [str(summary["id"]) for summary in summaries]
-        session_placeholders = ", ".join("?" for _ in session_ids)
-        role_placeholders = ", ".join("?" for _ in request.roles)
-        conditions = [
-            "messages_fts MATCH ?",
-            "m.agent_id = ?",
-            "m.project_id = ?",
-            f"m.session_id IN ({session_placeholders})",
-            f"m.role IN ({role_placeholders})",
-        ]
-        parameters: list[Any] = [
-            expression,
-            request.agent_id,
-            _scope(request.project_id),
-            *session_ids,
-            *request.roles,
-        ]
-        if request.since is not None:
-            conditions.append("m.timestamp >= ?")
-            parameters.append(request.since.isoformat())
-        if request.until is not None:
-            conditions.append("m.timestamp <= ?")
-            parameters.append(request.until.isoformat())
-
-        direction = "DESC" if request.sort == "newest" else "ASC"
-        parameters.append(request.limit + 1)
-        sql = f"""
-            SELECT
-              m.session_id,
-              m.message_id,
-              m.message_index,
-              m.timestamp,
-              bm25(messages_fts) AS rank
-            FROM messages_fts
-            JOIN messages AS m ON m.row_id = messages_fts.rowid
-            WHERE {" AND ".join(conditions)}
-            ORDER BY m.timestamp {direction}, m.session_id ASC, m.message_index ASC
-            LIMIT ?
-        """
-        return list(connection.execute(sql, parameters))
-
-    def _query_search_page(
-        self,
-        connection: sqlite3.Connection,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> list[sqlite3.Row]:
-        session_ids = [str(summary["id"]) for summary in summaries]
-        session_placeholders = ", ".join("?" for _ in session_ids)
-        role_placeholders = ", ".join("?" for _ in request.roles)
-        conditions = [
-            "messages_fts MATCH ?",
-            "m.agent_id = ?",
-            "m.project_id = ?",
-            f"m.session_id IN ({session_placeholders})",
-            f"m.role IN ({role_placeholders})",
-        ]
-        parameters: list[Any] = [
-            expression,
-            request.agent_id,
-            _scope(request.project_id),
-            *session_ids,
-            *request.roles,
-        ]
-        if request.since is not None:
-            conditions.append("m.timestamp >= ?")
-            parameters.append(request.since.isoformat())
-        if request.until is not None:
-            conditions.append("m.timestamp <= ?")
-            parameters.append(request.until.isoformat())
-        if request.order == "relevance":
-            order_by = "rank ASC, m.timestamp DESC, m.session_id ASC, m.message_index ASC"
-        else:
-            direction = "DESC" if request.order == "newest" else "ASC"
-            order_by = f"m.timestamp {direction}, m.session_id ASC, m.message_index ASC"
-        parameters.extend((request.limit + 1, request.offset))
-        sql = f"""
-            SELECT
-              m.session_id,
-              m.message_id,
-              m.message_index,
-              m.timestamp,
-              bm25(messages_fts) AS rank
-            FROM messages_fts
-            JOIN messages AS m ON m.row_id = messages_fts.rowid
-            WHERE {" AND ".join(conditions)}
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?
-        """
-        return list(connection.execute(sql, parameters))
 
     def _query_passages(
         self,
@@ -1007,37 +738,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             LIMIT ? OFFSET ?
         """
         return list(connection.execute(sql, parameters))
-
-    def _hydrate_matches(
-        self,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        rows: Iterable[sqlite3.Row],
-    ) -> list[JsonObject]:
-        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
-        matches: list[JsonObject] = []
-        for row in rows:
-            session_id = str(row["session_id"])
-            summary = summaries_by_id.get(session_id)
-            if summary is None:
-                continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(
-                    _session_address(request, session_id)
-                ).load_active()
-            messages = messages_by_session[session_id]
-            message_index = message_index_by_id(messages, str(row["message_id"]))
-            if message_index is None:
-                continue
-            message = messages[message_index]
-            if not message_matches_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_query(text, request):
-                continue
-            matches.append(message_match_payload(request, summary, messages, message_index, text))
-        return matches
 
     @staticmethod
     def _message_result(
@@ -1147,25 +847,6 @@ def _fts_expression_search(request: RecallSearchRequest) -> str | None:
         return None
     operator = " OR " if request.match_mode == "any_term" else " AND "
     return operator.join(_quote_fts_value(term) for term in terms)
-
-
-def _legacy_request_for_index(request: RecallSearchRequest) -> RecallRequest:
-    sort: RecallSortMode = "oldest" if request.order == "oldest" else "newest"
-    return RecallRequest(
-        agent_id=request.agent_id,
-        session_id=request.session_id,
-        around_message_id=None,
-        query=request.query,
-        since=request.since,
-        until=request.until,
-        roles=request.roles,
-        match_mode=request.match_mode,
-        limit=request.offset + request.limit + 1,
-        context_messages=0,
-        bookend_messages=0,
-        sort=sort,
-        project_id=request.project_id,
-    )
 
 
 def _quote_fts_value(value: str) -> str:

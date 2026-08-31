@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
+from core.sessions.errors import FtsHealth
 from core.sessions.store import SessionStore
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.skills.skills import format_skill_activation_context
@@ -631,8 +632,14 @@ class ChatSessionManager:
             self._store.close()
 
     def backup_snapshot(self, destination: Path) -> None:
-        """Expose the store's consistent snapshot for the rotating startup backup."""
+        """Write one consistent database copy for the snapshot engine."""
         self._store.backup(destination)
+
+    def snapshot_revisions(self) -> tuple[int, int]:
+        return self._store.snapshot_revisions()
+
+    def status_projection(self) -> JsonObject:
+        return self._store.status_projection()
 
     def add_title_changed_callback(
         self, callback: Callable[[SessionAddress], None]
@@ -1038,6 +1045,9 @@ class ChatSessionManager:
 
     def is_fts_available(self) -> bool:
         return self._store.is_fts_available()
+
+    def fts_health(self) -> FtsHealth:
+        return self._store.fts_health()
 
     def fts_search(
         self,

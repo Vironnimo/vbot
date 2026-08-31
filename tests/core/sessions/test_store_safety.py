@@ -1,16 +1,16 @@
-"""Rotating startup backups, quarantine recovery, and batched freshness."""
+"""Canonical Session snapshots, quarantine, and freshness contracts."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from core.chat import ChatMessage
-from core.sessions import (
-    BACKUP_KEEP_COUNT,
-    ChatSessionManager,
-    SessionAddress,
-    backup_directory,
-    create_startup_snapshot,
+from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.snapshots import (
+    SNAPSHOT_KEEP_COUNT,
+    create_snapshot,
+    list_snapshots,
+    snapshot_root,
 )
 from core.sessions.store import SessionStore, quarantine_database
 
@@ -19,22 +19,18 @@ def _address(session_id: str) -> SessionAddress:
     return SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
 
 
-# ---------------------------------------------------------------------------
-# Rotating startup backups
-# ---------------------------------------------------------------------------
-
-
-def test_startup_snapshot_creates_an_openable_copy(tmp_path: Path) -> None:
+def test_verified_snapshot_creates_an_openable_copy(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     try:
         manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
-
-        created = create_startup_snapshot(
-            manager.backup_snapshot, tmp_path / "sessions.db", tmp_path
+        created = create_snapshot(
+            tmp_path,
+            tmp_path / "sessions.db",
+            manager.backup_snapshot,
+            reason="test",
         )
-
         assert created is not None
-        check = SessionStore(created)
+        check = SessionStore(created / "sessions.db", _offline=True)
         try:
             assert check.exists(_address("session-one"))
         finally:
@@ -43,77 +39,38 @@ def test_startup_snapshot_creates_an_openable_copy(tmp_path: Path) -> None:
         manager.close()
 
 
-def test_startup_snapshot_without_database_is_a_noop(tmp_path: Path) -> None:
-    created = create_startup_snapshot(lambda destination: None, tmp_path / "sessions.db", tmp_path)
-
+def test_snapshot_without_database_is_a_noop(tmp_path: Path) -> None:
+    created = create_snapshot(tmp_path, tmp_path / "sessions.db", lambda destination: None)
     assert created is None
-    assert backup_directory(tmp_path).exists() is False
+    assert list_snapshots(tmp_path) == []
 
 
-def test_startup_snapshot_failure_is_swallowed(tmp_path: Path) -> None:
-    from core.chat.errors import ChatSessionError
-
+def test_snapshot_failure_keeps_previous_verified_snapshot(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     try:
-        (tmp_path / "sessions.db").write_bytes(b"placeholder")
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+        first = create_snapshot(tmp_path, tmp_path / "sessions.db", manager.backup_snapshot)
+        assert first is not None
 
         def failing_snapshot(_destination: Path) -> None:
-            raise ChatSessionError("disk busy")
+            raise OSError("disk busy")
 
-        created = create_startup_snapshot(failing_snapshot, tmp_path / "sessions.db", tmp_path)
-
-        assert created is None
+        assert create_snapshot(tmp_path, tmp_path / "sessions.db", failing_snapshot) is None
+        assert list_snapshots(tmp_path)
     finally:
         manager.close()
 
 
-def test_startup_snapshot_prunes_beyond_keep_count(tmp_path: Path) -> None:
+def test_snapshot_retention_prunes_only_after_verified_publish(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     try:
-        for _ in range(BACKUP_KEEP_COUNT + 2):
-            created = create_startup_snapshot(
-                manager.backup_snapshot, tmp_path / "sessions.db", tmp_path
-            )
-            assert created is not None
-
-        # The same-second creations collapse by timestamp filename, so force
-        # uniqueness by writing directly for the overflow check instead:
-        snapshots = list(backup_directory(tmp_path).iterdir())
-        assert 1 <= len(snapshots) <= BACKUP_KEEP_COUNT
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+        for _ in range(SNAPSHOT_KEEP_COUNT + 2):
+            assert create_snapshot(tmp_path, tmp_path / "sessions.db", manager.backup_snapshot)
+        assert 1 <= len(list_snapshots(tmp_path)) <= SNAPSHOT_KEEP_COUNT
+        assert snapshot_root(tmp_path).is_dir()
     finally:
         manager.close()
-
-
-def test_prune_keeps_only_the_newest_snapshots(tmp_path: Path) -> None:
-    from core.sessions import backup as backup_module
-
-    backup_root = backup_directory(tmp_path)
-    backup_root.mkdir(parents=True)
-    # Four snapshots with BACKUP_KEEP_COUNT = 5 keep everything; write one
-    # extra older file to prove the overflow is pruned.
-    stamps = [
-        "20251231T000000",
-        "20260101T000000",
-        "20260102T000000",
-        "20260103T000000",
-        "20260104T000000",
-        "20260105T000000",
-    ]
-    for stamp in stamps:
-        (backup_root / f"sessions-{stamp}Z.db").write_bytes(b"x")
-    (backup_root / "unrelated.txt").write_text("keep out")
-
-    backup_module._prune(backup_root)
-
-    remaining = sorted(path.name for path in backup_root.iterdir())
-    assert remaining == [
-        "sessions-20260101T000000Z.db",
-        "sessions-20260102T000000Z.db",
-        "sessions-20260103T000000Z.db",
-        "sessions-20260104T000000Z.db",
-        "sessions-20260105T000000Z.db",
-        "unrelated.txt",
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -128,10 +85,11 @@ def test_quarantine_moves_database_and_sidecars(tmp_path: Path) -> None:
 
     destination = quarantine_database(database)
 
-    assert destination is not None
+    assert destination.succeeded
+    assert destination.path is not None
     assert database.exists() is False
     assert Path(f"{database}-wal").exists() is False
-    quarantined = sorted(path.name for path in destination.iterdir())
+    quarantined = sorted(path.name for path in destination.path.iterdir())
     assert quarantined == ["sessions.db", "sessions.db-wal"]
 
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
 
 from core.sessions import schema as session_schema
-from core.sessions.errors import SessionStoreCorruptError
+from core.sessions.errors import SessionStoreCorruptError, SessionStoreSchemaMismatchError
 from core.sessions.schema import (
     APPLICATION_ID,
     SCHEMA_SQL,
@@ -26,6 +27,12 @@ def _create_current_database(path) -> sqlite3.Connection:
     connection.executescript(SCHEMA_SQL)
     connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    marker = json.loads((path.parent / "session-store.json").read_text(encoding="utf-8"))
+    connection.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('database_id', ?)",
+        (marker["database_id"],),
+    )
+    connection.commit()
     return connection
 
 
@@ -283,8 +290,28 @@ def test_store_refuses_a_database_from_a_newer_vbot(tmp_path) -> None:
     connection = _create_current_database(database)
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     connection.close()
-    with pytest.raises(SessionStoreCorruptError):
+    with pytest.raises(SessionStoreSchemaMismatchError):
         SessionStore(database)
+
+
+def test_store_reports_an_older_schema_separately_from_corruption(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    connection = _create_current_database(database)
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(SessionStoreSchemaMismatchError, match="offline conversion"):
+        SessionStore(database)
+
+
+def test_store_rejects_a_marker_with_an_older_schema_version(tmp_path) -> None:
+    marker = json.loads((tmp_path / "session-store.json").read_text(encoding="utf-8"))
+    marker["schema_version"] = SCHEMA_VERSION - 1
+    (tmp_path / "session-store.json").write_text(json.dumps(marker), encoding="utf-8")
+
+    with pytest.raises(SessionStoreSchemaMismatchError, match="marker schema"):
+        SessionStore(tmp_path / "sessions.db")
 
 
 def test_store_uses_rollback_journal_on_vulnerable_sqlite(tmp_path, monkeypatch) -> None:
