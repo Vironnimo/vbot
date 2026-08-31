@@ -634,7 +634,7 @@ def test_session_read_failure_returns_history_session_error(
     def fail_load(self: ChatSession) -> list[ChatMessage]:
         raise OSError("database read failed")
 
-    monkeypatch.setattr(ChatSession, "load", fail_load)
+    monkeypatch.setattr(ChatSession, "load_active", fail_load)
 
     result = _call(manager, session, {"action": "read"})
 

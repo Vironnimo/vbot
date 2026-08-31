@@ -46,6 +46,10 @@ _wal_reset_warned: set[str] = set()
 _diagnostic_lock = threading.Lock()
 
 
+class _BackupCancelledError(Exception):
+    """Internal cooperative stop signal for a chunked SQLite backup."""
+
+
 class UntrackableConnectionError(RuntimeError):
     """A file-backed connection could not be tracked until close."""
 
@@ -700,28 +704,61 @@ class SQLiteRuntime:
             except Exception as exc:
                 _LOGGER.warning("WAL checkpoint failed for %s: %s", self.db_path, exc)
 
-    def backup(self, destination: Path) -> None:
-        """Create an atomic online-backup copy and close the target on failure too."""
+    def backup(
+        self,
+        destination: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        """Create a cancellable online backup without monopolizing the writer."""
         destination = Path(destination).expanduser().resolve()
         if destination.exists():
             raise RuntimeError(f"backup destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+        source: sqlite3.Connection | None = None
         try:
             with self._lock:
-                target = sqlite3.connect(temporary)
-                try:
-                    self.writer.backup(target)
-                    target.commit()
-                finally:
-                    target.close()
+                if self._writer is None or self._closed:
+                    raise RuntimeError("SQLite runtime is closed")
+            source = connect_tracked(
+                f"file:{self.db_path.as_posix()}?mode=ro",
+                tracking_path=self.db_path,
+                uri=True,
+                isolation_level=None,
+                check_same_thread=False,
+                timeout=1.0,
+            )
+            source.execute("PRAGMA query_only=ON")
+            source.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            target = sqlite3.connect(temporary)
+            try:
+
+                def progress(_status: int, _remaining: int, _total: int) -> None:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise _BackupCancelledError
+
+                source.backup(target, pages=256, progress=progress, sleep=0.01)
+                target.commit()
+            finally:
+                target.close()
+                source.close()
+                source = None
             with contextlib.suppress(OSError):
                 descriptor = os.open(temporary, os.O_RDONLY)
                 try:
                     os.fsync(descriptor)
                 finally:
                     os.close(descriptor)
+            if cancel_event is not None and cancel_event.is_set():
+                raise _BackupCancelledError
             os.replace(temporary, destination)
+            return True
+        except _BackupCancelledError:
+            for candidate in (temporary, Path(f"{temporary}-wal"), Path(f"{temporary}-journal")):
+                with contextlib.suppress(OSError):
+                    candidate.unlink()
+            return False
         except (sqlite3.Error, OSError) as exc:
             for candidate in (temporary, Path(f"{temporary}-wal"), Path(f"{temporary}-journal")):
                 with contextlib.suppress(OSError):
@@ -729,6 +766,10 @@ class SQLiteRuntime:
             raise SessionStoreUnavailableError(
                 f"Session database backup failed: {destination}"
             ) from exc
+        finally:
+            if source is not None:
+                with contextlib.suppress(BaseException):
+                    source.close()
 
     def close(self) -> None:
         """Close pooled readers and writer, releasing all tracking entries."""

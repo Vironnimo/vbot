@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
+from core.chat.content_blocks import TextBlock
+from core.chat.continuation import fold_continuation_records
+from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
+from core.chat.output_files import AssistantFileReference
 from core.runs import RunKind
 from core.sessions import (
     FORK_SOURCE_META_KEY,
@@ -24,6 +29,18 @@ from core.sessions import (
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+
+
+def _continuation_start() -> dict[str, object]:
+    return {
+        "version": 1,
+        "type": "run_started",
+        "checkpoint_id": "checkpoint-one",
+        "run_id": "run-one",
+        "origin_run_id": "run-one",
+        "timestamp": "2026-08-31T12:00:00+00:00",
+        "request": "continue this work",
+    }
 
 
 @pytest.fixture
@@ -68,14 +85,83 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     manager.set_metadata(address, {"project": "vbot"})
     manager.record_run_kind(address, RunKind.USER)
     manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
-    session.append_continuation_records([{"turn": 1}])
+    session.append_continuation_records([_continuation_start()])
 
     assert manager.history_revision(address) == revision
     assert manager.get_metadata(address)["project"] == "vbot"
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
-    assert session.load_continuation_records() == [{"turn": 1}]
+    continuation = fold_continuation_records(session.load_continuation_records())
+    assert continuation is not None
+    assert continuation.checkpoint_id == "checkpoint-one"
     assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+
+
+def test_continuation_events_update_one_normalized_current_state(manager) -> None:
+    session = manager.create("coder", session_id="continuation-state")
+    session.append_continuation_records(
+        [
+            _continuation_start(),
+            {
+                "version": 1,
+                "type": "stream_delta",
+                "run_id": "run-one",
+                "timestamp": "2026-08-31T12:00:01+00:00",
+                "step": 1,
+                "reasoning_delta": "first ",
+                "content_delta": "partial ",
+            },
+            {
+                "version": 1,
+                "type": "stream_delta",
+                "run_id": "run-one",
+                "timestamp": "2026-08-31T12:00:02+00:00",
+                "step": 1,
+                "reasoning_delta": "second",
+                "content_delta": "answer",
+            },
+            {
+                "version": 1,
+                "type": "tool_started",
+                "run_id": "run-one",
+                "timestamp": "2026-08-31T12:00:03+00:00",
+                "tool_call_id": "call-one",
+                "name": "bash",
+            },
+            {
+                "version": 1,
+                "type": "tool_result",
+                "run_id": "run-one",
+                "timestamp": "2026-08-31T12:00:04+00:00",
+                "tool_call_id": "call-one",
+                "name": "bash",
+                "ok": True,
+            },
+            {
+                "version": 1,
+                "type": "run_interrupted",
+                "run_id": "run-one",
+                "timestamp": "2026-08-31T12:00:05+00:00",
+                "cause": "user",
+            },
+        ]
+    )
+
+    state = fold_continuation_records(session.load_continuation_records())
+    assert state is not None
+    assert state.reasoning == "first second"
+    assert state.partial_output == "partial answer"
+    assert state.operations["call-one"]["status"] == "completed"
+    assert state.cause == "user"
+    with sqlite3.connect(manager._store.path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert "continuation_records" not in tables
+        assert connection.execute("SELECT COUNT(*) FROM continuations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM continuation_steps").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM continuation_operations").fetchone()[0] == 1
 
 
 def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
@@ -83,7 +169,7 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     source.append_many(
         [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
     )
-    source.append_continuation_record({"turn": 1})
+    source.append_continuation_record(_continuation_start())
     source_address = _address("coder", "source")
     manager.record_terminal_run(source_address, "run-1", "completed", "2026-08-29T12:00:00Z")
 
@@ -97,6 +183,122 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     assert metadata[PROMPT_CACHE_AFFINITY_META_KEY] != manager.prompt_cache_affinity_id(
         source_address
     )
+
+
+def test_role_specific_relational_message_storage_round_trips(manager, tmp_path) -> None:
+    session = manager.create("coder", session_id="normalized")
+    user = ChatMessage.user(
+        [TextBlock(type="text", text="inspect the normalized store")],
+        sender=MessageSender(id="human-one", display_name="Ada", role="admin"),
+    )
+    assistant = ChatMessage.assistant(
+        model="provider/model",
+        content="file:C:\\tmp\\result.txt",
+        reasoning="reasoning text",
+        reasoning_meta={"provider_state": {"opaque": True}},
+        reasoning_scope="turn",
+        reasoning_timing={
+            "started_at": "2026-08-31T12:00:00+00:00",
+            "completed_at": "2026-08-31T12:00:01+00:00",
+            "duration_ms": 1000,
+            "clock": "monotonic",
+        },
+        phase="analysis",
+        usage={
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "cache_read_tokens": 2,
+            "estimated": False,
+            "provider_detail": {"tier": "test"},
+        },
+        tool_calls=[
+            ToolCall(
+                id="call-one",
+                name="read",
+                arguments={"path": "README.md"},
+                rejection=ToolCallRejection(
+                    code="policy",
+                    message="not dispatched",
+                    fingerprint="fingerprint",
+                ),
+            ),
+            ToolCall(
+                id="call-two",
+                name="bash",
+                arguments={"command": "echo ok"},
+                argument_sequence_index=0,
+                argument_sequence_length=2,
+            ),
+        ],
+        interrupted=True,
+        interruption_cause="user",
+        output_files=[
+            AssistantFileReference(
+                line_index=0,
+                path="C:\\tmp\\result.txt",
+                start_index=0,
+                end_index=len("file:C:\\tmp\\result.txt"),
+            )
+        ],
+    )
+    tool = ChatMessage.tool(
+        tool_call_id="call-one",
+        name="read",
+        content=(
+            '{"ok":false,"error":{"code":"denied","message":"not available",'
+            '"retryable":false,"attempts_made":2},"data":null,"artifacts":[]}'
+        ),
+        timing={
+            "started_at": "2026-08-31T12:00:01+00:00",
+            "completed_at": "2026-08-31T12:00:02+00:00",
+            "duration_ms": 1000,
+            "clock": "monotonic",
+        },
+        tool_display={"version": 1, "summary": "read README"},
+    )
+    run_summary = ChatMessage.run_summary(
+        run_id="run-one",
+        work_id="work-one",
+        status="interrupted",
+        timing={
+            "started_at": "2026-08-31T12:00:00+00:00",
+            "completed_at": "2026-08-31T12:00:03+00:00",
+            "duration_ms": 3000,
+            "clock": "monotonic",
+        },
+        iteration_count=2,
+        change_stats={
+            "files": 1,
+            "added": 3,
+            "removed": 1,
+            "paths": ["core/example.py"],
+            "source": "git",
+        },
+    )
+
+    session.append_many([user, assistant, tool, run_summary])
+
+    assert session.load() == [user, assistant, tool, run_summary]
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        assert connection.execute(
+            "SELECT content FROM messages WHERE message_id = ?", (tool.id,)
+        ).fetchone() == (None,)
+        assert connection.execute(
+            """
+            SELECT result_content, result_ok, error_code, error_message,
+                   error_retryable, error_attempts_made, data_json, artifacts_json
+            FROM tool_messages
+            """
+        ).fetchone() == (
+            tool.content,
+            0,
+            "denied",
+            "not available",
+            0,
+            2,
+            None,
+            "[]",
+        )
 
 
 def test_move_updates_the_composite_address_without_losing_history(manager) -> None:

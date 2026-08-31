@@ -13,6 +13,7 @@ import re
 import sqlite3
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -113,6 +114,10 @@ class _CanonicalProbe:
     failure_detected_at: str
 
 
+class _SnapshotCancelledError(Exception):
+    """Internal cooperative stop signal for an unpublished snapshot."""
+
+
 def snapshot_root(data_dir: Path) -> Path:
     return Path(data_dir) / SNAPSHOT_ROOT_NAME
 
@@ -168,10 +173,12 @@ def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
     return payload
 
 
-def _sha256(path: Path) -> str:
+def _sha256(path: Path, *, cancelled: Callable[[], bool] | None = None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if cancelled is not None and cancelled():
+                raise _SnapshotCancelledError
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -194,7 +201,12 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
-def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> _OperationLock | None:
+def _acquire_lock(
+    lock_path: Path,
+    timeout: float = 10.0,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> _OperationLock | None:
     """Acquire a crash-releasing POSIX or Windows descriptor lock.
 
     The file is never removed based on wall-clock age. A process that died
@@ -204,7 +216,7 @@ def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> _OperationLock | No
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline and not (cancelled is not None and cancelled()):
         descriptor: int | None = None
         try:
             descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
@@ -392,13 +404,18 @@ def _read_manifest(snapshot_dir: Path, data_dir: Path) -> tuple[SnapshotManifest
 
 
 def _verify_snapshot_db(
-    path: Path, expected_database_id: str | None = None
+    path: Path,
+    expected_database_id: str | None = None,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> _SnapshotVerification:
     """Verify one standalone current-format database and close it on all paths."""
 
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        if cancelled is not None:
+            connection.set_progress_handler(lambda: int(cancelled()), 10_000)
         application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
         if application_id != APPLICATION_ID:
             raise SessionStoreCorruptError("snapshot application_id mismatch")
@@ -440,6 +457,8 @@ def _verify_snapshot_db(
             latest_state_revision=latest_state,
         )
     except sqlite3.Error as exc:
+        if cancelled is not None and cancelled():
+            raise _SnapshotCancelledError from exc
         raise SessionStoreCorruptError("snapshot database verification failed") from exc
     finally:
         if connection is not None:
@@ -488,16 +507,19 @@ def create_snapshot(
     *,
     database_id: str | None = None,
     reason: str = "scheduled",
+    cancelled: Callable[[], bool] | None = None,
 ) -> Path | None:
     """Capture, verify, and atomically publish one snapshot."""
 
     root = snapshot_root(data_dir)
     root.mkdir(parents=True, exist_ok=True)
-    lock = _acquire_lock(root / SNAPSHOT_LOCK_NAME)
+    lock = _acquire_lock(root / SNAPSHOT_LOCK_NAME, cancelled=cancelled)
     if lock is None:
         return None
     partial: Path | None = None
     try:
+        if cancelled is not None and cancelled():
+            raise _SnapshotCancelledError
         try:
             free_space = __import__("shutil").disk_usage(root).free
             database_size = database_path.stat().st_size if database_path.exists() else 0
@@ -517,11 +539,16 @@ def create_snapshot(
         partial = root / f".{snapshot_id}.{os.getpid()}{SNAPSHOT_PARTIAL_SUFFIX}"
         partial.mkdir(parents=False, exist_ok=False)
         database_destination = partial / SNAPSHOT_DATABASE_NAME
-        backup_fn(database_destination)
+        if backup_fn(database_destination) is False:
+            raise _SnapshotCancelledError
+        if cancelled is not None and cancelled():
+            raise _SnapshotCancelledError
         file_size = database_destination.stat().st_size
-        digest = _sha256(database_destination)
+        digest = _sha256(database_destination, cancelled=cancelled)
         verification = _verify_snapshot_db(
-            database_destination, expected_database_id=resolved_database_id
+            database_destination,
+            expected_database_id=resolved_database_id,
+            cancelled=cancelled,
         )
         from core.sessions.sqlite_runtime import sqlite_source_id
 
@@ -549,6 +576,8 @@ def create_snapshot(
         _write_manifest(partial / SNAPSHOT_MANIFEST_NAME, manifest)
         _fsync_file(database_destination)
         _fsync_dir(partial)
+        if cancelled is not None and cancelled():
+            raise _SnapshotCancelledError
         final = root / snapshot_id
         os.replace(partial, final)
         partial = None
@@ -556,6 +585,11 @@ def create_snapshot(
         _prune_snapshots(root)
         _record_snapshot_health(data_dir, "healthy", snapshot_id=snapshot_id)
         return final
+    except _SnapshotCancelledError:
+        if partial is not None:
+            with suppress(OSError):
+                __import__("shutil").rmtree(partial, ignore_errors=True)
+        return None
     except (OSError, sqlite3.Error, SessionStoreCorruptError, SessionStoreUnavailableError) as exc:
         if partial is not None:
             with suppress(OSError):
@@ -626,11 +660,63 @@ def snapshot_summaries(
                 "sha256": manifest.sha256,
                 "session_count": manifest.session_count,
                 "message_count": manifest.message_count,
+                "latest_history_revision": manifest.latest_history_revision,
+                "latest_state_revision": manifest.latest_state_revision,
                 "integrity": manifest.integrity,
                 "complete": manifest.complete,
             }
         )
     return summaries
+
+
+def snapshot_inventory(
+    data_dir: Path, *, expected_database_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Return strict published-manifest metadata without rereading multi-GB databases."""
+    root = snapshot_root(data_dir)
+    if not root.is_dir():
+        return []
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return []
+    for child in children:
+        if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
+            continue
+        parsed = _read_manifest(child, data_dir)
+        if parsed is None:
+            continue
+        manifest, database_path = parsed
+        try:
+            if database_path.stat().st_size != manifest.file_size:
+                continue
+        except OSError:
+            continue
+        if expected_database_id is not None and manifest.database_id != expected_database_id:
+            continue
+        candidates.append(
+            (
+                manifest.created_at,
+                {
+                    "snapshot_id": manifest.snapshot_id,
+                    "created_at": manifest.created_at,
+                    "reason": manifest.reason,
+                    "database_id": manifest.database_id,
+                    "schema_version": manifest.schema_version,
+                    "file_size": manifest.file_size,
+                    "sha256": manifest.sha256,
+                    "session_count": manifest.session_count,
+                    "message_count": manifest.message_count,
+                    "latest_history_revision": manifest.latest_history_revision,
+                    "latest_state_revision": manifest.latest_state_revision,
+                    "integrity": manifest.integrity,
+                    "complete": manifest.complete,
+                },
+            )
+        )
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [summary for _created_at, summary in candidates]
 
 
 def _prune_snapshots(root: Path) -> None:

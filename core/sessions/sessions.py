@@ -593,7 +593,7 @@ class ChatSession:
         return await _run_session_io(self.load)
 
     def load_active(self) -> list[ChatMessage]:
-        return active_session_messages(self.load())
+        return self._store.active_messages(self.address)
 
     async def load_active_async(self) -> list[ChatMessage]:
         return await _run_session_io(self.load_active)
@@ -631,12 +631,23 @@ class ChatSessionManager:
         if self._owns_store:
             self._store.close()
 
-    def backup_snapshot(self, destination: Path) -> None:
+    def backup_snapshot(
+        self,
+        destination: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
         """Write one consistent database copy for the snapshot engine."""
-        self._store.backup(destination)
+        return self._store.backup(destination, cancel_event=cancel_event)
 
     def snapshot_revisions(self) -> tuple[int, int]:
         return self._store.snapshot_revisions()
+
+    def snapshot_checkpoint(self) -> tuple[str, tuple[int, int]] | None:
+        return self._store.snapshot_checkpoint()
+
+    def record_snapshot_checkpoint(self, snapshot_id: str, revisions: tuple[int, int]) -> None:
+        self._store.record_snapshot_checkpoint(snapshot_id, revisions)
 
     def status_projection(self) -> JsonObject:
         return self._store.status_projection()

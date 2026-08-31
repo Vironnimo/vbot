@@ -951,7 +951,6 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             self._storage.temporary_files.stop()
-        self._snapshot_on_shutdown()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -991,7 +990,6 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
-        self._snapshot_on_shutdown()
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
@@ -1222,10 +1220,51 @@ class Runtime:
         return value if isinstance(value, dict) else {}
 
     def _take_startup_snapshot(self) -> None:
-        """Capture one verified startup snapshot and then start cadence ownership."""
-        outcome = self._capture_session_snapshot(reason="startup")
-        if outcome is not None and self.logger is not None:
-            self.logger.info("Session snapshot created: %s", outcome)
+        """Restore snapshot cadence state and leave expensive copying off readiness."""
+        if self._storage is None or self._chat_sessions is None:
+            return
+        from core.sessions.format import read_session_store_marker
+        from core.sessions.snapshots import snapshot_inventory
+
+        marker = read_session_store_marker(self._storage.data_dir)
+        database_id = None if marker is None else str(marker["database_id"])
+        current_revisions = self._chat_sessions.snapshot_revisions()
+        inventory = snapshot_inventory(self._storage.data_dir, expected_database_id=database_id)
+        checkpoint = self._chat_sessions.snapshot_checkpoint()
+        if checkpoint is not None:
+            snapshot_id, revisions = checkpoint
+            matching = next(
+                (
+                    snapshot
+                    for snapshot in inventory
+                    if snapshot["snapshot_id"] == snapshot_id
+                    and (
+                        int(snapshot["latest_history_revision"]),
+                        int(snapshot["latest_state_revision"]),
+                    )
+                    == revisions
+                ),
+                None,
+            )
+            if matching is not None and revisions == current_revisions:
+                self._last_session_snapshot_revisions = revisions
+        if self._last_session_snapshot_revisions is None:
+            reusable = next(
+                (
+                    snapshot
+                    for snapshot in inventory
+                    if (
+                        int(snapshot["latest_history_revision"]),
+                        int(snapshot["latest_state_revision"]),
+                    )
+                    == current_revisions
+                ),
+                None,
+            )
+            if reusable is not None:
+                snapshot_id = str(reusable["snapshot_id"])
+                self._chat_sessions.record_snapshot_checkpoint(snapshot_id, current_revisions)
+                self._last_session_snapshot_revisions = current_revisions
         self._start_periodic_snapshots()
 
     def _capture_session_snapshot(self, *, reason: str) -> Path | None:
@@ -1239,12 +1278,17 @@ class Runtime:
         marker = read_session_store_marker(data_dir)
         database_id = None if marker is None else str(marker["database_id"])
         before = self._chat_sessions.snapshot_revisions()
+        stop_event = self._snapshot_stop_event
         outcome = create_snapshot(
             data_dir,
             database_path,
-            self._chat_sessions.backup_snapshot,
+            lambda destination: self._chat_sessions.backup_snapshot(
+                destination,
+                cancel_event=stop_event,
+            ),
             database_id=database_id,
             reason=reason,
+            cancelled=None if stop_event is None else stop_event.is_set,
         )
         if outcome is None:
             if self.logger is not None:
@@ -1252,6 +1296,7 @@ class Runtime:
             return None
         after = self._chat_sessions.snapshot_revisions()
         if before == after:
+            self._chat_sessions.record_snapshot_checkpoint(outcome.name, after)
             self._last_session_snapshot_revisions = after
         else:
             self._last_session_snapshot_revisions = None
@@ -1267,26 +1312,32 @@ class Runtime:
 
         def loop() -> None:
             assert self._snapshot_stop_event is not None
-            while not self._snapshot_stop_event.wait(_SESSION_SNAPSHOT_INTERVAL_S):
+            while not self._snapshot_stop_event.is_set():
                 if self._chat_sessions is None:
                     return
-                if (
-                    self._last_session_snapshot_revisions is not None
-                    and self._chat_sessions.snapshot_revisions()
-                    == self._last_session_snapshot_revisions
-                ):
-                    continue
-                try:
-                    self._capture_session_snapshot(reason="periodic")
-                except Exception as error:
-                    if self.logger is not None:
-                        self.logger.error(
-                            "Session periodic snapshot failed: %s: %s",
-                            type(error).__name__,
-                            error,
-                        )
+                changed = (
+                    self._last_session_snapshot_revisions is None
+                    or self._chat_sessions.snapshot_revisions()
+                    != self._last_session_snapshot_revisions
+                )
+                if changed:
+                    try:
+                        self._capture_session_snapshot(reason="periodic")
+                    except Exception as error:
+                        if self.logger is not None:
+                            self.logger.error(
+                                "Session periodic snapshot failed: %s: %s",
+                                type(error).__name__,
+                                error,
+                            )
+                if self._snapshot_stop_event.wait(_SESSION_SNAPSHOT_INTERVAL_S):
+                    return
 
-        thread = threading.Thread(target=loop, name="session-snapshot-periodic")
+        thread = threading.Thread(
+            target=loop,
+            name="session-snapshot-periodic",
+            daemon=True,
+        )
         thread.start()
         self._snapshot_periodic_thread = thread
 
@@ -1297,25 +1348,6 @@ class Runtime:
             self._snapshot_periodic_thread.join()
         self._snapshot_periodic_thread = None
         self._snapshot_stop_event = None
-
-    def _snapshot_on_shutdown(self) -> None:
-        """Capture changed canonical revisions after producers have stopped."""
-        if self._storage is None or self._chat_sessions is None:
-            return
-        try:
-            revisions = self._chat_sessions.snapshot_revisions()
-            if revisions == self._last_session_snapshot_revisions:
-                return
-            outcome = self._capture_session_snapshot(reason="shutdown")
-            if outcome is not None and self.logger is not None:
-                self.logger.info("Session shutdown snapshot created: %s", outcome)
-        except Exception as error:
-            if self.logger is not None:
-                self.logger.error(
-                    "Session shutdown snapshot failed: %s: %s",
-                    type(error).__name__,
-                    error,
-                )
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:

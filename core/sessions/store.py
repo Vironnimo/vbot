@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -44,7 +45,12 @@ from core.sessions.schema import (
     FTS_STALE_KEY,
     FTS_STORAGE_VERSION,
     FTS_STORAGE_VERSION_KEY,
+    FTS_TABLE,
     FTS_TARGET_HIGH_WATER_KEY,
+    FTS_TRIGGERS,
+    FTS_TRIGRAM_TABLE,
+    FTS_TRIGRAM_VIEW,
+    FTS_VIEW,
     SCHEMA_CONVERSION_FLOOR,
     SCHEMA_VERSION,
     reconcile_schema,
@@ -64,12 +70,129 @@ _LOGGER = logging.getLogger("vbot.sessions")
 
 JsonObject = dict[str, Any]
 
+_MESSAGE_INSERT = """
+    INSERT INTO messages (
+        session_key, seq, message_id, role, timestamp, content,
+        content_blocks_json, content_search, model, active, searchable
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+_MESSAGE_RECORD_COLUMNS = """
+    m.*,
+    a.reasoning,
+    a.reasoning_meta_json,
+    a.reasoning_scope,
+    a.reasoning_started_at,
+    a.reasoning_completed_at,
+    a.reasoning_duration_ms,
+    a.reasoning_timing_extra_json,
+    a.phase,
+    a.input_tokens,
+    a.output_tokens,
+    a.cache_read_tokens,
+    a.cache_write_tokens,
+    a.reasoning_tokens,
+    a.usage_estimated,
+    a.input_tokens_estimated,
+    a.output_tokens_estimated,
+    a.usage_present,
+    a.usage_extra_json,
+    a.tool_calls_present,
+    a.interrupted,
+    a.interruption_cause,
+    t.tool_call_key,
+    t.tool_call_id,
+    t.name,
+    t.result_content AS role_content,
+    t.started_at AS timing_started_at,
+    t.completed_at AS timing_completed_at,
+    t.duration_ms AS timing_duration_ms,
+    t.timing_extra_json,
+    t.display_json AS tool_display_json,
+    u.sender_id,
+    u.display_name AS sender_display_name,
+    u.role AS sender_role,
+    e.error_kind,
+    c.tail_boundary_id,
+    c.projection_json,
+    c.policy AS compaction_policy,
+    c.strategy AS compaction_strategy,
+    c.compacted_token_count,
+    c.context_tokens_before,
+    c.context_tokens_after,
+    c.compaction_duration_ms,
+    c.usage_present AS compaction_usage_present,
+    c.usage_extra_json AS compaction_usage_extra_json,
+    r.run_id,
+    r.work_id,
+    r.status,
+    r.started_at AS run_started_at,
+    r.completed_at AS run_completed_at,
+    r.duration_ms AS run_duration_ms,
+    r.timing_extra_json AS run_timing_extra_json,
+    r.iteration_count,
+    r.changed_files,
+    r.lines_added,
+    r.lines_removed,
+    r.change_stats_extra_json,
+    h.target_message_id,
+    CASE WHEN EXISTS (SELECT 1 FROM tool_calls AS tc WHERE tc.message_key = m.message_key)
+         THEN (SELECT json_group_array(json_array(
+                    ordered.tool_call_id,
+                    ordered.name,
+                    ordered.arguments_json,
+                    ordered.rejection_code,
+                    ordered.rejection_message,
+                    ordered.rejection_fingerprint,
+                    ordered.argument_sequence_index,
+                    ordered.argument_sequence_length
+                ))
+               FROM (SELECT * FROM tool_calls WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+         ELSE NULL END AS tool_call_rows_json,
+    CASE WHEN EXISTS (SELECT 1 FROM assistant_output_files AS f WHERE f.message_key = m.message_key)
+         THEN (SELECT json_group_array(json_array(
+                    ordered.path,
+                    ordered.line_index,
+                    ordered.start_index,
+                    ordered.end_index
+                ))
+               FROM (SELECT * FROM assistant_output_files WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+         ELSE NULL END AS output_file_rows_json,
+    CASE WHEN EXISTS (SELECT 1 FROM run_change_paths AS p WHERE p.message_key = m.message_key)
+         THEN (SELECT json_group_array(ordered.path)
+               FROM (SELECT path FROM run_change_paths WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+         ELSE NULL END AS change_paths_json
+"""
+
+_MESSAGE_RECORD_JOINS = """
+    LEFT JOIN assistant_messages AS a ON a.message_key = m.message_key
+    LEFT JOIN tool_messages AS t ON t.message_key = m.message_key
+    LEFT JOIN user_message_senders AS u ON u.message_key = m.message_key
+    LEFT JOIN error_messages AS e ON e.message_key = m.message_key
+    LEFT JOIN compaction_checkpoints AS c ON c.message_key = m.message_key
+    LEFT JOIN run_summaries AS r ON r.message_key = m.message_key
+    LEFT JOIN history_edits AS h ON h.message_key = m.message_key
+"""
+
+
+def _message_records_sql(*, where: str, order_by: str = "") -> str:
+    return (
+        f"SELECT {_MESSAGE_RECORD_COLUMNS} FROM messages AS m "
+        f"{_MESSAGE_RECORD_JOINS} WHERE {where} {order_by}"
+    )
+
 
 _FTS_BATCH_SIZE = 100
 _FTS_REBUILD_THROTTLE_S = 0.01
+_OFFLINE_IMPORT_CACHE_KIB = 262_144
 _SEARCH_RESULT_LIMIT = 1_000
 _SEARCH_FETCH_BATCH_SIZE = 100
 _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
+_SNAPSHOT_ID_KEY = "last_snapshot_id"
+_SNAPSHOT_HISTORY_REVISION_KEY = "last_snapshot_history_revision"
+_SNAPSHOT_STATE_REVISION_KEY = "last_snapshot_state_revision"
+_CONTINUATION_RECORD_VERSION = 1
+_CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 
 
 def _fts_meta(connection: sqlite3.Connection, key: str) -> str | None:
@@ -81,9 +204,8 @@ def _set_fts_meta(connection: sqlite3.Connection, key: str, value: str) -> None:
     connection.execute("INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (key, value))
 
 
-def _search_projection(message_json: str) -> str:
-    """Build the Recall-owned text projection without indexing raw JSON."""
-    message = _message_from_json(message_json)
+def _search_projection(message: ChatMessage) -> str:
+    """Build the Recall-owned text projection from one canonical Message."""
     from core.recall.canonical import (
         SESSION_RECALL_CONVERSATION_ROLES,
         is_recall_artifact_message,
@@ -100,62 +222,98 @@ def _search_projection(message_json: str) -> str:
     return message_search_text(message)
 
 
-def _fts_table_exists(connection: sqlite3.Connection) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'"
-        ).fetchone()
-        is not None
+def _message_is_searchable(message: ChatMessage) -> bool:
+    """Test index eligibility without materializing large Message search text."""
+    from core.recall.canonical import (
+        SESSION_RECALL_CONVERSATION_ROLES,
+        is_recall_artifact_message,
+    )
+    from core.sessions.sessions import is_skill_context_note
+
+    if (
+        message.role not in SESSION_RECALL_CONVERSATION_ROLES
+        or is_recall_artifact_message(message)
+        or is_skill_context_note(message)
+    ):
+        return False
+    return bool(
+        message.content
+        or message.reasoning
+        or message.name
+        or message.error_kind
+        or message.tool_calls
     )
 
 
-def _fts_content_exists(connection: sqlite3.Connection) -> bool:
+def _fts_table_exists(connection: sqlite3.Connection, table: str = FTS_TABLE) -> bool:
     return (
         connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_search'"
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
         ).fetchone()
         is not None
     )
 
 
 def _drop_fts_triggers(connection: sqlite3.Connection) -> None:
-    for trigger in ("messages_fts_insert", "messages_fts_delete", "messages_fts_update"):
+    for trigger in FTS_TRIGGERS:
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+
+
+def _drop_fts(connection: sqlite3.Connection) -> None:
+    _drop_fts_triggers(connection)
+    connection.execute(f"DROP TABLE IF EXISTS {FTS_TRIGRAM_TABLE}")
+    connection.execute(f"DROP VIEW IF EXISTS {FTS_TRIGRAM_VIEW}")
+    connection.execute(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+    connection.execute(f"DROP VIEW IF EXISTS {FTS_VIEW}")
 
 
 def _fts_coverage_ok(
     connection: sqlite3.Connection, *, verify_internal_index: bool = True
 ) -> tuple[bool, str | None]:
-    if not _fts_table_exists(connection) or not _fts_content_exists(connection):
+    if not _fts_table_exists(connection) or not _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         return False, "FTS tables are missing"
-    missing_projection = connection.execute(
+    missing_base = connection.execute(
         """
         SELECT 1
         FROM messages AS m
-        LEFT JOIN message_search AS ms ON ms.message_key = m.message_key
-        WHERE ms.message_key IS NULL
+        LEFT JOIN messages_fts_docsize AS indexed ON indexed.id = m.message_key
+        WHERE (m.searchable = 1 AND m.active = 1 AND indexed.id IS NULL)
+           OR ((m.searchable = 0 OR m.active = 0) AND indexed.id IS NOT NULL)
         LIMIT 1
         """
     ).fetchone()
-    if missing_projection is not None:
-        return False, "canonical Messages are missing FTS projections"
-    # External-content FTS tables synthesize ordinary row scans from the content
-    # table. Joining them therefore cannot prove that the internal index contains
-    # the same rows. FTS5's rank=1 integrity check explicitly compares both.
+    if missing_base is not None:
+        return False, "canonical Messages are missing base FTS rows"
+    invalid_trigram = connection.execute(
+        """
+        SELECT 1
+        FROM messages AS m
+        LEFT JOIN messages_fts_trigram_docsize AS indexed ON indexed.id = m.message_key
+        WHERE (m.searchable = 1 AND m.active = 1 AND m.role <> 'tool' AND indexed.id IS NULL)
+           OR ((m.searchable = 0 OR m.active = 0 OR m.role = 'tool') AND indexed.id IS NOT NULL)
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_trigram is not None:
+        return False, "trigram FTS coverage does not match non-Tool Messages"
     if verify_internal_index:
         try:
             connection.execute(
                 "INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)"
             )
+            connection.execute(
+                "INSERT INTO messages_fts_trigram(messages_fts_trigram, rank) VALUES('integrity-check', 1)"
+            )
         except sqlite3.DatabaseError:
-            return False, "FTS index does not match the searchable projection"
+            return False, "FTS index does not match canonical Messages"
     return True, None
 
 
 def _fts_health_from_connection(
     connection: sqlite3.Connection, *, verify_internal_index: bool = True
 ) -> FtsHealth:
-    if not _fts_table_exists(connection) or not _fts_content_exists(connection):
+    if not _fts_table_exists(connection) or not _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         return FtsHealth(state="unavailable", reason="FTS tables are missing")
     storage_version = _fts_meta(connection, FTS_STORAGE_VERSION_KEY)
     generation = _fts_meta(connection, FTS_GENERATION_KEY)
@@ -216,23 +374,32 @@ def _fts_rebuild_boundary(stage: str, high_water: int) -> None:
 def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
     """Create or repair the derived FTS projection without weakening canonical storage."""
     try:
-        health = _fts_health_from_connection(connection)
+        health = _fts_health_from_connection(connection, verify_internal_index=False)
         if health.available:
             return
-        if _fts_table_exists(connection):
-            _drop_fts_triggers(connection)
-            connection.execute("DROP TABLE IF EXISTS messages_fts")
+        if (
+            health.state == "rebuilding"
+            and _fts_meta(connection, FTS_STORAGE_VERSION_KEY) == str(FTS_STORAGE_VERSION)
+            and _fts_table_exists(connection)
+            and _fts_table_exists(connection, FTS_TRIGRAM_TABLE)
+        ):
+            _backfill_fts(connection)
+            _finish_fts_rebuild(connection)
+            return
+        if _fts_table_exists(connection) or _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
+            _drop_fts(connection)
         try:
             connection.executescript(FTS_SQL)
         except sqlite3.Error:
-            connection.execute("DROP TABLE IF EXISTS messages_fts")
+            _drop_fts(connection)
             connection.executescript(FTS_SQL_FALLBACK)
         _set_fts_meta(connection, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
         _set_fts_meta(connection, FTS_GENERATION_KEY, uuid.uuid4().hex)
+        _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, "0")
         _set_fts_meta(connection, FTS_STALE_KEY, "rebuilding")
         _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
         connection.commit()
-        _backfill_message_search(connection)
+        _backfill_fts(connection)
         _finish_fts_rebuild(connection)
     except sqlite3.Error as exc:
         _set_fts_meta(connection, FTS_STALE_KEY, "1")
@@ -241,8 +408,8 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
         _LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
 
 
-def _backfill_message_search(connection: sqlite3.Connection) -> None:
-    """Populate missing canonical projections in committed bounded batches."""
+def _backfill_fts(connection: sqlite3.Connection) -> None:
+    """Populate both external-content indexes in committed bounded batches."""
     generation = _fts_meta(connection, FTS_GENERATION_KEY) or uuid.uuid4().hex
     _set_fts_meta(connection, FTS_GENERATION_KEY, generation)
     previous = _fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY)
@@ -271,14 +438,17 @@ def _backfill_message_search(connection: sqlite3.Connection) -> None:
         try:
             rows = connection.execute(
                 """
-                SELECT m.message_key, m.message_json
+                SELECT m.message_key, m.role, m.searchable, m.active,
+                       source.content, source.content_search, source.reasoning,
+                       source.name, source.error_kind, source.tool_calls
                 FROM messages AS m
-                LEFT JOIN message_search AS ms ON ms.message_key = m.message_key
-                WHERE ms.message_key IS NULL AND m.message_key <= ?
+                LEFT JOIN messages_fts_source AS source
+                  ON source.message_key = m.message_key
+                WHERE m.message_key > ? AND m.message_key <= ?
                 ORDER BY m.message_key
                 LIMIT ?
                 """,
-                (target, _FTS_BATCH_SIZE),
+                (completed, target, _FTS_BATCH_SIZE),
             ).fetchall()
             if not rows:
                 connection.execute("COMMIT")
@@ -286,10 +456,31 @@ def _backfill_message_search(connection: sqlite3.Connection) -> None:
             batch_max = int(rows[-1][0])
             _fts_rebuild_boundary("before_batch_commit", batch_max)
             for row in rows:
-                connection.execute(
-                    "INSERT INTO message_search (message_key, search_text) VALUES (?, ?)",
-                    (int(row[0]), _search_projection(str(row[1]))),
+                values = (
+                    row["content"],
+                    row["content_search"],
+                    row["reasoning"],
+                    row["name"],
+                    row["error_kind"],
+                    row["tool_calls"],
                 )
+                if bool(row["searchable"]) and bool(row["active"]):
+                    connection.execute(
+                        "INSERT INTO messages_fts(rowid, content, content_search, reasoning, name, error_kind, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (int(row["message_key"]), *values),
+                    )
+                if bool(row["searchable"]) and bool(row["active"]) and row["role"] != "tool":
+                    connection.execute(
+                        "INSERT INTO messages_fts_trigram(rowid, content, content_search, name, error_kind, tool_calls) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            int(row["message_key"]),
+                            row["content"],
+                            row["content_search"],
+                            row["name"],
+                            row["error_kind"],
+                            row["tool_calls"],
+                        ),
+                    )
             _set_fts_meta(
                 connection,
                 FTS_COMPLETED_HIGH_WATER_KEY,
@@ -308,7 +499,6 @@ def _backfill_message_search(connection: sqlite3.Connection) -> None:
 
 def _finish_fts_rebuild(connection: sqlite3.Connection) -> None:
     """Rebuild FTS rows and clear stale only after explicit coverage checks."""
-    connection.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
     coverage_ok, coverage_reason = _fts_coverage_ok(connection)
     if not coverage_ok:
         _set_fts_meta(
@@ -334,19 +524,8 @@ def _detach_fts(connection: sqlite3.Connection, reason: str = "FTS write failed"
     with suppress(sqlite3.Error):
         _set_fts_meta(connection, FTS_STALE_KEY, "1")
         _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, reason)
-        _drop_fts_triggers(connection)
-        connection.execute("DROP TABLE IF EXISTS messages_fts")
+        _drop_fts(connection)
     _LOGGER.warning("Session FTS detached after corruption; canonical writes continue")
-
-
-def _insert_message_search(connection: sqlite3.Connection, message_key: int, payload: str) -> None:
-    """Maintain the derived projection inside the canonical write transaction."""
-    if not _fts_content_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
-        return
-    connection.execute(
-        "INSERT INTO message_search (message_key, search_text) VALUES (?, ?)",
-        (message_key, _search_projection(payload)),
-    )
 
 
 def _mark_fts_write(connection: sqlite3.Connection) -> None:
@@ -357,6 +536,67 @@ def _mark_fts_write(connection: sqlite3.Connection) -> None:
     )
     _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
     _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(target))
+
+
+def _insert_fts_message(connection: sqlite3.Connection, message_key: int) -> None:
+    """Project one fully written normalized Message into disposable FTS."""
+    if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
+        return
+    connection.execute(
+        """
+        INSERT INTO messages_fts(
+            rowid, content, content_search, reasoning, name, error_kind, tool_calls
+        )
+        SELECT message_key, content, content_search, reasoning, name, error_kind, tool_calls
+        FROM messages_fts_source
+        WHERE message_key = ?
+        """,
+        (message_key,),
+    )
+    role = connection.execute(
+        "SELECT role FROM messages WHERE message_key = ?", (message_key,)
+    ).fetchone()
+    if role is not None and role[0] != "tool" and _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
+        connection.execute(
+            """
+            INSERT INTO messages_fts_trigram(
+                rowid, content, content_search, name, error_kind, tool_calls
+            )
+            SELECT message_key, content, content_search, name, error_kind, tool_calls
+            FROM messages_fts_trigram_source
+            WHERE message_key = ?
+            """,
+            (message_key,),
+        )
+
+
+def _delete_fts_message(connection: sqlite3.Connection, message_key: int) -> None:
+    """Delete one still-visible projection before canonical state changes hide it."""
+    if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
+        return
+    connection.execute(
+        """
+        INSERT INTO messages_fts(
+            messages_fts, rowid, content, content_search, reasoning, name, error_kind, tool_calls
+        )
+        SELECT 'delete', message_key, content, content_search, reasoning, name, error_kind, tool_calls
+        FROM messages_fts_source
+        WHERE message_key = ?
+        """,
+        (message_key,),
+    )
+    if _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
+        connection.execute(
+            """
+            INSERT INTO messages_fts_trigram(
+                messages_fts_trigram, rowid, content, content_search, name, error_kind, tool_calls
+            )
+            SELECT 'delete', message_key, content, content_search, name, error_kind, tool_calls
+            FROM messages_fts_trigram_source
+            WHERE message_key = ?
+            """,
+            (message_key,),
+        )
 
 
 # Application-level patience is budgeted in seconds; SQLite's own busy handler is
@@ -371,6 +611,7 @@ class SessionStore:
         self.path = Path(path)
         self._runtime = SQLiteRuntime(self.path)
         self._offline = _offline
+        self._offline_bulk_import = False
         try:
             self._writer = self._open_runtime(offline=_offline)
         except BaseException:
@@ -449,7 +690,6 @@ class SessionStore:
 
     @staticmethod
     def _verify_connection(connection: sqlite3.Connection, path: Path) -> None:
-        SessionStore._verify_integrity(connection, path)
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version != SCHEMA_VERSION:
             raise SessionStoreSchemaMismatchError(
@@ -458,17 +698,22 @@ class SessionStore:
         application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
         if application_id != APPLICATION_ID:
             raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
-
-    @staticmethod
-    def _verify_integrity(connection: sqlite3.Connection, path: Path) -> None:
-        integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
-        if str(integrity) != "ok":
+        try:
+            for table in (
+                "store_meta",
+                "sessions",
+                "messages",
+                "assistant_messages",
+                "tool_calls",
+                "tool_messages",
+                "run_summaries",
+                "continuations",
+            ):
+                connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+        except sqlite3.DatabaseError as exc:
             raise SessionStoreCorruptError(
-                f"Session database integrity check failed at {path}: {integrity}"
-            )
-        foreign_key_error = connection.execute("PRAGMA foreign_key_check").fetchone()
-        if foreign_key_error is not None:
-            raise SessionStoreCorruptError(f"Session foreign-key check failed at {path}")
+                f"Session database structure is unreadable at {path}"
+            ) from exc
 
     @staticmethod
     def _verify_database_identity(
@@ -531,6 +776,9 @@ class SessionStore:
     def _try_fts_merge(self) -> None:
         def merge(connection: sqlite3.Connection) -> None:
             connection.execute("INSERT INTO messages_fts(messages_fts, rank) VALUES('merge', 16)")
+            connection.execute(
+                "INSERT INTO messages_fts_trigram(messages_fts_trigram, rank) VALUES('merge', 16)"
+            )
 
         with suppress(Exception):
             self._runtime.execute_write(merge, patience_s=ACTIVITY_WRITE_PATIENCE_S)
@@ -546,8 +794,64 @@ class SessionStore:
     def checkpoint(self) -> None:
         self._runtime.checkpoint()
 
-    def backup(self, destination: Path) -> None:
-        self._runtime.backup(destination)
+    def prepare_offline_bulk_import(self) -> None:
+        """Open one disposable canonical-data transaction without maintaining FTS."""
+        if not self._offline:
+            raise RuntimeError("bulk import mode is available only to the offline converter")
+        if self._offline_bulk_import:
+            raise RuntimeError("bulk import mode is already active")
+        mode = str(self._writer.execute("PRAGMA journal_mode=MEMORY").fetchone()[0]).lower()
+        if mode != "memory":
+            raise SessionStoreUnavailableError("staged Session database rejected MEMORY journal")
+        self._writer.execute("PRAGMA synchronous=OFF")
+        self._writer.execute("PRAGMA temp_store=MEMORY")
+        self._writer.execute(f"PRAGMA cache_size=-{_OFFLINE_IMPORT_CACHE_KIB}")
+        _drop_fts(self._writer)
+        _set_fts_meta(self._writer, FTS_STALE_KEY, "offline-import")
+        self._writer.execute("BEGIN IMMEDIATE")
+        self._offline_bulk_import = True
+
+    def finish_offline_bulk_import(self) -> None:
+        """Commit canonical rows and build both disposable FTS indexes in SQLite."""
+        if not self._offline or not self._offline_bulk_import:
+            raise RuntimeError("bulk import mode is not active")
+        self._writer.execute("COMMIT")
+        self._offline_bulk_import = False
+        try:
+            self._writer.executescript(FTS_SQL)
+        except sqlite3.Error:
+            _drop_fts(self._writer)
+            self._writer.executescript(FTS_SQL_FALLBACK)
+        target = int(
+            self._writer.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+        )
+        _set_fts_meta(self._writer, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
+        _set_fts_meta(self._writer, FTS_GENERATION_KEY, uuid.uuid4().hex)
+        _set_fts_meta(self._writer, FTS_TARGET_HIGH_WATER_KEY, str(target))
+        _set_fts_meta(self._writer, FTS_COMPLETED_HIGH_WATER_KEY, "0")
+        _set_fts_meta(self._writer, FTS_STALE_KEY, "rebuilding")
+        _set_fts_meta(self._writer, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
+        self._writer.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+        if _fts_table_exists(self._writer, FTS_TRIGRAM_TABLE):
+            self._writer.execute(
+                "INSERT INTO messages_fts_trigram(messages_fts_trigram) VALUES('rebuild')"
+            )
+        coverage_ok, coverage_reason = _fts_coverage_ok(self._writer)
+        if not coverage_ok:
+            raise SessionStoreCorruptError(
+                coverage_reason or "offline FTS rebuild did not cover canonical Messages"
+            )
+        _set_fts_meta(self._writer, FTS_COMPLETED_HIGH_WATER_KEY, str(target))
+        _set_fts_meta(self._writer, FTS_DEGRADED_REASON_KEY, "")
+        self._writer.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
+
+    def backup(
+        self,
+        destination: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        return self._runtime.backup(destination, cancel_event=cancel_event)
 
     def verify_read_write(self) -> None:
         """Exercise the opened Runtime's read/write path without changing canonical rows."""
@@ -574,12 +878,61 @@ class SessionStore:
             ).fetchone()
         return int(row[0]), int(row[1])
 
+    def snapshot_checkpoint(self) -> tuple[str, tuple[int, int]] | None:
+        """Return the durable pointer to the last source-consistent snapshot."""
+        with self._transaction(write=False) as connection:
+            values = {
+                str(row[0]): str(row[1])
+                for row in connection.execute(
+                    "SELECT key, value FROM store_meta WHERE key IN (?, ?, ?)",
+                    (
+                        _SNAPSHOT_ID_KEY,
+                        _SNAPSHOT_HISTORY_REVISION_KEY,
+                        _SNAPSHOT_STATE_REVISION_KEY,
+                    ),
+                )
+            }
+        if set(values) != {
+            _SNAPSHOT_ID_KEY,
+            _SNAPSHOT_HISTORY_REVISION_KEY,
+            _SNAPSHOT_STATE_REVISION_KEY,
+        }:
+            return None
+        try:
+            revisions = (
+                int(values[_SNAPSHOT_HISTORY_REVISION_KEY]),
+                int(values[_SNAPSHOT_STATE_REVISION_KEY]),
+            )
+        except ValueError:
+            return None
+        if any(value < 0 for value in revisions):
+            return None
+        return values[_SNAPSHOT_ID_KEY], revisions
+
+    def record_snapshot_checkpoint(self, snapshot_id: str, revisions: tuple[int, int]) -> None:
+        """Persist a completed snapshot pointer without changing Session revisions."""
+        if not snapshot_id or any(separator in snapshot_id for separator in ("/", "\\")):
+            raise SessionStoreCorruptError("snapshot id is invalid")
+        history_revision, state_revision = revisions
+        if history_revision < 0 or state_revision < 0:
+            raise SessionStoreCorruptError("snapshot revisions are invalid")
+
+        def write(connection: sqlite3.Connection) -> None:
+            for key, value in (
+                (_SNAPSHOT_ID_KEY, snapshot_id),
+                (_SNAPSHOT_HISTORY_REVISION_KEY, str(history_revision)),
+                (_SNAPSHOT_STATE_REVISION_KEY, str(state_revision)),
+            ):
+                _set_fts_meta(connection, key, value)
+
+        self._execute_write(write, patience_s=ACTIVITY_WRITE_PATIENCE_S)
+
     def status_projection(self) -> JsonObject:
         """Return operator-safe health, snapshot, and incident state."""
         from core.sessions.snapshots import (
             read_recovery_incident,
             read_snapshot_health,
-            snapshot_summaries,
+            snapshot_inventory,
         )
 
         marker = read_session_store_marker(self.path.parent)
@@ -587,7 +940,7 @@ class SessionStore:
             raise SessionStorageFormatError("current-format Session marker is missing")
         fts = self.fts_health()
         incident = read_recovery_incident(self.path.parent)
-        snapshots = snapshot_summaries(
+        snapshots = snapshot_inventory(
             self.path.parent, expected_database_id=str(marker["database_id"])
         )
         snapshot_health = read_snapshot_health(self.path.parent)
@@ -664,10 +1017,10 @@ class SessionStore:
             raise ChatSessionError("offline generation id is invalid")
         metadata_payload = _json_object(metadata, "session metadata")
         activity_payload = _json_object(activity, "session activity")
-        encoded_messages = [_message_row(message) for message in messages]
-        encoded_continuation = [
-            _json_object(record, "continuation record") for record in continuation
-        ]
+        for message in messages:
+            _message_base_row(message)
+        for record in continuation:
+            _json_object(record, "continuation record")
 
         def _fn(connection: sqlite3.Connection) -> None:
             try:
@@ -681,13 +1034,16 @@ class SessionStore:
                         *self._scope(address),
                         "archived" if archived else "live",
                         created_at,
-                        encoded_messages[-1][2] if encoded_messages else None,
+                        messages[-1].timestamp if messages else None,
                         created_at if archived else None,
-                        len(encoded_messages),
-                        encoded_messages[-1][0] if encoded_messages else None,
-                        1 if encoded_messages else 0,
+                        len(messages),
+                        messages[-1].id if messages else None,
+                        1 if messages else 0,
                         1
-                        if encoded_messages or metadata_payload != "{}" or activity_payload != "{}"
+                        if messages
+                        or continuation
+                        or metadata_payload != "{}"
+                        or activity_payload != "{}"
                         else 0,
                         metadata_payload,
                         activity_payload,
@@ -700,23 +1056,30 @@ class SessionStore:
             session_key = cursor.lastrowid
             if session_key is None:
                 raise SessionStoreCorruptError("SQLite did not return an offline Session key")
-            for sequence, (message_id, role, timestamp, payload) in enumerate(encoded_messages):
-                message_cursor = connection.execute(
-                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (session_key, sequence, message_id, role, timestamp, payload),
+            for sequence, message in enumerate(messages):
+                _insert_message(
+                    connection,
+                    int(session_key),
+                    sequence,
+                    message,
+                    index_fts=not self._offline_bulk_import,
                 )
-                message_key = message_cursor.lastrowid
-                if message_key is None:
-                    raise SessionStoreCorruptError("SQLite did not return an offline message key")
-                _insert_message_search(connection, int(message_key), payload)
-            for sequence, payload in enumerate(encoded_continuation):
-                connection.execute(
-                    "INSERT INTO continuation_records (session_key, seq, record_json) VALUES (?, ?, ?)",
-                    (session_key, sequence, payload),
-                )
-            _mark_fts_write(connection)
+            for record in continuation:
+                _apply_continuation_record(connection, int(session_key), record)
+            if not self._offline_bulk_import:
+                _mark_fts_write(connection)
 
+        if self._offline_bulk_import:
+            savepoint = f"generation_{generation_id}"
+            self._writer.execute(f"SAVEPOINT {savepoint}")
+            try:
+                _fn(self._writer)
+                self._writer.execute(f"RELEASE {savepoint}")
+            except BaseException:
+                self._writer.execute(f"ROLLBACK TO {savepoint}")
+                self._writer.execute(f"RELEASE {savepoint}")
+                raise
+            return
         self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
 
     def ensure_live(self, address: SessionAddress) -> None:
@@ -852,25 +1215,19 @@ class SessionStore:
     def append_messages(self, address: SessionAddress, messages: Sequence[ChatMessage]) -> None:
         if not messages:
             return
-        encoded = [_message_row(message) for message in messages]
+        for message in messages:
+            _message_base_row(message)
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             session_key = int(state["session_key"])
             next_seq = int(state["message_count"])
-            for index, (message_id, role, timestamp, payload) in enumerate(encoded):
-                cursor = connection.execute(
-                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) VALUES (?, ?, ?, ?, ?, ?)",
-                    (session_key, next_seq + index, message_id, role, timestamp, payload),
-                )
-                message_key = cursor.lastrowid
-                if message_key is None:
-                    raise SessionStoreCorruptError("SQLite did not return a canonical message key")
-                _insert_message_search(connection, int(message_key), payload)
-            last_id, _role, last_timestamp, _payload = encoded[-1]
+            for index, message in enumerate(messages):
+                _insert_message(connection, session_key, next_seq + index, message)
+            last_message = messages[-1]
             connection.execute(
                 "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, last_message_id = ?, history_revision = history_revision + 1, state_revision = state_revision + 1 WHERE session_key = ?",
-                (len(encoded), last_timestamp, last_id, session_key),
+                (len(messages), last_message.timestamp, last_message.id, session_key),
             )
             _mark_fts_write(connection)
 
@@ -881,10 +1238,23 @@ class SessionStore:
         with self._transaction(write=False) as connection:
             state = self._require_live(connection, address)
             rows = connection.execute(
-                "SELECT message_json FROM messages WHERE session_key = ? ORDER BY seq",
+                _message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
                 (state["session_key"],),
             ).fetchall()
-        return [_message_from_json(row["message_json"]) for row in rows]
+        return [message_from_row(row) for row in rows]
+
+    def active_messages(self, address: SessionAddress) -> list[ChatMessage]:
+        """Load the relationally materialized active lineage only."""
+        with self._transaction(write=False) as connection:
+            state = self._require_live(connection, address)
+            rows = connection.execute(
+                _message_records_sql(
+                    where="m.session_key = ? AND m.active = 1",
+                    order_by="ORDER BY m.seq",
+                ),
+                (state["session_key"],),
+            ).fetchall()
+        return [message_from_row(row) for row in rows]
 
     def messages_since(
         self, address: SessionAddress, cursor: SessionReadCursor | None
@@ -912,41 +1282,33 @@ class SessionStore:
                     return None
             start = 0 if cursor is None else cursor.next_seq
             rows = connection.execute(
-                "SELECT message_json FROM messages WHERE session_key = ? AND seq >= ? ORDER BY seq",
+                _message_records_sql(
+                    where="m.session_key = ? AND m.seq >= ?",
+                    order_by="ORDER BY m.seq",
+                ),
                 (state["session_key"], start),
             ).fetchall()
         return (
-            [_message_from_json(row["message_json"]) for row in rows],
+            [message_from_row(row) for row in rows],
             SessionReadCursor(generation_id, revision, count, count, last_id),
         )
 
     def continuation(self, address: SessionAddress) -> list[JsonObject]:
         with self._transaction(write=False) as connection:
             state = self._require_live(connection, address)
-            rows = connection.execute(
-                "SELECT record_json FROM continuation_records WHERE session_key = ? ORDER BY seq",
-                (state["session_key"],),
-            ).fetchall()
-        return [_json_from_payload(row["record_json"], "continuation record") for row in rows]
+            return _continuation_records(connection, int(state["session_key"]))
 
     def append_continuation(self, address: SessionAddress, records: Sequence[JsonObject]) -> None:
         if not records:
             return
-        payloads = [_json_object(record, "continuation record") for record in records]
+        for record in records:
+            _json_object(record, "continuation record")
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
-            sequence = connection.execute(
-                "SELECT COALESCE(MAX(seq) + 1, 0) AS value FROM continuation_records WHERE session_key = ?",
-                (state["session_key"],),
-            ).fetchone()["value"]
-            connection.executemany(
-                "INSERT INTO continuation_records (session_key, seq, record_json) VALUES (?, ?, ?)",
-                [
-                    (state["session_key"], int(sequence) + index, payload)
-                    for index, payload in enumerate(payloads)
-                ],
-            )
+            session_key = int(state["session_key"])
+            for record in records:
+                _apply_continuation_record(connection, session_key, record)
             self._touch_state(connection, int(state["session_key"]))
 
         self._execute_write(_fn)
@@ -955,7 +1317,7 @@ class SessionStore:
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
-                "DELETE FROM continuation_records WHERE session_key = ?",
+                "DELETE FROM continuations WHERE session_key = ?",
                 (state["session_key"],),
             )
             self._touch_state(connection, int(state["session_key"]))
@@ -1063,14 +1425,11 @@ class SessionStore:
         return versions
 
     def fts_health(self) -> FtsHealth:
-        """Return the integrated FTS state after checking metadata and coverage."""
+        """Return integrated FTS state without a whole-index startup/status scan."""
         try:
 
             def verify(connection: sqlite3.Connection) -> FtsHealth:
-                health = _fts_health_from_connection(connection)
-                if health.reason == "FTS index does not match the searchable projection":
-                    _detach_fts(connection, health.reason)
-                return health
+                return _fts_health_from_connection(connection, verify_internal_index=False)
 
             return cast(
                 FtsHealth,
@@ -1122,13 +1481,12 @@ class SessionStore:
         def canonical_rows(
             connection: sqlite3.Connection,
         ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-            sql = """
-                SELECT s.project_id, s.agent_id, s.session_id, m.message_id,
-                       m.timestamp, m.message_json, m.message_key
-                FROM messages AS m
-                JOIN sessions AS s ON s.session_key = m.session_key
-                WHERE s.status = 'live'
-            """
+            sql = (
+                f"SELECT s.project_id, s.agent_id, s.session_id, {_MESSAGE_RECORD_COLUMNS} "
+                f"FROM messages AS m {_MESSAGE_RECORD_JOINS} "
+                "JOIN sessions AS s ON s.session_key = m.session_key "
+                "WHERE s.status = 'live' AND m.active = 1"
+            )
             params: list[Any] = []
             if project_id is not None:
                 sql += " AND s.project_id = ?"
@@ -1163,9 +1521,10 @@ class SessionStore:
                 if not batch:
                     break
                 for row in batch:
-                    payload = str(row["message_json"])
-                    if not matches(_search_projection(payload)):
+                    message = message_from_row(row)
+                    if not matches(_search_projection(message)):
                         continue
+                    payload = _message_payload(row)
                     from core.sessions.sessions import SessionAddress as SessionAddr
 
                     result.append(
@@ -1205,60 +1564,72 @@ class SessionStore:
 
         try:
             with self._transaction(write=False) as connection:
-                sql = """
-                    SELECT s.project_id, s.agent_id, s.session_id, m.message_id,
-                           m.timestamp, m.message_json, bm25(messages_fts) AS rank
-                    FROM messages_fts
-                    JOIN messages AS m ON m.message_key = messages_fts.rowid
-                    JOIN sessions AS s ON s.session_key = m.session_key
-                    WHERE messages_fts MATCH ? AND s.status = 'live'
-                """
-                params: list[Any] = [expression]
-                if project_id is not None:
-                    sql += " AND s.project_id = ?"
-                    params.append(project_id)
-                else:
-                    sql += " AND s.project_id = ''"
-                if agent_id is not None:
-                    sql += " AND s.agent_id = ?"
-                    params.append(agent_id)
-                if session_id is not None:
-                    sql += " AND s.session_id = ?"
-                    params.append(session_id)
-                if roles is not None:
-                    placeholders = ", ".join("?" for _ in roles)
-                    sql += f" AND m.role IN ({placeholders})"
-                    params.extend(roles)
-                if since is not None:
-                    sql += " AND julianday(m.timestamp) >= julianday(?)"
-                    params.append(since)
-                if until is not None:
-                    sql += " AND julianday(m.timestamp) <= julianday(?)"
-                    params.append(until)
-                if excluded_session_ids:
-                    placeholders = ", ".join("?" for _ in excluded_session_ids)
-                    sql += f" AND s.session_id NOT IN ({placeholders})"
-                    params.extend(excluded_session_ids)
-                sql += " ORDER BY rank, m.timestamp DESC, m.message_key LIMIT ?"
-                params.append(limit)
-                rows = connection.execute(sql, params).fetchmany(limit)
-                result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
-                for row in rows:
-                    from core.sessions.sessions import SessionAddress as SessionAddr
 
-                    result.append(
-                        (
-                            SessionAddr(
-                                project_id=row["project_id"] or None,
-                                agent_id=row["agent_id"],
-                                session_id=row["session_id"],
-                            ),
-                            str(row["message_id"]),
-                            str(row["timestamp"]),
-                            str(row["message_json"]),
-                            float(row["rank"]) if row["rank"] is not None else 0.0,
-                        )
+                def query_fts(
+                    fts_table: str,
+                ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+                    sql = (
+                        f"SELECT s.project_id, s.agent_id, s.session_id, "
+                        f"{_MESSAGE_RECORD_COLUMNS}, bm25({fts_table}) AS rank "
+                        f"FROM {fts_table} "
+                        f"JOIN messages AS m ON m.message_key = {fts_table}.rowid "
+                        f"{_MESSAGE_RECORD_JOINS} "
+                        "JOIN sessions AS s ON s.session_key = m.session_key "
+                        f"WHERE {fts_table} MATCH ? AND s.status = 'live' AND m.active = 1"
                     )
+                    params: list[Any] = [expression]
+                    if project_id is not None:
+                        sql += " AND s.project_id = ?"
+                        params.append(project_id)
+                    else:
+                        sql += " AND s.project_id = ''"
+                    if agent_id is not None:
+                        sql += " AND s.agent_id = ?"
+                        params.append(agent_id)
+                    if session_id is not None:
+                        sql += " AND s.session_id = ?"
+                        params.append(session_id)
+                    if roles is not None:
+                        placeholders = ", ".join("?" for _ in roles)
+                        sql += f" AND m.role IN ({placeholders})"
+                        params.extend(roles)
+                    if since is not None:
+                        sql += " AND julianday(m.timestamp) >= julianday(?)"
+                        params.append(since)
+                    if until is not None:
+                        sql += " AND julianday(m.timestamp) <= julianday(?)"
+                        params.append(until)
+                    if excluded_session_ids:
+                        placeholders = ", ".join("?" for _ in excluded_session_ids)
+                        sql += f" AND s.session_id NOT IN ({placeholders})"
+                        params.extend(excluded_session_ids)
+                    sql += " ORDER BY rank, m.timestamp DESC, m.message_key LIMIT ?"
+                    params.append(limit)
+                    rows = connection.execute(sql, params).fetchmany(limit)
+                    found: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
+                    for row in rows:
+                        from core.sessions.sessions import SessionAddress as SessionAddr
+
+                        found.append(
+                            (
+                                SessionAddr(
+                                    project_id=row["project_id"] or None,
+                                    agent_id=row["agent_id"],
+                                    session_id=row["session_id"],
+                                ),
+                                str(row["message_id"]),
+                                str(row["timestamp"]),
+                                _message_payload(row),
+                                float(row["rank"]) if row["rank"] is not None else 0.0,
+                            )
+                        )
+                    return found
+
+                result = query_fts(FTS_TABLE)
+                if not result and not (roles is not None and "tool" in roles):
+                    result = query_fts(FTS_TRIGRAM_TABLE)
+                if not result:
+                    result = canonical_rows(connection)
                 return result
         except sqlite3.Error as exc:
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
@@ -1323,26 +1694,20 @@ class SessionStore:
                 raise ChatSessionError(
                     f"destination session already exists: {target.session_id}"
                 ) from exc
+            target_session_key = target_row.lastrowid
+            if target_session_key is None:
+                raise SessionStoreCorruptError("SQLite did not return a forked Session key")
             source_rows = connection.execute(
-                "SELECT seq, message_id, role, timestamp, message_json FROM messages WHERE session_key = ? ORDER BY seq",
+                _message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
                 (state["session_key"],),
             ).fetchall()
             for row in source_rows:
-                cursor = connection.execute(
-                    "INSERT INTO messages (session_key, seq, message_id, role, timestamp, message_json) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        target_row.lastrowid,
-                        row["seq"],
-                        row["message_id"],
-                        row["role"],
-                        row["timestamp"],
-                        row["message_json"],
-                    ),
+                _insert_message(
+                    connection,
+                    int(target_session_key),
+                    int(row["seq"]),
+                    message_from_row(row),
                 )
-                message_key = cursor.lastrowid
-                if message_key is None:
-                    raise SessionStoreCorruptError("SQLite did not return a canonical message key")
-                _insert_message_search(connection, int(message_key), str(row["message_json"]))
             _mark_fts_write(connection)
 
         self._execute_write(_fn)
@@ -1464,32 +1829,884 @@ def _json_from_payload(value: str, name: str) -> JsonObject:
     return decoded
 
 
-def _message_row(message: ChatMessage) -> tuple[str, str, str, str]:
-    data = message.to_dict()
-    if (
-        data.get("id") != message.id
-        or data.get("role") != message.role
-        or data.get("timestamp") != message.timestamp
-    ):
-        raise ChatSessionError("canonical message projections do not match payload")
+def _optional_json(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
     try:
-        return (
-            message.id,
-            message.role,
-            message.timestamp,
-            json.dumps(data, ensure_ascii=False, separators=(",", ":")),
-        )
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
-        raise ChatSessionError("message is not JSON-serializable") from exc
+        raise ChatSessionError(f"{name} is not JSON-serializable") from exc
 
 
-def _message_from_json(payload: str) -> ChatMessage:
+def _continuation_string(record: JsonObject, key: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value:
+        raise ChatSessionError(f"continuation record {key} must be a non-empty string")
+    return value
+
+
+def _continuation_step(record: JsonObject) -> int:
+    value = record.get("step")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ChatSessionError("continuation record step must be a non-negative integer")
+    return value
+
+
+def _next_continuation_ordinal(connection: sqlite3.Connection, table: str, session_key: int) -> int:
+    if table not in {
+        "continuation_requests",
+        "continuation_steps",
+        "continuation_operations",
+    }:
+        raise RuntimeError(f"unsupported continuation table: {table}")
+    row = connection.execute(
+        f"SELECT COALESCE(MAX(ordinal) + 1, 0) FROM {table} WHERE session_key = ?",
+        (session_key,),
+    ).fetchone()
+    return int(row[0])
+
+
+def _upsert_continuation_operation(
+    connection: sqlite3.Connection,
+    session_key: int,
+    *,
+    tool_call_id: str,
+    name: str,
+    run_id: str,
+    status: str,
+    ok: bool | None,
+    replace_unknown: bool,
+) -> None:
+    existing = connection.execute(
+        "SELECT ordinal FROM continuation_operations WHERE session_key = ? AND tool_call_id = ?",
+        (session_key, tool_call_id),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO continuation_operations (
+                session_key, tool_call_id, ordinal, name, run_id, status, ok
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_key,
+                tool_call_id,
+                _next_continuation_ordinal(connection, "continuation_operations", session_key),
+                name,
+                run_id,
+                status,
+                None if ok is None else int(ok),
+            ),
+        )
+        return
+    if replace_unknown or status == "completed":
+        connection.execute(
+            """
+            UPDATE continuation_operations
+            SET name = ?, run_id = ?, status = ?, ok = ?
+            WHERE session_key = ? AND tool_call_id = ?
+            """,
+            (name, run_id, status, None if ok is None else int(ok), session_key, tool_call_id),
+        )
+
+
+def _apply_continuation_record(
+    connection: sqlite3.Connection, session_key: int, record: JsonObject
+) -> None:
+    if record.get("version") != _CONTINUATION_RECORD_VERSION:
+        raise ChatSessionError("unsupported continuation record version")
+    record_type = record.get("type")
+    if record_type == "run_started":
+        checkpoint_id = _continuation_string(record, "checkpoint_id")
+        run_id = _continuation_string(record, "run_id")
+        origin_run_id = _continuation_string(record, "origin_run_id")
+        existing = connection.execute(
+            "SELECT checkpoint_id FROM continuations WHERE session_key = ?", (session_key,)
+        ).fetchone()
+        if existing is None or str(existing[0]) != checkpoint_id:
+            connection.execute("DELETE FROM continuations WHERE session_key = ?", (session_key,))
+            connection.execute(
+                """
+                INSERT INTO continuations (
+                    session_key, checkpoint_id, origin_run_id, latest_run_id, cause, active
+                ) VALUES (?, ?, ?, ?, NULL, 1)
+                """,
+                (session_key, checkpoint_id, origin_run_id, run_id),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE continuations SET latest_run_id = ?, cause = NULL, active = 1
+                WHERE session_key = ?
+                """,
+                (run_id, session_key),
+            )
+        if record.get("request") is not None:
+            try:
+                request_json = json.dumps(
+                    record["request"], ensure_ascii=False, separators=(",", ":")
+                )
+            except (TypeError, ValueError) as exc:
+                raise ChatSessionError("continuation request is not JSON-serializable") from exc
+            connection.execute(
+                """
+                INSERT INTO continuation_requests (session_key, ordinal, request_json)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    session_key,
+                    _next_continuation_ordinal(connection, "continuation_requests", session_key),
+                    request_json,
+                ),
+            )
+        return
+
+    continuation = connection.execute(
+        "SELECT checkpoint_id FROM continuations WHERE session_key = ?", (session_key,)
+    ).fetchone()
+    if continuation is None:
+        return
+    if record_type in {"stream_delta", "stream_attempt_discarded", "assistant_boundary"}:
+        run_id = _continuation_string(record, "run_id")
+        step = _continuation_step(record)
+        existing = connection.execute(
+            """
+            SELECT reasoning, content, assistant_message_id, interrupted
+            FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?
+            """,
+            (session_key, run_id, step),
+        ).fetchone()
+        if record_type == "stream_attempt_discarded":
+            connection.execute(
+                "DELETE FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?",
+                (session_key, run_id, step),
+            )
+            return
+        reasoning = "" if existing is None else str(existing["reasoning"])
+        content = "" if existing is None else str(existing["content"])
+        assistant_message_id = None if existing is None else existing["assistant_message_id"]
+        interrupted = False if existing is None else bool(existing["interrupted"])
+        if record_type == "stream_delta":
+            if isinstance(record.get("reasoning_delta"), str):
+                reasoning += str(record["reasoning_delta"])
+            if isinstance(record.get("content_delta"), str):
+                content += str(record["content_delta"])
+        else:
+            if isinstance(record.get("reasoning"), str):
+                reasoning = str(record["reasoning"])
+            if isinstance(record.get("content"), str):
+                content = str(record["content"])
+            value = record.get("message_id")
+            assistant_message_id = value if isinstance(value, str) else None
+            interrupted = record.get("interrupted") is True
+        if existing is None:
+            connection.execute(
+                """
+                INSERT INTO continuation_steps (
+                    session_key, run_id, step, ordinal, reasoning, content,
+                    assistant_message_id, interrupted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_key,
+                    run_id,
+                    step,
+                    _next_continuation_ordinal(connection, "continuation_steps", session_key),
+                    reasoning,
+                    content,
+                    assistant_message_id,
+                    int(interrupted),
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE continuation_steps
+                SET reasoning = ?, content = ?, assistant_message_id = ?, interrupted = ?
+                WHERE session_key = ? AND run_id = ? AND step = ?
+                """,
+                (
+                    reasoning,
+                    content,
+                    assistant_message_id,
+                    int(interrupted),
+                    session_key,
+                    run_id,
+                    step,
+                ),
+            )
+        if record_type == "assistant_boundary" and isinstance(record.get("tool_calls"), list):
+            for tool_call in record["tool_calls"]:
+                if not isinstance(tool_call, dict):
+                    continue
+                tool_call_id = tool_call.get("id")
+                name = tool_call.get("name")
+                if (
+                    isinstance(tool_call_id, str)
+                    and tool_call_id
+                    and isinstance(name, str)
+                    and name
+                ):
+                    _upsert_continuation_operation(
+                        connection,
+                        session_key,
+                        tool_call_id=tool_call_id,
+                        name=name,
+                        run_id=run_id,
+                        status="unknown",
+                        ok=None,
+                        replace_unknown=False,
+                    )
+        return
+    if record_type == "tool_started":
+        _upsert_continuation_operation(
+            connection,
+            session_key,
+            tool_call_id=_continuation_string(record, "tool_call_id"),
+            name=_continuation_string(record, "name"),
+            run_id=_continuation_string(record, "run_id"),
+            status="unknown",
+            ok=None,
+            replace_unknown=True,
+        )
+        return
+    if record_type == "tool_result":
+        _upsert_continuation_operation(
+            connection,
+            session_key,
+            tool_call_id=_continuation_string(record, "tool_call_id"),
+            name=_continuation_string(record, "name"),
+            run_id=_continuation_string(record, "run_id"),
+            status="completed",
+            ok=record.get("ok") is True,
+            replace_unknown=True,
+        )
+        return
+    if record_type == "run_interrupted":
+        cause = _continuation_string(record, "cause")
+        if cause not in {"user", "provider", "network", "timeout", "process_restart", "internal"}:
+            raise ChatSessionError(f"unsupported continuation cause: {cause}")
+        connection.execute(
+            """
+            UPDATE continuations SET latest_run_id = ?, cause = ?, active = 0
+            WHERE session_key = ?
+            """,
+            (_continuation_string(record, "run_id"), cause, session_key),
+        )
+        return
+    if record_type == "resolved" and record.get("checkpoint_id") == continuation[0]:
+        connection.execute("DELETE FROM continuations WHERE session_key = ?", (session_key,))
+
+
+def _continuation_records(connection: sqlite3.Connection, session_key: int) -> list[JsonObject]:
+    continuation = connection.execute(
+        "SELECT * FROM continuations WHERE session_key = ?", (session_key,)
+    ).fetchone()
+    if continuation is None:
+        return []
+    requests = connection.execute(
+        "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
+        (session_key,),
+    ).fetchall()
+    base: JsonObject = {
+        "version": _CONTINUATION_RECORD_VERSION,
+        "type": "run_started",
+        "run_id": str(continuation["latest_run_id"]),
+        "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
+        "checkpoint_id": str(continuation["checkpoint_id"]),
+        "origin_run_id": str(continuation["origin_run_id"]),
+    }
+    records: list[JsonObject] = []
+    if requests:
+        for request in requests:
+            records.append({**base, "request": json.loads(str(request[0]))})
+    else:
+        records.append(base)
+    for step in connection.execute(
+        "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
+        (session_key,),
+    ):
+        records.append(
+            {
+                "version": _CONTINUATION_RECORD_VERSION,
+                "type": "assistant_boundary",
+                "run_id": str(step["run_id"]),
+                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
+                "step": int(step["step"]),
+                "message_id": step["assistant_message_id"],
+                "reasoning": str(step["reasoning"]),
+                "content": str(step["content"]),
+                "interrupted": bool(step["interrupted"]),
+            }
+        )
+    for operation in connection.execute(
+        "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
+        (session_key,),
+    ):
+        common: JsonObject = {
+            "version": _CONTINUATION_RECORD_VERSION,
+            "run_id": str(operation["run_id"]),
+            "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
+            "tool_call_id": str(operation["tool_call_id"]),
+            "name": str(operation["name"]),
+        }
+        records.append({**common, "type": "tool_started"})
+        if operation["status"] == "completed":
+            records.append({**common, "type": "tool_result", "ok": bool(operation["ok"])})
+    if not bool(continuation["active"]):
+        records.append(
+            {
+                "version": _CONTINUATION_RECORD_VERSION,
+                "type": "run_interrupted",
+                "run_id": str(continuation["latest_run_id"]),
+                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
+                "cause": str(continuation["cause"]),
+            }
+        )
+    return records
+
+
+def _message_base_row(message: ChatMessage) -> tuple[Any, ...]:
+    message.validate()
+    content = (
+        message.content if isinstance(message.content, str) and message.role != "tool" else None
+    )
+    content_blocks = message.content if isinstance(message.content, list) else None
+    if content_blocks is None:
+        content_search = None
+        content_blocks_json = None
+    else:
+        from core.chat.content_blocks import content_block_to_dict
+        from core.recall.canonical import content_to_text
+
+        content_search = content_to_text(content_blocks)
+        content_blocks_json = _optional_json(
+            [content_block_to_dict(block) for block in content_blocks], "content"
+        )
+    return (
+        message.id,
+        message.role,
+        message.timestamp,
+        content,
+        content_blocks_json,
+        content_search,
+        message.model,
+        int(message.role != "history_edit"),
+        int(_message_is_searchable(message)),
+    )
+
+
+def _split_structured_fields(
+    payload: JsonObject | None,
+    validators: dict[str, Callable[[Any], bool]],
+) -> tuple[dict[str, Any], str | None, bool]:
+    """Promote stable fields while retaining unknown/future fields losslessly."""
+    if payload is None:
+        return {}, None, False
+    remaining = dict(payload)
+    promoted: dict[str, Any] = {}
+    for key, validator in validators.items():
+        if key in remaining and validator(remaining[key]):
+            promoted[key] = remaining.pop(key)
+    return promoted, _optional_json(remaining or None, "structured extras"), True
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_string(value: Any) -> bool:
+    return isinstance(value, str)
+
+
+def _timing_fields(payload: JsonObject | None) -> tuple[dict[str, Any], str | None, bool]:
+    return _split_structured_fields(
+        payload,
+        {
+            "started_at": _is_string,
+            "completed_at": _is_string,
+            "duration_ms": _is_non_negative_int,
+        },
+    )
+
+
+def _deactivate_history_tail(
+    connection: sqlite3.Connection, session_key: int, target_message_id: str
+) -> None:
+    target = connection.execute(
+        """
+        SELECT message_key, seq
+        FROM messages
+        WHERE session_key = ? AND message_id = ? AND role = 'user' AND active = 1
+        ORDER BY seq
+        LIMIT 1
+        """,
+        (session_key, target_message_id),
+    ).fetchone()
+    if target is None:
+        raise ChatSessionError(f"history edit target is not active: {target_message_id}")
+    keys = [
+        int(row[0])
+        for row in connection.execute(
+            "SELECT message_key FROM messages WHERE session_key = ? AND seq >= ? AND active = 1",
+            (session_key, int(target["seq"])),
+        ).fetchall()
+    ]
+    for message_key in keys:
+        _delete_fts_message(connection, message_key)
+    connection.execute(
+        "UPDATE messages SET active = 0 WHERE session_key = ? AND seq >= ? AND active = 1",
+        (session_key, int(target["seq"])),
+    )
+
+
+def _insert_message(
+    connection: sqlite3.Connection,
+    session_key: int,
+    sequence: int,
+    message: ChatMessage,
+    *,
+    index_fts: bool = True,
+) -> int:
+    if message.role == "history_edit":
+        if message.target_message_id is None:
+            raise ChatSessionError("history edit target is missing")
+        _deactivate_history_tail(connection, session_key, message.target_message_id)
+    cursor = connection.execute(
+        _MESSAGE_INSERT,
+        (session_key, sequence, *_message_base_row(message)),
+    )
+    if cursor.lastrowid is None:
+        raise SessionStoreCorruptError("SQLite did not return a canonical message key")
+    message_key = int(cursor.lastrowid)
+
+    if message.role == "assistant":
+        usage, usage_extra, usage_present = _split_structured_fields(
+            message.usage,
+            {
+                "input_tokens": _is_non_negative_int,
+                "output_tokens": _is_non_negative_int,
+                "cache_read_tokens": _is_non_negative_int,
+                "cache_write_tokens": _is_non_negative_int,
+                "reasoning_tokens": _is_non_negative_int,
+                "estimated": _is_bool,
+                "input_tokens_estimated": _is_bool,
+                "output_tokens_estimated": _is_bool,
+            },
+        )
+        reasoning_timing, reasoning_timing_extra, _timing_present = _timing_fields(
+            message.reasoning_timing
+        )
+        connection.execute(
+            """
+            INSERT INTO assistant_messages (
+                message_key, reasoning, reasoning_meta_json, reasoning_scope,
+                reasoning_started_at, reasoning_completed_at, reasoning_duration_ms,
+                reasoning_timing_extra_json, phase, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_estimated,
+                input_tokens_estimated, output_tokens_estimated, usage_present,
+                usage_extra_json, tool_calls_present, interrupted, interruption_cause
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_key,
+                message.reasoning,
+                _optional_json(message.reasoning_meta, "reasoning_meta"),
+                message.reasoning_scope,
+                reasoning_timing.get("started_at"),
+                reasoning_timing.get("completed_at"),
+                reasoning_timing.get("duration_ms"),
+                reasoning_timing_extra,
+                message.phase,
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                usage.get("cache_read_tokens"),
+                usage.get("cache_write_tokens"),
+                usage.get("reasoning_tokens"),
+                None if "estimated" not in usage else int(bool(usage["estimated"])),
+                (
+                    None
+                    if "input_tokens_estimated" not in usage
+                    else int(bool(usage["input_tokens_estimated"]))
+                ),
+                (
+                    None
+                    if "output_tokens_estimated" not in usage
+                    else int(bool(usage["output_tokens_estimated"]))
+                ),
+                int(usage_present),
+                usage_extra,
+                int(message.tool_calls is not None),
+                int(message.interrupted),
+                message.interruption_cause,
+            ),
+        )
+        for ordinal, tool_call in enumerate(message.tool_calls or ()):
+            rejection = tool_call.rejection
+            connection.execute(
+                """
+                INSERT INTO tool_calls (
+                    message_key, ordinal, tool_call_id, name, arguments_json,
+                    rejection_code, rejection_message, rejection_fingerprint,
+                    argument_sequence_index, argument_sequence_length
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_key,
+                    ordinal,
+                    tool_call.id,
+                    tool_call.name,
+                    _json_object(tool_call.arguments, "tool call arguments"),
+                    None if rejection is None else rejection.code,
+                    None if rejection is None else rejection.message,
+                    None if rejection is None else rejection.fingerprint,
+                    tool_call.argument_sequence_index,
+                    tool_call.argument_sequence_length,
+                ),
+            )
+        for ordinal, reference in enumerate(message.output_files or ()):
+            connection.execute(
+                """
+                INSERT INTO assistant_output_files (
+                    message_key, ordinal, path, line_index, start_index, end_index
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_key,
+                    ordinal,
+                    reference.path,
+                    reference.line_index,
+                    reference.start_index,
+                    reference.end_index,
+                ),
+            )
+    elif message.role == "user" and message.sender is not None:
+        connection.execute(
+            """
+            INSERT INTO user_message_senders (
+                message_key, sender_id, display_name, role
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (message_key, message.sender.id, message.sender.display_name, message.sender.role),
+        )
+    elif message.role == "tool":
+        timing, timing_extra, _timing_present = _timing_fields(message.timing)
+        linked = connection.execute(
+            """
+            SELECT tc.tool_call_key
+            FROM tool_calls AS tc
+            JOIN messages AS owner ON owner.message_key = tc.message_key
+            WHERE owner.session_key = ? AND owner.seq < ? AND tc.tool_call_id = ?
+            ORDER BY owner.seq DESC, tc.ordinal DESC
+            LIMIT 1
+            """,
+            (session_key, sequence, message.tool_call_id),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO tool_messages (
+                message_key, tool_call_key, tool_call_id, name, result_content,
+                started_at, completed_at, duration_ms, timing_extra_json, display_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_key,
+                None if linked is None else int(linked[0]),
+                message.tool_call_id,
+                message.name,
+                message.content,
+                timing.get("started_at"),
+                timing.get("completed_at"),
+                timing.get("duration_ms"),
+                timing_extra,
+                _optional_json(message.tool_display, "tool_display"),
+            ),
+        )
+    elif message.role == "error":
+        connection.execute(
+            "INSERT INTO error_messages (message_key, error_kind) VALUES (?, ?)",
+            (message_key, message.error_kind),
+        )
+    elif message.role == "compaction_checkpoint":
+        usage, usage_extra, usage_present = _split_structured_fields(
+            message.usage,
+            {
+                "compacted_token_count": _is_non_negative_int,
+                "context_tokens_before": _is_non_negative_int,
+                "context_tokens_after": _is_non_negative_int,
+                "compaction_duration_ms": _is_non_negative_int,
+            },
+        )
+        connection.execute(
+            """
+            INSERT INTO compaction_checkpoints (
+                message_key, tail_boundary_id, projection_json, policy, strategy,
+                compacted_token_count, context_tokens_before, context_tokens_after,
+                compaction_duration_ms, usage_present, usage_extra_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_key,
+                message.tail_boundary_id,
+                _optional_json(message.projection, "projection"),
+                message.compaction_policy,
+                message.compaction_strategy,
+                usage.get("compacted_token_count"),
+                usage.get("context_tokens_before"),
+                usage.get("context_tokens_after"),
+                usage.get("compaction_duration_ms"),
+                int(usage_present),
+                usage_extra,
+            ),
+        )
+    elif message.role == "run_summary":
+        timing, timing_extra, _timing_present = _timing_fields(message.timing)
+        changes, changes_extra, changes_present = _split_structured_fields(
+            message.change_stats,
+            {
+                "files": _is_non_negative_int,
+                "added": _is_non_negative_int,
+                "removed": _is_non_negative_int,
+                "paths": lambda value: (
+                    isinstance(value, list) and all(isinstance(path, str) for path in value)
+                ),
+            },
+        )
+        connection.execute(
+            """
+            INSERT INTO run_summaries (
+                message_key, run_id, work_id, status, started_at, completed_at,
+                duration_ms, timing_extra_json, iteration_count, changed_files,
+                lines_added, lines_removed, change_stats_extra_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_key,
+                message.run_id,
+                message.work_id,
+                message.status,
+                timing.get("started_at"),
+                timing.get("completed_at"),
+                timing.get("duration_ms"),
+                timing_extra,
+                message.iteration_count,
+                changes.get("files") if changes_present else None,
+                changes.get("added") if changes_present else None,
+                changes.get("removed") if changes_present else None,
+                changes_extra,
+            ),
+        )
+        for ordinal, path in enumerate(changes.get("paths", ())):
+            connection.execute(
+                "INSERT INTO run_change_paths (message_key, ordinal, path) VALUES (?, ?, ?)",
+                (message_key, ordinal, path),
+            )
+    elif message.role == "history_edit":
+        connection.execute(
+            "INSERT INTO history_edits (message_key, target_message_id) VALUES (?, ?)",
+            (message_key, message.target_message_id),
+        )
+
+    if index_fts:
+        _insert_fts_message(connection, message_key)
+    return message_key
+
+
+def message_from_row(row: sqlite3.Row) -> ChatMessage:
+    """Reconstruct one canonical ChatMessage from normalized SQLite columns."""
     from core.chat.messages import ChatMessage
 
     try:
-        return ChatMessage.from_dict(json.loads(payload))
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        data: JsonObject = {
+            "id": str(row["message_id"]),
+            "role": str(row["role"]),
+            "timestamp": str(row["timestamp"]),
+        }
+        content_blocks = row["content_blocks_json"]
+        if content_blocks is not None:
+            data["content"] = json.loads(str(content_blocks))
+        elif row["content"] is not None or row["role_content"] is not None:
+            data["content"] = str(
+                row["content"] if row["content"] is not None else row["role_content"]
+            )
+        scalar_fields = (
+            "model",
+            "reasoning",
+            "reasoning_scope",
+            "phase",
+            "tool_call_id",
+            "name",
+            "error_kind",
+            "tail_boundary_id",
+            "compaction_policy",
+            "compaction_strategy",
+            "run_id",
+            "work_id",
+            "status",
+            "iteration_count",
+            "target_message_id",
+            "interruption_cause",
+        )
+        for field in scalar_fields:
+            if row[field] is not None:
+                data[field] = row[field]
+        json_fields = {
+            "reasoning_meta_json": "reasoning_meta",
+            "tool_display_json": "tool_display",
+            "projection_json": "projection",
+        }
+        for column, field in json_fields.items():
+            if row[column] is not None:
+                data[field] = json.loads(str(row[column]))
+        if (
+            row["reasoning_started_at"] is not None
+            or row["reasoning_timing_extra_json"] is not None
+        ):
+            timing = (
+                {}
+                if row["reasoning_timing_extra_json"] is None
+                else json.loads(str(row["reasoning_timing_extra_json"]))
+            )
+            for key, column in (
+                ("started_at", "reasoning_started_at"),
+                ("completed_at", "reasoning_completed_at"),
+                ("duration_ms", "reasoning_duration_ms"),
+            ):
+                if row[column] is not None:
+                    timing[key] = row[column]
+            data["reasoning_timing"] = timing
+        if bool(row["usage_present"] or row["compaction_usage_present"]):
+            extra_column = (
+                "usage_extra_json" if row["usage_present"] else "compaction_usage_extra_json"
+            )
+            usage = {} if row[extra_column] is None else json.loads(str(row[extra_column]))
+            usage_columns = (
+                ("input_tokens", "input_tokens"),
+                ("output_tokens", "output_tokens"),
+                ("cache_read_tokens", "cache_read_tokens"),
+                ("cache_write_tokens", "cache_write_tokens"),
+                ("reasoning_tokens", "reasoning_tokens"),
+                ("estimated", "usage_estimated"),
+                ("input_tokens_estimated", "input_tokens_estimated"),
+                ("output_tokens_estimated", "output_tokens_estimated"),
+                ("compacted_token_count", "compacted_token_count"),
+                ("context_tokens_before", "context_tokens_before"),
+                ("context_tokens_after", "context_tokens_after"),
+                ("compaction_duration_ms", "compaction_duration_ms"),
+            )
+            for key, column in usage_columns:
+                if row[column] is not None:
+                    usage[key] = (
+                        bool(row[column])
+                        if column
+                        in {
+                            "usage_estimated",
+                            "input_tokens_estimated",
+                            "output_tokens_estimated",
+                        }
+                        else row[column]
+                    )
+            data["usage"] = usage
+        if row["timing_started_at"] is not None or row["run_started_at"] is not None:
+            is_run = row["run_started_at"] is not None
+            prefix = "run_" if is_run else "timing_"
+            extra_column = "run_timing_extra_json" if is_run else "timing_extra_json"
+            timing = {} if row[extra_column] is None else json.loads(str(row[extra_column]))
+            for key, suffix in (
+                ("started_at", "started_at"),
+                ("completed_at", "completed_at"),
+                ("duration_ms", "duration_ms"),
+            ):
+                value = row[f"{prefix}{suffix}"]
+                if value is not None:
+                    timing[key] = value
+            data["timing"] = timing
+        if bool(row["tool_calls_present"]):
+            calls: list[JsonObject] = []
+            for values in json.loads(str(row["tool_call_rows_json"] or "[]")):
+                call: JsonObject = {
+                    "id": values[0],
+                    "name": values[1],
+                    "arguments": json.loads(values[2]),
+                }
+                if values[3] is not None:
+                    call["rejection"] = {
+                        "code": values[3],
+                        "message": values[4],
+                        "fingerprint": values[5],
+                    }
+                if values[6] is not None:
+                    call["argument_sequence_index"] = values[6]
+                    call["argument_sequence_length"] = values[7]
+                calls.append(call)
+            data["tool_calls"] = calls
+        if row["sender_id"] is not None:
+            data["sender"] = {
+                "id": row["sender_id"],
+                "display_name": row["sender_display_name"],
+                "role": row["sender_role"],
+            }
+        if row["output_file_rows_json"] is not None:
+            data["output_files"] = [
+                {
+                    "path": values[0],
+                    "line_index": values[1],
+                    **({} if values[2] is None else {"start_index": values[2]}),
+                    **({} if values[3] is None else {"end_index": values[3]}),
+                }
+                for values in json.loads(str(row["output_file_rows_json"]))
+            ]
+        if row["changed_files"] is not None:
+            changes = (
+                {}
+                if row["change_stats_extra_json"] is None
+                else json.loads(str(row["change_stats_extra_json"]))
+            )
+            changes.update(
+                {
+                    "files": row["changed_files"],
+                    "added": row["lines_added"],
+                    "removed": row["lines_removed"],
+                    "paths": json.loads(str(row["change_paths_json"] or "[]")),
+                }
+            )
+            data["change_stats"] = changes
+        if bool(row["interrupted"]):
+            data["interrupted"] = True
+        return ChatMessage.from_dict(data)
+    except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
         raise SessionStoreCorruptError("invalid canonical Session message") from exc
+
+
+def _message_payload(row: sqlite3.Row) -> str:
+    try:
+        return json.dumps(
+            message_from_row(row).to_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise SessionStoreCorruptError("invalid canonical Session message") from exc
+
+
+def messages_from_connection(connection: sqlite3.Connection, session_key: int) -> list[ChatMessage]:
+    """Decode one generation for offline verification/export callers."""
+    rows = connection.execute(
+        _message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
+        (session_key,),
+    ).fetchall()
+    return [message_from_row(row) for row in rows]
+
+
+def continuation_from_connection(
+    connection: sqlite3.Connection, session_key: int
+) -> list[JsonObject]:
+    """Project normalized current continuation state through the legacy-shaped facade."""
+    return _continuation_records(connection, session_key)
 
 
 QUARANTINE_DIRECTORY_NAME = "session-quarantine"
