@@ -461,6 +461,8 @@ class Runtime:
         self._extension_reload_lock = asyncio.Lock()
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
+        self._snapshot_periodic_thread: threading.Thread | None = None
+        self._snapshot_stop_event: threading.Event | None = None
         self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
@@ -927,6 +929,8 @@ class Runtime:
         """
         self._log_shutdown()
         self._started = False
+        self._stop_periodic_snapshots()
+        self._snapshot_on_shutdown()
 
         if self._extensions is not None:
             self._extensions.fire_shutdown_blocking()
@@ -957,6 +961,8 @@ class Runtime:
         """Gracefully shut down the runtime and await async service cleanup."""
         self._log_shutdown()
         self._started = False
+        self._stop_periodic_snapshots()
+        self._snapshot_on_shutdown()
 
         if self._extensions is not None:
             await self._extensions.fire_shutdown()
@@ -1269,6 +1275,63 @@ class Runtime:
         elif result:
             assert self.logger is not None
             self.logger.info("Session backup snapshot: %s", result[0])
+        # Start periodic verified snapshots (best-effort, coalesced).
+        self._start_periodic_snapshots()
+
+    def _start_periodic_snapshots(self) -> None:
+        """Periodically snapshot the canonical DB while dirty (5 min cadence)."""
+        if self._storage is None or self._chat_sessions is None:
+            return
+        if self._snapshot_periodic_thread is not None:
+            return
+        self._snapshot_stop_event = threading.Event()
+        data_dir = self._storage.data_dir
+        database_path = self._storage.layout.sessions_db_path
+        snapshot_fn = self._chat_sessions.backup_snapshot
+
+        def loop() -> None:
+            assert self._snapshot_stop_event is not None
+            while not self._snapshot_stop_event.wait(300.0):
+                try:
+                    from core.sessions.format import read_session_store_marker
+                    from core.sessions.snapshots import create_snapshot
+
+                    marker = read_session_store_marker(data_dir)
+                    db_id = str(marker["database_id"]) if marker else None
+                    create_snapshot(data_dir, database_path, snapshot_fn, database_id=db_id)
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=loop, name="session-snapshot-periodic", daemon=True)
+        thread.start()
+        self._snapshot_periodic_thread = thread
+
+    def _stop_periodic_snapshots(self) -> None:
+        if self._snapshot_stop_event is not None:
+            self._snapshot_stop_event.set()
+        if self._snapshot_periodic_thread is not None:
+            with suppress(Exception):
+                self._snapshot_periodic_thread.join(timeout=1.0)
+        self._snapshot_periodic_thread = None
+        self._snapshot_stop_event = None
+
+    def _snapshot_on_shutdown(self) -> None:
+        """Best-effort snapshot on graceful shutdown if dirty."""
+        if self._storage is None or self._chat_sessions is None:
+            return
+        try:
+            from core.sessions.format import read_session_store_marker
+            from core.sessions.snapshots import create_snapshot
+
+            data_dir = self._storage.data_dir
+            database_path = self._storage.layout.sessions_db_path
+            marker = read_session_store_marker(data_dir)
+            db_id = str(marker["database_id"]) if marker else None
+            create_snapshot(
+                data_dir, database_path, self._chat_sessions.backup_snapshot, database_id=db_id
+            )
+        except Exception:
+            pass
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:
