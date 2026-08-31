@@ -363,19 +363,23 @@ def test_resume_reconciles_after_source_relocation_boundary(tmp_path: Path, monk
 
 
 @pytest.mark.parametrize(
-    "interrupted_stage",
+    ("interrupted_stage", "interrupted_boundary"),
     [
-        "install_preflight",
-        "backup_publishing",
-        "sources_relocating",
-        "database_publishing",
-        "marker_publishing",
-        "runtime_verifying",
-        "complete",
+        (stage, boundary)
+        for stage in (
+            "install_preflight",
+            "backup_publishing",
+            "sources_relocating",
+            "database_publishing",
+            "marker_publishing",
+            "runtime_verifying",
+            "complete",
+        )
+        for boundary in ("before", "after")
     ],
 )
 def test_install_resume_reconciles_every_state_boundary(
-    tmp_path: Path, monkeypatch, interrupted_stage: str
+    tmp_path: Path, monkeypatch, interrupted_stage: str, interrupted_boundary: str
 ) -> None:
     source = tmp_path / "source"
     work = tmp_path / "work"
@@ -385,7 +389,7 @@ def test_install_resume_reconciles_every_state_boundary(
     assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
 
     def interrupt(stage: str, boundary: str) -> None:
-        if stage == interrupted_stage and boundary == "before":
+        if stage == interrupted_stage and boundary == interrupted_boundary:
             raise RuntimeError(f"simulated interruption at {stage}")
 
     monkeypatch.setattr(session_sqlite, "_server_is_stopped", lambda _host, _port: True)
