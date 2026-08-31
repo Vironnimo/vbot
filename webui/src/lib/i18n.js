@@ -2043,7 +2043,7 @@ export const englishCatalog = Object.freeze({
   'voice.mic.tooltip.starting': 'Starting wakeword listening',
   'voice.mic.tooltip.listening': 'Listening for wakeword',
   'voice.mic.tooltip.detected': 'Wakeword detected',
-  'voice.mic.tooltip.recording': 'Recording voice command',
+  'voice.mic.tooltip.recording': 'Recording — click to stop and send',
   'voice.mic.tooltip.processing': 'Processing voice command',
   'voice.mic.tooltip.sent': 'Voice command sent',
   'voice.mic.tooltip.cancelled': 'Voice command cancelled',

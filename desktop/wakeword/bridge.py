@@ -398,6 +398,24 @@ class DesktopBridge:
                 refresh_microphone_devices()
             self._start_worker()
 
+    def stopWakewordRecording(self) -> dict[str, Any]:  # noqa: N802
+        """End the active voice recording now, sending what was captured so far.
+
+        Only meaningful while the worker is recording: the request is forwarded
+        to the worker, which closes the capture early and keeps the audio
+        already collected, so the command still transcribes and sends normally.
+        Outside the recording state this is a no-op.
+        """
+        with self._lock:
+            recording = self._state == _WAKEWORD_STATE_RECORDING
+        if recording:
+            worker = self._worker
+            if worker is not None:
+                stop_recording = getattr(worker, "stop_recording", None)
+                if callable(stop_recording):
+                    stop_recording()
+        return self.getWakewordStatus()
+
     def startWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
         """Pause command activation and expose raw per-model detector scores."""
         with self._lock:

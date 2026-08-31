@@ -3,6 +3,8 @@ import {
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
+  RUN_EVENT_TOOL_CALL_STDERR,
+  RUN_EVENT_TOOL_CALL_STDOUT,
   cancelProcess as requestCancelProcess,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
@@ -81,6 +83,8 @@ const TERMINAL_RUN_STATUSES = new Set([
 const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_EVENT_TOOL_CALL_STDERR,
 ]);
 
 const HISTORY_INITIAL_LIMIT = 100;
@@ -2132,12 +2136,21 @@ function isStreamingDeltaRunEvent(eventType) {
     RUN_EVENT_REASONING_DELTA,
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     RUN_EVENT_TOOL_CALL_DELTA,
+    RUN_EVENT_TOOL_CALL_STDOUT,
+    RUN_EVENT_TOOL_CALL_STDERR,
   ].includes(eventType);
 }
 
 function appendCompressedStreamingRunEvent(sessionState, event) {
   if (event.type === RUN_EVENT_TOOL_CALL_DELTA) {
     appendCompressedToolCallDeltaEvent(sessionState, event);
+    return;
+  }
+  if (
+    event.type === RUN_EVENT_TOOL_CALL_STDOUT ||
+    event.type === RUN_EVENT_TOOL_CALL_STDERR
+  ) {
+    appendCompressedToolOutputDeltaEvent(sessionState, event);
     return;
   }
 
@@ -2237,6 +2250,54 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
   sessionState.streamingRunEvents = [
     ...sessionState.streamingRunEvents,
     compressedEvent,
+  ];
+}
+
+// Tool stdout/stderr chunks are compressed into ONE retained event per
+// (run, tool call, stream). The live run projection replays every retained
+// event on each render, so per-chunk retention made the rebuild cost quadratic
+// in the streamed output size — a multi-MiB bash output froze the whole UI.
+// A tool call id is unique per run, so no phase scoping is needed: all chunks
+// of one call belong to the same stream regardless of phase boundaries.
+function appendCompressedToolOutputDeltaEvent(sessionState, event) {
+  const payload = event.payload ?? {};
+  const toolCallId = payload.tool_call_id ?? payload.id;
+  const data = typeof payload.data === 'string' ? payload.data : '';
+  if (!toolCallId || !data) {
+    return;
+  }
+
+  const existingEvent = sessionState.streamingRunEvents.find(
+    (candidate) =>
+      candidate.type === event.type &&
+      candidate.run_id === event.run_id &&
+      (candidate.payload?.tool_call_id ?? candidate.payload?.id) === toolCallId,
+  );
+  if (existingEvent) {
+    existingEvent.payload.data = `${existingEvent.payload?.data ?? ''}${data}`;
+    existingEvent.sequence = firstSeenSequence(
+      existingEvent.sequence,
+      event.sequence,
+    );
+    existingEvent._streamChunkCount = streamEventChunkCount(existingEvent) + 1;
+    existingEvent._streamLatestSequence = streamEventLatestSequence(event);
+    existingEvent.timestamp ??= event.timestamp;
+    return;
+  }
+
+  sessionState.streamingRunEvents = [
+    ...sessionState.streamingRunEvents,
+    {
+      ...event,
+      payload: {
+        ...payload,
+        tool_call_id: toolCallId,
+        data,
+      },
+      _streamingPhase: sessionState.streamingPhase,
+      _streamChunkCount: 1,
+      _streamLatestSequence: streamEventLatestSequence(event),
+    },
   ];
 }
 

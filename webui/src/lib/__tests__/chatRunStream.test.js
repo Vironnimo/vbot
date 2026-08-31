@@ -1621,6 +1621,92 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
   });
 });
 
+describe('createChatRunStream() tool output chunk batching', () => {
+  const DISPLAYED_AGENT_ID = 'alpha';
+  const DISPLAYED_SESSION_ID = 'session-displayed';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('batches tool stdout chunks into the streaming flush instead of appending each one eagerly', async () => {
+    const chatState = createChatState();
+    let onEvent;
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents: vi.fn((_url, handlers) => {
+        onEvent = handlers.onEvent;
+        return { close: vi.fn() };
+      }),
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-chunks',
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: { status: 'running' },
+      },
+    });
+
+    onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-chunks',
+        sequence: 2,
+        payload: {
+          tool_call: {
+            id: 'call-one',
+            index: 0,
+            name: 'bash',
+            arguments: { command: 'x' },
+          },
+        },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'tool_call_stdout',
+        run_id: 'run-chunks',
+        sequence: 3,
+        payload: { tool_call_id: 'call-one', data: 'chunk-one' },
+      },
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    // The non-delayed tool_call_started flushed immediately; the stdout
+    // chunk rides the ~33 ms streaming flush.
+    expect(sessionState.streamingRunEvents).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_stdout',
+        payload: expect.objectContaining({ data: 'chunk-one' }),
+      }),
+    ]);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
+    expect(assistantRun.tools[0]).toEqual(
+      expect.objectContaining({ toolCallId: 'call-one', stdout: 'chunk-one' }),
+    );
+  });
+});
+
 describe('reflection review tracking', () => {
   let chatState;
   const SOURCE_SESSION_ID = 'session-source';
