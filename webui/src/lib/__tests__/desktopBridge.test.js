@@ -19,6 +19,7 @@ import {
   importWakewordModel,
   deleteWakewordModel,
   retryWakeword,
+  stopWakewordRecording,
   startWakewordCalibration,
   stopWakewordCalibration,
   restartWakewordCalibration,
@@ -405,6 +406,19 @@ describe('desktop Voice recovery and devices', () => {
     await retryWakeword();
 
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('stops the active voice recording through the bridge', async () => {
+    const stop = vi.fn(() => ({ state: 'transcribing' }));
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { stopWakewordRecording: stop } },
+    };
+
+    await expect(stopWakewordRecording()).resolves.toEqual({
+      state: 'transcribing',
+    });
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it('controls transient wakeword calibration through the bridge', async () => {

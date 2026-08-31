@@ -8,13 +8,15 @@ import time
 import types
 import wave
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import httpx
+import numpy as np
 import pytest
 
 from desktop.wakeword.engine import MockWakewordEngine, WakewordMatch
+from desktop.wakeword.worker import SpeechDetector
 
 
 class FakeBridge:
@@ -179,6 +181,24 @@ def ready_speech_to_text(
     return original_checker
 
 
+@pytest.fixture(autouse=True)
+def no_real_neural_speech_detector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], SpeechDetector | None]:
+    """Keep worker tests from loading the real ONNX speech detector.
+
+    Tests that need neural behavior inject a scripted detector explicitly;
+    everything else must exercise the fail-open fallback instead of silently
+    depending on the bundled model file. Yields the real factory so the
+    integration test can restore it.
+    """
+    from desktop.wakeword.worker import SpeechDetector
+
+    original_factory = SpeechDetector.create
+    monkeypatch.setattr(SpeechDetector, "create", staticmethod(lambda: None))
+    return original_factory
+
+
 def _make_silence_chunk(samples: int = 1280) -> bytes:
     """Generate a near-silent PCM chunk that VAD classifies as non-speech."""
     import struct
@@ -187,8 +207,8 @@ def _make_silence_chunk(samples: int = 1280) -> bytes:
     return struct.pack(f"<{samples}h", *values)
 
 
-def _make_speech_chunk(samples: int = 480) -> bytes:
-    """Generate a louder PCM chunk that VAD classifies as speech."""
+def _make_speech_chunk(samples: int = 512) -> bytes:
+    """Generate a louder PCM chunk (16 kHz mono, 32 ms)."""
     import struct
 
     values = [1000] * samples
@@ -387,24 +407,27 @@ def test_recording_prepends_end_aligned_pre_roll_when_new_speech_arrives(
 ) -> None:
     from desktop.wakeword.worker import WakewordWorker
 
-    class FakeVad:
-        def __init__(self, _mode: int) -> None:
+    class SpeechFirstDetector:
+        def __init__(self) -> None:
             self.calls = 0
 
-        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+        def reset(self) -> None:
+            self.calls = 0
+
+        def is_speech(self, _frame: bytes) -> bool:
             self.calls += 1
             return self.calls == 1
 
-    monkeypatch.setitem(sys.modules, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
-    frame_bytes = 480 * 2
+    frame_bytes = 512 * 2
     aligned_pre_roll = b"".join(bytes([value]) * frame_bytes for value in range(1, 11))
-    pre_roll = b"x" * 640 + aligned_pre_roll
+    pre_roll = b"x" * 64 + aligned_pre_roll
     speech = b"s" * frame_bytes
     silence = b"\0" * frame_bytes
     worker = WakewordWorker(
         engine=MockWakewordEngine(),
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
+        speech_detector=SpeechFirstDetector(),
     )
     worker._stream = FakeSounddeviceStream([speech, *([silence] * 50)])
     worker._running.set()
@@ -424,25 +447,500 @@ def test_pre_roll_alone_does_not_become_a_command(
     from desktop.wakeword import worker as worker_module
     from desktop.wakeword.worker import WakewordWorker
 
-    class SilentVad:
-        def __init__(self, _mode: int) -> None:
+    class SilentDetector:
+        def reset(self) -> None:
             pass
 
-        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+        def is_speech(self, _frame: bytes) -> bool:
             return False
 
-    monkeypatch.setitem(sys.modules, "webrtcvad", types.SimpleNamespace(Vad=SilentVad))
     monkeypatch.setattr(worker_module, "_SPEECH_START_FRAME_COUNT", 2)
-    wake_phrase_audio = b"w" * (480 * 2 * 10)
+    wake_phrase_audio = b"w" * (512 * 2 * 10)
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=SilentDetector(),
+    )
+    worker._running.set()
+
+    # _record_until_silence consumes 512-sample PCM frames from the stream.
+    class EndlessSilenceStream:
+        def read_pcm16(self, _frame_size: int) -> bytes:
+            return b"\0" * 1024
+
+    worker._stream = EndlessSilenceStream()
+
+    assert worker._record_until_silence(wake_phrase_audio) is None
+
+
+def test_recording_exceeds_15_seconds_when_speech_continues(
+    fake_bridge: FakeBridge,
+) -> None:
+    """Continuous speech must not be truncated by any fixed duration cap.
+
+    Regression for the retired 15-second hard limit: a user who keeps talking
+    is recorded until the utterance really ends; only the speech upload size
+    budget (or silence) ends the capture.
+    """
+    from desktop.wakeword.worker import (
+        _SILENCE_FRAME_COUNT,
+        _VAD_FRAME_DURATION_MS,
+        WakewordWorker,
+    )
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    frames_for_20_seconds = int(20.0 / (_VAD_FRAME_DURATION_MS / 1000))
+    speech_chunk = _make_speech_chunk()
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    worker._stream = FakeSounddeviceStream([speech_chunk] * frames_for_20_seconds)
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        duration_seconds = wav_file.getnframes() / wav_file.getframerate()
+    assert duration_seconds >= 20.0 - _SILENCE_FRAME_COUNT * (_VAD_FRAME_DURATION_MS / 1000)
+
+
+def test_recording_stops_at_upload_budget_when_speech_never_ends(
+    fake_bridge: FakeBridge,
+) -> None:
+    """An endless "speech" classification ends at the upload budget, not never.
+
+    The budget is the conservative payload slice of the active server speech
+    upload limit, measured in native-rate PCM bytes; the recording may never
+    produce a payload the server would reject as oversize.
+    """
+    from desktop.wakeword.worker import (
+        _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
+        _UPLOAD_BUDGET_FALLBACK_BYTES,
+        _WAV_HEADER_BYTES,
+        WakewordWorker,
+    )
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    worker._rpc_call = lambda _method, _params: {  # type: ignore[assignment]
+        "setting": {"value": _UPLOAD_BUDGET_FALLBACK_BYTES}
+    }
+    worker._stream = EndlessSpeechStream()
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        payload_bytes = wav_file.getnframes() * wav_file.getsampwidth()
+    assert payload_bytes <= int(
+        (_UPLOAD_BUDGET_FALLBACK_BYTES - _WAV_HEADER_BYTES)
+        * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION
+    )
+
+
+def test_upload_budget_asks_the_server_for_its_active_limit(
+    fake_bridge: FakeBridge,
+) -> None:
+    """The recording budget derives from the server's configured upload limit."""
+    from desktop.wakeword.worker import (
+        _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
+        _WAV_HEADER_BYTES,
+        WakewordWorker,
+    )
+
+    server_limit = 10 * 1024 * 1024
     worker = WakewordWorker(
         engine=MockWakewordEngine(),
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
     )
-    worker._stream = FakeSounddeviceStream([b"\0" * 960, b"\0" * 960])
+    worker._rpc_call = lambda _method, _params: {  # type: ignore[assignment]
+        "setting": {"value": server_limit}
+    }
+
+    budget = worker._resolve_upload_budget_bytes()
+
+    assert budget == int(
+        (server_limit - _WAV_HEADER_BYTES) * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION
+    )
+
+
+def test_stop_recording_ends_capture_and_keeps_audio(
+    fake_bridge: FakeBridge,
+) -> None:
+    """A user stop closes the capture early but keeps the audio recorded so far.
+
+    The captured frames must still flow through the normal pipeline (the caller
+    transcribes and sends them), so the recording returns WAV bytes instead of
+    discarding the utterance.
+    """
+    from desktop.wakeword.worker import WakewordWorker
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    reads = {"count": 0}
+
+    def stop_after_few_reads() -> None:
+        reads["count"] += 1
+        if reads["count"] >= 5:
+            worker.stop_recording()
+
+    worker._stream = FakeSounddeviceStream(
+        [_make_speech_chunk()] * 1000,
+        on_read=stop_after_few_reads,
+    )
     worker._running.set()
 
-    assert worker._record_until_silence(wake_phrase_audio) is None
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        duration_seconds = wav_file.getnframes() / wav_file.getframerate()
+    # A handful of frames plus pre-roll, far below the endless stream.
+    assert duration_seconds < 1.0
+
+
+def test_stop_recording_request_does_not_leak_into_next_recording(
+    fake_bridge: FakeBridge,
+) -> None:
+    """A stale stop request must not cut the next recording short.
+
+    The stop event is cleared before every recording starts, so a stop that
+    already ended one utterance never breaks the following one.
+    """
+    from unittest.mock import MagicMock
+
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stop_recording.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()] * 10)
+    worker._transcribe = lambda _audio: "test command"  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock(return_value="session-1")  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock(return_value=True)  # type: ignore[method-assign]
+    worker._running.set()
+
+    outcome = worker._handle_detection()
+
+    assert outcome == "sent"
+    worker._send_transcript.assert_called_once()
+
+
+def test_recording_ends_during_continuous_noise_not_at_max_duration(
+    fake_bridge: FakeBridge,
+) -> None:
+    """Continuous ambient noise must close the recording after silence, not hold it.
+
+    Regression for wind/rain/traffic keeping the channel open: the neural
+    detector classifies every ambient frame as non-speech, so after the
+    wake-word-adjacent speech the recording ends at the silence timeout even
+    though noise continues forever.
+    """
+    from desktop.wakeword.worker import (
+        _SILENCE_FRAME_COUNT,
+        WakewordWorker,
+    )
+
+    class NoiseDetector:
+        """Classifies only the first two frames as speech, then pure noise."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self) -> None:
+            self.calls = 0
+
+        def is_speech(self, _frame: bytes) -> bool:
+            self.calls += 1
+            return self.calls <= 2
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=NoiseDetector(),
+    )
+    # Endless ambient noise after the initial speech; the recording must still
+    # end at the silence timeout.
+    worker._stream = EndlessNoiseStream(_make_speech_chunk())
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        frame_count = wav_file.getnframes()
+    # 2 speech frames + a full silence window; never the endless noise tail.
+    expected_max_samples = (2 + _SILENCE_FRAME_COUNT + 1) * 512
+    assert frame_count <= expected_max_samples
+
+
+class EndlessNoiseStream:
+    """Yields endless 32 ms noise chunks for recording-loop tests."""
+
+    def __init__(self, chunk: bytes) -> None:
+        self._noise_chunk = chunk
+
+    def read_pcm16(self, _frame_size: int) -> bytes:
+        return self._noise_chunk
+
+
+class EndlessSpeechStream:
+    """Yields endless 32 ms loud chunks: the detector face-classifies as speech."""
+
+    def read_pcm16(self, _frame_size: int) -> bytes:
+        return _make_speech_chunk()
+
+
+def test_single_noise_blip_does_not_reset_silence_timer(
+    fake_bridge: FakeBridge,
+) -> None:
+    """One noise frame among trailing silence must not restart the recording.
+
+    The neural endpoint needs consecutive-ish non-speech evidence; an isolated
+    false-positive frame resets the silence counter in the legacy loop, so a
+    noisy tail would extend the recording indefinitely. The detector's
+    hysteresis closes once below the negative threshold and stays closed.
+    """
+    from desktop.wakeword.worker import (
+        _SILENCE_DURATION_SECONDS,
+        _VAD_FRAME_DURATION_MS,
+        WakewordWorker,
+    )
+
+    silence_frame_count = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+
+    class OneBlipDetector:
+        """Speech for the opening, then silence with one classified blip."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self) -> None:
+            self.calls = 0
+
+        def is_speech(self, _frame: bytes) -> bool:
+            self.calls += 1
+            return self.calls <= 2 or self.calls == 10
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=OneBlipDetector(),
+    )
+    worker._stream = EndlessNoiseStream(_make_speech_chunk())
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        frame_count = wav_file.getnframes()
+    # The blip resets the counter once, then a full silence window must close
+    # regardless of where the blip landed (samples, not detector frames).
+    assert frame_count <= (2 + silence_frame_count + 1 + silence_frame_count) * 512
+
+
+def test_speech_detector_hysteresis_needs_conclusive_close() -> None:
+    """Below the negative threshold closes; a mid-band probe stays active."""
+    from desktop.wakeword.worker import SpeechDetector
+
+    class ScriptedSession:
+        """Returns the scripted probability, tracking model state calls."""
+
+        def __init__(self, probabilities: list[float]) -> None:
+            self._probabilities = list(probabilities)
+            self.calls = 0
+
+        def run(self, _output_names: object, _feeds: object) -> tuple[object, object]:
+            probability = self._probabilities[self.calls]
+            self.calls += 1
+            return (
+                np.array([[probability]], dtype=np.float32),
+                np.zeros((2, 1, 128), dtype=np.float32),
+            )
+
+    detector = SpeechDetector(ScriptedSession([0.9, 0.4, 0.45, 0.2, 0.2]))
+
+    frame = np.zeros(512, dtype=np.int16).tobytes()
+    assert detector.is_speech(frame) is True  # 0.9 opens
+    assert detector.is_speech(frame) is True  # 0.4 in the hysteresis band stays open
+    assert detector.is_speech(frame) is True  # 0.45 still above negative threshold
+    assert detector.is_speech(frame) is False  # 0.2 conclusively closes
+    assert detector.is_speech(frame) is False  # closed state does not reopen mid-band
+
+
+def test_speech_detector_reset_reopens_the_threshold() -> None:
+    from desktop.wakeword.worker import SpeechDetector
+
+    class ScriptedSession:
+        def __init__(self, probabilities: list[float]) -> None:
+            self._probabilities = list(probabilities)
+            self.calls = 0
+
+        def run(self, _output_names: object, _feeds: object) -> tuple[object, object]:
+            probability = self._probabilities[self.calls]
+            self.calls += 1
+            return (
+                np.array([[probability]], dtype=np.float32),
+                np.zeros((2, 1, 128), dtype=np.float32),
+            )
+
+    session = ScriptedSession([0.9, 0.2, 0.9, 0.9])
+    detector = SpeechDetector(session)
+
+    frame = np.zeros(512, dtype=np.int16).tobytes()
+    assert detector.is_speech(frame) is True
+    assert detector.is_speech(frame) is False
+    detector.reset()
+    assert detector.is_speech(frame) is True  # a fresh utterance opens high again
+
+
+def test_recording_falls_back_to_webrtc_when_neural_detector_absent(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the neural model the legacy WebRTC VAD must still gate recording."""
+    from desktop.wakeword.worker import WakewordWorker
+
+    class SpeechThenSilentVad:
+        def __init__(self, _mode: int) -> None:
+            self.calls = 0
+
+        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+            self.calls += 1
+            return self.calls <= 2
+
+    monkeypatch.setitem(
+        sys.modules,
+        "webrtcvad",
+        types.SimpleNamespace(Vad=SpeechThenSilentVad),
+    )
+    noise_frames = [_make_speech_chunk() for _ in range(40)]
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=None,
+    )
+    worker._stream = FakeSounddeviceStream(noise_frames)
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+
+
+def test_recording_counts_as_speech_when_no_vad_loads_at_all(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a totally broken decision stack recording must never go mute."""
+    from desktop.wakeword.worker import WakewordWorker
+
+    class ExplodingVad:
+        def __init__(self, _mode: int) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+            raise RuntimeError("vad exploded")
+
+    monkeypatch.setitem(sys.modules, "webrtcvad", types.SimpleNamespace(Vad=ExplodingVad))
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=None,
+    )
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    # The frame was counted as speech (fail-open) and thus recorded.
+    assert wav_bytes is not None
+
+
+def test_real_speech_detector_endpoints_speech_and_ignores_noise(
+    no_real_neural_speech_detector: Callable[[], SpeechDetector | None],
+) -> None:
+    """Integration: the bundled model separates real speech from noise tails.
+
+    Uses the okay_nabu fixture (real spoken wake word, quiet lead-in/out) and
+    asserts the detector both opens on the phrase and closes after it, then
+    refuses to reopen on continuing noise.
+    """
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("soxr")
+    import soxr
+
+    detector = no_real_neural_speech_detector()
+    assert detector is not None
+    with wave.open("tests/fixtures/wakeword/okay_nabu.wav", "rb") as wav_file:
+        rate = wav_file.getframerate()
+        raw = wav_file.readframes(wav_file.getnframes())
+    samples = soxr.resample(np.frombuffer(raw, dtype=np.int16), rate, 16000).astype(np.float32)
+    samples /= 32768.0
+
+    active_frames = 0
+    for position in range(0, len(samples) - 512, 512):
+        frame = (samples[position : position + 512] * 32767).astype(np.int16).tobytes()
+        if detector.is_speech(frame):
+            active_frames += 1
+
+    assert active_frames > 10  # real phrase audio opens the detector
+
+    # After the utterance closed, pure noise must not reopen it.
+    rng = np.random.default_rng(3)
+    noise_reactivations = sum(
+        1
+        for _ in range(20)
+        if detector.is_speech((rng.normal(0, 3000, 512)).astype(np.int16).tobytes())
+    )
+    assert noise_reactivations == 0
 
 
 def test_detection_gate_requires_two_speech_frames_per_chunk() -> None:
@@ -460,8 +958,8 @@ def test_detection_gate_requires_two_speech_frames_per_chunk() -> None:
 
     chunk = b"\x10\x20" * 1280  # 2560 bytes = eight 10 ms frames
 
-    assert _chunk_contains_speech(ScriptedVad({0}), chunk) is False
-    assert _chunk_contains_speech(ScriptedVad({0, 3}), chunk) is True
+    assert _chunk_contains_speech(chunk, None, ScriptedVad({0})) is False
+    assert _chunk_contains_speech(chunk, None, ScriptedVad({0, 3})) is True
 
 
 def test_detection_gate_fails_open_when_it_cannot_judge() -> None:
@@ -474,20 +972,63 @@ def test_detection_gate_fails_open_when_it_cannot_judge() -> None:
 
     chunk = b"\x10\x20" * 1280
 
-    assert _chunk_contains_speech(None, chunk) is True
-    assert _chunk_contains_speech(RaisingVad(), b"\x10\x20" * 10) is True
-    assert _chunk_contains_speech(RaisingVad(), chunk) is True
+    assert _chunk_contains_speech(chunk, None, None) is True
+    assert _chunk_contains_speech(b"\x10\x20" * 10, None, RaisingVad()) is True
+    assert _chunk_contains_speech(chunk, None, RaisingVad()) is True
 
 
-def test_detection_gate_matches_silence_and_speech_with_real_vad() -> None:
+def test_detection_gate_neural_detector_gates_noise_and_admits_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a neural detector, chunks are gated on speech probability."""
+    from unittest.mock import MagicMock
+
+    from desktop.wakeword.worker import _chunk_contains_speech
+
+    detector = MagicMock()
+    detector.speech_probability.return_value = 0.0
+    noise = b"\x10\x20" * 1280
+
+    # A high absolute score counts as speech regardless of the legacy VAD.
+    detector.speech_probability.return_value = 0.9
+    assert _chunk_contains_speech(noise, detector, None) is True
+
+    # A low score is non-speech; the legacy VAD is not consulted anymore.
+    detector.speech_probability.return_value = 0.1
+    assert _chunk_contains_speech(noise, detector, None) is False
+
+
+def test_detection_gate_neural_scoring_failure_falls_back_to_webrtc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword.worker import _chunk_contains_speech
+
+    class SilentVad:
+        @staticmethod
+        def is_speech(_frame: bytes, _sample_rate: int) -> bool:
+            return False
+
+    class ExplodingDetector:
+        @staticmethod
+        def speech_probability(_chunk: bytes) -> float:
+            raise RuntimeError("model exploded")
+
+    chunk = b"\x10\x20" * 1280
+    exploding = cast(SpeechDetector, ExplodingDetector())
+
+    assert _chunk_contains_speech(chunk, exploding, None) is True
+    assert _chunk_contains_speech(chunk, exploding, SilentVad()) is False
+
+
+def test_detection_gate_matches_silence_and_speech_with_real_fallback_vad() -> None:
     pytest.importorskip("webrtcvad")
     from desktop.wakeword.worker import _chunk_contains_speech, _create_detection_vad
 
     vad = _create_detection_vad()
 
     assert vad is not None
-    assert _chunk_contains_speech(vad, _make_silence_chunk()) is False
-    assert _chunk_contains_speech(vad, _make_speech_chunk(1280)) is True
+    assert _chunk_contains_speech(_make_silence_chunk(), None, vad) is False
+    assert _chunk_contains_speech(_make_speech_chunk(1280), None, vad) is True
 
 
 def test_detection_loop_gates_engine_detection_on_speech_presence(
@@ -496,26 +1037,25 @@ def test_detection_loop_gates_engine_detection_on_speech_presence(
 ) -> None:
     from unittest.mock import MagicMock
 
-    from desktop.wakeword import worker as worker_module
     from desktop.wakeword.worker import WakewordWorker
 
-    class AlternatingVad:
+    class AlternatingDetector:
         """Opens the gate from the second detection chunk onward."""
 
         call_count = 0
 
         @classmethod
-        def is_speech(cls, _frame: bytes, _sample_rate: int) -> bool:
+        def speech_probability(cls, _chunk: bytes) -> float:
             cls.call_count += 1
-            return cls.call_count > 8  # one full 80 ms chunk = eight frames
+            return 0.9 if cls.call_count > 1 else 0.0
 
-    monkeypatch.setattr(worker_module, "_create_detection_vad", lambda: AlternatingVad)
     engine = MagicMock()
     engine.detect.return_value = None
     worker = WakewordWorker(
         engine=engine,
         bridge=fake_bridge,
         server_url="http://127.0.0.1:8420",
+        speech_detector=AlternatingDetector,
     )
     worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
     worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
