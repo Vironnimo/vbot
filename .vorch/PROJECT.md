@@ -46,7 +46,7 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
-| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, migration, and lifecycle |
+| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, offline conversion boundary, and lifecycle |
 | recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
@@ -106,6 +106,8 @@ python cli/main.py server start       # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
 This checkout carries a git-ignored marker selecting the dev data directory (`~/.vbot-dev`, port `8421`); an installed CLI outside the checkout keeps product defaults (`~/.vbot`, `8420`). Never point development commands at the installed instance. Managed worktrees use their own data dirs and ports.
+
+**Session store maintenance:** Use `python cli/main.py session-store status|snapshot|incident` for live operator-safe health and `snapshot restore` only against a proven-stopped target; use `python scripts/converters/session_sqlite.py inventory|dry-run|convert|verify|install|resume|export-jsonl` only as an explicit offline workflow on copied legacy data.
 
 **Build frontend:** `cd webui && npm ci && npm run build`
 

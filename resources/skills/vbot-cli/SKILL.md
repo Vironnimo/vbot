@@ -63,6 +63,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `project` | `add` `list` `show` `set` `set-override` `clear-override` `detect` `rm` | `references/agents-projects.md` |
 | `memory` | `list` `add` `replace` `remove` — pinned Memory entries per Agent | `references/memory.md` |
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
+| `session-store` | `status` `snapshot list` `snapshot create` `snapshot verify` `snapshot restore` `incident acknowledge` | `references/session-store.md` |
 | `channel` | `add` `list` `status` `update` `set-token` `enable` `disable` `remove` | `references/channels.md` |
 | `cron` | `list` `create` `update` `delete` `enable` `disable` | `references/cron.md` |
 | `bootstrap` | `list` `create` `update` `delete` `enable` `disable` | `references/bootstrap.md` |
