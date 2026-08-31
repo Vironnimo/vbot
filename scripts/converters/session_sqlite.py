@@ -654,6 +654,13 @@ def _install_from_manifest(
     _require_server_stopped(host, port)
     target = source / "sessions.db"
     marker = source / "session-store.json"
+    if backup_dir is None and manifest["stage"] == "converted":
+        configured_backup = manifest.get("backup_dir")
+        if not isinstance(configured_backup, str) or not configured_backup:
+            raise RuntimeError("install requires an external backup directory")
+        backup_dir = Path(configured_backup).resolve()
+    if backup_dir is not None:
+        _resolve_outside(source, backup_dir)
     if stage in {"converted", "install_preflight", "backup_publishing", "sources_relocating"} and (
         target.exists() or marker.exists()
     ):
@@ -668,6 +675,8 @@ def _install_from_manifest(
     if manifest["stage"] == "converted":
         if backup_dir is None:
             raise RuntimeError("install requires an external backup directory")
+        manifest["backup_dir"] = str(backup_dir)
+        _write_json(manifest_path, manifest)
         _set_stage(manifest_path, manifest, "install_preflight")
     if manifest["stage"] == "install_preflight":
         if backup_dir is None:
