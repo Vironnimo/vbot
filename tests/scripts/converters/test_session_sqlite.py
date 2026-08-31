@@ -360,3 +360,78 @@ def test_resume_reconciles_after_source_relocation_boundary(tmp_path: Path, monk
     assert (
         json.loads((source / "session-store.json").read_text(encoding="utf-8"))["state"] == "ready"
     )
+
+
+@pytest.mark.parametrize(
+    "interrupted_stage",
+    [
+        "install_preflight",
+        "backup_publishing",
+        "sources_relocating",
+        "database_publishing",
+        "marker_publishing",
+        "runtime_verifying",
+        "complete",
+    ],
+)
+def test_install_resume_reconciles_every_state_boundary(
+    tmp_path: Path, monkeypatch, interrupted_stage: str
+) -> None:
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    backup = tmp_path / "external-backup"
+    transcript = source / "agents" / "coder" / "sessions" / "one.jsonl"
+    _write_transcript(transcript, "hello")
+    assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
+
+    def interrupt(stage: str, boundary: str) -> None:
+        if stage == interrupted_stage and boundary == "before":
+            raise RuntimeError(f"simulated interruption at {stage}")
+
+    monkeypatch.setattr(session_sqlite, "_server_is_stopped", lambda _host, _port: True)
+    monkeypatch.setattr(session_sqlite, "_TRANSITION_HOOK", interrupt)
+    manifest_path = work / session_sqlite.MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    staged = work / manifest["staged_db"]
+    with pytest.raises(RuntimeError, match=f"simulated interruption at {interrupted_stage}"):
+        session_sqlite.main(
+            [
+                "install",
+                "--source",
+                str(source),
+                "--database",
+                str(staged),
+                "--manifest",
+                str(manifest_path),
+                "--backup-dir",
+                str(backup),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "65530",
+            ]
+        )
+
+    monkeypatch.setattr(session_sqlite, "_TRANSITION_HOOK", None)
+    assert (
+        session_sqlite.main(
+            [
+                "resume",
+                "--manifest",
+                str(manifest_path),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "65530",
+            ]
+        )
+        == 0
+    )
+    completed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert completed["stage"] == "complete"
+    assert not transcript.exists()
+    assert (source / "sessions.db").is_file()
+    assert (
+        json.loads((source / "session-store.json").read_text(encoding="utf-8"))["state"] == "ready"
+    )
+    assert list(backup.rglob("one.jsonl"))
