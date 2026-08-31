@@ -32,6 +32,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 - The offline notice keeps Retry as the normal browser recovery. When Desktop capability discovery reports `serverSelection`, it also offers Switch server; that action hides the notice and opens the shared Desktop remembered-server picker in a modal rendered outside AppShell's inert main content. Browser accessors never see this action, and launch-time Desktop failures remain with the native Connection screen because the WebUI is not available yet.
 - `connection_ready.replay_status` is `fresh`, `resumed`, `gap`, or `epoch_changed`. A complete resume keeps the client's acknowledged cursor until replayed events arrive; a gap or epoch change adopts the hello high-water mark and invalidates every resource-backed projection through its existing owner. The authoritative `active_runs` and public `queues` snapshots are forwarded to Chat for immediate Run and Queue reconciliation.
 - Recovery after a confirmed offline notice increments `serverRecoveryGeneration`, remounting the keyed main-view generation-including the retained Chat owner-so normal load paths refresh server-backed state. A reconnect that completes inside the notice grace period does not force that remount.
+- Session-store status loads on `connection_ready` and on `resource_changed(kind="session_store")`; the App-owned sticky Banner keeps an unacknowledged recovery incident visible through transient refresh failures, and acknowledgement adopts only the returned status projection.
 - WebSocket Run events are lifecycle summaries used for global awareness and recovery. Per-Run output, reasoning, tool-call, and log deltas arrive through the Run SSE subscription owned by Chat.
 - Presence is server-owned. `clients.list` supplies the Settings projection; the WebSocket only signals when that projection should refresh.
 
@@ -41,6 +42,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 - `commands` invalidation bumps the App-owned Command refresh token forwarded to Chat. Replay gaps and epoch changes bump it with the other server-backed projections so the active autocomplete catalog is re-fetched after uncertain continuity.
 - Queue invalidation is scoped to the addressed Agent and Session. Other resource families refresh the controller that owns their displayed projection.
 - `terminals` invalidation bumps the App-owned terminal refresh token. The mounted Terminals controller re-fetches the active catalog without replacing a still-valid selection; PTY output is not an invalidation and remains on the selected terminal's dedicated stream.
+- `session_store` invalidation refreshes the App-owned health and incident projection without touching Chat selection or Session content.
 - Refresh completion does not automatically replace an active editing surface. A controller can retain the visible snapshot while a modal, picker, or draft is busy, then adopt the newest server result at the safe boundary.
 - Event handlers must be idempotent because reconnect replay and explicit refreshes can describe state the browser already knows.
 

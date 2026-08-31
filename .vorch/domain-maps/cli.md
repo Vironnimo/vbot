@@ -67,6 +67,7 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 **Session & Cron areas**
 
 - `session fork` optionally re-homes the copy via `--target-agent`; `set-compaction-policy` sets a full JSON Session Policy or clears it to resume inheritance and prints override/effective/source; `delete` refuses without `--yes` and prints the landing `next_session_id`; `link-channel` links a Channel to an identity-owned session.
+- `session-store status` reads the operator-safe live health projection through RPC; `snapshot list|verify` are local read-only checks; `snapshot create` uses the running Runtime; `snapshot restore` is local offline maintenance requiring `--yes` and a proven-stopped exact target; `incident acknowledge` clears only the warning state and preserves snapshots and quarantine evidence. Legacy JSONL conversion is owned solely by `scripts/converters/session_sqlite.py` and is never an update or startup path.
 - `cron create <agent-id> --name <name> --prompt <text>` requires a human-readable name and exactly one of `--cron <expression>` (recurring) or `--at <iso-datetime>` (one-time; derives `schedule_type`). Cron expressions and offset-free Once values use the server timezone; the CLI has no timezone flag. `update` accepts the same flags plus `--status active|paused` and rejects empty updates before RPC.
 
 **Diagnostics areas**

@@ -180,7 +180,7 @@ Close every vBot Desktop window on Windows, then run:
 vbot update
 ```
 
-The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Runtime data under `~/.vbot` or the configured data directory is not modified.
+The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates or verifies a compatible Session snapshot; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
 
 Use an explicit policy when the tracked checkout contains local changes or when the server should not restart:
 
@@ -403,6 +403,37 @@ Current application code reads only the canonical paths. Convert every older dat
 7. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
 
 The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
+
+### Session-store maintenance and legacy conversion
+
+The canonical Session store is `<data-dir>/sessions.db`, authorized by `<data-dir>/session-store.json`; FTS, Recall, Vector, Statistics, snapshots, and quarantine bundles are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it.
+
+Inspect a current-format store and its recovery state through the live server or the local offline commands:
+
+```bash
+vbot session-store status
+vbot session-store snapshot list
+vbot session-store snapshot create --reason manual
+vbot session-store snapshot verify <snapshot-id>
+vbot session-store incident acknowledge <incident-id>
+vbot session-store snapshot restore <snapshot-id> --yes
+```
+
+`status` reports safe operational metadata, FTS state, verified snapshots, and any unacknowledged recovery incident without returning Session content. Snapshot creation is an explicit current-format backup. A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence. Offline restore requires `--yes`, proves the exact target server is stopped, and must be rehearsed on a copied data directory first.
+
+Legacy JSONL conversion is a separate operator action and is never performed by Runtime, Setup, update, or server startup. Rehearse on a disposable copy, keep the immutable capture and conversion manifest outside the source, and inspect every reported orphan, unknown file, rejected path, and torn tail:
+
+```bash
+python scripts/converters/session_sqlite.py inventory --source <copied-legacy-root> --work-dir <work-dir>
+python scripts/converters/session_sqlite.py dry-run --source <copied-legacy-root> --work-dir <work-dir>
+python scripts/converters/session_sqlite.py convert --source <copied-legacy-root> --work-dir <work-dir>
+python scripts/converters/session_sqlite.py verify --source <copied-legacy-root> --database <work-dir>/converted.db --manifest <work-dir>/conversion-manifest.json
+python scripts/converters/session_sqlite.py export-jsonl --database <work-dir>/converted.db --output <export-copy>
+```
+
+`install` is the only converter command that relocates source artifacts or publishes a current-format target; it requires a verified external backup, a proven-stopped exact target server, and a verified staged database. `resume` reconciles the manifest with the filesystem and database after interruption. Do not run `install`, `resume`, or a real-data conversion against a production or development Session root until a separate operator decision authorizes that cutover.
+
+The safe later cutover sequence is: development rehearsal on copies; review the manifest, counts, generation ids, semantic digests, marker, snapshot, and search results; separately approve the worktree merge; separately approve deployment; stop and prove the exact target server; create the external backup and run the converter install; reopen the new Runtime and verify status, Sessions, search, Statistics, and logs; retain the source capture, displaced target, manifest, snapshot, and incident evidence until acceptance. A merge or deployment approval does not by itself authorize real Session conversion.
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 
@@ -760,7 +791,7 @@ Home Assistant ships as a bundled Extension. In Settings → Extensions → Home
 
 ## CLI reference
 
-Installed commands use `vbot`. From a source checkout, `python cli/main.py` exposes the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, and doctor include local work and do not merely proxy management RPC.
+Installed commands use `vbot`. From a source checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `session-store` offline maintenance include local work and do not merely proxy management RPC.
 
 | Area | Commands |
 |---|---|
@@ -771,6 +802,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project rm` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session set-compaction-policy`, `session delete`, `session link-channel` |
+| Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel grant-admin`, `channel revoke-admin`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill read`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
 | System Prompt | `prompt list`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
@@ -799,6 +831,8 @@ Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and p
 ## Server API
 
 The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. The server has no built-in authentication; treat access as host-level code-execution authority.
+
+Session-store operations exposed through RPC are `session_store.status`, `session_store.snapshot_create`, and `session_store.incident_acknowledge`. They return safe health and recovery metadata, publish `resource_changed` with kind `session_store` after successful snapshot or acknowledgement mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
 
 ### RPC envelope
 
@@ -933,4 +967,6 @@ The Playwright E2E suite under `tests/e2e/` is separate from the local quality s
 - Attachment, speech, and image artifacts are durable. Attachments currently have no garbage collector or reference counting, including attachments promoted from images read from disk.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.
 - Recall indexes are derived and disposable; deleting `<data-dir>/recall/` does not delete canonical Sessions.
+- A current-format Session recovery incident stays visible until explicit acknowledgement. Preserve its quarantine bundle and verified snapshots; never delete evidence as part of acknowledgement.
+- Update protection creates a compatible Session snapshot before replacing current-format code. Legacy JSONL conversion is an explicit offline operation and is never part of update, startup, deployment, or merge.
 - The Desktop wakeword listener is independent of Chat text-to-speech playback, so speaker output can trigger a sensitive wakeword Model. Choose device placement and sensitivity accordingly.
