@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.schema import (
@@ -133,3 +135,33 @@ def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
         assert [hit[1] for hit in hits] == [message.id]
     finally:
         sessions.close()
+
+
+def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypatch) -> None:
+    from core.sessions import store as store_module
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="resumable")
+    session.append_many([ChatMessage.user(f"resume needle {index}") for index in range(105)])
+    sessions.close()
+
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        connection.execute("DELETE FROM message_search")
+        connection.execute("DROP TABLE messages_fts")
+        connection.commit()
+
+    def interrupt(stage: str, _high_water: int) -> None:
+        if stage == "after_batch_commit":
+            raise RuntimeError("simulated FTS interruption")
+
+    monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", interrupt)
+    with pytest.raises(RuntimeError, match="simulated FTS interruption"):
+        ChatSessionManager(tmp_path)
+
+    monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", None)
+    reopened = ChatSessionManager(tmp_path)
+    try:
+        assert reopened.is_fts_available()
+        assert len(reopened.fts_search("resume", project_id=None, agent_id="agent")) == 105
+    finally:
+        reopened.close()
