@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from core.chat import ChatMessage
-from core.sessions import SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.store import SessionStore
 from scripts.converters import session_sqlite
 from scripts.converters.jsonl_sessions import capture_inventory, inventory
 
@@ -91,6 +92,67 @@ def test_inventory_maps_every_legacy_root(
     sessions = inventory(tmp_path)
 
     assert [(session.address, session.archived) for session in sessions] == [(address, archived)]
+
+
+def test_copied_rehearsal_converts_all_roots_and_reopens_current_database(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "copied-source"
+    work = tmp_path / "copied-work"
+    relative_paths = (
+        "agents/identity/sessions/live.jsonl",
+        "projects/project/agents/project-agent/sessions/live.jsonl",
+        "archive/sessions/agents/identity/old.jsonl",
+        "archive/sessions/projects/project/agents/project-agent/old.jsonl",
+        "archive/agents/identity/agent/sessions/older.jsonl",
+        "archive/projects/project/agents/project-agent/sessions/older.jsonl",
+    )
+    for index, relative in enumerate(relative_paths):
+        transcript = source / relative
+        _write_transcript(transcript, f"rehearsal-{index}-one")
+        transcript.write_text(
+            transcript.read_text(encoding="utf-8")
+            + json.dumps(ChatMessage.user(f"rehearsal-{index}-two").to_dict())
+            + "\n",
+            encoding="utf-8",
+        )
+    torn = source / relative_paths[-1]
+    with torn.open("ab") as handle:
+        handle.write(b'{"role":"user","content":"\xe2')
+
+    assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
+    manifest_path = work / session_sqlite.MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    staged = work / manifest["staged_db"]
+
+    assert manifest["count"] == 6
+    assert manifest["evidence"]["rejected_paths"] == []
+    assert any(source["ignored_tails"] for source in manifest["sources"])
+    assert (
+        session_sqlite.main(
+            [
+                "verify",
+                "--source",
+                str(source),
+                "--database",
+                str(staged),
+                "--manifest",
+                str(manifest_path),
+            ]
+        )
+        == 0
+    )
+
+    store = SessionStore(staged, _offline=True)
+    sessions = ChatSessionManager(source, store=store)
+    try:
+        with sqlite3.connect(staged) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 6
+        assert sessions.get(SessionAddress(None, "identity", "live")).load()[0].content == (
+            "rehearsal-0-one"
+        )
+    finally:
+        store.close()
 
 
 def test_capture_reads_torn_utf8_tail_once_and_records_evidence(tmp_path: Path) -> None:
