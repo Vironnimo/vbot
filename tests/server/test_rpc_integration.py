@@ -19,6 +19,7 @@ from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
 from core.utils.errors import ConfigError
@@ -410,6 +411,9 @@ class IntegrationRuntime:
         )
         self.agent_resolver = IntegrationAgentResolver(self.agents)
         self.projects = IntegrationProjects()
+        marker = tmp_path / "session-store.json"
+        if not marker.exists():
+            write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)

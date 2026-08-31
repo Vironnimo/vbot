@@ -36,6 +36,7 @@ from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, Run, RunAdmission
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY, RpcError
@@ -191,6 +192,8 @@ def _make_state(
     bootstrap_jobs: list | None = None,
 ) -> SimpleNamespace:
     data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     sessions = ChatSessionManager(data_dir)
     projects = ProjectStore(data_dir, sessions=sessions)
     agents = AgentStore(data_dir, sessions=sessions)

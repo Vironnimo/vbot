@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
+from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from server.app import create_app
 
@@ -94,6 +95,7 @@ def test_invalid_agent_config_does_not_block_application_startup(tmp_path: Path)
     data_dir = tmp_path / "data"
     invalid_agent_dir = data_dir / "agents" / "main"
     invalid_agent_dir.mkdir(parents=True)
+    write_bootstrap_marker(data_dir)
     (invalid_agent_dir / "agent.json").write_text(
         json.dumps({"name": "Missing id"}), encoding="utf-8"
     )
@@ -110,6 +112,7 @@ def test_invalid_agent_config_does_not_block_application_startup(tmp_path: Path)
 def test_invalid_settings_do_not_block_application_startup(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
+    write_bootstrap_marker(data_dir)
     (data_dir / "settings.json").write_text(
         json.dumps({"server_port": 8500, "compaction": {"enabled": "yes"}}),
         encoding="utf-8",
@@ -128,6 +131,7 @@ def test_invalid_cron_storage_does_not_block_application_startup(tmp_path: Path)
     data_dir = tmp_path / "data"
     jobs_path = data_dir / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
+    write_bootstrap_marker(data_dir)
     jobs_path.write_text("{", encoding="utf-8")
     app = create_app(runtime=StubRuntime(Config(data_dir=data_dir)))
 
@@ -281,6 +285,7 @@ def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
 def test_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     (data_dir / ".env").write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
     runtime = StubRuntime(Config(data_dir=data_dir))
     app = create_app(runtime=runtime)
@@ -327,6 +332,7 @@ def test_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
     adapter = StubAdapter(block=True)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     (data_dir / ".env").write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
     runtime = StubRuntime(Config(data_dir=data_dir), adapter=adapter)
     app = create_app(runtime=cast(Any, runtime))

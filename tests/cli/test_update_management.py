@@ -21,7 +21,7 @@ from cli.install_state import (
 )
 from cli.main import dispatch_update_command
 from cli.parser import parse_args
-from cli.server_management import CommandResult, ServerInstance
+from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
 from cli.update_management import (
     UNKNOWN_VBOT_VERSION,
     CommandRun,
@@ -32,6 +32,8 @@ from cli.update_management import (
     read_checkout_version,
     run_update,
 )
+from core.chat import ChatMessage, ChatSessionManager
+from core.sessions.format import write_bootstrap_marker
 
 
 def _instance() -> ServerInstance:
@@ -165,6 +167,32 @@ def test_update_refuses_non_git_checkout(tmp_path: Path) -> None:
 
     assert not result.ok
     assert events == []
+
+
+def test_update_snapshot_preflight_captures_current_format_store_when_server_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    manager = ChatSessionManager(tmp_path)
+    manager.create("coder", session_id="session-one").append(ChatMessage.user("protected"))
+    manager.close()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8420",
+        log_path=tmp_path / "server.log",
+    )
+    monkeypatch.setattr(
+        update_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+
+    result = update_management._ensure_update_session_snapshot(instance)
+
+    assert result.ok is True
+    assert "pre-update Session snapshot:" in result.message
 
 
 def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:

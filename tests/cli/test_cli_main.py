@@ -150,6 +150,29 @@ def test_parse_args_supports_server_command_options() -> None:
     assert args.data_dir == "dev-data"
 
 
+def test_parse_args_supports_session_store_operations() -> None:
+    status = cli_main.parse_args(["session-store", "status", "--data-dir", "dev-data"])
+    restore = cli_main.parse_args(["session-store", "snapshot", "restore", "snapshot-1", "--yes"])
+    incident = cli_main.parse_args(["session-store", "incident", "acknowledge", "incident-1"])
+
+    assert (status.area, status.command, status.data_dir) == (
+        "session-store",
+        "status",
+        "dev-data",
+    )
+    assert (restore.command, restore.snapshot_command, restore.snapshot_id, restore.yes) == (
+        "snapshot",
+        "restore",
+        "snapshot-1",
+        True,
+    )
+    assert (incident.command, incident.incident_command, incident.incident_id) == (
+        "incident",
+        "acknowledge",
+        "incident-1",
+    )
+
+
 @pytest.mark.parametrize("command", ["start", "stop", "restart", "status"])
 def test_each_server_command_accepts_target_options(command: str) -> None:
     args = cli_main.parse_args(

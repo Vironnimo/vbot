@@ -32,6 +32,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
 )
+from core.sessions.format import write_bootstrap_marker
 from core.tools.tools import tool_success
 from server.events import ServerEventBus
 from server.rpc import chat_methods, event_bridge
@@ -44,6 +45,7 @@ class HistoryAgentStore:
 
 
 def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]:
+    write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     state = SimpleNamespace(
         runtime=SimpleNamespace(
@@ -183,6 +185,7 @@ def _make_queued_item(
 @pytest.mark.asyncio
 async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path) -> None:
     # Arrange
+    write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")
     session.add_note("Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done")
