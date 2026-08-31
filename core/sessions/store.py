@@ -403,7 +403,7 @@ class SessionStore:
                                 "debug",
                             }
                             for entry in entries
-                        ):
+                        ) or is_temp and not (data_dir / "sessions.db").exists():
                             should_try_init = True
             if should_try_init:
                 from core.storage.layout import initialize_data_directory
