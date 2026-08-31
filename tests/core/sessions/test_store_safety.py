@@ -10,6 +10,7 @@ from core.sessions.snapshots import (
     SNAPSHOT_KEEP_COUNT,
     create_snapshot,
     list_snapshots,
+    read_snapshot_health,
     snapshot_root,
 )
 from core.sessions.store import SessionStore, quarantine_database
@@ -57,6 +58,8 @@ def test_snapshot_failure_keeps_previous_verified_snapshot(tmp_path: Path) -> No
 
         assert create_snapshot(tmp_path, tmp_path / "sessions.db", failing_snapshot) is None
         assert list_snapshots(tmp_path)
+        assert read_snapshot_health(tmp_path)["state"] == "degraded"
+        assert manager.status_projection()["state"] == "snapshot_degraded"
     finally:
         manager.close()
 

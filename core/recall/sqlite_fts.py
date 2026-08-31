@@ -117,7 +117,12 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             request.query or "",
             project_id=request.project_id,
             agent_id=request.agent_id,
+            session_id=request.session_id,
             match_mode=request.match_mode,
+            limit=max(256, (request.limit + 1) * 8),
+            roles=request.roles,
+            since=None if request.since is None else request.since.isoformat(),
+            until=None if request.until is None else request.until.isoformat(),
         )
         # rows are (address, message_id, timestamp, message_json, rank)
         summaries_by_id = {str(summary["id"]): summary for summary in summaries}
@@ -160,7 +165,13 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             request.query,
             project_id=request.project_id,
             agent_id=request.agent_id,
+            session_id=request.session_id,
             match_mode=request.match_mode,
+            limit=max(256, (request.offset + request.limit + 1) * 8),
+            roles=request.roles,
+            since=None if request.since is None else request.since.isoformat(),
+            until=None if request.until is None else request.until.isoformat(),
+            excluded_session_ids=request.excluded_session_ids,
         )
         summaries_by_id = {str(s["id"]): s for s in summaries}
         messages_by_session: dict[str, list[Any]] = {}

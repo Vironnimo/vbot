@@ -22,6 +22,7 @@ from core.sessions.errors import SessionStorageFormatError
 from core.sessions.schema import SCHEMA_VERSION
 
 MARKER_FILE_NAME = "session-store.json"
+MAINTENANCE_GUARD_FILE_NAME = "session-store-maintenance.json"
 MARKER_FORMAT_VERSION = 1
 MARKER_STATE_BOOTSTRAP = "bootstrap"
 MARKER_STATE_READY = "ready"
@@ -86,6 +87,12 @@ def validate_session_store_paths(data_dir: Path, database_path: Path) -> Path:
     """
     resolved_data_dir = Path(data_dir).resolve()
     resolved_database = Path(database_path).resolve()
+    maintenance_guard = resolved_data_dir / MAINTENANCE_GUARD_FILE_NAME
+    if maintenance_guard.exists():
+        raise SessionStorageFormatError(
+            f"Session store maintenance is incomplete; resume the offline operation: "
+            f"{maintenance_guard}"
+        )
     if resolved_database.parent != resolved_data_dir:
         raise SessionStorageFormatError(
             f"Session database {resolved_database} is not the canonical path inside "

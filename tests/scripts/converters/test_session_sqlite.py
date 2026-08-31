@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import MAINTENANCE_GUARD_FILE_NAME
 from core.sessions.store import SessionStore
 from scripts.converters import session_sqlite
 from scripts.converters.jsonl_sessions import capture_inventory, inventory
@@ -227,6 +229,7 @@ def test_install_relocates_only_a_copy_and_publishes_marker_last(
     assert (source / "sessions.db").is_file()
     marker = json.loads((source / "session-store.json").read_text(encoding="utf-8"))
     assert marker["state"] == "ready"
+    assert not (source / MAINTENANCE_GUARD_FILE_NAME).exists()
     assert list(backup.rglob("one.jsonl"))
     with sqlite3.connect(source / "sessions.db") as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
@@ -264,10 +267,32 @@ def test_install_refuses_a_reachable_target_before_mutating_source(
                 "65530",
             ]
         )
-
     assert transcript.is_file()
     assert not (source / "sessions.db").exists()
     assert not backup.exists()
+
+
+def test_server_stop_probe_rejects_any_tcp_listener_even_without_healthy_http() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = int(listener.getsockname()[1])
+        assert session_sqlite._server_is_stopped("127.0.0.1", port) is False
+
+
+def test_fsync_file_flushes_on_the_current_platform(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"durable")
+    calls: list[int] = []
+    real_fsync = session_sqlite.os.fsync
+
+    def observe(descriptor: int) -> None:
+        calls.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(session_sqlite.os, "fsync", observe)
+    session_sqlite._fsync_file(artifact)
+    assert len(calls) == 1
 
 
 def test_export_is_generation_collision_safe(tmp_path: Path) -> None:
@@ -338,6 +363,7 @@ def test_resume_reconciles_after_source_relocation_boundary(tmp_path: Path, monk
     interrupted = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert interrupted["stage"] == "sources_relocating"
     assert not transcript.exists()
+    assert (source / MAINTENANCE_GUARD_FILE_NAME).is_file()
 
     monkeypatch.setattr(session_sqlite, "_TRANSITION_HOOK", None)
     assert (
@@ -356,6 +382,7 @@ def test_resume_reconciles_after_source_relocation_boundary(tmp_path: Path, monk
     )
     completed = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert completed["stage"] == "complete"
+    assert not (source / MAINTENANCE_GUARD_FILE_NAME).exists()
     assert (source / "sessions.db").is_file()
     assert (
         json.loads((source / "session-store.json").read_text(encoding="utf-8"))["state"] == "ready"
