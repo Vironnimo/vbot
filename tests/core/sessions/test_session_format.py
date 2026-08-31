@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -46,3 +47,23 @@ def test_existing_root_without_marker_never_authorizes_a_database(tmp_path: Path
 
     with pytest.raises(SessionStorageFormatError):
         SessionStore(database)
+
+
+def test_runtime_session_boundary_has_no_legacy_jsonl_dependency() -> None:
+    repository = Path(__file__).resolve().parents[3]
+    production_roots = (
+        repository / "core" / "sessions",
+        repository / "core" / "recall",
+        repository / "core" / "runtime",
+        repository / "server",
+        repository / "cli",
+    )
+    legacy_reference = re.compile(
+        r"(?:session|sessions).{0,100}jsonl|jsonl.{0,100}(?:session|sessions)", re.I
+    )
+
+    for root in production_roots:
+        for source_path in root.rglob("*.py"):
+            source = source_path.read_text(encoding="utf-8")
+            assert "jsonl_to_sqlite" not in source_path.name
+            assert legacy_reference.search(source) is None, source_path
