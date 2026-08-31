@@ -19,6 +19,7 @@ import {
   WEBSOCKET_ERROR_RESPONSE,
   addProject,
   addAgentMemory,
+  acknowledgeSessionStoreIncident,
   cancelProcess,
   cancelRun,
   cancelToolCall,
@@ -26,6 +27,7 @@ import {
   detectProject,
   setOverride,
   createRpcEnvelope,
+  createSessionStoreSnapshot,
   listProjects,
   listAgentMemories,
   listSessionActivity,
@@ -36,6 +38,7 @@ import {
   setProject,
   showProject,
   getTaskModelOptions,
+  getSessionStoreStatus,
   inspectSubAgentWork,
   listTaskModelTargets,
   listQueue,
@@ -109,6 +112,49 @@ describe('rpc()', () => {
         signal: undefined,
       },
     );
+  });
+
+  it('exposes Session-store status, snapshot, and incident acknowledgement RPCs', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { state: 'ready' } }),
+      );
+
+    await expect(
+      getSessionStoreStatus({ fetch: fetchFunction }),
+    ).resolves.toEqual({
+      state: 'ready',
+    });
+    await expect(
+      createSessionStoreSnapshot('manual', { fetch: fetchFunction }),
+    ).resolves.toEqual({ state: 'ready' });
+    await expect(
+      acknowledgeSessionStoreIncident('incident-1', { fetch: fetchFunction }),
+    ).resolves.toEqual({ state: 'ready' });
+
+    expect(
+      fetchFunction.mock.calls.map(([url, init]) => [
+        url,
+        JSON.parse(init.body),
+      ]),
+    ).toEqual([
+      ['/api/rpc', { method: 'session_store.status', params: {} }],
+      [
+        '/api/rpc',
+        {
+          method: 'session_store.snapshot_create',
+          params: { reason: 'manual' },
+        },
+      ],
+      [
+        '/api/rpc',
+        {
+          method: 'session_store.incident_acknowledge',
+          params: { incident_id: 'incident-1' },
+        },
+      ],
+    ]);
   });
 
   it('normalizes server RPC errors', async () => {

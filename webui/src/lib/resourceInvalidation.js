@@ -25,6 +25,7 @@ export const RESOURCE_TOKEN_CALENDAR = 'calendar';
 export const RESOURCE_TOKEN_COMMANDS = 'commands';
 export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 export const RESOURCE_TOKEN_SKILLS = 'skills';
+export const RESOURCE_KIND_SESSION_STORE = 'session_store';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
 // refresh ("models") and a provider/credential change ("providers") alter which

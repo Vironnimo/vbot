@@ -29,6 +29,7 @@ import {
   RESOURCE_TOKEN_SESSIONS,
   RESOURCE_TOKEN_SKILLS,
   RESOURCE_TOKEN_TERMINALS,
+  RESOURCE_KIND_SESSION_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
 
@@ -70,6 +71,8 @@ export function createAppControllerState(activeViewId) {
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
     sessionsRefreshToken: 0,
+    sessionStoreHealth: null,
+    sessionStoreIncident: null,
     settingsPanelTarget: '',
     settingsPanelTargetRequestId: 0,
     skillsRefreshToken: 0,
@@ -91,6 +94,7 @@ export function createAppController({
   onLoadProjects,
   onAgentIdChanged = () => {},
   onReloadAgents,
+  onLoadSessionStoreStatus = async () => {},
   onSetOnboardingAside,
   browserHistory = globalThis.history,
   browserWindow = globalThis.window,
@@ -390,6 +394,7 @@ export function createAppController({
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
+      await onLoadSessionStoreStatus();
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
@@ -421,6 +426,9 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    if (kind === RESOURCE_KIND_SESSION_STORE) {
+      await onLoadSessionStoreStatus();
+    }
     if (kind === 'agents') {
       const scope = event.payload?.scope ?? {};
       if (

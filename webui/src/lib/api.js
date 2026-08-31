@@ -164,6 +164,32 @@ export function getSettings(options = {}) {
   return rpc('settings.get', {}, options);
 }
 
+export function getSessionStoreStatus(options = {}) {
+  return rpc('session_store.status', {}, options);
+}
+
+export function createSessionStoreSnapshot(reason = 'rpc', options = {}) {
+  requireNonEmptyString(
+    reason,
+    'Snapshot reason must be a non-empty string',
+    'session_store.snapshot_create',
+  );
+  return rpc('session_store.snapshot_create', { reason }, options);
+}
+
+export function acknowledgeSessionStoreIncident(incidentId, options = {}) {
+  requireNonEmptyString(
+    incidentId,
+    'Recovery incident id must be a non-empty string',
+    'session_store.incident_acknowledge',
+  );
+  return rpc(
+    'session_store.incident_acknowledge',
+    { incident_id: incidentId },
+    options,
+  );
+}
+
 export function updateSettings(settings, options = {}) {
   requirePlainObject(
     settings,
