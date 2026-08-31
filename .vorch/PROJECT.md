@@ -27,6 +27,8 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Data flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (orchestration via providers, models, tools, agents) -> external APIs. Agentic-only - no separate non-agentic streaming path.
 
+**Persistence:** Canonical Session history lives in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). `message_search`/`messages_fts` is derived FTS inside the same DB (trigram fallback, stale-breadcrumb, chunked backfill). Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore; `session-recovery.json` records incidents.
+
 **Tools:** Canonical schema contracts, argument normalization/validation, concurrency policy, and authoring rules live in `tools.md`; Agent-facing definitions follow repository-root `TOOLS.md`.
 
 **Configuration:** The data directory (`~/.vbot`) owns `settings.json` (application settings) and `.env` (user-owned fallback credential snapshot; process environment takes precedence, vBot never rewrites `os.environ`). Every user-editable JSON file is validated by its owning domain before runtime consumption; public accessors configure Settings only through cataloged paths. Contracts and internals live in `settings.md` and `storage.md`; Custom Provider credentials in `providers/connections.md`.
