@@ -228,7 +228,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             backup_file = backup_root / rel
             if not backup_file.is_file() or _sha256(p) != _sha256(backup_file):
                 raise SystemExit(f"install: backup verification failed for {rel}")
-    # Remove original legacy artifacts (preserve backup). Defer marker/DB publish until sources are gone.
+    # Remove original legacy artifacts; publish marker/DB only when sources gone.
     for s in sources:
         for p in _artifacts(s.transcript):
             with suppress(OSError):
@@ -324,10 +324,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
             # Verify DB still matches manifest if it exists.
             if work_dir and staged_db:
                 staged_path = Path(work_dir) / staged_db
-                if staged_path.exists() and manifest.get("staged_sha256"):
-                    if _sha256(staged_path) != manifest["staged_sha256"]:
-                        print("resume: staged DB hash mismatch")
-                        return 1
+                if (
+                    staged_path.exists()
+                    and manifest.get("staged_sha256")
+                    and _sha256(staged_path) != manifest["staged_sha256"]
+                ):
+                    print("resume: staged DB hash mismatch")
+                    return 1
             print(f"resume: verified {manifest_path}")
             return 0
         except Exception as exc:
