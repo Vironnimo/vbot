@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from core.chat import ChatMessage
@@ -44,6 +45,21 @@ def test_snapshot_without_database_is_a_noop(tmp_path: Path) -> None:
     created = create_snapshot(tmp_path, tmp_path / "sessions.db", lambda destination: None)
     assert created is None
     assert list_snapshots(tmp_path) == []
+
+
+def test_cancelled_online_backup_leaves_no_partial_database(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    destination = tmp_path / "cancelled.db"
+    cancelled = threading.Event()
+    cancelled.set()
+    try:
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+
+        assert manager.backup_snapshot(destination, cancel_event=cancelled) is False
+        assert destination.exists() is False
+        assert not list(tmp_path.glob(".cancelled.db.*.tmp"))
+    finally:
+        manager.close()
 
 
 def test_snapshot_failure_keeps_previous_verified_snapshot(tmp_path: Path) -> None:

@@ -150,6 +150,16 @@ def test_copied_rehearsal_converts_all_roots_and_reopens_current_database(
     try:
         with sqlite3.connect(staged) as connection:
             assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 6
+            assert (
+                connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 12
+            )
+            assert (
+                connection.execute("SELECT COUNT(*) FROM messages_fts_trigram_docsize").fetchone()[
+                    0
+                ]
+                == 12
+            )
+        assert store.fts_health().state == "healthy"
         assert sessions.get(SessionAddress(None, "identity", "live")).load()[0].content == (
             "rehearsal-0-one"
         )
@@ -170,6 +180,26 @@ def test_capture_reads_torn_utf8_tail_once_and_records_evidence(tmp_path: Path) 
     assert capture.sessions[0].messages[0].content == "complete"
     assert capture.sessions[0].ignored_tails[0].size == len(torn)
     assert capture.sessions[0].ignored_tails[0].sha256 == session_sqlite._sha256_bytes(torn)
+    assert all(artifact.data == b"" for artifact in capture.sessions[0].captured_artifacts)
+
+
+def test_capture_skips_one_malformed_session_without_losing_valid_sessions(
+    tmp_path: Path,
+) -> None:
+    valid = tmp_path / "agents" / "coder" / "sessions" / "valid.jsonl"
+    malformed = tmp_path / "agents" / "coder" / "sessions" / "malformed.jsonl"
+    _write_transcript(valid, "keep me")
+    malformed.write_text("not-json\n", encoding="utf-8")
+
+    capture = capture_inventory(tmp_path)
+
+    assert [session.address.session_id for session in capture.sessions] == ["valid"]
+    assert capture.skipped_sessions == (
+        {
+            "relative_path": "agents/coder/sessions/malformed.jsonl",
+            "reason": f"invalid legacy message record: {malformed}:1",
+        },
+    )
 
 
 def test_convert_is_deterministic_and_preserves_sources(tmp_path: Path) -> None:
@@ -293,6 +323,62 @@ def test_fsync_file_flushes_on_the_current_platform(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(session_sqlite.os, "fsync", observe)
     session_sqlite._fsync_file(artifact)
     assert len(calls) == 1
+
+
+def test_source_relocation_checkpoints_progress_in_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    backup = tmp_path / "backup"
+    manifest_path = tmp_path / "manifest.json"
+    artifacts: list[dict[str, object]] = []
+    for index in range(3):
+        relative = f"agents/coder/sessions/{index}.jsonl"
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = f"message-{index}".encode()
+        path.write_bytes(data)
+        artifacts.append(
+            {
+                "relative_path": relative,
+                "present": True,
+                "sha256": session_sqlite._sha256_bytes(data),
+                "size": len(data),
+            }
+        )
+    manifest: dict[str, object] = {"sources": [{"artifacts": artifacts}]}
+    writes = 0
+    stop_checks = 0
+    real_write_json = session_sqlite._write_json
+
+    def count_write(path: Path, payload: dict[str, object]) -> None:
+        nonlocal writes
+        writes += 1
+        real_write_json(path, payload)
+
+    monkeypatch.setattr(session_sqlite, "_RELOCATION_CHECKPOINT_BATCH_SIZE", 2)
+    monkeypatch.setattr(session_sqlite, "_write_json", count_write)
+
+    def count_stop_check() -> None:
+        nonlocal stop_checks
+        stop_checks += 1
+
+    session_sqlite._relocate_sources(
+        source,
+        backup,
+        None,
+        manifest_path,
+        manifest,
+        count_stop_check,
+    )
+
+    assert writes == 2
+    assert stop_checks == 2
+    relocated = manifest["relocated"]
+    assert isinstance(relocated, list)
+    assert len(relocated) == 3
+    assert not list(source.rglob("*.jsonl"))
+    assert len(list((backup / "relocated").rglob("*.jsonl"))) == 3
 
 
 def test_export_is_generation_collision_safe(tmp_path: Path) -> None:

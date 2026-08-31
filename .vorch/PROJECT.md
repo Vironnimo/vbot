@@ -27,7 +27,7 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Data flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (orchestration via providers, models, tools, agents) -> external APIs. Agentic-only - no separate non-agentic streaming path.
 
-**Persistence:** Canonical Session history lives in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). `message_search`/`messages_fts` is derived FTS inside the same DB (trigram fallback, stale-breadcrumb, chunked backfill). Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore; `session-recovery.json` records incidents.
+**Persistence:** Canonical Session history lives in normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). Standard external-content FTS covers searchable Messages and a second trigram index excludes Tool-role bulk; no mirrored search-text table exists. Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore, run outside Runtime readiness, and use durable revision checkpoints to skip unchanged restarts; `session-recovery.json` records incidents.
 
 **Tools:** Canonical schema contracts, argument normalization/validation, concurrency policy, and authoring rules live in `tools.md`; Agent-facing definitions follow repository-root `TOOLS.md`.
 

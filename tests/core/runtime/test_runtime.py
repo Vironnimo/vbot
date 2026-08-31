@@ -5,6 +5,8 @@ import json
 import logging
 import re
 import sys
+import threading
+import time
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,7 +26,6 @@ from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
-from core.sessions.snapshots import list_snapshots
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
@@ -365,22 +366,98 @@ metadata:
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
 
 
-def test_runtime_snapshots_are_revision_aware(config: Config) -> None:
+def test_runtime_snapshot_records_captured_revisions(config: Config) -> None:
     runtime = Runtime(config)
     runtime.start()
     try:
-        runtime._last_session_snapshot_revisions = runtime.chat_sessions.snapshot_revisions()
-        snapshots_before = list_snapshots(config.data_dir)
-        runtime._snapshot_on_shutdown()
-        assert list_snapshots(config.data_dir) == snapshots_before
-
+        runtime._stop_periodic_snapshots()
         runtime.chat_sessions.create("main", session_id="snapshot-revision").append(
             ChatMessage.user("snapshot revision")
         )
-        runtime._snapshot_on_shutdown()
-        assert len(list_snapshots(config.data_dir)) > len(snapshots_before)
+        revisions = runtime.chat_sessions.snapshot_revisions()
+        outcome = runtime._capture_session_snapshot(reason="test")
+
+        assert outcome is not None
+        assert runtime._last_session_snapshot_revisions == revisions
+        assert runtime.chat_sessions.snapshot_checkpoint() == (outcome.name, revisions)
     finally:
         runtime.stop()
+
+
+def test_large_startup_snapshot_work_never_blocks_runtime_readiness(
+    config: Config, monkeypatch
+) -> None:
+    from core.sessions import snapshots
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = snapshots.create_snapshot
+
+    def delayed_snapshot(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "create_snapshot", delayed_snapshot)
+    runtime = Runtime(config)
+    started_at = time.monotonic()
+    runtime.start()
+    try:
+        assert time.monotonic() - started_at < 5
+        assert entered.wait(5)
+    finally:
+        release.set()
+        runtime.stop()
+
+
+def test_runtime_stop_cancels_an_in_progress_snapshot(config: Config, monkeypatch) -> None:
+    from core.sessions import snapshots
+
+    entered = threading.Event()
+
+    def cancellable_snapshot(*args, cancelled=None, **kwargs):
+        entered.set()
+        assert cancelled is not None
+        while not cancelled():
+            time.sleep(0.01)
+        return None
+
+    monkeypatch.setattr(snapshots, "create_snapshot", cancellable_snapshot)
+    runtime = Runtime(config)
+    runtime.start()
+    assert entered.wait(5)
+
+    stopped_at = time.monotonic()
+    runtime.stop()
+
+    assert time.monotonic() - stopped_at < 2
+
+
+def test_unchanged_restart_reuses_durable_snapshot_checkpoint(config: Config, monkeypatch) -> None:
+    first = Runtime(config)
+    first.start()
+    deadline = time.monotonic() + 5
+    while first._last_session_snapshot_revisions is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert first._last_session_snapshot_revisions is not None
+    first.stop()
+
+    from core.sessions import snapshots
+
+    calls = 0
+    original = snapshots.create_snapshot
+
+    def counted_snapshot(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "create_snapshot", counted_snapshot)
+    second = Runtime(config)
+    second.start()
+    second.stop()
+
+    assert calls == 0
 
 
 def test_runtime_stop_runs_cleanly(tmp_path: Path):

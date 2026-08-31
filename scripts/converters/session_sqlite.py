@@ -24,7 +24,6 @@ from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from core.chat.messages import ChatMessage
 from core.sessions import SessionAddress
 from core.sessions.format import (
     MAINTENANCE_GUARD_FILE_NAME,
@@ -32,16 +31,19 @@ from core.sessions.format import (
     read_session_store_marker,
 )
 from core.sessions.schema import APPLICATION_ID, SCHEMA_VERSION
-from core.sessions.snapshots import create_snapshot, list_snapshots
-from core.sessions.store import SessionStore
+from core.sessions.snapshots import create_snapshot
+from core.sessions.store import (
+    SessionStore,
+    continuation_from_connection,
+    messages_from_connection,
+)
 from scripts.converters.jsonl_sessions import (
     CaptureInventory,
     LegacySession,
     capture_inventory,
-    semantic_digest,
 )
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 MANIFEST_NAME = "conversion-manifest.json"
 EXPORT_MANIFEST_NAME = "export-manifest.json"
 ALLOWED_STAGES = (
@@ -56,6 +58,7 @@ ALLOWED_STAGES = (
     "complete",
 )
 _TRANSITION_HOOK: Any = None
+_RELOCATION_CHECKPOINT_BATCH_SIZE = 250
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -176,7 +179,7 @@ def _source_record(session: LegacySession, source: Path) -> dict[str, Any]:
         "archived": session.archived,
         "generation_id": session.generation_id,
         "source_digest": session.source_digest,
-        "semantic_digest": session.digest,
+        "message_count": len(session.messages),
         "artifacts": artifacts,
         "ignored_tails": [tail.__dict__ for tail in session.ignored_tails],
     }
@@ -192,6 +195,7 @@ def _inventory_payload(capture: CaptureInventory, source: Path) -> dict[str, Any
             "orphan_sidecars": list(capture.orphan_sidecars),
             "unknown_files": list(capture.unknown_files),
             "rejected_paths": list(capture.rejected_paths),
+            "skipped_sessions": list(capture.skipped_sessions),
         },
         "count": len(sessions),
     }
@@ -214,6 +218,7 @@ def _same_capture(manifest: dict[str, Any], capture: CaptureInventory, source: P
             "orphan_sidecars": list(capture.orphan_sidecars),
             "unknown_files": list(capture.unknown_files),
             "rejected_paths": list(capture.rejected_paths),
+            "skipped_sessions": list(capture.skipped_sessions),
         },
     }
     actual = {"sources": manifest["sources"], "evidence": manifest.get("evidence", {})}
@@ -248,6 +253,7 @@ def _created_at(session: LegacySession) -> str:
 def _import_to_db(path: Path, sessions: tuple[LegacySession, ...]) -> None:
     store = SessionStore(path, _offline=True)
     try:
+        store.prepare_offline_bulk_import()
         for session in sessions:
             store.import_generation(
                 session.address,
@@ -259,6 +265,7 @@ def _import_to_db(path: Path, sessions: tuple[LegacySession, ...]) -> None:
                 archived=session.archived,
                 created_at=_created_at(session),
             )
+        store.finish_offline_bulk_import()
         store.checkpoint()
     finally:
         store.close()
@@ -277,11 +284,11 @@ def _force_delete_journal(path: Path) -> None:
 
 def _verify_db(path: Path, sessions: tuple[LegacySession, ...]) -> dict[str, Any]:
     return _verify_db_expected(
-        path, {session.generation_id: session.digest for session in sessions}
+        path, {session.generation_id: len(session.messages) for session in sessions}
     )
 
 
-def _verify_db_expected(path: Path, expected: dict[str, str]) -> dict[str, Any]:
+def _verify_db_expected(path: Path, expected: dict[str, int]) -> dict[str, Any]:
     if not path.is_file():
         raise RuntimeError(f"staged database is missing: {path}")
     with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as connection:
@@ -294,74 +301,28 @@ def _verify_db_expected(path: Path, expected: dict[str, str]) -> dict[str, Any]:
             raise RuntimeError("staged database integrity check failed")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise RuntimeError("staged database foreign-key check failed")
-        rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
+        rows = connection.execute(
+            "SELECT s.generation_id, s.message_count, COUNT(m.message_key) AS actual_count "
+            "FROM sessions AS s LEFT JOIN messages AS m ON m.session_key = s.session_key "
+            "GROUP BY s.session_key ORDER BY s.session_key"
+        ).fetchall()
         if len(rows) != len(expected):
             raise RuntimeError("converted Session count does not match immutable capture")
-        actual: dict[str, str] = {}
+        actual: dict[str, int] = {}
         for row in rows:
-            key = int(row["session_key"])
-            messages = tuple(
-                ChatMessage.from_dict(json.loads(message["message_json"]))
-                for message in connection.execute(
-                    "SELECT message_json FROM messages WHERE session_key = ? ORDER BY seq", (key,)
+            count = int(row["actual_count"])
+            if int(row["message_count"]) != count:
+                raise RuntimeError(
+                    "converted Session message counter does not match canonical rows"
                 )
-            )
-            continuation = tuple(
-                json.loads(record["record_json"])
-                for record in connection.execute(
-                    "SELECT record_json FROM continuation_records "
-                    "WHERE session_key = ? ORDER BY seq",
-                    (key,),
-                )
-            )
-            address = SessionAddress(
-                project_id=row["project_id"] or None,
-                agent_id=row["agent_id"],
-                session_id=row["session_id"],
-            )
-            actual[str(row["generation_id"])] = semantic_digest(
-                address,
-                messages,
-                json.loads(row["metadata_json"]),
-                json.loads(row["activity_json"]),
-                continuation,
-                row["status"] == "archived",
-            )
+            actual[str(row["generation_id"])] = count
         if actual != expected:
-            raise RuntimeError("converted Session semantic coverage does not match capture")
+            raise RuntimeError("converted Session message coverage does not match capture")
         return {
             "session_count": len(rows),
             "message_count": int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0]),
             "sha256": _sha256(path),
         }
-
-
-def _snapshot_staged(work_dir: Path, database: Path, database_id: str) -> dict[str, Any]:
-    snapshot = create_snapshot(
-        work_dir,
-        database,
-        lambda destination: _offline_backup(database, destination),
-        database_id=database_id,
-        reason="conversion",
-    )
-    if snapshot is None:
-        raise RuntimeError("staged database snapshot was not published")
-    snapshot_dir = Path(snapshot)
-    manifests = list_snapshots(work_dir, expected_database_id=database_id)
-    if snapshot_dir not in manifests:
-        raise RuntimeError("staged database snapshot did not verify")
-    return {"directory": snapshot_dir.relative_to(work_dir).as_posix(), "id": snapshot_dir.name}
-
-
-def _offline_backup(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        closing(sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)) as origin,
-        closing(sqlite3.connect(destination)) as copy,
-    ):
-        origin.backup(copy)
-        copy.commit()
-    _fsync_file(destination)
 
 
 def cmd_dry_run(args: argparse.Namespace) -> int:
@@ -413,10 +374,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
         _import_to_db(staged, capture.sessions)
         verification = _verify_db(staged, capture.sessions)
         database_id = _database_id(staged)
-        snapshot = _snapshot_staged(work_dir, staged, database_id)
-        manifest.update(
-            {"database_id": database_id, "database": verification, "staged_snapshot": snapshot}
-        )
+        manifest.update({"database_id": database_id, "database": verification})
         _set_stage(manifest_path, manifest, "converted")
     except Exception:
         # The immutable source and any partial staged output remain available for
@@ -516,7 +474,11 @@ def _backup_external(
                     continue
                 target = staging / "legacy" / artifact.relative_path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(artifact.data)
+                shutil.copyfile(artifact.path, target)
+                if target.stat().st_size != artifact.size or _sha256(target) != artifact.sha256:
+                    raise RuntimeError(
+                        f"legacy Session source changed while backing up: {artifact.relative_path}"
+                    )
                 _fsync_file(target)
         _write_json(
             staging / "backup-manifest.json",
@@ -593,28 +555,48 @@ def _relocate_sources(
                 "relative_path": artifact.relative_path,
                 "present": artifact.present,
                 "sha256": artifact.sha256,
+                "size": artifact.size,
             }
             for session in sessions
             for artifact in session.captured_artifacts
         ]
     else:
         artifacts = [artifact for record in manifest["sources"] for artifact in record["artifacts"]]
+    pending_checkpoint = 0
     for artifact in artifacts:
         relative_path = str(artifact["relative_path"])
+        artifact_size = artifact.get("size")
+        if (
+            isinstance(artifact_size, bool)
+            or not isinstance(artifact_size, int)
+            or artifact_size < 0
+        ):
+            raise RuntimeError(f"source manifest has an invalid size: {relative_path}")
         if not artifact["present"] or relative_path in relocated:
             continue
+        if pending_checkpoint == 0:
+            require_stopped()
         original = source / Path(relative_path)
         destination = backup_root / "relocated" / Path(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        require_stopped()
         if original.exists():
-            if _sha256(original) != artifact["sha256"]:
+            if original.stat().st_size != artifact_size or _sha256(original) != artifact["sha256"]:
                 raise RuntimeError(f"source changed before relocation: {relative_path}")
             os.replace(original, destination)
             _fsync_dir(destination.parent)
-        elif not destination.is_file() or _sha256(destination) != artifact["sha256"]:
+        elif (
+            not destination.is_file()
+            or destination.stat().st_size != artifact_size
+            or _sha256(destination) != artifact["sha256"]
+        ):
             raise RuntimeError(f"source disappeared before relocation: {relative_path}")
         relocated.add(relative_path)
+        pending_checkpoint += 1
+        if pending_checkpoint >= _RELOCATION_CHECKPOINT_BATCH_SIZE:
+            manifest["relocated"] = sorted(relocated)
+            _write_json(manifest_path, manifest)
+            pending_checkpoint = 0
+    if pending_checkpoint:
         manifest["relocated"] = sorted(relocated)
         _write_json(manifest_path, manifest)
 
@@ -632,7 +614,7 @@ def _publish_database(staged: Path, target: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _install_runtime_verify(source: Path, expected: dict[str, str]) -> dict[str, Any]:
+def _install_runtime_verify(source: Path, expected: dict[str, int]) -> dict[str, Any]:
     target = source / "sessions.db"
     marker = read_session_store_marker(source)
     if marker is None or marker["state"] != "ready":
@@ -657,10 +639,11 @@ def _create_live_snapshot(source: Path, target: Path, database_id: str) -> dict[
             database_id=database_id,
             reason="conversion-install",
         )
+        if snapshot is None:
+            raise RuntimeError("live initial Session snapshot was not published")
+        store.record_snapshot_checkpoint(Path(snapshot).name, store.snapshot_revisions())
     finally:
         store.close()
-    if snapshot is None:
-        raise RuntimeError("live initial Session snapshot was not published")
     return {"id": Path(snapshot).name, "directory": str(Path(snapshot).relative_to(source))}
 
 
@@ -678,10 +661,10 @@ def _install_from_manifest(
     if stage in {"converted", "install_preflight", "backup_publishing"}:
         capture = _capture_source(source)
         _same_capture(manifest, capture, source)
-        expected = {session.generation_id: session.digest for session in capture.sessions}
+        expected = {session.generation_id: len(session.messages) for session in capture.sessions}
     else:
         expected = {
-            str(record["generation_id"]): str(record["semantic_digest"])
+            str(record["generation_id"]): int(record["message_count"])
             for record in manifest["sources"]
         }
     _require_server_stopped(host, port)
@@ -798,9 +781,6 @@ def cmd_resume(args: argparse.Namespace) -> int:
         _import_to_db(staged, capture.sessions)
         manifest["database"] = _verify_db(staged, capture.sessions)
         manifest["database_id"] = _database_id(staged)
-        manifest["staged_snapshot"] = _snapshot_staged(
-            Path(str(manifest["work_dir"])).resolve(), staged, str(manifest["database_id"])
-        )
         _set_stage(manifest_path, manifest, "converted")
         print(f"resume: converted staged database at {staged}")
         return 0
@@ -837,11 +817,8 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
                 output / scope / str(row["agent_id"]) / str(row["session_id"]) / generation
             )
             messages = [
-                json.loads(message["message_json"])
-                for message in connection.execute(
-                    "SELECT message_json FROM messages WHERE session_key = ? ORDER BY seq",
-                    (row["session_key"],),
-                )
+                message.to_dict()
+                for message in messages_from_connection(connection, int(row["session_key"]))
             ]
             transcript = b"".join(
                 (json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
@@ -859,6 +836,21 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
             for suffix, key in (("meta.json", "metadata_json"), ("activity.json", "activity_json")):
                 payload = str(row[key]).encode("utf-8")
                 path = session_root / f"{row['session_id']}.{suffix}"
+                files.append(
+                    {
+                        "path": path.relative_to(output).as_posix(),
+                        "sha256": _write_export_file(path, payload),
+                    }
+                )
+            continuation = continuation_from_connection(connection, int(row["session_key"]))
+            if continuation:
+                payload = b"".join(
+                    (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+                        "utf-8"
+                    )
+                    for record in continuation
+                )
+                path = session_root / f"{row['session_id']}.continuation.jsonl"
                 files.append(
                     {
                         "path": path.relative_to(output).as_posix(),

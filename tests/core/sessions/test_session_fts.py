@@ -93,19 +93,40 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
     )
     try:
         with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
             rows = connection.execute(
-                """
-                SELECT m.message_key, m.message_id, ms.message_key, ms.search_text
-                FROM messages AS m
-                JOIN message_search AS ms ON ms.message_key = m.message_key
-                ORDER BY m.message_key
-                """
+                "SELECT message_id, content, searchable FROM messages ORDER BY message_key"
             ).fetchall()
-            assert [row[0] for row in rows] == [row[2] for row in rows]
-            assert rows[0][3] == "visible searchable content"
-            assert rows[1][3] == ""
-            assert rows[2][3] == ""
-            assert visible.id not in rows[0][3]
+            indexed = connection.execute(
+                "SELECT rowid, content FROM messages_fts ORDER BY rowid"
+            ).fetchall()
+            assert "message_json" not in columns
+            assert "reasoning" not in columns
+            assert "tool_calls_json" not in columns
+            assert "run_id" not in columns
+            assert "message_search" not in tables
+            assert {
+                "assistant_messages",
+                "tool_calls",
+                "tool_messages",
+                "run_summaries",
+                "compaction_checkpoints",
+                "continuations",
+            }.issubset(tables)
+            assert rows == [
+                (visible.id, "visible searchable content", 1),
+                (system.id, "internal system payload", 0),
+                (note.id, "internal note payload", 0),
+            ]
+            assert indexed == [(1, "visible searchable content")]
             metadata = dict(connection.execute("SELECT key, value FROM store_meta").fetchall())
         assert metadata[FTS_STORAGE_VERSION_KEY] == str(FTS_STORAGE_VERSION)
         assert metadata[FTS_GENERATION_KEY]
@@ -181,6 +202,41 @@ def test_fts_candidate_filters_apply_before_the_result_limit(tmp_path: Path) -> 
         sessions.close()
 
 
+def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="edited")
+    original = ChatMessage.user("obsolete needle")
+    session.append_many(
+        [original, ChatMessage.assistant(model="model", content="obsolete tail needle")]
+    )
+
+    session.append_many(
+        [ChatMessage.history_edit(original.id), ChatMessage.user("replacement text")]
+    )
+
+    assert [message.content for message in session.load_active()] == ["replacement text"]
+    assert (
+        sessions.fts_search(
+            "needle",
+            project_id=None,
+            agent_id="agent",
+            roles=("user", "assistant"),
+        )
+        == []
+    )
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        assert connection.execute("SELECT active FROM messages ORDER BY seq").fetchall() == [
+            (0,),
+            (0,),
+            (0,),
+            (1,),
+        ]
+        assert connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 1
+    sessions.close()
+
+
 def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
     tmp_path: Path,
 ) -> None:
@@ -215,8 +271,8 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
     sessions.close()
 
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        connection.execute("DELETE FROM message_search")
         connection.execute("DROP TABLE messages_fts")
+        connection.execute("DROP TABLE messages_fts_trigram")
         connection.commit()
 
     def interrupt(stage: str, _high_water: int) -> None:

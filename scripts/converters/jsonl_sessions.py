@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -100,23 +100,9 @@ class LegacySession:
     archived: bool
     root_kind: str
     generation_id: str
+    source_digest: str
     captured_artifacts: tuple[CapturedArtifact, ...]
     ignored_tails: tuple[IgnoredTail, ...]
-
-    @property
-    def source_digest(self) -> str:
-        return _source_digest(self.captured_artifacts)
-
-    @property
-    def digest(self) -> str:
-        return semantic_digest(
-            self.address,
-            self.messages,
-            self.metadata,
-            self.activity,
-            self.continuation,
-            self.archived,
-        )
 
 
 @dataclass(frozen=True)
@@ -127,6 +113,7 @@ class CaptureInventory:
     orphan_sidecars: tuple[str, ...]
     unknown_files: tuple[str, ...]
     rejected_paths: tuple[str, ...]
+    skipped_sessions: tuple[JsonObject, ...]
 
 
 def inventory(data_dir: Path) -> list[LegacySession]:
@@ -147,6 +134,7 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
             candidates.append((specification, path))
 
     sessions: list[LegacySession] = []
+    skipped_sessions: list[JsonObject] = []
     seen_paths: set[Path] = set()
     seen_live: set[SessionAddress] = set()
     for specification, transcript in sorted(
@@ -164,12 +152,35 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
         )
         agent_id = relative_parts[specification.agent_index]
         address = SessionAddress(project_id, agent_id, transcript.stem)
-        _validate_address(address, transcript)
+        try:
+            _validate_address(address, transcript)
+        except ValueError as exc:
+            skipped_sessions.append(
+                {
+                    "relative_path": transcript.relative_to(root).as_posix(),
+                    "reason": str(exc),
+                }
+            )
+            continue
         if not specification.archived:
             if address in seen_live:
-                raise ValueError(f"duplicate live legacy Session source: {address}")
+                skipped_sessions.append(
+                    {
+                        "relative_path": transcript.relative_to(root).as_posix(),
+                        "reason": f"duplicate live legacy Session source: {address}",
+                    }
+                )
+                continue
             seen_live.add(address)
-        sessions.append(_capture_session(root, specification, transcript, address))
+        try:
+            sessions.append(_capture_session(root, specification, transcript, address))
+        except ValueError as exc:
+            skipped_sessions.append(
+                {
+                    "relative_path": transcript.relative_to(root).as_posix(),
+                    "reason": str(exc),
+                }
+            )
 
     known_artifacts = {
         artifact.relative_path
@@ -192,30 +203,8 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
         orphan_sidecars=tuple(sorted(orphan_sidecars)),
         unknown_files=tuple(sorted(unknown - orphan_sidecars)),
         rejected_paths=tuple(sorted(rejected)),
+        skipped_sessions=tuple(skipped_sessions),
     )
-
-
-def semantic_digest(
-    address: SessionAddress,
-    messages: tuple[ChatMessage, ...],
-    metadata: JsonObject,
-    activity: JsonObject,
-    continuation: tuple[JsonObject, ...],
-    archived: bool,
-) -> str:
-    payload = {
-        "address": [address.project_id, address.agent_id, address.session_id],
-        "messages": [message.to_dict() for message in messages],
-        "metadata": metadata,
-        "activity": activity,
-        "continuation": continuation,
-        "archived": archived,
-    }
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
 
 def _match_root(
@@ -331,7 +320,8 @@ def _capture_session(
     activity = _parse_object(captures[2])
     continuation, continuation_tail = _parse_continuation(captures[3])
     relative = transcript.relative_to(root).as_posix()
-    generation_id = _generation_id(specification.name, relative, _source_digest(captures), 0)
+    source_digest = _source_digest(captures)
+    generation_id = _generation_id(specification.name, relative, source_digest, 0)
     return LegacySession(
         address=address,
         transcript=transcript,
@@ -342,7 +332,8 @@ def _capture_session(
         archived=specification.archived,
         root_kind=specification.name,
         generation_id=generation_id,
-        captured_artifacts=tuple(captures),
+        source_digest=source_digest,
+        captured_artifacts=tuple(replace(artifact, data=b"") for artifact in captures),
         ignored_tails=(*transcript_tail, *continuation_tail),
     )
 
@@ -459,7 +450,7 @@ def _source_digest(captures: tuple[CapturedArtifact, ...] | list[CapturedArtifac
         digest.update(b"\0")
         digest.update(artifact.relative_path.encode("utf-8"))
         digest.update(b"\0present\0" if artifact.present else b"\0missing\0")
-        digest.update(artifact.data)
+        digest.update(artifact.sha256.encode("ascii"))
     return digest.hexdigest()
 
 
