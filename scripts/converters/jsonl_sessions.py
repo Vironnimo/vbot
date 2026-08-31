@@ -67,20 +67,38 @@ def inventory(data_dir: Path) -> list[LegacySession]:
         sources.append(
             (transcript, transcript.parents[3].name, transcript.parent.parent.name, True)
         )
+    # Additional two roots: archived agent and archived project trees.
+    for transcript in (data_dir / "archive" / "agents").glob("*/agent/sessions/*.jsonl"):
+        sources.append((transcript, None, transcript.parents[3].name, True))
+    for transcript in (data_dir / "archive" / "projects").glob("*/agents/*/sessions/*.jsonl"):
+        sources.append(
+            (transcript, transcript.parent.parent.parent.name, transcript.parent.parent.name, True)
+        )
 
     sessions: list[LegacySession] = []
-    seen: set[tuple[SessionAddress, bool]] = set()
+    # Live addresses must be unique; archived may share an address across
+    # multiple generations (plan 5). Deduplicate by file path, not address.
+    seen_paths: set[Path] = set()
+    seen_live: set[SessionAddress] = set()
     for transcript, project_id, agent_id, archived in sorted(
         sources, key=lambda item: (not item[3], str(item[0]))
     ):
         if transcript.name.endswith(".continuation.jsonl"):
             continue
+        # Resolve the path to avoid symlink duplicates.
+        try:
+            resolved = transcript.resolve()
+        except OSError:
+            resolved = transcript
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
         address = SessionAddress(project_id, agent_id, transcript.stem)
         _validate_address(address, transcript)
-        source_key = (address, archived)
-        if source_key in seen:
-            raise ValueError(f"duplicate legacy Session source: {address}")
-        seen.add(source_key)
+        if not archived:
+            if address in seen_live:
+                raise ValueError(f"duplicate live legacy Session source: {address}")
+            seen_live.add(address)
         sessions.append(
             LegacySession(
                 address=address,
@@ -143,15 +161,24 @@ def _validate_address(address: SessionAddress, path: Path) -> None:
 
 def _messages(path: Path) -> list[ChatMessage]:
     messages: list[ChatMessage] = []
-    content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
+    data = path.read_bytes()
+    ends_with_newline = data.endswith(b"\n") or data.endswith(b"\r")
+    # Split without discarding empty tail handling via bytes.
+    lines = data.splitlines()
+    for line_number, line_bytes in enumerate(lines, start=1):
+        if not line_bytes.strip():
             continue
+        try:
+            line = line_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if line_number == len(lines) and not ends_with_newline:
+                # Torn multibyte tail — ignore suffix as legacy loader did.
+                break
+            raise ValueError(f"invalid legacy Session message at {path}:{line_number}") from exc
         try:
             messages.append(ChatMessage.from_dict(json.loads(line)))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            if line_number == len(lines) and not content.endswith(("\n", "\r")):
+            if line_number == len(lines) and not ends_with_newline:
                 break
             raise ValueError(f"invalid legacy Session message at {path}:{line_number}") from exc
     return messages
@@ -173,20 +200,27 @@ def _continuation(path: Path) -> list[JsonObject]:
     if not path.exists():
         return []
     records: list[JsonObject] = []
-    content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
+    data = path.read_bytes()
+    ends_with_newline = data.endswith(b"\n") or data.endswith(b"\r")
+    lines = data.splitlines()
+    for line_number, line_bytes in enumerate(lines, start=1):
+        if not line_bytes.strip():
             continue
         try:
-            data = json.loads(line)
-        except json.JSONDecodeError as exc:
-            if line_number == len(lines) and not content.endswith(("\n", "\r")):
+            line = line_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if line_number == len(lines) and not ends_with_newline:
                 break
             raise ValueError(f"invalid legacy continuation at {path}:{line_number}") from exc
-        if not isinstance(data, dict):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as exc:
+            if line_number == len(lines) and not ends_with_newline:
+                break
+            raise ValueError(f"invalid legacy continuation at {path}:{line_number}") from exc
+        if not isinstance(parsed, dict):
             raise ValueError(f"legacy continuation record must be an object: {path}:{line_number}")
-        records.append(data)
+        records.append(parsed)
     return records
 
 

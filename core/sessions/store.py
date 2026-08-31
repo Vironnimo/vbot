@@ -234,11 +234,9 @@ class SessionStore:
         validate_session_store_paths(path.parent, path)
         marker = read_session_store_marker(path.parent)
         if marker is None:
-            # Auto-initialize a fresh test directory that has no marker yet.
-            # ``initialize_data_directory`` handles the ``root not exists``
-            # case and the ``existing empty`` case (including ``logs``-only).
-            # A production directory without a marker will not be empty and
-            # thus will not be auto-initialized, preserving the hard error.
+            # Fresh-root convenience without any legacy JSONL inspection.
+            # Only an empty directory or an empty temp directory with allowed
+            # names is auto-initialized. Everything else is a hard error.
             data_dir = path.parent
             should_try_init = False
             if not data_dir.exists():
@@ -248,88 +246,59 @@ class SessionStore:
                     entries = list(data_dir.iterdir())
                 except OSError:
                     entries = None
-                # Fresh pytest temp directories may already contain
-                # ``settings.json``, ``.env``, ``skills``, ``logs`` etc.
-                # written by test setup before ``Runtime.start``. Treat any
-                # temp directory without a marker and without a sessions.db
-                # as fresh, unless it clearly contains legacy session files.
-                is_temp = False
-                try:
-                    temp_base = Path(tempfile.gettempdir()).resolve()
-                    is_temp = data_dir.resolve().is_relative_to(temp_base)
-                except Exception:
-                    is_temp = "pytest" in str(data_dir) or "Temp" in str(data_dir)
-                if entries is not None and (
-                    not entries
-                    or all(
-                        entry.name
-                        in {
-                            "logs",
-                            "skills",
-                            "settings.json",
-                            ".env",
-                            ".env.example",
-                            "extensions",
-                            "prompts",
-                            "recall",
-                            "statistics",
-                            "bootstrap",
-                            "calendar",
-                            "channels",
-                            "cron",
-                            "processes",
-                            "terminals",
-                            "oauth",
-                            "artifacts",
-                            "archive",
-                            "agents",
-                            "projects",
-                            "models",
-                            "debug",
-                        }
-                        for entry in entries
-                    )
-                    or (
-                        is_temp
-                        and not (data_dir / "sessions.db").exists()
-                        and not (data_dir / "session-store.json").exists()
-                    )
-                ):
-                    # If the directory looks like a legacy production data
-                    # dir (contains actual session files), don't treat it as
-                    # fresh even inside temp.
-                    has_legacy = False
-                    for legacy_root in (
-                        data_dir / "agents",
-                        data_dir / "projects",
-                        data_dir / "archive",
-                    ):
-                        if legacy_root.exists():
-                            try:
-                                if any(legacy_root.rglob("*.jsonl")):
-                                    has_legacy = True
-                                    break
-                            except Exception:
-                                pass
-                    if not has_legacy:
+                if entries is not None:
+                    if not entries:
                         should_try_init = True
+                    else:
+                        try:
+                            temp_base = Path(tempfile.gettempdir()).resolve()
+                            is_temp = data_dir.resolve().is_relative_to(temp_base)
+                        except Exception:
+                            is_temp = "pytest" in str(data_dir) or "Temp" in str(data_dir)
+                        if is_temp and all(
+                            entry.name
+                            in {
+                                "logs",
+                                "skills",
+                                "settings.json",
+                                ".env",
+                                ".env.example",
+                                "extensions",
+                                "prompts",
+                                "recall",
+                                "statistics",
+                                "bootstrap",
+                                "calendar",
+                                "channels",
+                                "cron",
+                                "processes",
+                                "terminals",
+                                "oauth",
+                                "artifacts",
+                                "archive",
+                                "agents",
+                                "projects",
+                                "models",
+                                "debug",
+                            }
+                            for entry in entries
+                        ):
+                            should_try_init = True
             if should_try_init:
                 from core.storage.layout import initialize_data_directory
 
                 with suppress(Exception):
                     initialize_data_directory(data_dir)
                 marker = read_session_store_marker(data_dir)
-            # For tests that create a database file directly without a marker
-            # (e.g. ``_create_current_database``), derive a ready marker from
-            # the database's own ``store_meta`` identity so the subsequent
-            # schema/version checks can run and raise the correct typed error
-            # instead of a generic missing-marker error.
+            # Test-only fallback: a DB file created directly (e.g. schema tests)
+            # contains a valid store_meta/database_id. Derive a ready marker so
+            # the test reaches the intended schema/version check instead of a
+            # generic missing-marker error. Production code never relies on this.
             if marker is None and path.exists() and path.is_file():
                 with suppress(Exception):
-                    # Use a read-only URI to avoid creating -wal/-shm side effects.
                     ro_path = f"file:{path.as_posix()}?mode=ro"
                     with sqlite3.connect(ro_path, uri=True) as _ro_conn:
-                        _ro_conn.row_factory = sqlite3.Row
+                        _ro_conn.row_factory = sqlite3.Row  # type: ignore[assignment]
                         try:
                             _db_id_row = _ro_conn.execute(
                                 "SELECT value FROM store_meta WHERE key='database_id'"
@@ -349,7 +318,6 @@ class SessionStore:
                                 )
                             except Exception:
                                 _version = SCHEMA_VERSION
-                            # Clamp version for marker schema_version field.
                             _marker_version = _version if 1 <= _version <= 100 else SCHEMA_VERSION
                             from core.sessions.format import (
                                 _write_marker,
@@ -366,12 +334,10 @@ class SessionStore:
                                 _write_marker(session_store_marker_path(data_dir), _payload)
                                 marker = read_session_store_marker(data_dir)
                         else:
-                            # No valid identity in store_meta (e.g. test helper
-                            # created the schema via executescript but did not
-                            # insert a row). Generate one, persist it, and
-                            # create a matching ready marker so the subsequent
-                            # open can proceed to the intended schema/version
-                            # checks.
+                            # No valid identity in store_meta (test helper
+                            # created schema without inserting a row). Generate
+                            # one and create a matching marker so the test
+                            # reaches the intended schema/version check.
                             _db_id = uuid.uuid4().hex
                             try:
                                 with sqlite3.connect(path, isolation_level=None) as _w_conn:
@@ -509,6 +475,36 @@ class SessionStore:
                     )
                 _ensure_fts_schema(connection)
             return connection
+        except sqlite3.OperationalError as exc:
+            with suppress(UnboundLocalError):
+                connection.close()
+            if create_if_missing and not existed:
+                for created in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+                    with suppress(OSError):
+                        created.unlink()
+            msg = str(exc).lower()
+            if any(
+                k in msg
+                for k in (
+                    "locked",
+                    "busy",
+                    "readonly",
+                    "read-only",
+                    "disk full",
+                    "disk i/o",
+                    "unable to open",
+                    "cannot open",
+                    "permission",
+                    "full",
+                    "no such file",
+                )
+            ):
+                raise SessionStoreUnavailableError(
+                    f"Session database cannot be opened safely: {path}"
+                ) from exc
+            raise SessionStoreCorruptError(
+                f"Session database cannot be opened safely: {path}"
+            ) from exc
         except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
                 connection.close()
@@ -598,6 +594,31 @@ class SessionStore:
                     )
                 _ensure_fts_schema(connection)
             return connection
+        except sqlite3.OperationalError as exc:
+            with suppress(UnboundLocalError):
+                connection.close()
+            msg = str(exc).lower()
+            if any(
+                k in msg
+                for k in (
+                    "locked",
+                    "busy",
+                    "readonly",
+                    "read-only",
+                    "disk full",
+                    "disk i/o",
+                    "unable to open",
+                    "cannot open",
+                    "permission",
+                    "full",
+                )
+            ):
+                raise SessionStoreUnavailableError(
+                    f"Session database cannot be opened safely: {path}"
+                ) from exc
+            raise SessionStoreCorruptError(
+                f"Session database cannot be opened safely: {path}"
+            ) from exc
         except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
                 connection.close()
@@ -724,17 +745,49 @@ class SessionStore:
     @contextmanager
     def _transaction(self, *, write: bool, patience_s: float = WRITE_PATIENCE_S):
         if write:
-            with self._write_transaction(patience_s=patience_s) as connection:
+            with self._single_write_transaction() as connection:
                 yield connection
         else:
             with self._read_transaction() as connection:
                 yield connection
 
     @contextmanager
-    def _write_transaction(self, patience_s: float = WRITE_PATIENCE_S):
-        # Time-based jittered retry for BUSY/LOCKED only. Release the Python
-        # writer lock during sleep so another writer can make progress.
+    def _single_write_transaction(self):
+        """Single-attempt writer transaction without retry. Retry is handled by _execute_write."""
+        self._writer_lock.acquire()
+        acquired = True
+        try:
+            with self._lifetime_lock:
+                if self._closed:
+                    raise ChatSessionError("Session store is closed")
+            try:
+                self._writer.execute("BEGIN IMMEDIATE")
+                yield self._writer
+                self._writer.execute("COMMIT")
+            except BaseException:
+                with suppress(sqlite3.Error):
+                    if self._writer.in_transaction:
+                        self._writer.execute("ROLLBACK")
+                raise
+            # Success — count only committed writes.
+            self._write_count += 1
+            if self._write_count % 50 == 0:
+                self._try_wal_checkpoint()
+        finally:
+            if acquired:
+                self._writer_lock.release()
+
+    def _execute_write(
+        self, func: Callable[[sqlite3.Connection], Any], patience_s: float = WRITE_PATIENCE_S
+    ) -> Any:
+        """Execute func(connection) inside a retried writer transaction.
+
+        Retries only BUSY/LOCKED and the transient engine condition, plus one
+        FTS-detach retry. Uses time-based jittered budgets (20s/60s/0.5s) and
+        releases the Python lock during sleep.
+        """
         deadline = time.monotonic() + patience_s
+        fts_detached = False
 
         def _is_retryable(exc: BaseException) -> bool:
             msg = str(exc).lower()
@@ -757,60 +810,27 @@ class SessionStore:
             time.sleep(min(jitter, max(deadline - now, 0.001)))
             return True
 
-        fts_detached_this_attempt = False
         while True:
-            # Acquire writer lock only for the attempt itself.
-            acquired = False
             try:
-                self._writer_lock.acquire()
-                acquired = True
-                with self._lifetime_lock:
-                    if self._closed:
-                        raise ChatSessionError("Session store is closed")
-                try:
-                    self._writer.execute("BEGIN IMMEDIATE")
-                    yield self._writer
-                    self._writer.execute("COMMIT")
-                    break
-                except BaseException as exc:
-                    with suppress(sqlite3.Error):
-                        if self._writer.in_transaction:
-                            self._writer.execute("ROLLBACK")
-                    if isinstance(exc, sqlite3.Error) and _is_retryable(exc):
-                        # Unlock before sleeping.
-                        self._writer_lock.release()
-                        acquired = False
-                        if _sleep_before_retry():
-                            continue
-                        raise SessionStoreUnavailableError(
-                            f"Session database write busy for {patience_s:.0f}s: {self.path}"
-                        ) from exc
-                    if (
-                        isinstance(exc, sqlite3.Error)
-                        and _is_fts_error(exc)
-                        and not fts_detached_this_attempt
-                    ):
-                        # Derived FTS corruption must never block canonical writes.
-                        with suppress(Exception):
-                            _detach_fts(self._writer)
-                        fts_detached_this_attempt = True
-                        # Release lock before retry without FTS.
-                        if acquired:
-                            self._writer_lock.release()
-                            acquired = False
+                with self._single_write_transaction() as connection:
+                    return func(connection)
+            except BaseException as exc:
+                if isinstance(exc, sqlite3.Error) and _is_retryable(exc):
+                    if _sleep_before_retry():
                         continue
-                    if isinstance(exc, sqlite3.Error):
-                        raise SessionStoreUnavailableError(
-                            f"Session database write failed: {self.path}"
-                        ) from exc
-                    raise
-            finally:
-                if acquired:
-                    self._writer_lock.release()
-        # Success — hygiene outside the lock. Count only committed writes.
-        self._write_count += 1
-        if self._write_count % 50 == 0:
-            self._try_wal_checkpoint()
+                    raise SessionStoreUnavailableError(
+                        f"Session database write busy for {patience_s:.0f}s: {self.path}"
+                    ) from exc
+                if isinstance(exc, sqlite3.Error) and _is_fts_error(exc) and not fts_detached:
+                    with suppress(Exception), self._writer_lock:
+                        _detach_fts(self._writer)
+                    fts_detached = True
+                    continue
+                if isinstance(exc, sqlite3.Error):
+                    raise SessionStoreUnavailableError(
+                        f"Session database write failed: {self.path}"
+                    ) from exc
+                raise
 
     def _try_wal_checkpoint(self) -> None:
         """Best-effort PASSIVE checkpoint; never raises or fails the transaction."""
@@ -1014,7 +1034,8 @@ class SessionStore:
 
     def create(self, address: SessionAddress, created_at: str | None = None) -> None:
         timestamp = created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
                     "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -1023,16 +1044,21 @@ class SessionStore:
             except sqlite3.IntegrityError as exc:
                 raise ChatSessionError(f"session already exists: {address.session_id}") from exc
 
+        self._execute_write(_fn)
+
     def ensure_live(self, address: SessionAddress) -> None:
         """Atomically return an existing live Session or create a new generation."""
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             if self._find_live(connection, address) is not None:
                 return
             connection.execute(
                 "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
                 (uuid.uuid4().hex, *self._scope(address), timestamp),
             )
+
+        self._execute_write(_fn)
 
     def exists(self, address: SessionAddress, *, include_archived: bool = False) -> bool:
         clause = "" if include_archived else " AND status = 'live'"
@@ -1072,18 +1098,24 @@ class SessionStore:
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         payload = _json_object(metadata, "session metadata")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
                 "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (payload, state["session_key"]),
             )
 
+        self._execute_write(_fn)
+
     def mutate_metadata(
         self, address: SessionAddress, mutation: Callable[[JsonObject], None]
     ) -> tuple[JsonObject, JsonObject]:
         """Apply one metadata read-modify-write under the writer transaction."""
-        with self._transaction(write=True) as connection:
+        result: tuple[JsonObject, JsonObject] | None = None
+
+        def _fn(connection: sqlite3.Connection) -> None:
+            nonlocal result
             state = self._require_live(connection, address)
             previous = _json_from_payload(state["metadata_json"], "session metadata")
             updated = deepcopy(previous)
@@ -1093,7 +1125,11 @@ class SessionStore:
                 "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (payload, state["session_key"]),
             )
-        return previous, updated
+            result = (previous, updated)
+
+        self._execute_write(_fn)
+        assert result is not None
+        return result
 
     def activity(self, address: SessionAddress) -> JsonObject:
         payload = self.state(address)["activity_json"]
@@ -1107,18 +1143,24 @@ class SessionStore:
 
     def replace_activity(self, address: SessionAddress, activity: JsonObject) -> None:
         payload = _json_object(activity, "session activity")
-        with self._transaction(write=True, patience_s=ACTIVITY_WRITE_PATIENCE_S) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
                 "UPDATE sessions SET activity_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (payload, state["session_key"]),
             )
 
+        self._execute_write(_fn, patience_s=ACTIVITY_WRITE_PATIENCE_S)
+
     def mutate_activity(
         self, address: SessionAddress, mutation: Callable[[JsonObject], None]
     ) -> tuple[JsonObject, JsonObject]:
         """Apply one activity read-modify-write under the writer transaction."""
-        with self._transaction(write=True, patience_s=ACTIVITY_WRITE_PATIENCE_S) as connection:
+        result: tuple[JsonObject, JsonObject] | None = None
+
+        def _fn(connection: sqlite3.Connection) -> None:
+            nonlocal result
             state = self._require_live(connection, address)
             previous = _json_from_payload(state["activity_json"], "session activity")
             updated = deepcopy(previous)
@@ -1128,13 +1170,18 @@ class SessionStore:
                 "UPDATE sessions SET activity_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (payload, state["session_key"]),
             )
-        return previous, updated
+            result = (previous, updated)
+
+        self._execute_write(_fn, patience_s=ACTIVITY_WRITE_PATIENCE_S)
+        assert result is not None
+        return result
 
     def append_messages(self, address: SessionAddress, messages: Sequence[ChatMessage]) -> None:
         if not messages:
             return
         encoded = [_message_row(message) for message in messages]
-        with self._transaction(write=True, patience_s=TRANSCRIPT_WRITE_PATIENCE_S) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             session_key = int(state["session_key"])
             next_seq = int(state["message_count"])
@@ -1147,6 +1194,8 @@ class SessionStore:
                 "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, last_message_id = ?, history_revision = history_revision + 1, state_revision = state_revision + 1 WHERE session_key = ?",
                 (len(encoded), last_timestamp, last_id, session_key),
             )
+
+        self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
 
     def messages(self, address: SessionAddress) -> list[ChatMessage]:
 
@@ -1205,7 +1254,8 @@ class SessionStore:
         if not records:
             return
         payloads = [_json_object(record, "continuation record") for record in records]
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             sequence = connection.execute(
                 "SELECT COALESCE(MAX(seq) + 1, 0) AS value FROM continuation_records WHERE session_key = ?",
@@ -1220,14 +1270,18 @@ class SessionStore:
             )
             self._touch_state(connection, int(state["session_key"]))
 
+        self._execute_write(_fn)
+
     def clear_continuation(self, address: SessionAddress) -> None:
-        with self._transaction(write=True) as connection:
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
                 "DELETE FROM continuation_records WHERE session_key = ?",
                 (state["session_key"],),
             )
             self._touch_state(connection, int(state["session_key"]))
+
+        self._execute_write(_fn)
 
     def bookend_timestamps(self, address: SessionAddress) -> tuple[str, str] | None:
         with self._transaction(write=False) as connection:
@@ -1442,23 +1496,31 @@ class SessionStore:
         except sqlite3.Error as exc:
             # FTS corruption should not block canonical reads; detach and return empty.
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
-                with suppress(Exception), self._transaction(write=True) as wconn:
-                    _detach_fts(wconn)
+
+                def _detach(connection: sqlite3.Connection) -> None:
+                    _detach_fts(connection)
+
+                with suppress(Exception):
+                    self._execute_write(_detach)
             return []
 
     def archive(self, address: SessionAddress) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
                 "UPDATE sessions SET status = 'archived', archived_at = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (timestamp, state["session_key"]),
             )
 
+        self._execute_write(_fn)
+
     def move(self, source: SessionAddress, target: SessionAddress, metadata: JsonObject) -> None:
         """Relocate one complete Session row and its dependent rows atomically."""
         payload = _json_object(metadata, "session metadata")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, source)
             collision = connection.execute(
                 "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
@@ -1471,10 +1533,13 @@ class SessionStore:
                 (*self._scope(target), payload, state["session_key"]),
             )
 
+        self._execute_write(_fn)
+
     def fork(self, source: SessionAddress, target: SessionAddress, metadata: JsonObject) -> None:
         """Copy canonical history to a new live Session without activity/journal state."""
         payload = _json_object(metadata, "session metadata")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, source)
             try:
                 target_row = connection.execute(
@@ -1499,8 +1564,10 @@ class SessionStore:
                 (target_row.lastrowid, state["session_key"]),
             )
 
+        self._execute_write(_fn)
+
     def restore(self, address: SessionAddress) -> None:
-        with self._transaction(write=True) as connection:
+        def _fn(connection: sqlite3.Connection) -> None:
             collision = connection.execute(
                 "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
                 self._scope(address),
@@ -1518,16 +1585,21 @@ class SessionStore:
                 (row["session_key"],),
             )
 
+        self._execute_write(_fn)
+
     def delete(self, address: SessionAddress) -> None:
-        with self._transaction(write=True) as connection:
+        def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
                 "DELETE FROM sessions WHERE session_key = ?", (state["session_key"],)
             )
 
+        self._execute_write(_fn)
+
     def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> None:
         """Rename every global Session address for one Identity Agent atomically."""
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             collision = connection.execute(
                 "SELECT 1 FROM sessions AS source WHERE source.project_id = '' AND source.agent_id = ? "
                 "AND EXISTS (SELECT 1 FROM sessions AS target WHERE target.project_id = '' "
@@ -1543,23 +1615,31 @@ class SessionStore:
                 (new_agent_id, old_agent_id),
             )
 
+        self._execute_write(_fn)
+
     def archive_identity_agent_sessions(self, agent_id: str) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "UPDATE sessions SET status = 'archived', archived_at = ?, state_revision = state_revision + 1 "
                 "WHERE project_id = '' AND agent_id = ? AND status = 'live'",
                 (timestamp, agent_id),
             )
 
+        self._execute_write(_fn)
+
     def archive_project_sessions(self, project_id: str) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        with self._transaction(write=True) as connection:
+
+        def _fn(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "UPDATE sessions SET status = 'archived', archived_at = ?, state_revision = state_revision + 1 "
                 "WHERE project_id = ? AND status = 'live'",
                 (timestamp, project_id),
             )
+
+        self._execute_write(_fn)
 
     def _require_live(self, connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row:
         row = self._find_live(connection, address)
@@ -1623,21 +1703,16 @@ def _message_row(message: ChatMessage) -> tuple[str, str, str, str]:
 
 
 def _is_offline_path(path: Path) -> bool:
-    """Heuristic for converter staging databases outside the canonical location.
+    """Heuristic for converter staging and backup databases.
 
-    The canonical database is always ``<data_dir>/sessions.db``. Any database
-    whose name is not ``sessions.db`` or whose parent path contains the
-    converter's staging segment is treated as offline and bypasses the marker
-    state machine. Only the standalone converter uses this path.
+    Any database whose name is not ``sessions.db`` is a backup or staged
+    copy and bypasses the marker. The canonical ``sessions.db`` under
+    ``artifacts/temp/session-conversion-`` also bypasses the marker.
     """
     name = Path(path).name
     if name != "sessions.db":
         return True
-    # Staging databases live under ``artifacts/temp/session-conversion-...``
-    # inside the data directory. They must not require a marker at their
-    # immediate parent.
-    parts = Path(path).parts
-    return "session-conversion-" in str(path) or "artifacts" in parts and "temp" in parts
+    return "session-conversion-" in str(path)
 
 
 def _message_from_json(payload: str) -> ChatMessage:
@@ -1653,11 +1728,12 @@ QUARANTINE_DIRECTORY_NAME = "session-quarantine"
 
 
 def quarantine_database(database_path: Path) -> Path | None:
-    """Move a distrusted database plus sidecars into the quarantine directory.
+    """Move a distrusted database plus sidecars as one bundle, all-or-rollback.
 
-    The bytes are preserved and never overwritten: an existing quarantine
-    entry for the same timestamp grows a numeric suffix. Returns the
-    quarantine path, or ``None`` when nothing could be moved.
+    Moves ``sessions.db`` and its ``-wal/-shm/-journal`` sidecars into a
+    unique timestamped quarantine directory. If any existing member fails to
+    move, every already-moved member is rolled back and the function returns
+    ``None`` without removing the original database.
     """
 
     database_path = Path(database_path)
@@ -1666,29 +1742,34 @@ def quarantine_database(database_path: Path) -> Path | None:
     destination_root = data_dir / QUARANTINE_DIRECTORY_NAME
     destination_root.mkdir(parents=True, exist_ok=True)
     batch = destination_root / f"{timestamp}-quarantine"
-    # Ensure unique destination if a quarantine for the same second already exists.
     counter = 1
     original_batch = batch
     while batch.exists():
         batch = Path(f"{original_batch}-{counter}")
         counter += 1
-    moved_any = False
-    for sidecar_path in (database_path, *database_sidecar_paths(database_path)):
-        if not sidecar_path.exists():
-            continue
-        target = batch / sidecar_path.name
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
+    # Collect existing members up front.
+    members = [p for p in (database_path, *database_sidecar_paths(database_path)) if p.exists()]
+    if not members:
+        return None
+    moved: list[tuple[Path, Path]] = []
+    try:
+        batch.mkdir(parents=True, exist_ok=True)
+        for sidecar_path in members:
+            target = batch / sidecar_path.name
             os.replace(sidecar_path, target)
-            moved_any = True
-        except OSError:
-            continue
-    if not moved_any:
+            moved.append((sidecar_path, target))
+    except OSError as exc:
+        # Roll back every member already moved.
+        for original, target in reversed(moved):
+            with suppress(OSError):
+                os.replace(target, original)
+        with suppress(OSError):
+            batch.rmdir()
+        _LOGGER.error("Session quarantine failed, rolled back: %s", exc)
         return None
     _LOGGER.error(
         "Session database quarantined at %s (original bytes preserved); "
-        "a fresh Session database starts empty; restore from "
-        "session-backups if available",
+        "automatic restore will attempt the newest verified snapshot",
         batch,
     )
     return batch

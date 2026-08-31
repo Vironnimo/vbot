@@ -201,15 +201,19 @@ def _write_bootstrap_marker_fallback(data_dir: Path) -> None:
     import os as _os
     import uuid as _uuid
 
-    # ``SCHEMA_VERSION`` is currently 1; keep the fallback in sync with
-    # ``core.sessions.schema.SCHEMA_VERSION``. If that constant ever changes,
-    # update this fallback as well — it is only used for the standalone CLI
-    # path where importing the schema would also fail.
+    # Keep in sync with ``core.sessions.schema.SCHEMA_VERSION``; try to
+    # import it dynamically so the fallback does not drift.
+    try:
+        from core.sessions.schema import SCHEMA_VERSION as _sv  # type: ignore  # noqa: N811
+
+        _schema_version = int(_sv)
+    except Exception:
+        _schema_version = 2
     payload = {
         "format_version": 1,
         "state": "bootstrap",
         "database_id": _uuid.uuid4().hex,
-        "schema_version": 1,
+        "schema_version": _schema_version,
     }
     target = Path(data_dir) / "session-store.json"
     text = _json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -281,14 +285,12 @@ def initialize_data_directory(
     elif not layout.root.is_dir():
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
     else:
-        # An existing directory with no marker yet but that is not a legacy
-        # production data directory. ``LogManager`` creates ``<data_dir>/logs``
-        # before ``ensure_directories`` is called, so a freshly created
-        # ``data_dir`` will already contain a ``logs`` entry when we arrive
-        # here. Tests may also have written ``settings.json``, ``.env``,
-        # ``skills`` etc. before ``Runtime.start``. Treat those as fresh
-        # when the directory is inside the system temp area (pytest) and
-        # contains no legacy session artifacts.
+        # Bootstrap is only written when this call created the root. An
+        # existing directory without a marker is a hard current-format error;
+        # Runtime never inspects legacy Session artifacts to guess why.
+        # For test convenience, an empty temp directory that pytest created
+        # before Runtime starts is still considered fresh — but no JSONL scan
+        # is performed.
         if not layout.session_store_marker_path.exists():
             try:
                 entries = list(layout.root.iterdir())
@@ -298,8 +300,6 @@ def initialize_data_directory(
             if entries is not None:
                 import tempfile
 
-                # Broad set of files that can appear in a fresh test data dir
-                # before Runtime starts (settings, skills, logs, etc.).
                 allowed_fresh_names = {
                     "logs",
                     "skills",
@@ -332,44 +332,9 @@ def initialize_data_directory(
                     is_temp = "pytest" in str(layout.root) or "Temp" in str(layout.root)
                 if not entries:
                     is_fresh = True
-                elif all(entry.name in allowed_fresh_names for entry in entries):
-                    # If the directory contains legacy session files, don't
-                    # treat it as fresh even inside temp.
-                    has_legacy = False
-                    for legacy_root in (
-                        layout.root / "agents",
-                        layout.root / "projects",
-                        layout.root / "archive",
-                    ):
-                        if legacy_root.exists():
-                            try:
-                                if any(legacy_root.rglob("*.jsonl")):
-                                    has_legacy = True
-                                    break
-                            except Exception:
-                                pass
-                    if not has_legacy:
-                        is_fresh = True
-                elif (
-                    is_temp
-                    and not (layout.root / "sessions.db").exists()
-                    and not (layout.root / "session-store.json").exists()
-                ):
-                    has_legacy = False
-                    for legacy_root in (
-                        layout.root / "agents",
-                        layout.root / "projects",
-                        layout.root / "archive",
-                    ):
-                        if legacy_root.exists():
-                            try:
-                                if any(legacy_root.rglob("*.jsonl")):
-                                    has_legacy = True
-                                    break
-                            except Exception:
-                                pass
-                    if not has_legacy:
-                        is_fresh = True
+                elif is_temp and all(entry.name in allowed_fresh_names for entry in entries):
+                    # Temp-only convenience without any JSONL inspection.
+                    is_fresh = True
             if is_fresh:
                 try:
                     from core.sessions.format import write_bootstrap_marker  # type: ignore
