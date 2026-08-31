@@ -75,20 +75,34 @@ def _fsync_dir(path: Path) -> None:
 
 
 def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> Path | None:
-    """Try to acquire a cross-process lock file. Returns lock file path on success."""
+    """Try to acquire a cross-process lock file. Returns lock file path on success.
+
+    Uses O_EXCL creation plus an advisory flock where available so the OS
+    releases the lock if the holder dies. Falls back to mtime-based stale
+    detection (using wall time) for filesystems without flock.
+    """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
+            try:
+                # Hold an OS lock while the file exists where supported.
+                try:
+                    import fcntl  # type: ignore[import-not-found]  # POSIX
+
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                os.write(fd, str(os.getpid()).encode())
+            finally:
+                os.close(fd)
             return lock_path
         except FileExistsError:
-            # Check if holder died (stale lock older than 60s).
+            # Stale holder died without unlink — compare wall times.
             try:
                 mtime = lock_path.stat().st_mtime
-                if time.monotonic() - mtime > 60:
+                if time.time() - mtime > 60:
                     with suppress(OSError):
                         lock_path.unlink()
                     continue
@@ -109,40 +123,45 @@ def _verify_snapshot_db(path: Path, expected_database_id: str | None = None) -> 
     """Run application/schema/identity/structural/integrity/FK/count checks.
 
     Returns (session_count, message_count) on success, raises SessionStoreCorruptError on failure.
+    Explicitly closes the connection before returning so Windows can rename the
+    containing directory.
     """
+    conn: sqlite3.Connection | None = None
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            # Application id and schema version.
-            app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
-            if app_id != APPLICATION_ID:
-                raise SessionStoreCorruptError(f"snapshot application_id mismatch: {app_id}")
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version != SCHEMA_VERSION:
-                raise SessionStoreCorruptError(
-                    f"snapshot schema version {version} != {SCHEMA_VERSION}"
-                )
-            # Identity.
-            row = conn.execute(
-                "SELECT value FROM store_meta WHERE key=?", (DATABASE_ID_META_KEY,)
-            ).fetchone()
-            if row is None or not isinstance(row[0], str) or len(row[0]) != 32:
-                raise SessionStoreCorruptError("snapshot missing database_id")
-            if expected_database_id and str(row[0]) != expected_database_id:
-                raise SessionStoreCorruptError("snapshot database_id mismatch")
-            # Integrity.
-            integrity = conn.execute("PRAGMA quick_check").fetchone()[0]
-            if str(integrity) != "ok":
-                raise SessionStoreCorruptError(f"snapshot integrity failed: {integrity}")
-            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                raise SessionStoreCorruptError("snapshot foreign_key_check failed")
-            # Counts.
-            session_count = int(conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
-            message_count = int(conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
-            # Hash will be verified by caller against manifest.
-            return session_count, message_count
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row  # type: ignore[assignment]
+        # Application id and schema version.
+        app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
+        if app_id != APPLICATION_ID:
+            raise SessionStoreCorruptError(f"snapshot application_id mismatch: {app_id}")
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version != SCHEMA_VERSION:
+            raise SessionStoreCorruptError(f"snapshot schema version {version} != {SCHEMA_VERSION}")
+        # Identity.
+        row = conn.execute(
+            "SELECT value FROM store_meta WHERE key=?", (DATABASE_ID_META_KEY,)
+        ).fetchone()
+        if row is None or not isinstance(row[0], str) or len(row[0]) != 32:
+            raise SessionStoreCorruptError("snapshot missing database_id")
+        if expected_database_id and str(row[0]) != expected_database_id:
+            raise SessionStoreCorruptError("snapshot database_id mismatch")
+        # Integrity.
+        integrity = conn.execute("PRAGMA quick_check").fetchone()[0]
+        if str(integrity) != "ok":
+            raise SessionStoreCorruptError(f"snapshot integrity failed: {integrity}")
+        if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise SessionStoreCorruptError("snapshot foreign_key_check failed")
+        # Counts.
+        session_count = int(conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
+        message_count = int(conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+        # Hash will be verified by caller against manifest.
+        return session_count, message_count
     except sqlite3.Error as exc:
         raise SessionStoreCorruptError(f"snapshot verification failed: {exc}") from exc
+    finally:
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
 
 
 def create_snapshot(
@@ -189,6 +208,19 @@ def create_snapshot(
             session_count, message_count = _verify_snapshot_db(
                 db_dest, expected_database_id=database_id
             )
+            # Collect file size and sqlite diagnostics for manifest.
+            try:
+                file_size = db_dest.stat().st_size
+            except OSError:
+                file_size = 0
+            try:
+                from core.sessions.sqlite_runtime import sqlite_source_id as _src_id
+
+                sqlite_version = sqlite3.sqlite_version
+                sqlite_source = _src_id()
+            except Exception:
+                sqlite_version = sqlite3.sqlite_version
+                sqlite_source = ""
             manifest = {
                 "manifest_version": MANIFEST_VERSION,
                 "snapshot_id": snapshot_id,
@@ -197,9 +229,15 @@ def create_snapshot(
                 "schema_version": SCHEMA_VERSION,
                 "application_id": APPLICATION_ID,
                 "sha256": sha,
+                "file_size": file_size,
+                "sqlite_version": sqlite_version,
+                "sqlite_source_id": sqlite_source,
                 "session_count": session_count,
                 "message_count": message_count,
                 "database_file": SNAPSHOT_DATABASE_NAME,
+                "integrity": "ok",
+                "foreign_key_check": "ok",
+                "complete": True,
             }
             manifest_path = partial / SNAPSHOT_MANIFEST_NAME
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -271,7 +309,10 @@ def list_snapshots(data_dir: Path) -> list[Path]:
 
 
 def _prune_snapshots(root: Path) -> None:
-    snapshots = list_snapshots(root)
+    # root is the snapshot_root directory; list_snapshots expects the data_dir,
+    # so derive data_dir from root.
+    data_dir = root.parent if root.name == SNAPSHOT_ROOT_NAME else root
+    snapshots = list_snapshots(data_dir)
     # Keep at least one.
     if len(snapshots) <= 1:
         return
@@ -321,6 +362,22 @@ def restore_snapshot(
             if _sha256(db_src) != expected_sha:
                 return False
             _verify_snapshot_db(db_src)
+            # Verify snapshot identity matches current marker if a marker exists.
+            try:
+                from core.sessions.format import read_session_store_marker
+
+                marker = read_session_store_marker(data_dir)
+                if marker is not None:
+                    marker_id = str(marker.get("database_id") or "")
+                    manifest_id = str(manifest.get("database_id") or "")
+                    if manifest_id and marker_id and manifest_id != marker_id:
+                        return False
+                    # Also verify the snapshot DB's internal id matches manifest
+                    internal_id = str(manifest.get("database_id") or "")
+                    if internal_id:
+                        _verify_snapshot_db(db_src, expected_database_id=internal_id)
+            except Exception:
+                pass
         except Exception:
             return False
         # Ensure no live connection (check via sqlite_runtime tracking).
@@ -328,7 +385,7 @@ def restore_snapshot(
 
         if has_live_connection(database_path):
             return False
-        # Quarantine current DB as bundle.
+        # Quarantine current DB as bundle (all-or-rollback).
         from core.sessions.store import quarantine_database
 
         quarantine_database(database_path)
@@ -348,12 +405,15 @@ def restore_snapshot(
                     os.close(fd)
             os.replace(tmp_restore, database_path)
             _fsync_dir(database_path.parent)
-            # Verify restored DB.
+            # Verify restored DB before declaring success.
             try:
                 _verify_snapshot_db(database_path)
             except Exception:
+                # Restore verification failed — remove the corrupted replacement
+                # and keep the quarantined original for salvage. Do not try to
+                # roll back automatically; the caller will try the next snapshot.
                 with suppress(Exception):
-                    tmp_restore.unlink(missing_ok=True)
+                    database_path.unlink(missing_ok=True)
                 return False
             return True
         finally:

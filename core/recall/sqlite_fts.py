@@ -102,30 +102,12 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         expression = _fts_expression(request)
         if expression is None:
             return await self._fallback.search(request)
-        # Prefer integrated canonical FTS when available.
+        # Integrated FTS is the only lexical index; fallback is canonical scan.
         if self.sessions.is_fts_available():
             try:
                 return await asyncio.to_thread(self._search_with_canonical_fts, request, summaries)
             except Exception as error:  # pragma: no cover - fallback
                 self._warning("Canonical FTS search failed; falling back: %s", error)
-
-        async with self._index_lock:
-            try:
-                return await asyncio.to_thread(
-                    self._search_with_sqlite, request, summaries, expression
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite recall index failed; rebuilding once: %s", error)
-                await asyncio.to_thread(self._delete_index_file)
-
-            try:
-                return await asyncio.to_thread(
-                    self._search_with_sqlite, request, summaries, expression
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning(
-                    "SQLite recall index rebuild failed; falling back to canonical scan: %s", error
-                )
         return await self._fallback.search(request)
 
     def _search_with_canonical_fts(
@@ -285,7 +267,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             )
             page = await self._fallback.search_page(fallback_request)
             return replace(page, ranking=f"substring_scan_{fallback_request.order}")
-        # Try canonical FTS when available.
+        # Integrated FTS only; otherwise canonical scan.
         if self.sessions.is_fts_available():
             try:
                 return await asyncio.to_thread(
@@ -293,31 +275,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
                 )
             except Exception as error:  # pragma: no cover
                 self._warning("Canonical FTS page failed; falling back: %s", error)
-
-        async with self._index_lock:
-            try:
-                return await asyncio.to_thread(
-                    self._search_page_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite recall index failed; rebuilding once: %s", error)
-                await asyncio.to_thread(self._delete_index_file)
-            try:
-                return await asyncio.to_thread(
-                    self._search_page_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning(
-                    "SQLite recall index rebuild failed; falling back to canonical scan: %s", error
-                )
         fallback_request = (
             replace(request, order="newest") if request.order == "relevance" else request
         )

@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 import sys
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -204,18 +204,43 @@ def cmd_install(args: argparse.Namespace) -> int:
         raise SystemExit(
             "install: server appears live (sessions.db has live connection); stop server first"
         )
-    # Create external backup bundle.
-    backup_root = backup_dir / f"backup-{uuid.uuid4().hex}"
-    backup_root.mkdir(parents=True, exist_ok=True)
+    # Create external backup bundle in hidden staging, then atomically publish.
+    backup_staging = backup_dir / f".backup-{uuid.uuid4().hex}.tmp"
+    backup_staging.mkdir(parents=True, exist_ok=True)
     for s in sources:
         for p in _artifacts(s.transcript):
             if not p.exists():
                 continue
             rel = p.relative_to(source)
-            dest = backup_root / rel
+            dest = backup_staging / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dest)
-    _fsync_dir(backup_root)
+    _fsync_dir(backup_staging)
+    backup_root = backup_dir / f"backup-{uuid.uuid4().hex}"
+    os.replace(backup_staging, backup_root)
+    _fsync_dir(backup_dir)
+    # Verify backup hashes before mutating source.
+    for s in sources:
+        for p in _artifacts(s.transcript):
+            if not p.exists():
+                continue
+            rel = p.relative_to(source)
+            backup_file = backup_root / rel
+            if not backup_file.is_file() or _sha256(p) != _sha256(backup_file):
+                raise SystemExit(f"install: backup verification failed for {rel}")
+    # Remove original legacy artifacts (preserve backup). Defer marker/DB publish until sources are gone.
+    for s in sources:
+        for p in _artifacts(s.transcript):
+            with suppress(OSError):
+                p.unlink(missing_ok=True)
+        # Try to prune empty parent dirs up to data_dir (best-effort).
+        for parent in [s.transcript.parent, s.transcript.parent.parent]:
+            with suppress(OSError):
+                if parent != source and not any(parent.iterdir()):
+                    parent.rmdir()
+    remaining = inventory(source)
+    if remaining:
+        raise SystemExit(f"install: {len(remaining)} legacy artifacts remain after backup removal")
     # Stage converted DB beside target, verify, replace.
     tmp_target = target.with_name(f".{target.name}.install.{uuid.uuid4().hex}.tmp")
     shutil.copy2(db, tmp_target)
@@ -249,7 +274,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             "schema_version": SCHEMA_VERSION,
         },
     )
-    # Verify no legacy artifacts remain.
+    # Final verification: no legacy should have reappeared.
     remaining = inventory(source)
     if remaining:
         raise SystemExit(f"install: {len(remaining)} legacy artifacts remain after install")
@@ -275,8 +300,39 @@ def cmd_install(args: argparse.Namespace) -> int:
 def cmd_resume(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest).expanduser().resolve()
     manifest = _load_manifest(manifest_path)
-    # For now, resume is idempotent: re-run convert if staged missing, else verify.
-    # Full crash recovery would inspect stage; simplified.
+    # Resume a half-finished install: if DB and marker are published but legacy
+    # sources still exist, finish removal and verification idempotently.
+    staged_db = manifest.get("staged_db")
+    work_dir = manifest.get("work_dir")
+    source_str = manifest.get("source")
+    if source_str and staged_db and work_dir:
+        try:
+            source = Path(source_str).expanduser().resolve()
+            remaining = inventory(source)
+            if remaining:
+                # If backup already exists, remove remaining sources.
+                backup_dir = manifest.get("backup_dir")
+                if backup_dir and Path(backup_dir).exists():
+                    for s in remaining:
+                        for p in _artifacts(s.transcript):
+                            with suppress(OSError):
+                                p.unlink(missing_ok=True)
+                    remaining = inventory(source)
+                if remaining:
+                    print(f"resume: {len(remaining)} legacy artifacts still present")
+                    return 1
+            # Verify DB still matches manifest if it exists.
+            if work_dir and staged_db:
+                staged_path = Path(work_dir) / staged_db
+                if staged_path.exists() and manifest.get("staged_sha256"):
+                    if _sha256(staged_path) != manifest["staged_sha256"]:
+                        print("resume: staged DB hash mismatch")
+                        return 1
+            print(f"resume: verified {manifest_path}")
+            return 0
+        except Exception as exc:
+            print(f"resume: failed {exc}")
+            return 1
     print(f"resume: manifest {manifest_path} stage {manifest.get('command')}")
     return 0
 
@@ -290,10 +346,12 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     with closing(sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         for row in conn.execute("SELECT * FROM sessions"):
+            # Use generation_id to keep multiple archived generations distinct.
+            gen = str(row["generation_id"])
             addr = f"{row['project_id'] or 'global'}/{row['agent_id']}/{row['session_id']}"
-            sess_dir = out / addr
+            # Collision-safe: include generation prefix.
+            sess_dir = out / addr / gen[:12]
             sess_dir.mkdir(parents=True, exist_ok=True)
-            # Write transcript.
             transcript = sess_dir / f"{row['session_id']}.jsonl"
             with transcript.open("w", encoding="utf-8") as f:
                 for msg in conn.execute(
@@ -301,7 +359,6 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
                     (row["session_key"],),
                 ):
                     f.write(msg["message_json"] + "\n")
-            # Write sidecars if present.
             metadata = json.loads(row["metadata_json"])
             if metadata:
                 (sess_dir / f"{row['session_id']}.meta.json").write_text(
@@ -312,6 +369,16 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
                 (sess_dir / f"{row['session_id']}.activity.json").write_text(
                     json.dumps(activity, indent=2), encoding="utf-8"
                 )
+            # Export continuation if present.
+            cont_rows = conn.execute(
+                "SELECT record_json FROM continuation_records WHERE session_key=? ORDER BY seq",
+                (row["session_key"],),
+            ).fetchall()
+            if cont_rows:
+                cont_path = sess_dir / f"{row['session_id']}.continuation.jsonl"
+                with cont_path.open("w", encoding="utf-8") as f:
+                    for rec in cont_rows:
+                        f.write(rec["record_json"] + "\n")
     print(f"export-jsonl: exported to {out}")
     return 0
 
