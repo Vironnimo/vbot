@@ -74,12 +74,14 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+_lock_fds: dict[str, int] = {}
+
+
 def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> Path | None:
     """Try to acquire a cross-process lock file. Returns lock file path on success.
 
-    Uses O_EXCL creation plus an advisory flock where available so the OS
-    releases the lock if the holder dies. Falls back to mtime-based stale
-    detection (using wall time) for filesystems without flock.
+    Holds an OS flock where available so the lock is released if the holder
+    dies. Falls back to O_EXCL plus wall-time stale detection.
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
@@ -87,7 +89,6 @@ def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> Path | None:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             try:
-                # Hold an OS lock while the file exists where supported.
                 try:
                     import fcntl  # type: ignore[import-not-found]  # POSIX
 
@@ -95,8 +96,12 @@ def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> Path | None:
                 except Exception:
                     pass
                 os.write(fd, str(os.getpid()).encode())
-            finally:
-                os.close(fd)
+                # Keep fd open to hold the flock for the duration of the operation.
+                _lock_fds[str(lock_path)] = fd
+            except Exception:
+                with suppress(OSError):
+                    os.close(fd)
+                raise
             return lock_path
         except FileExistsError:
             # Stale holder died without unlink — compare wall times.
@@ -115,6 +120,17 @@ def _acquire_lock(lock_path: Path, timeout: float = 10.0) -> Path | None:
 
 
 def _release_lock(lock_path: Path) -> None:
+    key = str(lock_path)
+    fd = _lock_fds.pop(key, None)
+    if fd is not None:
+        with suppress(OSError):
+            try:
+                import fcntl  # type: ignore[import-not-found]
+
+                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            os.close(fd)
     with suppress(OSError):
         lock_path.unlink()
 
