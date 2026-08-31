@@ -14,6 +14,7 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
+from core.chat import ChatMessage
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
@@ -23,6 +24,7 @@ from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
+from core.sessions.snapshots import list_snapshots
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
@@ -361,6 +363,24 @@ metadata:
 
     assert "[WARN] vbot.core - Loaded skills with " in contents
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
+
+
+def test_runtime_snapshots_are_revision_aware(config: Config) -> None:
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        runtime._last_session_snapshot_revisions = runtime.chat_sessions.snapshot_revisions()
+        snapshots_before = list_snapshots(config.data_dir)
+        runtime._snapshot_on_shutdown()
+        assert list_snapshots(config.data_dir) == snapshots_before
+
+        runtime.chat_sessions.create("main", session_id="snapshot-revision").append(
+            ChatMessage.user("snapshot revision")
+        )
+        runtime._snapshot_on_shutdown()
+        assert len(list_snapshots(config.data_dir)) > len(snapshots_before)
+    finally:
+        runtime.stop()
 
 
 def test_runtime_stop_runs_cleanly(tmp_path: Path):
