@@ -170,6 +170,44 @@ def test_install_relocates_only_a_copy_and_publishes_marker_last(
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
 
 
+def test_install_refuses_a_reachable_target_before_mutating_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    backup = tmp_path / "external-backup"
+    transcript = source / "agents" / "coder" / "sessions" / "one.jsonl"
+    _write_transcript(transcript, "hello")
+    assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
+    manifest_path = work / session_sqlite.MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    staged = work / manifest["staged_db"]
+    monkeypatch.setattr(session_sqlite, "_server_is_stopped", lambda _host, _port: False)
+
+    with pytest.raises(RuntimeError, match="target is reachable"):
+        session_sqlite.main(
+            [
+                "install",
+                "--source",
+                str(source),
+                "--database",
+                str(staged),
+                "--manifest",
+                str(manifest_path),
+                "--backup-dir",
+                str(backup),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "65530",
+            ]
+        )
+
+    assert transcript.is_file()
+    assert not (source / "sessions.db").exists()
+    assert not backup.exists()
+
+
 def test_export_is_generation_collision_safe(tmp_path: Path) -> None:
     source = tmp_path / "source"
     work = tmp_path / "work"
