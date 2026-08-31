@@ -12,21 +12,25 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import sqlite3
 import sys
 import uuid
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.chat.messages import ChatMessage
 from core.sessions import SessionAddress
-from core.sessions.format import publish_ready_marker
+from core.sessions.format import (
+    MAINTENANCE_GUARD_FILE_NAME,
+    publish_ready_marker,
+    read_session_store_marker,
+)
 from core.sessions.schema import APPLICATION_ID, SCHEMA_VERSION
 from core.sessions.snapshots import create_snapshot, list_snapshots
 from core.sessions.store import SessionStore
@@ -67,9 +71,7 @@ def _sha256(path: Path) -> str:
 
 
 def _fsync_file(path: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(path, os.O_RDONLY)
+    descriptor = os.open(path, os.O_RDWR)
     try:
         os.fsync(descriptor)
     finally:
@@ -455,11 +457,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def _server_is_stopped(host: str, port: int) -> bool:
     probe_host = "127.0.0.1" if host in {"", "*", "0.0.0.0"} else host
-    request = Request(f"http://{probe_host}:{port}/health", method="GET")
     try:
-        with urlopen(request, timeout=0.5):
+        with socket.create_connection((probe_host, port), timeout=0.5):
             return False
-    except (URLError, TimeoutError, OSError):
+    except OSError:
         return True
 
 
@@ -471,6 +472,28 @@ def _require_server_stopped(host: str, port: int) -> None:
 def _require_free_space(path: Path, bytes_needed: int) -> None:
     if shutil.disk_usage(path).free < max(bytes_needed * 2, 64 * 1024 * 1024):
         raise RuntimeError("insufficient free space for external backup and staged database")
+
+
+def _ensure_maintenance_guard(source: Path, manifest: dict[str, Any]) -> None:
+    """Block Runtime startup across every source-mutating install boundary."""
+
+    path = source / MAINTENANCE_GUARD_FILE_NAME
+    expected = {
+        "operation": "session-sqlite-install",
+        "run_id": str(manifest["run_id"]),
+        "database_id": str(manifest["database_id"]),
+    }
+    if path.exists():
+        if _load_json(path) != expected:
+            raise RuntimeError("another Session-store maintenance operation owns the target")
+        return
+    _write_json(path, expected)
+
+
+def _remove_maintenance_guard(source: Path) -> None:
+    path = source / MAINTENANCE_GUARD_FILE_NAME
+    path.unlink(missing_ok=True)
+    _fsync_dir(source)
 
 
 def _backup_external(
@@ -561,6 +584,7 @@ def _relocate_sources(
     sessions: tuple[LegacySession, ...] | None,
     manifest_path: Path,
     manifest: dict[str, Any],
+    require_stopped: Callable[[], None],
 ) -> None:
     relocated: set[str] = set(manifest.get("relocated", []))
     if sessions is not None:
@@ -582,6 +606,7 @@ def _relocate_sources(
         original = source / Path(relative_path)
         destination = backup_root / "relocated" / Path(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        require_stopped()
         if original.exists():
             if _sha256(original) != artifact["sha256"]:
                 raise RuntimeError(f"source changed before relocation: {relative_path}")
@@ -609,7 +634,12 @@ def _publish_database(staged: Path, target: Path) -> None:
 
 def _install_runtime_verify(source: Path, expected: dict[str, str]) -> dict[str, Any]:
     target = source / "sessions.db"
-    store = SessionStore(target)
+    marker = read_session_store_marker(source)
+    if marker is None or marker["state"] != "ready":
+        raise RuntimeError("published Session-store marker is not ready")
+    if _database_id(target) != str(marker["database_id"]):
+        raise RuntimeError("published marker and database identity differ")
+    store = SessionStore(target, _offline=True)
     try:
         result = _verify_db_expected(target, expected)
     finally:
@@ -618,7 +648,7 @@ def _install_runtime_verify(source: Path, expected: dict[str, str]) -> dict[str,
 
 
 def _create_live_snapshot(source: Path, target: Path, database_id: str) -> dict[str, Any]:
-    store = SessionStore(target)
+    store = SessionStore(target, _offline=True)
     try:
         snapshot = create_snapshot(
             source,
@@ -641,6 +671,9 @@ def _install_from_manifest(
     work_dir = Path(str(manifest["work_dir"])).resolve()
     staged = work_dir / str(manifest["staged_db"])
     stage = str(manifest["stage"])
+    if stage == "complete":
+        _remove_maintenance_guard(source)
+        return
     capture: CaptureInventory | None = None
     if stage in {"converted", "install_preflight", "backup_publishing"}:
         capture = _capture_source(source)
@@ -692,27 +725,37 @@ def _install_from_manifest(
     if manifest["stage"] == "backup_publishing":
         if not backup_root.is_dir():
             raise RuntimeError("external backup bundle is missing")
+        _ensure_maintenance_guard(source, manifest)
         _set_stage(manifest_path, manifest, "sources_relocating")
     if manifest["stage"] == "sources_relocating":
+        _ensure_maintenance_guard(source, manifest)
         _relocate_sources(
             source,
             backup_root,
             None if capture is None else capture.sessions,
             manifest_path,
             manifest,
+            lambda: _require_server_stopped(host, port),
         )
         _set_stage(manifest_path, manifest, "database_publishing")
     if manifest["stage"] == "database_publishing":
+        _ensure_maintenance_guard(source, manifest)
+        _require_server_stopped(host, port)
         if not target.is_file() or _database_id(target) != str(manifest["database_id"]):
             _publish_database(staged, target)
         if _database_id(target) != str(manifest["database_id"]):
             raise RuntimeError("published database identity mismatch")
         _set_stage(manifest_path, manifest, "marker_publishing")
     if manifest["stage"] == "marker_publishing":
+        _ensure_maintenance_guard(source, manifest)
+        _require_server_stopped(host, port)
         publish_ready_marker(source, str(manifest["database_id"]))
         _set_stage(manifest_path, manifest, "runtime_verifying")
     if manifest["stage"] == "runtime_verifying":
+        _ensure_maintenance_guard(source, manifest)
+        _require_server_stopped(host, port)
         verification = _install_runtime_verify(source, expected)
+        _require_server_stopped(host, port)
         manifest["live_snapshot"] = _create_live_snapshot(
             source, target, str(manifest["database_id"])
         )
@@ -720,6 +763,7 @@ def _install_from_manifest(
         manifest["installed_database"] = verification
         manifest["completed_at"] = _now()
         _set_stage(manifest_path, manifest, "complete")
+        _remove_maintenance_guard(source)
 
 
 def cmd_install(args: argparse.Namespace) -> int:

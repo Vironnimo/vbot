@@ -23,6 +23,7 @@ from core.sessions.errors import (
     QuarantineResult,
     SessionStorageFormatError,
     SessionStoreCorruptError,
+    SessionStoreHealth,
     SessionStoreSchemaMismatchError,
     SessionStoreUnavailableError,
 )
@@ -66,6 +67,8 @@ JsonObject = dict[str, Any]
 
 _FTS_BATCH_SIZE = 100
 _FTS_REBUILD_THROTTLE_S = 0.01
+_SEARCH_RESULT_LIMIT = 1_000
+_SEARCH_FETCH_BATCH_SIZE = 100
 _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
 
 
@@ -120,7 +123,9 @@ def _drop_fts_triggers(connection: sqlite3.Connection) -> None:
         connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
 
 
-def _fts_coverage_ok(connection: sqlite3.Connection) -> tuple[bool, str | None]:
+def _fts_coverage_ok(
+    connection: sqlite3.Connection, *, verify_internal_index: bool = True
+) -> tuple[bool, str | None]:
     if not _fts_table_exists(connection) or not _fts_content_exists(connection):
         return False, "FTS tables are missing"
     missing_projection = connection.execute(
@@ -134,32 +139,22 @@ def _fts_coverage_ok(connection: sqlite3.Connection) -> tuple[bool, str | None]:
     ).fetchone()
     if missing_projection is not None:
         return False, "canonical Messages are missing FTS projections"
-    missing_index = connection.execute(
-        """
-        SELECT 1
-        FROM message_search AS ms
-        LEFT JOIN messages_fts AS f ON f.rowid = ms.message_key
-        WHERE ms.search_text <> '' AND f.rowid IS NULL
-        LIMIT 1
-        """
-    ).fetchone()
-    if missing_index is not None:
-        return False, "FTS rows are missing searchable projections"
-    unexpected_index = connection.execute(
-        """
-        SELECT 1
-        FROM messages_fts AS f
-        LEFT JOIN message_search AS ms ON ms.message_key = f.rowid
-        WHERE ms.message_key IS NULL
-        LIMIT 1
-        """
-    ).fetchone()
-    if unexpected_index is not None:
-        return False, "FTS contains rows outside the searchable projection"
+    # External-content FTS tables synthesize ordinary row scans from the content
+    # table. Joining them therefore cannot prove that the internal index contains
+    # the same rows. FTS5's rank=1 integrity check explicitly compares both.
+    if verify_internal_index:
+        try:
+            connection.execute(
+                "INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)"
+            )
+        except sqlite3.DatabaseError:
+            return False, "FTS index does not match the searchable projection"
     return True, None
 
 
-def _fts_health_from_connection(connection: sqlite3.Connection) -> FtsHealth:
+def _fts_health_from_connection(
+    connection: sqlite3.Connection, *, verify_internal_index: bool = True
+) -> FtsHealth:
     if not _fts_table_exists(connection) or not _fts_content_exists(connection):
         return FtsHealth(state="unavailable", reason="FTS tables are missing")
     storage_version = _fts_meta(connection, FTS_STORAGE_VERSION_KEY)
@@ -193,7 +188,9 @@ def _fts_health_from_connection(connection: sqlite3.Connection) -> FtsHealth:
             target_high_water=target_value,
             completed_high_water=completed_value,
         )
-    coverage_ok, coverage_reason = _fts_coverage_ok(connection)
+    coverage_ok, coverage_reason = _fts_coverage_ok(
+        connection, verify_internal_index=verify_internal_index
+    )
     if stale is not None or completed_value != target_value or not coverage_ok:
         rebuilding = stale == "rebuilding" or completed_value != target_value
         return FtsHealth(
@@ -408,21 +405,21 @@ class SessionStore:
             self._reconcile_open_database(writer, expected_database_id=database_id)
             publish_ready_marker(self.path.parent, database_id)
             return writer
-        if not self.path.exists():
-            from core.sessions.snapshots import auto_restore_if_needed
+        from core.sessions.snapshots import auto_restore_if_needed, read_recovery_incident
 
-            if not auto_restore_if_needed(self.path.parent, self.path):
-                raise SessionStoreUnavailableError(
-                    f"the Session database is missing although the store is ready: {self.path}"
-                )
+        pending_incident = read_recovery_incident(self.path.parent)
+        if pending_incident and pending_incident.get("verification") == "pending":
+            auto_restore_if_needed(self.path.parent, self.path)
+        if not self.path.exists() and not auto_restore_if_needed(self.path.parent, self.path):
+            raise SessionStoreUnavailableError(
+                f"the Session database is missing although the store is ready: {self.path}"
+            )
         try:
             writer = self._runtime.open_writer(expected_database_id=database_id)
             self._reconcile_open_database(writer, expected_database_id=database_id)
             return writer
         except (SessionStoreCorruptError, sqlite3.DatabaseError, OSError):
             self._runtime.close()
-            from core.sessions.snapshots import auto_restore_if_needed
-
             if auto_restore_if_needed(self.path.parent, self.path):
                 self._runtime = SQLiteRuntime(self.path)
                 writer = self._runtime.open_writer(expected_database_id=database_id)
@@ -552,6 +549,23 @@ class SessionStore:
     def backup(self, destination: Path) -> None:
         self._runtime.backup(destination)
 
+    def verify_read_write(self) -> None:
+        """Exercise the opened Runtime's read/write path without changing canonical rows."""
+
+        def verify(connection: sqlite3.Connection) -> None:
+            connection.execute("CREATE TEMP TABLE session_store_verify(value INTEGER NOT NULL)")
+            try:
+                connection.execute("INSERT INTO session_store_verify(value) VALUES (1)")
+                row = connection.execute("SELECT value FROM session_store_verify").fetchone()
+                if row is None or int(row[0]) != 1:
+                    raise SessionStoreUnavailableError(
+                        "Session database read/write verification failed"
+                    )
+            finally:
+                connection.execute("DROP TABLE IF EXISTS session_store_verify")
+
+        self._execute_write(verify)
+
     def snapshot_revisions(self) -> tuple[int, int]:
         """Return database-wide history/state revisions for snapshot coalescing."""
         with self._transaction(write=False) as connection:
@@ -562,7 +576,11 @@ class SessionStore:
 
     def status_projection(self) -> JsonObject:
         """Return operator-safe health, snapshot, and incident state."""
-        from core.sessions.snapshots import read_recovery_incident, snapshot_summaries
+        from core.sessions.snapshots import (
+            read_recovery_incident,
+            read_snapshot_health,
+            snapshot_summaries,
+        )
 
         marker = read_session_store_marker(self.path.parent)
         if marker is None:
@@ -572,9 +590,22 @@ class SessionStore:
         snapshots = snapshot_summaries(
             self.path.parent, expected_database_id=str(marker["database_id"])
         )
+        snapshot_health = read_snapshot_health(self.path.parent)
         active_incident = incident if incident and not incident.get("acknowledged", False) else None
+        if active_incident:
+            health = SessionStoreHealth("recovered_with_incident")
+        elif not fts.available:
+            health = SessionStoreHealth("search_degraded", fts.reason)
+        elif not snapshots or snapshot_health.get("state") != "healthy":
+            health = SessionStoreHealth(
+                "snapshot_degraded",
+                str(snapshot_health.get("reason") or "no verified Session snapshot is available"),
+            )
+        else:
+            health = SessionStoreHealth("healthy")
         return {
-            "state": "recovered_with_incident" if active_incident else "ready",
+            "state": health.state,
+            "reason": health.reason,
             "database_id": str(marker["database_id"]),
             "marker_state": marker["state"],
             "schema_version": int(marker["schema_version"]),
@@ -586,6 +617,7 @@ class SessionStore:
                 "completed_high_water": fts.completed_high_water,
             },
             "snapshots": snapshots,
+            "snapshot_health": snapshot_health,
             "incident": active_incident,
         }
 
@@ -1033,14 +1065,29 @@ class SessionStore:
     def fts_health(self) -> FtsHealth:
         """Return the integrated FTS state after checking metadata and coverage."""
         try:
-            with self._transaction(write=False) as connection:
-                return _fts_health_from_connection(connection)
+
+            def verify(connection: sqlite3.Connection) -> FtsHealth:
+                health = _fts_health_from_connection(connection)
+                if health.reason == "FTS index does not match the searchable projection":
+                    _detach_fts(connection, health.reason)
+                return health
+
+            return cast(
+                FtsHealth,
+                self._runtime.execute_write(verify, patience_s=ACTIVITY_WRITE_PATIENCE_S),
+            )
         except Exception as exc:
             return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
 
     def is_fts_available(self) -> bool:
-        """Return true only when FTS metadata and all projection joins are verified."""
-        return self.fts_health().available
+        """Return the cheap live availability state; startup/status perform full integrity."""
+        try:
+            with self._transaction(write=False) as connection:
+                return _fts_health_from_connection(
+                    connection, verify_internal_index=False
+                ).available
+        except Exception:
+            return False
 
     def fts_search(
         self,
@@ -1050,9 +1097,14 @@ class SessionStore:
         agent_id: str | None,
         session_id: str | None = None,
         match_mode: str = "all_terms",
+        limit: int = _SEARCH_RESULT_LIMIT,
+        roles: Sequence[str] | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        excluded_session_ids: Sequence[str] = (),
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
         """Search canonical Messages through FTS or a truthful projection fallback."""
-        if not query or not query.strip():
+        if not query or not query.strip() or limit <= 0 or (roles is not None and not roles):
             return []
         compact = re.sub(r"\s+", " ", query).strip().casefold()
         if not compact:
@@ -1089,27 +1141,48 @@ class SessionStore:
             if session_id is not None:
                 sql += " AND s.session_id = ?"
                 params.append(session_id)
+            if roles is not None:
+                placeholders = ", ".join("?" for _ in roles)
+                sql += f" AND m.role IN ({placeholders})"
+                params.extend(roles)
+            if since is not None:
+                sql += " AND julianday(m.timestamp) >= julianday(?)"
+                params.append(since)
+            if until is not None:
+                sql += " AND julianday(m.timestamp) <= julianday(?)"
+                params.append(until)
+            if excluded_session_ids:
+                placeholders = ", ".join("?" for _ in excluded_session_ids)
+                sql += f" AND s.session_id NOT IN ({placeholders})"
+                params.extend(excluded_session_ids)
             sql += " ORDER BY m.timestamp DESC, m.message_key"
             result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
-            for row in connection.execute(sql, params).fetchall():
-                payload = str(row["message_json"])
-                if not matches(_search_projection(payload)):
-                    continue
-                from core.sessions.sessions import SessionAddress as SessionAddr
+            cursor = connection.execute(sql, params)
+            while len(result) < limit:
+                batch = cursor.fetchmany(_SEARCH_FETCH_BATCH_SIZE)
+                if not batch:
+                    break
+                for row in batch:
+                    payload = str(row["message_json"])
+                    if not matches(_search_projection(payload)):
+                        continue
+                    from core.sessions.sessions import SessionAddress as SessionAddr
 
-                result.append(
-                    (
-                        SessionAddr(
-                            project_id=row["project_id"] or None,
-                            agent_id=row["agent_id"],
-                            session_id=row["session_id"],
-                        ),
-                        str(row["message_id"]),
-                        str(row["timestamp"]),
-                        payload,
-                        0.0,
+                    result.append(
+                        (
+                            SessionAddr(
+                                project_id=row["project_id"] or None,
+                                agent_id=row["agent_id"],
+                                session_id=row["session_id"],
+                            ),
+                            str(row["message_id"]),
+                            str(row["timestamp"]),
+                            payload,
+                            0.0,
+                        )
                     )
-                )
+                    if len(result) >= limit:
+                        break
             return result
 
         terms = [term for term in compact.split(" ") if term]
@@ -1126,10 +1199,12 @@ class SessionStore:
             with self._transaction(write=False) as connection:
                 return canonical_rows(connection)
 
+        if not self.is_fts_available():
+            with self._transaction(write=False) as connection:
+                return canonical_rows(connection)
+
         try:
             with self._transaction(write=False) as connection:
-                if not _fts_health_from_connection(connection).available:
-                    return canonical_rows(connection)
                 sql = """
                     SELECT s.project_id, s.agent_id, s.session_id, m.message_id,
                            m.timestamp, m.message_json, bm25(messages_fts) AS rank
@@ -1150,8 +1225,23 @@ class SessionStore:
                 if session_id is not None:
                     sql += " AND s.session_id = ?"
                     params.append(session_id)
-                sql += " ORDER BY rank, m.timestamp DESC, m.message_key"
-                rows = connection.execute(sql, params).fetchall()
+                if roles is not None:
+                    placeholders = ", ".join("?" for _ in roles)
+                    sql += f" AND m.role IN ({placeholders})"
+                    params.extend(roles)
+                if since is not None:
+                    sql += " AND julianday(m.timestamp) >= julianday(?)"
+                    params.append(since)
+                if until is not None:
+                    sql += " AND julianday(m.timestamp) <= julianday(?)"
+                    params.append(until)
+                if excluded_session_ids:
+                    placeholders = ", ".join("?" for _ in excluded_session_ids)
+                    sql += f" AND s.session_id NOT IN ({placeholders})"
+                    params.extend(excluded_session_ids)
+                sql += " ORDER BY rank, m.timestamp DESC, m.message_key LIMIT ?"
+                params.append(limit)
+                rows = connection.execute(sql, params).fetchmany(limit)
                 result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
                 for row in rows:
                     from core.sessions.sessions import SessionAddress as SessionAddr

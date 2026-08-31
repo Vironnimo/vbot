@@ -54,6 +54,20 @@ class FtsHealth:
 
 
 @dataclass(frozen=True)
+class SessionStoreHealth:
+    """Typed operator state derived from canonical, snapshot, search, and incident health."""
+
+    state: Literal[
+        "healthy",
+        "snapshot_degraded",
+        "search_degraded",
+        "recovered_with_incident",
+        "unrecoverable",
+    ]
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class QuarantineResult:
     """Outcome of moving a canonical database bundle to quarantine."""
 

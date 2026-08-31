@@ -6,14 +6,28 @@ import json
 from pathlib import Path
 
 from cli.rpc_client import rpc_call
-from cli.server_management import CommandResult, ServerInstance, probe_health
+from cli.server_management import (
+    DEFAULT_SERVICE_NAME,
+    CommandResult,
+    ServerInstance,
+    is_systemd_managed,
+    probe_health,
+    start_server,
+    start_systemd_server,
+    stop_server,
+    stop_systemd_server,
+)
+from core.sessions.errors import SessionStorageError
 from core.sessions.format import read_session_store_marker
 from core.sessions.snapshots import (
     list_snapshots,
-    restore_snapshot,
+    read_recovery_incident,
+    read_snapshot_health,
+    restore_snapshot_with_incident,
     snapshot_root,
     snapshot_summaries,
 )
+from core.sessions.store import SessionStore
 
 
 def session_store_status(instance: ServerInstance) -> CommandResult:
@@ -21,7 +35,16 @@ def session_store_status(instance: ServerInstance) -> CommandResult:
 
     payload = rpc_call(instance, "session_store.status", {})
     if not payload.ok:
-        return payload.to_command_result()
+        health = probe_health(instance)
+        if health.reachable:
+            return payload.to_command_result()
+        projection = _offline_status_projection(instance)
+        return CommandResult(
+            ok=projection["state"] != "unrecoverable",
+            message=json.dumps(projection, ensure_ascii=False, indent=2, sort_keys=True),
+            instance=instance,
+            health=health,
+        )
     return CommandResult(
         ok=True,
         message=json.dumps(payload.data, ensure_ascii=False, indent=2, sort_keys=True),
@@ -111,29 +134,17 @@ def session_store_snapshot_restore(
             message="refusing Session-store restore without confirmation; re-run with --yes",
             instance=instance,
         )
-    health = probe_health(instance)
-    if health.reachable:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"refusing Session-store restore while the exact target is reachable at "
-                f"{instance.host}:{instance.port}; stop it first"
-            ),
-            instance=instance,
-            health=health,
-        )
     marker = read_session_store_marker(instance.data_dir)
     if marker is None:
         return CommandResult(
             ok=False,
             message="cannot restore a Session snapshot without a current-format marker",
             instance=instance,
-            health=health,
         )
     try:
         snapshot = _snapshot_path(instance, snapshot_id)
     except ValueError as exc:
-        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+        return CommandResult(ok=False, message=str(exc), instance=instance)
     if snapshot not in list_snapshots(
         instance.data_dir, expected_database_id=str(marker["database_id"])
     ):
@@ -141,23 +152,113 @@ def session_store_snapshot_restore(
             ok=False,
             message=f"snapshot is missing or failed verification: {snapshot_id}",
             instance=instance,
+        )
+    health = probe_health(instance)
+    if health.reachable and not health.is_vbot:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"refusing Session-store restore because a non-vBot process owns "
+                f"{instance.host}:{instance.port}"
+            ),
+            instance=instance,
             health=health,
         )
-    restored = restore_snapshot(
+    was_running = health.is_vbot
+    systemd_managed = was_running and is_systemd_managed(instance, DEFAULT_SERVICE_NAME)
+    if was_running:
+        stopped = (
+            stop_systemd_server(instance, DEFAULT_SERVICE_NAME)
+            if systemd_managed
+            else stop_server(instance)
+        )
+        if not stopped.ok or probe_health(instance).reachable:
+            return CommandResult(
+                ok=False,
+                message=f"could not stop and verify the exact vBot target: {stopped.message}",
+                instance=instance,
+                health=stopped.health,
+            )
+    restored = restore_snapshot_with_incident(
         instance.data_dir,
         instance.data_dir / "sessions.db",
         snapshot,
+        cause="manual operator restore",
     )
+    if restored:
+        store: SessionStore | None = None
+        try:
+            store = SessionStore(instance.data_dir / "sessions.db")
+            store.verify_read_write()
+        except (OSError, SessionStorageError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"restored Session snapshot failed post-restore verification: {exc}",
+                instance=instance,
+                health=health,
+            )
+        finally:
+            if store is not None:
+                store.close()
+    restarted: CommandResult | None = None
+    if restored and was_running:
+        restarted = (
+            start_systemd_server(instance, DEFAULT_SERVICE_NAME)
+            if systemd_managed
+            else start_server(instance)
+        )
+        if not restarted.ok:
+            return CommandResult(
+                ok=False,
+                message=(
+                    f"restored Session snapshot {snapshot_id}, but restoring the prior server "
+                    f"state failed: {restarted.message}"
+                ),
+                instance=instance,
+                health=restarted.health,
+            )
     return CommandResult(
         ok=restored,
         message=(
             f"restored Session snapshot {snapshot_id}"
+            + (" and restarted the server" if restarted is not None else "")
             if restored
             else f"Session snapshot restore failed: {snapshot_id}"
         ),
         instance=instance,
         health=health,
     )
+
+
+def _offline_status_projection(instance: ServerInstance) -> dict[str, object]:
+    """Inspect a stopped current-format store even when Runtime cannot start."""
+
+    marker: dict[str, object] | None = None
+    try:
+        marker = read_session_store_marker(instance.data_dir)
+        if marker is None:
+            raise SessionStorageError("current-format Session marker is missing")
+        store = SessionStore(instance.data_dir / "sessions.db")
+        try:
+            return store.status_projection()
+        finally:
+            store.close()
+    except (OSError, SessionStorageError) as exc:
+        expected_id = None if marker is None else str(marker.get("database_id"))
+        incident = read_recovery_incident(instance.data_dir)
+        return {
+            "state": "unrecoverable",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "database_id": expected_id,
+            "marker_state": None if marker is None else marker.get("state"),
+            "schema_version": None if marker is None else marker.get("schema_version"),
+            "fts": {"state": "unavailable", "reason": "canonical store did not open"},
+            "snapshots": snapshot_summaries(instance.data_dir, expected_database_id=expected_id),
+            "snapshot_health": read_snapshot_health(instance.data_dir),
+            "incident": (
+                incident if incident and not incident.get("acknowledged", False) else None
+            ),
+        }
 
 
 def _snapshot_path(instance: ServerInstance, snapshot_id: str) -> Path:

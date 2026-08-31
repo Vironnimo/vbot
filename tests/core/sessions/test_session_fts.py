@@ -46,6 +46,42 @@ def test_detached_fts_reopens_complete_when_canonical_projection_already_exists(
         reopened.close()
 
 
+def test_empty_internal_fts_index_never_reports_healthy_or_hides_matches(tmp_path: Path) -> None:
+    address = SessionAddress(project_id=None, agent_id="agent", session_id="empty-index")
+    message = ChatMessage.user("unique needle 314159")
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create(address.agent_id, session_id=address.session_id).append(message)
+    try:
+        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            connection.execute("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
+            connection.commit()
+
+        health = sessions.fts_health()
+        assert health.state == "degraded"
+        assert sessions.status_projection()["state"] == "search_degraded"
+        hits = sessions.fts_search(
+            "needle", project_id=None, agent_id=address.agent_id, session_id=address.session_id
+        )
+        assert [hit[1] for hit in hits] == [message.id]
+    finally:
+        sessions.close()
+
+    reopened = ChatSessionManager(tmp_path)
+    try:
+        assert reopened.fts_health().state == "healthy"
+        assert [
+            hit[1]
+            for hit in reopened.fts_search(
+                "needle",
+                project_id=None,
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+            )
+        ] == [message.id]
+    finally:
+        reopened.close()
+
+
 def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path: Path) -> None:
     address = SessionAddress(project_id=None, agent_id="agent", session_id="projection")
     visible = ChatMessage.user("visible searchable content")
@@ -108,6 +144,39 @@ def test_fts_search_preserves_same_message_id_in_distinct_sessions(tmp_path: Pat
             ("one", shared_id),
             ("two", shared_id),
         }
+    finally:
+        sessions.close()
+
+
+def test_fts_and_canonical_search_apply_explicit_result_bounds(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="bounded")
+    session.append_many([ChatMessage.user(f"bounded needle {index}") for index in range(20)])
+    try:
+        assert len(sessions.fts_search("needle", project_id=None, agent_id="agent", limit=7)) == 7
+        assert len(sessions.fts_search("ne", project_id=None, agent_id="agent", limit=7)) == 7
+    finally:
+        sessions.close()
+
+
+def test_fts_candidate_filters_apply_before_the_result_limit(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    excluded = sessions.create("agent", session_id="excluded")
+    included = sessions.create("agent", session_id="included")
+    excluded.append(ChatMessage.assistant(model="model", content="needle needle needle"))
+    included_message = ChatMessage.user("needle")
+    included.append(included_message)
+    try:
+        rows = sessions.fts_search(
+            "needle",
+            project_id=None,
+            agent_id="agent",
+            roles=("user",),
+            excluded_session_ids=("excluded",),
+            limit=1,
+        )
+        actual = [(row[0].session_id, row[1]) for row in rows]
+        assert actual == [("included", included_message.id)]
     finally:
         sessions.close()
 

@@ -10,6 +10,7 @@ import pytest
 
 from core.sessions.errors import SessionStorageFormatError
 from core.sessions.format import (
+    MAINTENANCE_GUARD_FILE_NAME,
     MARKER_FORMAT_VERSION,
     MARKER_STATE_READY,
     read_session_store_marker,
@@ -47,6 +48,15 @@ def test_existing_root_without_marker_never_authorizes_a_database(tmp_path: Path
 
     with pytest.raises(SessionStorageFormatError):
         SessionStore(database)
+
+
+def test_offline_maintenance_guard_blocks_runtime_open(tmp_path: Path) -> None:
+    _write_marker(tmp_path / "session-store.json", schema_version=SCHEMA_VERSION)
+    (tmp_path / "sessions.db").write_bytes(b"SQLite format 3\x00")
+    (tmp_path / MAINTENANCE_GUARD_FILE_NAME).write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SessionStorageFormatError, match="maintenance is incomplete"):
+        SessionStore(tmp_path / "sessions.db")
 
 
 def test_runtime_session_boundary_has_no_legacy_jsonl_dependency() -> None:

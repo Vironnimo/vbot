@@ -1057,6 +1057,11 @@ class ChatSessionManager:
         agent_id: str | None,
         session_id: str | None = None,
         match_mode: str = "all_terms",
+        limit: int = 1_000,
+        roles: Sequence[str] | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        excluded_session_ids: Sequence[str] = (),
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
         return self._store.fts_search(
             query,
@@ -1064,6 +1069,11 @@ class ChatSessionManager:
             agent_id=agent_id,
             session_id=session_id,
             match_mode=match_mode,
+            limit=limit,
+            roles=roles,
+            since=since,
+            until=until,
+            excluded_session_ids=excluded_session_ids,
         )
 
     @staticmethod

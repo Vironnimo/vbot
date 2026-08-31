@@ -92,6 +92,42 @@ def test_incident_publication_failure_does_not_report_recovery_complete(
         ChatSessionManager(tmp_path)
 
 
+def test_final_incident_failure_leaves_pending_evidence_and_retries_on_next_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _snapshot, address, message = _create_verified_snapshot(tmp_path)
+    database = tmp_path / "sessions.db"
+    database.write_bytes(b"damaged")
+    real_replace = snapshots_module.os.replace
+    incident_replaces = 0
+
+    def fail_final_incident(source: str | Path, destination: str | Path) -> None:
+        nonlocal incident_replaces
+        if Path(destination).name == "session-recovery.json":
+            incident_replaces += 1
+            if incident_replaces == 2:
+                raise OSError("injected final incident publication failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(snapshots_module.os, "replace", fail_final_incident)
+    with pytest.raises(SessionStoreCorruptError):
+        ChatSessionManager(tmp_path)
+    pending = snapshots_module.read_recovery_incident(tmp_path)
+    assert pending is not None
+    assert pending["verification"] == "pending"
+
+    monkeypatch.setattr(snapshots_module.os, "replace", real_replace)
+    reopened = ChatSessionManager(tmp_path)
+    try:
+        assert [item.content for item in reopened.get(address).load()] == [message.content]
+    finally:
+        reopened.close()
+    completed = snapshots_module.read_recovery_incident(tmp_path)
+    assert completed is not None
+    assert completed["incident_id"] == pending["incident_id"]
+    assert completed["verification"] == "ok"
+
+
 def test_recovery_lock_is_not_broken_by_wall_clock_age(tmp_path: Path) -> None:
     lock = snapshots_module.snapshot_root(tmp_path) / snapshots_module.SNAPSHOT_LOCK_NAME
     lock.parent.mkdir(parents=True)

@@ -41,7 +41,7 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
             {"method": "session_store.status", "params": {}},
         )
         assert status["ok"] is True
-        assert status["result"]["state"] == "ready"
+        assert status["result"]["state"] == "snapshot_degraded"
         assert "sessions" not in status["result"]
 
         write_recovery_incident(
@@ -67,7 +67,7 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
             },
         )
         assert acknowledged["ok"] is True
-        assert acknowledged["result"]["state"] == "ready"
+        assert acknowledged["result"]["state"] == "snapshot_degraded"
         assert acknowledged["result"]["incident"] is None
         assert state.event_bus.events[-1]["payload"] == {"kind": "session_store"}
     finally:
