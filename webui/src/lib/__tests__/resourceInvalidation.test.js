@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  RESOURCE_KIND_SESSION_STORE,
   RESOURCE_TOKEN_AGENTS,
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
@@ -19,6 +20,10 @@ import {
 } from '../resourceInvalidation.js';
 
 describe('tokenKeysForKind()', () => {
+  it('keeps Session-store health outside refresh-token groups', () => {
+    expect(RESOURCE_KIND_SESSION_STORE).toBe('session_store');
+    expect(tokenKeysForKind(RESOURCE_KIND_SESSION_STORE)).toEqual([]);
+  });
   it('routes a model-catalog change to the models token', () => {
     expect(tokenKeysForKind('models')).toEqual([RESOURCE_TOKEN_MODELS]);
   });

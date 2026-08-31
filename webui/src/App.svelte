@@ -107,7 +107,9 @@
   } from '$lib/appController.js';
   import {
     debugStatus,
+    acknowledgeSessionStoreIncident,
     getSettings,
+    getSessionStoreStatus,
     listAgents,
     listProjects,
   } from '$lib/api.js';
@@ -280,6 +282,7 @@
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let sessionStoreIncident = $derived(appControllerState.sessionStoreIncident);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
@@ -682,6 +685,42 @@
     }
   };
 
+  const loadSessionStoreStatus = async () => {
+    try {
+      const result = await getSessionStoreStatus();
+      appControllerState.sessionStoreHealth = result ?? null;
+      appControllerState.sessionStoreIncident = result?.incident ?? null;
+    } catch {
+      // Preserve the last durable incident projection during a transient RPC failure.
+    }
+  };
+
+  const acknowledgeSessionStoreRecovery = async () => {
+    const incidentId = sessionStoreIncident?.incident_id;
+    if (!incidentId) {
+      return;
+    }
+    try {
+      const result = await acknowledgeSessionStoreIncident(incidentId);
+      appControllerState.sessionStoreHealth = result ?? null;
+      appControllerState.sessionStoreIncident = result?.incident ?? null;
+    } catch (error) {
+      showToast({
+        title: t(
+          'sessionStore.acknowledgeFailedTitle',
+          'Recovery notice still needs attention',
+        ),
+        message:
+          error?.message ??
+          t(
+            'sessionStore.acknowledgeFailed',
+            'Refresh the status and try again.',
+          ),
+        variant: 'error',
+      });
+    }
+  };
+
   const clearToastDismissTimer = (id) => {
     const timer = toastDismissTimers.get(id);
     if (!timer) {
@@ -920,6 +959,7 @@
     onLoadProjects: loadProjects,
     onAgentIdChanged: remapIdentityAgentId,
     onReloadAgents: reloadAgentsFromServer,
+    onLoadSessionStoreStatus: loadSessionStoreStatus,
     onSetOnboardingAside: () => {
       onboardingActive = false;
       onboardingDismissed = true;
@@ -1088,6 +1128,33 @@
       </span>
       <Button variant="secondary" onClick={reopenOnboarding}>
         {t('onboarding.finishSetup', 'Finish setup')}
+      </Button>
+    </Banner>
+  {/if}
+  {#if sessionStoreIncident}
+    <Banner variant="error" role="alert" class="app-session-store-incident">
+      <div class="app-session-store-incident__copy">
+        <strong
+          >{t(
+            'sessionStore.recoveredTitle',
+            'Session storage recovered',
+          )}</strong
+        >
+        <span>
+          {t(
+            'sessionStore.recoveredMessage',
+            'The current Session database was restored from a verified snapshot. Recent changes may be missing.',
+          )}
+        </span>
+        <span class="app-session-store-incident__meta">
+          {t('sessionStore.snapshot', 'Snapshot')}: {sessionStoreIncident.restored_snapshot_id}
+          · {t('sessionStore.possibleLoss', 'Possible loss')}: {sessionStoreIncident
+            .possible_loss_interval?.start}
+          → {sessionStoreIncident.possible_loss_interval?.end}
+        </span>
+      </div>
+      <Button variant="secondary" onClick={acknowledgeSessionStoreRecovery}>
+        {t('sessionStore.acknowledge', 'Acknowledge')}
       </Button>
     </Banner>
   {/if}
@@ -1285,6 +1352,35 @@
     background: var(--surface);
   }
 
+  :global(.app-session-store-incident) {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-width: 0 0 1px 3px;
+    border-radius: 0;
+    box-shadow: 0 8px 24px rgb(20 20 18 / 8%);
+  }
+
+  .app-session-store-incident__copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .app-session-store-incident__copy span {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
+
+  .app-session-store-incident__meta {
+    overflow-wrap: anywhere;
+    font-size: var(--fs-caption) !important;
+  }
+
   .app-finish-setup__text {
     color: var(--text-med);
     font-family: var(--font-ui);
@@ -1303,6 +1399,11 @@
   @media (max-width: 640px) {
     :global(.app-finish-setup) {
       padding: 8px 14px;
+    }
+
+    :global(.app-session-store-incident) {
+      align-items: stretch;
+      padding: 10px 14px;
     }
   }
 </style>
