@@ -15,7 +15,13 @@ from core.utils.server_control import (
 
 
 def test_control_record_round_trips_and_is_removed_by_exact_owner(tmp_path: Path) -> None:
-    record = create_server_control(tmp_path, 8420, pid=1234, token="secret-token")
+    record = create_server_control(
+        tmp_path,
+        8420,
+        pid=1234,
+        process_create_time=1000.25,
+        token="secret-token",
+    )
 
     assert read_server_control(tmp_path, 8420) == record
     assert record.path == control_record_path(tmp_path, 8420)
@@ -26,8 +32,20 @@ def test_control_record_round_trips_and_is_removed_by_exact_owner(tmp_path: Path
 
 
 def test_stale_owner_cannot_remove_replacement_control_record(tmp_path: Path) -> None:
-    stale = create_server_control(tmp_path, 8420, pid=1234, token="stale-token")
-    current = create_server_control(tmp_path, 8420, pid=5678, token="current-token")
+    stale = create_server_control(
+        tmp_path,
+        8420,
+        pid=1234,
+        process_create_time=1000.25,
+        token="stale-token",
+    )
+    current = create_server_control(
+        tmp_path,
+        8420,
+        pid=5678,
+        process_create_time=1001.5,
+        token="current-token",
+    )
 
     remove_server_control(stale)
 
@@ -37,7 +55,17 @@ def test_stale_owner_cannot_remove_replacement_control_record(tmp_path: Path) ->
 def test_invalid_or_oversized_control_record_is_ignored(tmp_path: Path) -> None:
     path = control_record_path(tmp_path, 8420)
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"version": 1, "pid": 0, "port": 8420, "token": "x"}))
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "pid": 0,
+                "process_create_time": 1000.25,
+                "port": 8420,
+                "token": "x",
+            }
+        )
+    )
 
     assert read_server_control(tmp_path, 8420) is None
 

@@ -33,6 +33,7 @@ DEFAULT_STARTUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 1.0
+PROCESS_CREATE_TIME_TOLERANCE_SECONDS = 0.001
 HEALTH_PATH = "/health"
 WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
@@ -479,6 +480,14 @@ def stop_server(
 
     health = probe_health(instance)
     if not health.reachable:
+        process = _resolve_control_process(instance)
+        if process is not None:
+            return _finish_unreachable_control_process(
+                instance,
+                health,
+                process,
+                shutdown_timeout_seconds=shutdown_timeout_seconds,
+            )
         return CommandResult(ok=True, message="not running", instance=instance, health=health)
     if not health.is_vbot:
         return CommandResult(
@@ -502,6 +511,65 @@ def stop_server(
     try:
         if not cooperative:
             process.terminate()
+        process.wait(timeout=shutdown_timeout_seconds)
+    except psutil.TimeoutExpired:
+        forced = True
+        try:
+            process.kill()
+            process.wait(timeout=shutdown_timeout_seconds)
+        except psutil.TimeoutExpired:
+            return CommandResult(
+                ok=False,
+                message="forced termination timed out",
+                instance=instance,
+                health=health,
+                process_id=process.pid,
+                forced=True,
+            )
+        except psutil.NoSuchProcess:
+            pass
+    except psutil.NoSuchProcess:
+        pass
+
+    return CommandResult(
+        ok=True,
+        message="stopped",
+        instance=instance,
+        health=health,
+        process_id=process.pid,
+        forced=forced,
+    )
+
+
+def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
+    """Resolve the exact process that authored this instance's control record."""
+
+    control = read_server_control(instance.data_dir, instance.port)
+    if control is None:
+        return None
+    try:
+        process = psutil.Process(control.pid)
+        if (
+            abs(process.create_time() - control.process_create_time)
+            > PROCESS_CREATE_TIME_TOLERANCE_SECONDS
+        ):
+            return None
+    except (psutil.Error, OSError):
+        return None
+    return process
+
+
+def _finish_unreachable_control_process(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    process: psutil.Process | Any,
+    *,
+    shutdown_timeout_seconds: float,
+) -> CommandResult:
+    """Wait for teardown after the listener closes, then kill only its exact owner."""
+
+    forced = False
+    try:
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
         forced = True
