@@ -103,6 +103,7 @@ EDIT_PREVIEW_MAX_REGIONS = 2
 EDIT_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 ALREADY_APPLIED_STRATEGIES = frozenset({"exact", "normalized"})
 ALREADY_APPLIED_CONTEXT_MIN_CHARS = 4
+NO_MATCH_DIFFERENCE_EXCERPT_MAX_CHARS = 80
 
 
 def _bounded_context_line(line: str) -> str:
@@ -185,7 +186,47 @@ def _format_ambiguous_match_error(
     )
 
 
-def _format_no_match_candidates(candidates: list[ClosestFuzzyCandidate]) -> str:
+def _line_and_column(text: str, offset: int) -> tuple[int, int]:
+    prefix = text[:offset]
+    return prefix.count("\n") + 1, offset - prefix.rfind("\n")
+
+
+def _difference_excerpt(text: str, offset: int) -> str:
+    if offset >= len(text):
+        return "<end of text>"
+    line_end = text.find("\n", offset)
+    if line_end < 0:
+        line_end = len(text)
+    excerpt = text[offset:line_end][:NO_MATCH_DIFFERENCE_EXCERPT_MAX_CHARS]
+    return repr(excerpt)
+
+
+def _first_difference(candidate: ClosestFuzzyCandidate, pattern: str) -> str:
+    """Describe the first concrete mismatch without authorizing a fuzzy write."""
+    if candidate.truncated:
+        return ""
+
+    normalized_pattern = EDIT_LINE_BREAK_PATTERN.sub("\n", pattern)
+    normalized_candidate = EDIT_LINE_BREAK_PATTERN.sub("\n", candidate.text)
+    limit = min(len(normalized_pattern), len(normalized_candidate))
+    offset = 0
+    while offset < limit and normalized_pattern[offset] == normalized_candidate[offset]:
+        offset += 1
+    if offset == len(normalized_pattern) == len(normalized_candidate):
+        return ""
+
+    pattern_line, pattern_column = _line_and_column(normalized_pattern, offset)
+    candidate_line, _ = _line_and_column(normalized_candidate, offset)
+    file_line = candidate.line_number + candidate_line - 1
+    return (
+        f"\nFirst difference from old_string at line {pattern_line}, "
+        f"column {pattern_column} (file line {file_line}):\n"
+        f"old_string: {_difference_excerpt(normalized_pattern, offset)}\n"
+        f"file: {_difference_excerpt(normalized_candidate, offset)}"
+    )
+
+
+def _format_no_match_candidates(candidates: list[ClosestFuzzyCandidate], pattern: str) -> str:
     if not candidates:
         return ""
     blocks = []
@@ -193,7 +234,7 @@ def _format_no_match_candidates(candidates: list[ClosestFuzzyCandidate]) -> str:
         excerpt_kind = "bounded raw prefix" if candidate.truncated else "raw text"
         blocks.append(
             f"Candidate {index} (starting line {candidate.line_number}; {excerpt_kind}):\n"
-            f"{candidate.text}"
+            f"{candidate.text}{_first_difference(candidate, pattern)}"
         )
     return (
         "\nClosest raw candidates (without read's line-number gutter):\n"
@@ -220,11 +261,13 @@ def _text_not_found_failure(content: str, old_string: str) -> JsonObject:
         )
         diagnostic_pattern = old_string
     else:
-        message = "old_string not found in file. Check whitespace, indentation, or line endings."
+        message = "old_string not found in file. Compare it with the closest candidate below."
         diagnostic_pattern = old_string
 
     candidates = find_closest_candidates(content, diagnostic_pattern)
-    return tool_failure("text_not_found", message + _format_no_match_candidates(candidates))
+    return tool_failure(
+        "text_not_found", message + _format_no_match_candidates(candidates, diagnostic_pattern)
+    )
 
 
 def _replace_with_gutter_fallback(
