@@ -62,7 +62,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Adapter contract, canonical terminal outcomes, Tool-call candidate normalization and target-wire identifier profiles, and shared HTTP/error layer: `core/providers/adapter.py`, `_http_shared.py`, `errors.py`
 - Shared reasoning decision policy: `core/providers/reasoning.py`
 - Shared non-strict Tool-schema rendering: `core/providers/tool_schema.py`
-- Runtime Adapter factory: `_ADAPTER_MAP` and `Runtime.get_adapter()` in `core/runtime/runtime.py`
+- Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates
 - Model discovery integration: `core/models/discovery.py`; Model data semantics remain in `models.md`
 
 ## Conventions and gotchas

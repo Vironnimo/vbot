@@ -1175,7 +1175,7 @@ def test_local_context_resolver_enforces_effective_window(
     )
 
     # Act
-    resolver = runtime._local_context_resolver_for("ollama")
+    resolver = runtime._provider_operations()._local_context_resolver("ollama")
 
     # Assert — user-set window for the local model, None for the proxied cloud one.
     assert resolver("ministral-3:8b") == 16384
@@ -1202,7 +1202,7 @@ def test_local_context_resolver_defaults_to_cap_without_setting(
     monkeypatch.setattr(runtime.models, "get", lambda provider_id, model_id: local_model)
 
     # Act / Assert
-    assert runtime._local_context_resolver_for("ollama")("big-local") == 32768
+    assert runtime._provider_operations()._local_context_resolver("ollama")("big-local") == 32768
 
 
 def test_ollama_local_connection_reports_credentials_configured(runtime: Runtime) -> None:
@@ -1223,7 +1223,7 @@ def test_auto_refresh_targets_include_enabled_ollama_local(runtime: Runtime) -> 
     runtime.storage.set_provider_connection_enabled("ollama:local", True)
 
     # Act
-    targets = runtime._auto_refresh_targets()
+    targets = runtime._provider_operations()._auto_refresh_targets()
 
     # Assert
     assert [(provider_id, connection.id) for provider_id, _, connection in targets] == [
@@ -1234,7 +1234,7 @@ def test_auto_refresh_targets_include_enabled_ollama_local(runtime: Runtime) -> 
 def test_auto_refresh_targets_exclude_disabled_ollama_local(runtime: Runtime) -> None:
     """A disabled local connection is completely passive — never probed."""
     # Act — no enable: the keyless default is disabled.
-    targets = runtime._auto_refresh_targets()
+    targets = runtime._provider_operations()._auto_refresh_targets()
 
     # Assert
     assert targets == []
@@ -1287,8 +1287,9 @@ async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
 
     # Act — expire the throttle between the calls.
     await runtime.maybe_refresh_local_catalogs()
-    assert runtime._local_catalog_refresh_at is not None
-    runtime._local_catalog_refresh_at -= 31.0
+    assert runtime._provider_runtime is not None
+    assert runtime._provider_runtime.refresh_at is not None
+    runtime._provider_runtime.refresh_at -= 31.0
     await runtime.maybe_refresh_local_catalogs()
 
     # Assert
@@ -1319,7 +1320,8 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
     # Assert — no reload of an unchanged catalog; failure stamped the throttle
     # and the probe outcome is recorded as unreachable.
     assert reloads == []
-    assert runtime._local_catalog_refresh_at is not None
+    assert runtime._provider_runtime is not None
+    assert runtime._provider_runtime.refresh_at is not None
     assert runtime.connection_reachability("ollama:local") is False
 
 
