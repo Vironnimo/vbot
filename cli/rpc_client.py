@@ -12,13 +12,14 @@ from cli.server_management import CommandResult, ServerInstance
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
 
-# Methods that legitimately run far longer than the default cap. `model.refresh_db`
-# fans out sequentially to provider /models endpoints, each server-bounded to 60s
-# with retries, so the total can exceed any fixed ceiling. These calls leave the
-# read phase unbounded — the server already bounds the work — while a short connect
-# timeout still fails fast on an unreachable server. This is the same read=None
-# shape the provider chat client uses for open-ended generation.
-_LONG_RUNNING_METHODS: frozenset[str] = frozenset({"model.refresh_db"})
+# Methods that legitimately run far longer than the default cap. Model refreshes
+# fan out across Provider endpoints, while Session snapshots copy and verify a
+# database whose size is user-controlled. These calls leave the read phase
+# unbounded after the local server accepts them, while the ordinary connect,
+# write, and pool limits still fail fast when the server cannot be reached.
+_LONG_RUNNING_METHODS: frozenset[str] = frozenset(
+    {"model.refresh_db", "session_store.snapshot_create"}
+)
 RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
 
 

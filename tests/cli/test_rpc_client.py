@@ -61,16 +61,22 @@ def test_rpc_call_ignores_environment_proxies(
     assert captured["trust_env"] is False
 
 
-def test_rpc_call_uses_unbounded_read_timeout_for_refresh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "method",
+    ["model.refresh_db", "session_store.snapshot_create"],
+)
+def test_rpc_call_uses_unbounded_read_timeout_for_long_running_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     captured = _capture_request(monkeypatch)
 
-    rpc_client.rpc_call(make_instance(tmp_path), "model.refresh_db", {})
+    rpc_client.rpc_call(make_instance(tmp_path), method, {})
 
     timeout = captured["timeout"]
     assert isinstance(timeout, httpx.Timeout)
-    # Read is unbounded (the server bounds the work) while connect still fails
-    # fast on an unreachable server.
+    # Read is unbounded after the local server accepts the operation, while
+    # connect still fails fast on an unreachable server.
     assert timeout.read is None
     assert timeout.connect == rpc_client.RPC_TIMEOUT_SECONDS
+    assert timeout.write == rpc_client.RPC_TIMEOUT_SECONDS
+    assert timeout.pool == rpc_client.RPC_TIMEOUT_SECONDS
