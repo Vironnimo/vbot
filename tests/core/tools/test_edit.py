@@ -14,6 +14,7 @@ from core.tools.edit import (
     register_edit_tool,
 )
 from core.tools.file_state import FileReadState
+from core.tools.read import render_text_file
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_success
 from core.utils.paths import model_path
 
@@ -450,6 +451,39 @@ def test_edit_strips_complete_line_number_gutter_from_new_string(tmp_path: Path)
         {"kind": "line_change", "change": "added", "value": 2},
         {"kind": "line_change", "change": "removed", "value": 2},
     ]
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"],
+    ids=["vt", "ff", "fs", "gs", "rs", "nel", "line-separator", "paragraph-separator"],
+)
+def test_edit_reuses_read_block_without_normalizing_exotic_separators(
+    tmp_path: Path, separator: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    original = f"alpha{separator}\tbeta\n".encode()
+    target.write_bytes(original)
+    read_content = render_text_file(original)
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "old_string": read_content,
+            "new_string": read_content.replace("beta", "BETA"),
+        },
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert data["normalization_warning"] == (
+        "Removed read line-number gutters from new_string before applying the edit."
+    )
+    assert target.read_bytes() == f"alpha{separator}\tBETA\n".encode()
 
 
 @pytest.mark.parametrize(

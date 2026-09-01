@@ -123,6 +123,21 @@ def test_line_trimmed_preserves_crlf_endings() -> None:
     assert result.new_content == "def f():\r\n    a = 1\r\n    c = 3\r\n"
 
 
+def test_line_trimmed_reindents_without_normalizing_explicit_exotic_separator() -> None:
+    content = "def f():\n    alpha\n    beta\n"
+
+    result = replace_fuzzy(
+        content,
+        "  alpha\n  beta",
+        "  alpha\u2028  BETA",
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "line_trimmed"
+    assert result.new_content == "def f():\n    alpha\u2028    BETA\n"
+
+
 def test_line_trimmed_does_not_match_genuinely_different_text() -> None:
     # Same shape, different content — must not fuzzily replace the wrong block.
     content = "def f():\n    a = 1\n    b = 2\n"
