@@ -68,9 +68,19 @@ try {
     $service.Connect()
     $root = $service.GetFolder("\")
 
-    if ($payload.operation -eq "status") {
+    if ($payload.operation -eq "status" -or $payload.operation -eq "inspect") {
         try {
-            $null = $root.GetTask([string]$payload.task_name)
+            $task = $root.GetTask([string]$payload.task_name)
+            if ($payload.operation -eq "inspect") {
+                $actions = @($task.Definition.Actions | Where-Object { $_.Type -eq 0 })
+                if ($actions.Count -ne 1) {
+                    throw "Expected exactly one executable action"
+                }
+                [Console]::Out.WriteLine((@{
+                    launcher = [string]$actions[0].Path
+                    arguments = [string]$actions[0].Arguments
+                } | ConvertTo-Json -Compress))
+            }
             exit 0
         }
         catch {
@@ -169,6 +179,8 @@ class _TaskLookup:
     ok: bool
     exists: bool
     message: str = ""
+    launcher: str = ""
+    arguments: str = ""
 
 
 def enable_autostart(
@@ -275,19 +287,49 @@ def autostart_status(
     runner: Runner | None = None,
     task_name: str | None = None,
     service_name: str | None = None,
+    unit_dir: Path | None = None,
+    windows_launcher_path: str | None = None,
+    python_executable: str = sys.executable,
+    repo_root: Path | None = None,
 ) -> CommandResult:
     """Report whether OS autostart is registered for the server."""
 
     run = runner or _default_runner
     if platform == "win32":
         name = task_name or DEFAULT_TASK_NAME
-        lookup = _windows_task_lookup(run, name)
+        lookup = _windows_task_lookup(run, name, inspect_action=True)
         if not lookup.ok:
             return _fail(instance, f"autostart: Task Scheduler query failed: {lookup.message}")
-        state = "enabled" if lookup.exists else "not enabled"
+        if not lookup.exists:
+            return CommandResult(
+                ok=True,
+                message=f"autostart: not enabled (per-user Task Scheduler task '{name}')",
+                instance=instance,
+            )
+        launcher = windows_launcher_path or _resolve_windows_autostart_path()
+        if launcher is None:
+            return _fail(instance, "autostart: could not locate the windowless vBot launcher")
+        expected_arguments = subprocess.list2cmdline(
+            [
+                "--host",
+                instance.host,
+                "--port",
+                str(instance.port),
+                "--data-dir",
+                str(instance.data_dir),
+            ]
+        )
+        launcher_matches = os.path.normcase(os.path.abspath(lookup.launcher)) == os.path.normcase(
+            os.path.abspath(launcher)
+        )
+        if not launcher_matches or lookup.arguments != expected_arguments:
+            return _fail(
+                instance,
+                f"autostart: Task Scheduler task '{name}' targets a different server instance",
+            )
         return CommandResult(
             ok=True,
-            message=f"autostart: {state} (per-user Task Scheduler task '{name}')",
+            message=f"autostart: enabled (per-user Task Scheduler task '{name}')",
             instance=instance,
         )
     if platform.startswith("linux"):
@@ -309,6 +351,23 @@ def autostart_status(
         if not enabled and reported_state not in known_disabled_states:
             detail = query.stderr or query.stdout or f"exit code {query.returncode}"
             return _fail(instance, f"autostart: systemctl is-enabled failed: {detail}")
+        if enabled:
+            units = unit_dir or _systemd_user_dir()
+            unit_path = units / f"{name}.service"
+            expected_unit = _systemd_unit(
+                instance,
+                python_executable,
+                repo_root or VBOT_ROOT,
+            )
+            try:
+                unit_matches = unit_path.read_text(encoding="utf-8") == expected_unit
+            except OSError:
+                unit_matches = False
+            if not unit_matches:
+                return _fail(
+                    instance,
+                    f"autostart: systemd user unit '{name}' targets a different server instance",
+                )
         state = "enabled" if enabled else "not enabled"
         return CommandResult(
             ok=True,
@@ -579,10 +638,23 @@ def _fail(instance: ServerInstance, message: str) -> CommandResult:
     return CommandResult(ok=False, message=message, instance=instance)
 
 
-def _windows_task_lookup(run: Runner, task_name: str) -> _TaskLookup:
-    result = run(_windows_task_command("status", task_name=task_name))
+def _windows_task_lookup(
+    run: Runner, task_name: str, *, inspect_action: bool = False
+) -> _TaskLookup:
+    operation = "inspect" if inspect_action else "status"
+    result = run(_windows_task_command(operation, task_name=task_name))
     if result.returncode == 0:
-        return _TaskLookup(True, True)
+        if not inspect_action:
+            return _TaskLookup(True, True)
+        try:
+            action = json.loads(result.stdout)
+            launcher = action["launcher"]
+            arguments = action["arguments"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return _TaskLookup(False, True, "Task Scheduler returned invalid action metadata")
+        if not isinstance(launcher, str) or not isinstance(arguments, str):
+            return _TaskLookup(False, True, "Task Scheduler returned invalid action metadata")
+        return _TaskLookup(True, True, launcher=launcher, arguments=arguments)
     if result.returncode == _WINDOWS_TASK_NOT_FOUND_EXIT_CODE:
         return _TaskLookup(True, False)
     detail = result.stdout or result.stderr or f"exit code {result.returncode}"

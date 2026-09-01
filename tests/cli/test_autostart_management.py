@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import subprocess
 import sys
 import sysconfig
 from collections.abc import Callable, Sequence
@@ -304,12 +305,53 @@ def test_disable_linux_removes_unit(tmp_path: Path) -> None:
 
 
 def test_status_reports_enabled_windows() -> None:
-    runner = ScriptedRunner(lambda command: _ok())
-    result = autostart_status(_instance(), platform="win32", runner=runner)
+    launcher = r"C:\vbot\vbot-desktop.exe"
+    action = json.dumps(
+        {
+            "launcher": launcher,
+            "arguments": subprocess.list2cmdline(
+                [
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "8420",
+                    "--data-dir",
+                    str(_instance().data_dir),
+                ]
+            ),
+        }
+    )
+    runner = ScriptedRunner(lambda command: _ok(action))
+    result = autostart_status(
+        _instance(),
+        platform="win32",
+        runner=runner,
+        windows_launcher_path=launcher,
+    )
 
     assert result.ok
     assert "enabled" in result.message
     assert "not enabled" not in result.message
+
+
+def test_status_rejects_windows_task_for_different_instance() -> None:
+    launcher = r"C:\vbot\vbot-desktop.exe"
+    action = json.dumps(
+        {
+            "launcher": launcher,
+            "arguments": "--host 127.0.0.1 --port 9999 --data-dir /data",
+        }
+    )
+
+    result = autostart_status(
+        _instance(),
+        platform="win32",
+        runner=ScriptedRunner(lambda command: _ok(action)),
+        windows_launcher_path=launcher,
+    )
+
+    assert not result.ok
+    assert "different server instance" in result.message
 
 
 def test_status_distinguishes_absent_task_from_scheduler_failure() -> None:
@@ -334,6 +376,43 @@ def test_status_reports_not_enabled_linux() -> None:
 
     assert result.ok
     assert "not enabled" in result.message
+
+
+def test_status_rejects_enabled_linux_unit_for_different_instance(tmp_path: Path) -> None:
+    (tmp_path / "vbot.service").write_text(
+        "[Service]\nExecStart=/wrong/program\n", encoding="utf-8"
+    )
+
+    result = autostart_status(
+        _instance(),
+        platform="linux",
+        runner=ScriptedRunner(lambda command: _ok("enabled")),
+        unit_dir=tmp_path,
+        python_executable="/expected/python",
+        repo_root=Path("/repo"),
+    )
+
+    assert not result.ok
+    assert "different server instance" in result.message
+
+
+def test_status_accepts_enabled_linux_unit_for_exact_instance(tmp_path: Path) -> None:
+    python_executable = "/expected/python"
+    repo_root = Path("/repo")
+    unit = autostart_management._systemd_unit(_instance(), python_executable, repo_root)
+    (tmp_path / "vbot.service").write_text(unit, encoding="utf-8")
+
+    result = autostart_status(
+        _instance(),
+        platform="linux",
+        runner=ScriptedRunner(lambda command: _ok("enabled")),
+        unit_dir=tmp_path,
+        python_executable=python_executable,
+        repo_root=repo_root,
+    )
+
+    assert result.ok
+    assert "enabled" in result.message
 
 
 def test_linux_service_name_cannot_escape_unit_directory(tmp_path: Path) -> None:
