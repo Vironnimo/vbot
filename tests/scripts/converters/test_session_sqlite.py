@@ -221,6 +221,45 @@ def test_convert_is_deterministic_and_preserves_sources(tmp_path: Path) -> None:
     assert not (source / "sessions.db").exists()
 
 
+def test_convert_preserves_session_activity(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    transcript = source / "agents" / "coder" / "sessions" / "one.jsonl"
+    _write_transcript(transcript, "hello")
+    activity = {
+        "latest_completion": {
+            "run_id": "run-current",
+            "status": "completed",
+            "timestamp": "2026-08-31T12:00:00+00:00",
+        },
+        "read_run_id": "run-previous",
+    }
+    transcript.with_name("one.activity.json").write_text(json.dumps(activity), encoding="utf-8")
+
+    assert session_sqlite.MANIFEST_VERSION == 1
+    assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
+    manifest = json.loads((work / session_sqlite.MANIFEST_NAME).read_text(encoding="utf-8"))
+    staged = work / manifest["staged_db"]
+
+    store = SessionStore(staged, _offline=True)
+    sessions = ChatSessionManager(source, store=store)
+    try:
+        address = SessionAddress(None, "coder", "one")
+        assert store.activity(address) == activity
+        assert sessions.list_completion_activity("coder") == [
+            {
+                "id": "one",
+                "latest_completion_run_id": "run-current",
+                "has_unread_completion": True,
+                "unread_run_id": "run-current",
+                "unread_run_status": "completed",
+                "unread_run_at": "2026-08-31T12:00:00+00:00",
+            }
+        ]
+    finally:
+        store.close()
+
+
 def test_install_relocates_only_a_copy_and_publishes_marker_last(
     tmp_path: Path, monkeypatch
 ) -> None:

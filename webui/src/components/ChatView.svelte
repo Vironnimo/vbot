@@ -279,6 +279,18 @@
     }
     return roster;
   });
+  let sessionDrawerActivity = $derived.by(() =>
+    Object.values(chatState.sessions).map((sessionState) => ({
+      agent_address: sessionState.agentId,
+      session_id: sessionState.sessionId,
+      has_active_run: isRunActive(sessionState),
+      has_unread_completion: sessionState.hasUnreadCompletion === true,
+      latest_completion_run_id: sessionState.latestCompletionRunId || null,
+      unread_run_id: sessionState.unreadRunId || null,
+      unread_run_status: sessionState.unreadRunStatus || null,
+      unread_run_at: sessionState.unreadRunAt || null,
+    })),
+  );
   // Agent-bar selection follows the owner of the displayed Session, while the
   // underlying selected Agent remains the return target for an override. This
   // keeps nested Sub-Agent navigation truthful without losing the root context.
@@ -2037,6 +2049,7 @@
               activeAgent.current_session_id}
             reloadToken={sessionsRefreshToken}
             agents={sessionDrawerAgents}
+            liveActivity={sessionDrawerActivity}
             initialFilters={sessionFilters}
             onFiltersChange={(next) => {
               sessionFilters = next;
