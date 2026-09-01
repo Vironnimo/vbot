@@ -30,7 +30,9 @@ JsonObject = dict[str, Any]
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-_SCHEMA_VERSION = 4
+# v3 replaces JSONL file cursors with canonical Session generations and
+# revisions. This is the one disposable-index bump from the released v2 shape.
+_SCHEMA_VERSION = 3
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 

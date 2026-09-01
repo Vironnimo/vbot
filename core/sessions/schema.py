@@ -8,11 +8,13 @@ from dataclasses import dataclass
 
 from core.sessions.errors import SessionStoreCorruptError
 
-SCHEMA_VERSION = 4
+# Initial public store generation. Intermediate revisions made before the
+# SQLite Session store ships belong to this same baseline, not fake migrations.
+SCHEMA_VERSION = 1
 # This is the physical store-format generation, not a counter for every
 # additive column. Current-generation databases reconcile additive SCHEMA_SQL
 # changes in place; raise both values only for a destructive format change.
-SCHEMA_CONVERSION_FLOOR = 4
+SCHEMA_CONVERSION_FLOOR = 1
 MINIMUM_SQLITE_VERSION = (3, 37, 0)
 APPLICATION_ID = 0x56424F54
 DATABASE_ID_META_KEY = "database_id"
@@ -37,7 +39,7 @@ FTS_DEGRADED_REASON_KEY = "fts_degraded_reason"
 FTS_HIGH_WATER_KEY = FTS_TARGET_HIGH_WATER_KEY
 FTS_PROGRESS_KEY = FTS_COMPLETED_HIGH_WATER_KEY
 FTS_STORAGE_VERSION_KEY = "fts_storage_version"
-FTS_STORAGE_VERSION = 3
+FTS_STORAGE_VERSION = 1
 FTS_TRIGRAM_TOKENIZER = "trigram"
 
 SCHEMA_SQL = """

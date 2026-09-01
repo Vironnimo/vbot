@@ -208,7 +208,7 @@ def _write_bootstrap_marker_fallback(data_dir: Path) -> None:
 
         _schema_version = int(_sv)
     except Exception:
-        _schema_version = 2
+        _schema_version = 1
     payload = {
         "format_version": 1,
         "state": "bootstrap",
