@@ -57,13 +57,23 @@ def test_websocket_transport_rejects_cross_origin_browser_connections(
 
 
 def test_websocket_transport_allows_same_origin_browser_connection(tmp_path: Path) -> None:
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app = create_app(
+        runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())),
+        server_bind={
+            "listen_host": "0.0.0.0",
+            "listen_port": 8420,
+            "port_source": "cli",
+        },
+    )
 
     with (
         TestClient(app) as client,
         client.websocket_connect(
             "/ws",
-            headers={"origin": "http://testserver"},
+            headers={
+                "host": "192.168.10.25:8420",
+                "origin": "http://192.168.10.25:8420",
+            },
         ) as websocket,
     ):
         hello = websocket.receive_json()

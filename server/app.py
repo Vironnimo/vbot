@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -139,6 +140,7 @@ JSON_MEDIA_TYPE = "application/json"
 JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
 HTTP_ORIGIN_SCHEMES = frozenset({"http", "https"})
 ORIGIN_HEADER_NAME = b"origin"
+HOST_HEADER_NAME = b"host"
 
 
 class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
@@ -179,14 +181,23 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
 class _BrowserOriginGuardMiddleware:
     """Reject browser transports whose Origin is not a configured server origin."""
 
-    def __init__(self, app: Any, *, allowed_origins: frozenset[tuple[str, str, int]]) -> None:
+    def __init__(
+        self,
+        app: Any,
+        *,
+        allowed_origins: frozenset[tuple[str, str, int]],
+        same_origin_ip_port: int | None,
+    ) -> None:
         self._app = app
         self._allowed_origins = allowed_origins
+        self._same_origin_ip_port = same_origin_ip_port
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
         if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(
-            scope, self._allowed_origins
+            scope,
+            self._allowed_origins,
+            same_origin_ip_port=self._same_origin_ip_port,
         ):
             await self._app(scope, receive, send)
             return
@@ -204,7 +215,10 @@ class _BrowserOriginGuardMiddleware:
 
 
 def _scope_has_allowed_origin(
-    scope: MutableMapping[str, Any], allowed_origins: frozenset[tuple[str, str, int]]
+    scope: MutableMapping[str, Any],
+    allowed_origins: frozenset[tuple[str, str, int]],
+    *,
+    same_origin_ip_port: int | None,
 ) -> bool:
     origin_values = _scope_header_values(scope, ORIGIN_HEADER_NAME)
     if not origin_values:
@@ -212,7 +226,22 @@ def _scope_has_allowed_origin(
     if len(origin_values) != 1:
         return False
     origin = _parse_origin(origin_values[0])
-    return origin is not None and origin in allowed_origins
+    if origin is None:
+        return False
+    if origin in allowed_origins:
+        return True
+    if (
+        same_origin_ip_port is None
+        or origin[2] != same_origin_ip_port
+        or not _is_ip_literal(origin[1])
+    ):
+        return False
+    target_scheme = _http_scheme(scope.get("scheme"))
+    host_values = _scope_header_values(scope, HOST_HEADER_NAME)
+    if target_scheme is None or len(host_values) != 1:
+        return False
+    target = _parse_origin(f"{target_scheme}://{host_values[0]}")
+    return target is not None and origin == target
 
 
 def _scope_header_values(scope: MutableMapping[str, Any], name: bytes) -> list[str]:
@@ -252,14 +281,19 @@ def _configured_browser_origins(server_bind: ServerBindState) -> frozenset[tuple
     """Return browser origins directly bound by this server, never request headers."""
     host = server_bind["listen_host"]
     if host in {"0.0.0.0", "::"}:
-        # A wildcard listener has no one stable browser authority. Requiring an
-        # explicit listening address keeps Origin validation independent of a
-        # caller-controlled Host header and therefore blocks DNS rebinding.
         return frozenset()
     origin = _parse_origin(f"http://{_format_origin_host(host)}:{server_bind['listen_port']}")
     if origin is None:
         raise RuntimeError(f"Invalid server bind host for browser origin guard: {host!r}")
     return frozenset({origin})
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def _format_origin_host(host: str) -> str:
@@ -390,6 +424,11 @@ def create_app(
     app.add_middleware(
         _BrowserOriginGuardMiddleware,
         allowed_origins=_configured_browser_origins(resolved_server_bind),
+        same_origin_ip_port=(
+            resolved_server_bind["listen_port"]
+            if resolved_server_bind["listen_host"] in {"0.0.0.0", "::"}
+            else None
+        ),
     )
 
     @app.get("/health")
