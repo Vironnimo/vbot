@@ -259,20 +259,45 @@ function Resolve-EffectivePort {
 # escape embedded double quotes when passing arguments to native commands.
 $SyncSettingsPortScript = @'
 import json
+import os
 import sys
+import time
 from pathlib import Path
+from uuid import uuid4
 
 path = Path(sys.argv[1])
 port = int(sys.argv[2])
-settings = json.loads(path.read_text(encoding='utf-8'))
-if not isinstance(settings, dict):
-    raise SystemExit('settings.json must hold a JSON object')
-keys = ('server_port', 'SERVER_PORT', 'port', 'PORT')
-key = next((k for k in keys if k in settings), 'server_port')
-if settings.get(key) != port:
-    settings[key] = port
-    path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + '\n', encoding='utf-8')
-    print(key)
+lock_path = path.with_name(f'.{path.name}.setup.lock')
+deadline = time.monotonic() + 10.0
+while True:
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(lock_fd)
+        break
+    except FileExistsError:
+        if time.monotonic() >= deadline:
+            raise SystemExit('settings.json is busy; another setup may be updating it')
+        time.sleep(0.05)
+temp_path = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
+try:
+    settings = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(settings, dict):
+        raise SystemExit('settings.json must hold a JSON object')
+    keys = ('server_port', 'SERVER_PORT', 'port', 'PORT')
+    key = next((k for k in keys if k in settings), 'server_port')
+    if settings.get(key) != port:
+        settings[key] = port
+        mode = path.stat().st_mode & 0o777
+        with temp_path.open('w', encoding='utf-8') as handle:
+            handle.write(json.dumps(settings, indent=4, ensure_ascii=False) + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+        print(key)
+finally:
+    temp_path.unlink(missing_ok=True)
+    lock_path.unlink(missing_ok=True)
 '@
 
 function Initialize-DataDirectory {
