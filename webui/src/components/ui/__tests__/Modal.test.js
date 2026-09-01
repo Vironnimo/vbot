@@ -63,6 +63,15 @@ describe('Modal', () => {
     );
   });
 
+  it('always gives the dialog an accessible name from its visible title', () => {
+    render({ labelledById: '' });
+
+    const dialog = document.body.querySelector('.modal');
+    const title = document.body.querySelector('.modal-title');
+    expect(title.id).not.toBe('');
+    expect(dialog.getAttribute('aria-labelledby')).toBe(title.id);
+  });
+
   it('renders an optional footer snippet inside .modal-footer', () => {
     render({ footer: snippet('<span class="my-footer">actions</span>') });
 
@@ -109,5 +118,50 @@ describe('Modal', () => {
     document.body.querySelector('.modal-overlay').click();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('traps Tab navigation, isolates the background, and restores focus', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'Open';
+    document.body.append(opener);
+    opener.focus();
+
+    render({
+      body: snippet(
+        '<div class="modal-body"><button class="body-action">Action</button></div>',
+      ),
+    });
+
+    const dialog = document.body.querySelector('.modal');
+    const closeButton = dialog.querySelector('.modal-close');
+    const bodyAction = dialog.querySelector('.body-action');
+    expect(document.activeElement).toBe(dialog);
+    expect(opener.inert).toBe(true);
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    expect(document.activeElement).toBe(closeButton);
+
+    bodyAction.focus();
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    expect(document.activeElement).toBe(closeButton);
+
+    closeButton.focus();
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    expect(document.activeElement).toBe(bodyAction);
+
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(opener.inert).toBe(false);
+    expect(document.activeElement).toBe(opener);
   });
 });

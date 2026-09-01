@@ -6,6 +6,7 @@
 
   const SEARCH_HEADER_HEIGHT = 44;
   const noop = () => {};
+  const componentId = $props.id();
 
   let {
     id = '',
@@ -43,6 +44,7 @@
   let searchQuery = $state(untrack(() => searchText));
   let panelStyle = $state('');
   let panelPlacement = $state('bottom');
+  let activeOptionValue = $state('');
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let filteredOptions = $derived(filterOptions(normalizedOptions, searchQuery));
@@ -51,6 +53,17 @@
   );
   let triggerLabel = $derived(selectedOption?.label || placeholder);
   let hasSelection = $derived(Boolean(selectedOption));
+  let listboxId = $derived(id ? `${id}-listbox` : `${componentId}-listbox`);
+  let activeOptionIndex = $derived(
+    filteredOptions.findIndex(
+      (option) => option.value === activeOptionValue && !option.disabled,
+    ),
+  );
+  let activeDescendantId = $derived(
+    activeOptionIndex >= 0
+      ? `${listboxId}-option-${activeOptionIndex}`
+      : undefined,
+  );
 
   function normalizeOptions(items) {
     return items.map((option) => {
@@ -88,12 +101,13 @@
     );
   }
 
-  async function open() {
+  async function open({ focus = 'selected' } = {}) {
     if (disabled) {
       return;
     }
 
     isOpen = true;
+    setInitialActiveOption(focus);
     onOpenChange(true);
     await tick();
     updatePanelPosition();
@@ -109,6 +123,7 @@
     searchQuery = searchText;
     panelStyle = '';
     panelPlacement = 'bottom';
+    activeOptionValue = '';
     onOpenChange(false);
   }
 
@@ -119,6 +134,102 @@
     }
 
     await open();
+  }
+
+  function enabledFilteredOptions() {
+    return filteredOptions.filter((option) => !option.disabled);
+  }
+
+  function setInitialActiveOption(focus) {
+    const enabledOptions = enabledFilteredOptions();
+    if (enabledOptions.length === 0) {
+      activeOptionValue = '';
+      return;
+    }
+    if (focus === 'last') {
+      activeOptionValue = enabledOptions.at(-1).value;
+      return;
+    }
+    const selectedEnabled = enabledOptions.find(
+      (option) => option.value === value,
+    );
+    activeOptionValue = (selectedEnabled ?? enabledOptions[0]).value;
+  }
+
+  async function moveActiveOption(direction) {
+    const enabledOptions = enabledFilteredOptions();
+    if (enabledOptions.length === 0) {
+      activeOptionValue = '';
+      return;
+    }
+    const currentIndex = enabledOptions.findIndex(
+      (option) => option.value === activeOptionValue,
+    );
+    let nextIndex;
+    if (direction === 'first') {
+      nextIndex = 0;
+    } else if (direction === 'last') {
+      nextIndex = enabledOptions.length - 1;
+    } else if (direction === 1) {
+      nextIndex =
+        (currentIndex + 1 + enabledOptions.length) % enabledOptions.length;
+    } else {
+      nextIndex =
+        (currentIndex - 1 + enabledOptions.length) % enabledOptions.length;
+    }
+    activeOptionValue = enabledOptions[nextIndex].value;
+    await tick();
+    document
+      .getElementById(activeDescendantId)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  function handleTriggerKeyDown(event) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    open({
+      focus:
+        event.key === 'ArrowUp' || event.key === 'End' ? 'last' : 'selected',
+    });
+  }
+
+  function handleSearchInput() {
+    setInitialActiveOption('selected');
+  }
+
+  async function handleSearchKeyDown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+      triggerElement?.focus();
+      return;
+    }
+    if (event.key === 'Tab') {
+      close();
+      return;
+    }
+    if (event.key === 'Enter') {
+      const activeOption = filteredOptions[activeOptionIndex];
+      if (activeOption) {
+        event.preventDefault();
+        selectOption(activeOption);
+        triggerElement?.focus();
+      }
+      return;
+    }
+    const directions = {
+      ArrowDown: 1,
+      ArrowUp: -1,
+      Home: 'first',
+      End: 'last',
+    };
+    if (!(event.key in directions)) {
+      return;
+    }
+    event.preventDefault();
+    await moveActiveOption(directions[event.key]);
   }
 
   function updatePanelPosition() {
@@ -227,7 +338,9 @@
     aria-describedby={ariaDescribedby}
     aria-haspopup="listbox"
     aria-expanded={isOpen}
+    aria-controls={isOpen ? listboxId : undefined}
     onclick={toggleOpen}
+    onkeydown={handleTriggerKeyDown}
   >
     <span
       class="searchable-dropdown__trigger-label"
@@ -251,7 +364,6 @@
       bind:this={panelElement}
       use:portal
       class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
-      role="listbox"
       data-placement={panelPlacement}
       data-positioning="fixed"
       style={panelStyle}
@@ -266,10 +378,24 @@
           type="text"
           bind:value={searchQuery}
           placeholder={searchPlaceholder}
+          aria-label={searchPlaceholder}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded="true"
+          aria-controls={listboxId}
+          aria-activedescendant={activeDescendantId}
+          oninput={handleSearchInput}
+          onkeydown={handleSearchKeyDown}
         />
       </div>
 
-      <div class="s-dropdown-options searchable-dropdown__options">
+      <div
+        class="s-dropdown-options searchable-dropdown__options"
+        id={listboxId}
+        role="listbox"
+        tabindex="-1"
+        aria-label={ariaLabel || placeholder}
+      >
         {#if filteredOptions.length > 0}
           {#each filteredOptions as option (option.value)}
             <button
@@ -277,8 +403,11 @@
               class:selected={option.value === value}
               type="button"
               role="option"
+              id={`${listboxId}-option-${filteredOptions.indexOf(option)}`}
+              tabindex="-1"
               disabled={option.disabled}
               aria-selected={option.value === value}
+              class:active={option.value === activeOptionValue}
               onclick={() => selectOption(option)}
             >
               <span class="searchable-dropdown__option-label"

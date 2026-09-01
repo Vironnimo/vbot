@@ -81,4 +81,51 @@ describe('Dropdown', () => {
     // not left to the static CSS cap, so it can scroll instead of overflowing.
     expect(list.getAttribute('style') ?? '').toContain('max-height');
   });
+
+  it('opens and traverses enabled options with standard listbox keys', async () => {
+    const onValueChange = vi.fn();
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'keyboard-dropdown',
+        value: 'b',
+        options: [
+          { value: 'a', label: 'A', disabled: true },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ],
+        onValueChange,
+      },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#keyboard-dropdown');
+    trigger.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    });
+    const listbox = document.activeElement;
+    expect(listbox.getAttribute('aria-activedescendant')).toContain(
+      '-option-1',
+    );
+
+    listbox.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+    expect(listbox.getAttribute('aria-activedescendant')).toContain(
+      '-option-2',
+    );
+
+    listbox.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    flushSync();
+    expect(onValueChange).toHaveBeenCalledWith(
+      'c',
+      expect.objectContaining({ value: 'c' }),
+    );
+  });
 });
