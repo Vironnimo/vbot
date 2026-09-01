@@ -261,6 +261,32 @@ def _list_uncommitted_paths(worktree_path: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def _worktree_registration_state(worktree_path: Path) -> bool | None:
+    """Return whether Git still registers a worktree, or ``None`` if unknown."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain", "-z"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    target = os.path.normcase(str(worktree_path.resolve()))
+    for field in result.stdout.split("\0"):
+        if not field.startswith("worktree "):
+            continue
+        registered = Path(field.removeprefix("worktree ")).resolve()
+        if os.path.normcase(str(registered)) == target:
+            return True
+    return False
+
+
 def _read_worktree_branch_name(worktree_path: Path) -> str | None:
     """Read the currently checked-out branch in a worktree."""
     try:
@@ -937,15 +963,19 @@ def cmd_delete(args: argparse.Namespace) -> int:
     leftover_path: Path | None = None
     if return_code != 0:
         reason = stderr or "git worktree remove failed"
-        lowered = reason.lower()
-        if not args.force and (
-            "dirty" in lowered or "modified" in lowered or "untracked" in lowered
-        ):
+        uncommitted_paths = _list_uncommitted_paths(worktree_path) if not args.force else []
+        registration_state = (
+            _worktree_registration_state(worktree_path) if not args.force else False
+        )
+        if not args.force and registration_state is not False:
             if marker_text is not None and not marker.exists():
                 with suppress(OSError):
                     marker.write_text(marker_text, encoding="utf-8")
-            print_error("worktree has uncommitted changes, use --force to override")
-            for line in _list_uncommitted_paths(worktree_path):
+            if uncommitted_paths:
+                print_error("worktree has uncommitted changes, use --force to override")
+            else:
+                print_error(reason)
+            for line in uncommitted_paths:
                 print(f"uncommitted: {line}")
             return 1
 
