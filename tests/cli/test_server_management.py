@@ -79,6 +79,23 @@ def test_resolve_instance_uses_explicit_port_before_environment_and_settings(
     assert instance.log_path == resolve_daily_log_path(data_dir.resolve())
 
 
+@pytest.mark.parametrize(
+    ("host", "expected_url"),
+    [
+        ("::1", "http://[::1]:8420"),
+        ("[::1]", "http://[::1]:8420"),
+        ("::", "http://[::1]:8420"),
+        ("0.0.0.0", "http://127.0.0.1:8420"),
+    ],
+)
+def test_resolve_instance_builds_connectable_ipv6_safe_url(
+    tmp_path: Path, host: str, expected_url: str
+) -> None:
+    instance = resolve_instance(host=host, port=8420, data_dir=tmp_path)
+
+    assert instance.url == expected_url
+
+
 def test_resolve_instance_uses_environment_before_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

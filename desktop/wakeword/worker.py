@@ -284,6 +284,7 @@ def check_speech_to_text_readiness(
                 "params": {"task_type": _TASK_SPEECH_TO_TEXT},
             },
             timeout=_RPC_TIMEOUT,
+            trust_env=False,
         )
     except httpx.RequestError:
         logger.warning("Speech-to-text readiness check could not reach the server", exc_info=True)
@@ -910,7 +911,7 @@ class WakewordWorker:
 
         for attempt in range(_MAX_RETRIES):
             try:
-                response = httpx.post(url, files=files, timeout=_HTTP_TIMEOUT)
+                response = httpx.post(url, files=files, timeout=_HTTP_TIMEOUT, trust_env=False)
                 if response.status_code == 200:
                     result = response.json()
                     if not isinstance(result, dict):
@@ -1004,7 +1005,7 @@ class WakewordWorker:
 
         for attempt in range(attempt_count):
             try:
-                response = httpx.post(url, json=payload, timeout=_RPC_TIMEOUT)
+                response = httpx.post(url, json=payload, timeout=_RPC_TIMEOUT, trust_env=False)
                 if response.status_code == 200:
                     rpc_response = response.json()
                     if not isinstance(rpc_response, dict):

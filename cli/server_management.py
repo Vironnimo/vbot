@@ -147,9 +147,23 @@ def resolve_instance(
         host=host,
         port=resolved_port,
         data_dir=resolved_data_dir,
-        url=f"http://{host}:{resolved_port}",
+        url=build_server_base_url(host, resolved_port),
         log_path=resolve_daily_log_path(resolved_data_dir),
     )
+
+
+def build_server_base_url(host: str, port: int) -> str:
+    """Build the direct, IPv6-safe HTTP base URL for one server target."""
+
+    connect_host = host
+    if connect_host in {"", "*", "0.0.0.0"}:
+        connect_host = "127.0.0.1"
+    elif connect_host == "::":
+        connect_host = "::1"
+    connect_host = connect_host.removeprefix("[").removesuffix("]")
+    if ":" in connect_host:
+        connect_host = f"[{connect_host}]"
+    return f"http://{connect_host}:{port}"
 
 
 def probe_health(
@@ -208,16 +222,7 @@ def probe_webui(
 def _probe_url(instance: ServerInstance, path: str) -> str:
     """Return a direct local probe URL for health and WebUI checks."""
 
-    probe_host = instance.host
-    if probe_host in {"", "*", "0.0.0.0"}:
-        probe_host = "127.0.0.1"
-    elif probe_host == "::":
-        probe_host = "::1"
-
-    if ":" in probe_host and not probe_host.startswith("["):
-        probe_host = f"[{probe_host}]"
-
-    return f"http://{probe_host}:{instance.port}{path}"
+    return f"{build_server_base_url(instance.host, instance.port)}{path}"
 
 
 def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
