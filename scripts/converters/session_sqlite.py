@@ -641,7 +641,6 @@ def _create_live_snapshot(source: Path, target: Path, database_id: str) -> dict[
         )
         if snapshot is None:
             raise RuntimeError("live initial Session snapshot was not published")
-        store.record_snapshot_checkpoint(Path(snapshot).name, store.snapshot_revisions())
     finally:
         store.close()
     return {"id": Path(snapshot).name, "directory": str(Path(snapshot).relative_to(source))}

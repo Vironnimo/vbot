@@ -189,9 +189,6 @@ _OFFLINE_IMPORT_CACHE_KIB = 262_144
 _SEARCH_RESULT_LIMIT = 1_000
 _SEARCH_FETCH_BATCH_SIZE = 100
 _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
-_SNAPSHOT_ID_KEY = "last_snapshot_id"
-_SNAPSHOT_HISTORY_REVISION_KEY = "last_snapshot_history_revision"
-_SNAPSHOT_STATE_REVISION_KEY = "last_snapshot_state_revision"
 _CONTINUATION_RECORD_VERSION = 1
 _CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 
@@ -896,63 +893,6 @@ class SessionStore:
                 connection.execute("DROP TABLE IF EXISTS session_store_verify")
 
         self._execute_write(verify)
-
-    def snapshot_revisions(self) -> tuple[int, int]:
-        """Return database-wide history/state revisions for snapshot coalescing."""
-        with self._transaction(write=False) as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(history_revision), 0), COALESCE(MAX(state_revision), 0) FROM sessions"
-            ).fetchone()
-        return int(row[0]), int(row[1])
-
-    def snapshot_checkpoint(self) -> tuple[str, tuple[int, int]] | None:
-        """Return the durable pointer to the last source-consistent snapshot."""
-        with self._transaction(write=False) as connection:
-            values = {
-                str(row[0]): str(row[1])
-                for row in connection.execute(
-                    "SELECT key, value FROM store_meta WHERE key IN (?, ?, ?)",
-                    (
-                        _SNAPSHOT_ID_KEY,
-                        _SNAPSHOT_HISTORY_REVISION_KEY,
-                        _SNAPSHOT_STATE_REVISION_KEY,
-                    ),
-                )
-            }
-        if set(values) != {
-            _SNAPSHOT_ID_KEY,
-            _SNAPSHOT_HISTORY_REVISION_KEY,
-            _SNAPSHOT_STATE_REVISION_KEY,
-        }:
-            return None
-        try:
-            revisions = (
-                int(values[_SNAPSHOT_HISTORY_REVISION_KEY]),
-                int(values[_SNAPSHOT_STATE_REVISION_KEY]),
-            )
-        except ValueError:
-            return None
-        if any(value < 0 for value in revisions):
-            return None
-        return values[_SNAPSHOT_ID_KEY], revisions
-
-    def record_snapshot_checkpoint(self, snapshot_id: str, revisions: tuple[int, int]) -> None:
-        """Persist a completed snapshot pointer without changing Session revisions."""
-        if not snapshot_id or any(separator in snapshot_id for separator in ("/", "\\")):
-            raise SessionStoreCorruptError("snapshot id is invalid")
-        history_revision, state_revision = revisions
-        if history_revision < 0 or state_revision < 0:
-            raise SessionStoreCorruptError("snapshot revisions are invalid")
-
-        def write(connection: sqlite3.Connection) -> None:
-            for key, value in (
-                (_SNAPSHOT_ID_KEY, snapshot_id),
-                (_SNAPSHOT_HISTORY_REVISION_KEY, str(history_revision)),
-                (_SNAPSHOT_STATE_REVISION_KEY, str(state_revision)),
-            ):
-                _set_fts_meta(connection, key, value)
-
-        self._execute_write(write, patience_s=ACTIVITY_WRITE_PATIENCE_S)
 
     def status_projection(self) -> JsonObject:
         """Return operator-safe health, snapshot, and incident state."""
@@ -1766,9 +1706,13 @@ class SessionStore:
 
         self._execute_write(_fn)
 
-    def move(self, source: SessionAddress, target: SessionAddress, metadata: JsonObject) -> None:
+    def move(
+        self,
+        source: SessionAddress,
+        target: SessionAddress,
+        prepare_metadata: Callable[[JsonObject, int], None],
+    ) -> None:
         """Relocate one complete Session row and its dependent rows atomically."""
-        payload = _json_object(metadata, "session metadata")
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, source)
@@ -1778,6 +1722,9 @@ class SessionStore:
             ).fetchone()
             if collision is not None:
                 raise ChatSessionError(f"destination session already exists: {target.session_id}")
+            metadata = _json_from_payload(state["metadata_json"], "session metadata")
+            prepare_metadata(metadata, int(state["message_count"]))
+            payload = _json_object(metadata, "session metadata")
             connection.execute(
                 "UPDATE sessions SET project_id = ?, agent_id = ?, session_id = ?, metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
                 (*self._scope(target), payload, state["session_key"]),
@@ -1785,12 +1732,19 @@ class SessionStore:
 
         self._execute_write(_fn)
 
-    def fork(self, source: SessionAddress, target: SessionAddress, metadata: JsonObject) -> None:
+    def fork(
+        self,
+        source: SessionAddress,
+        target: SessionAddress,
+        prepare_metadata: Callable[[JsonObject, int], None],
+    ) -> None:
         """Copy canonical history to a new live Session without activity/journal state."""
-        payload = _json_object(metadata, "session metadata")
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, source)
+            metadata = _json_from_payload(state["metadata_json"], "session metadata")
+            prepare_metadata(metadata, int(state["message_count"]))
+            payload = _json_object(metadata, "session metadata")
             try:
                 target_row = connection.execute(
                     "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at, last_message_at, message_count, last_message_id, history_revision, state_revision, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",

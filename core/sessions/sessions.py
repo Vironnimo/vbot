@@ -648,34 +648,19 @@ class ChatSessionManager:
         return self._store.backup(destination, cancel_event=cancel_event)
 
     def create_snapshot(self, *, reason: str) -> Path | None:
-        """Create one explicit verified snapshot and checkpoint its source revisions."""
+        """Create one explicit verified snapshot."""
         from core.sessions.format import read_session_store_marker
         from core.sessions.snapshots import create_snapshot
 
         marker = read_session_store_marker(self.data_dir)
         database_id = None if marker is None else str(marker["database_id"])
-        before = self.snapshot_revisions()
-        outcome = create_snapshot(
+        return create_snapshot(
             self.data_dir,
             self._store.path,
             self.backup_snapshot,
             database_id=database_id,
             reason=reason,
         )
-        if outcome is not None:
-            after = self.snapshot_revisions()
-            if before == after:
-                self.record_snapshot_checkpoint(outcome.name, after)
-        return outcome
-
-    def snapshot_revisions(self) -> tuple[int, int]:
-        return self._store.snapshot_revisions()
-
-    def snapshot_checkpoint(self) -> tuple[str, tuple[int, int]] | None:
-        return self._store.snapshot_checkpoint()
-
-    def record_snapshot_checkpoint(self, snapshot_id: str, revisions: tuple[int, int]) -> None:
-        self._store.record_snapshot_checkpoint(snapshot_id, revisions)
 
     def status_projection(self) -> JsonObject:
         return self._store.status_projection()
@@ -1041,12 +1026,11 @@ class ChatSessionManager:
     def _move(
         self, source: SessionAddress, target: SessionAddress, strip_meta_keys: frozenset[str]
     ) -> ChatSession:
-        metadata = {
-            key: value
-            for key, value in self.get_metadata(source).items()
-            if key not in strip_meta_keys
-        }
-        self._store.move(source, target, metadata)
+        def prepare_metadata(metadata: JsonObject, _message_count: int) -> None:
+            for key in strip_meta_keys:
+                metadata.pop(key, None)
+
+        self._store.move(source, target, prepare_metadata)
         return ChatSession(self._store, target)
 
     async def fork(
@@ -1075,24 +1059,34 @@ class ChatSessionManager:
         strip_meta_keys: frozenset[str],
     ) -> ChatSession:
         _validate_agent_id(target_agent_id)
-        metadata = {
-            key: value
-            for key, value in self.get_metadata(source).items()
-            if key not in strip_meta_keys
-        }
         same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
-        metadata[PROMPT_CACHE_AFFINITY_META_KEY] = (
-            self.prompt_cache_affinity_id(source) if same_scope else _new_prompt_cache_affinity_id()
-        )
         target = SessionAddress(target_project_id, target_agent_id, str(uuid.uuid4()))
-        metadata[FORK_SOURCE_META_KEY] = {
-            "agent_id": source.agent_id,
-            "session_id": source.session_id,
-            "project_id": source.project_id,
-            "forked_at": _format_timestamp(datetime.now(UTC)),
-            "message_count": int(self._store.state(source)["message_count"]),
-        }
-        self._store.fork(source, target, metadata)
+        cross_scope_affinity_id = None if same_scope else _new_prompt_cache_affinity_id()
+        forked_at = _format_timestamp(datetime.now(UTC))
+
+        def prepare_metadata(metadata: JsonObject, message_count: int) -> None:
+            affinity_id = metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
+            for key in strip_meta_keys:
+                metadata.pop(key, None)
+            if same_scope:
+                if affinity_id is None:
+                    affinity_id = _default_prompt_cache_affinity_id(source)
+                elif not _is_prompt_cache_affinity_id(affinity_id):
+                    raise ChatSessionError(
+                        f"invalid prompt cache affinity id for session: {source.session_id}"
+                    )
+            else:
+                affinity_id = cross_scope_affinity_id
+            metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
+            metadata[FORK_SOURCE_META_KEY] = {
+                "agent_id": source.agent_id,
+                "session_id": source.session_id,
+                "project_id": source.project_id,
+                "forked_at": forked_at,
+                "message_count": message_count,
+            }
+
+        self._store.fork(source, target, prepare_metadata)
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:

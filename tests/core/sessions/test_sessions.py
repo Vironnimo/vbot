@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import sqlite3
 import threading
@@ -316,6 +317,73 @@ def test_move_updates_the_composite_address_without_losing_history(manager) -> N
     assert manager.exists(target)
     assert moved.address == target
     assert moved.load() == [message]
+
+
+def test_move_reads_and_transforms_metadata_inside_its_writer_transaction(
+    manager, monkeypatch
+) -> None:
+    source = manager.create("coder", session_id="session-one")
+    target = _address("reviewer", source.id, "project-a")
+    entered_store = threading.Event()
+    original_move = manager._store.move
+
+    def observed_move(*args, **kwargs):
+        entered_store.set()
+        return original_move(*args, **kwargs)
+
+    monkeypatch.setattr(manager._store, "move", observed_move)
+    writer = sqlite3.connect(manager._store.path, isolation_level=None)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 "
+            "WHERE agent_id = ? AND session_id = ? AND status = 'live'",
+            (json.dumps({"title": "latest title"}), source.address.agent_id, source.id),
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(lambda: asyncio.run(manager.move(source.address, target)))
+            assert entered_store.wait(timeout=5)
+            writer.commit()
+            moved = future.result(timeout=5)
+    finally:
+        writer.close()
+
+    assert manager.get_metadata(moved.address)["title"] == "latest title"
+
+
+def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
+    manager, monkeypatch
+) -> None:
+    source = manager.create("coder", session_id="session-one")
+    source.append(ChatMessage.user("hello"))
+    entered_store = threading.Event()
+    original_fork = manager._store.fork
+
+    def observed_fork(*args, **kwargs):
+        entered_store.set()
+        return original_fork(*args, **kwargs)
+
+    monkeypatch.setattr(manager._store, "fork", observed_fork)
+    writer = sqlite3.connect(manager._store.path, isolation_level=None)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 "
+            "WHERE agent_id = ? AND session_id = ? AND status = 'live'",
+            (json.dumps({"title": "latest title"}), source.address.agent_id, source.id),
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(lambda: asyncio.run(manager.fork(source.address)))
+            assert entered_store.wait(timeout=5)
+            writer.commit()
+            forked = future.result(timeout=5)
+    finally:
+        writer.close()
+
+    metadata = manager.get_metadata(forked.address)
+    assert metadata["title"] == "latest title"
+    assert metadata[FORK_SOURCE_META_KEY]["message_count"] == 1
+    assert forked.load() == source.load()
 
 
 def test_archive_hides_session_until_explicit_restore(manager) -> None:
