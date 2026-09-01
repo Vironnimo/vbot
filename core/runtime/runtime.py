@@ -8,11 +8,9 @@ import asyncio
 import inspect
 import os
 import sqlite3
-import time
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_package_version
@@ -28,13 +26,12 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
-from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
     InteractionResponder,
-    purge_extension_modules,
 )
+from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
 from core.model_tasks import (
     EmbeddingService,
@@ -44,13 +41,11 @@ from core.model_tasks import (
     TaskModelService,
     VideoService,
 )
-from core.models.database import begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
 from core.projects import (
     AgentResolver,
     ProjectStore,
     build_agent_resolver,
-    effective_project_allowed_skills,
 )
 from core.prompts import (
     AGENT_SCOPE_KEY_PREFIX,
@@ -62,44 +57,17 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
-from core.providers.accounts import (
-    DEFAULT_ACCOUNT_ID,
-    ConnectionRef,
-    split_connection_id,
-)
-from core.providers.adapter import ModelLookup, ProviderAdapter
-from core.providers.anthropic import AnthropicAdapter
+from core.providers.accounts import ConnectionRef
+from core.providers.adapter import ProviderAdapter
 from core.providers.credentials import ProviderCredentialResolver
-from core.providers.github_copilot import GitHubCopilotAdapter
-from core.providers.kimi import KimiAdapter
-from core.providers.lmstudio import LMStudioAdapter
-from core.providers.minimax import MiniMaxAdapter
-from core.providers.mistral import MistralAdapter
-from core.providers.nous import NousAdapter
-from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
-from core.providers.openai import OpenAIAdapter
-from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.opencode_go import OpenCodeGoAdapter
-from core.providers.opencode_zen import OpenCodeZenAdapter
-from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
-    ConnectionConfig,
-    ProviderConfig,
     ProviderRegistry,
-    model_is_local,
-    resolve_effective_context_window,
 )
-from core.providers.reasoning import ReasoningIntent, ReasoningReplayPolicy
-from core.providers.stepfun import StepFunAdapter
-from core.providers.token_getter import (
-    COPILOT_API_ENDPOINT_EXTRA_KEY,
-    OAuthTokenGetter,
-    StaticTokenGetter,
-    TokenGetter,
-)
+from core.providers.reasoning import ReasoningIntent
+from core.providers.runtime import ProviderRuntime
+from core.providers.token_getter import TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
-from core.providers.xai import XAIAdapter
 from core.recall import (
     DEFAULT_RECALL_BACKEND,
     RecallBackend,
@@ -122,20 +90,8 @@ from core.settings.paths import (
 )
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
-from core.skills.skills import (
-    SKILL_ORIGIN_AGENT,
-    SKILL_ORIGIN_BUNDLED,
-    SKILL_ORIGIN_GLOBAL,
-    SKILL_ORIGIN_PROJECT_PREFIX,
-    SkillMetadata,
-    SkillRegistry,
-    find_skill_package_dir,
-    load_project_skill_registry,
-    project_skill_origin,
-    project_skills_dir,
-    scan_project_skill_names,
-    scan_skill_names,
-)
+from core.skills.runtime import SkillRuntime, load_global_skill_registry
+from core.skills.skills import SkillMetadata, SkillRegistry
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -184,7 +140,6 @@ _DEFAULT_RESOURCES_DIR = _VBOT_ROOT / "resources"
 _PACKAGE_NAME = "vbot"
 _UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
-_AGENTS_DIRNAME = "agents"
 
 
 def _detect_vbot_version() -> str:
@@ -209,22 +164,6 @@ def _detect_vbot_version() -> str:
         return _installed_package_version(_PACKAGE_NAME)
     except PackageNotFoundError:
         return _UNKNOWN_VBOT_VERSION
-
-
-@dataclass(frozen=True)
-class _ProjectSkillBundle:
-    """A project's merged skill registry plus the names of its own skills.
-
-    Cached per ``project_id`` on the runtime, like the resolver's Team cache: built
-    on miss and dropped on the same per-project triggers (project open, cwd change,
-    project removal, global skill reload), so an open re-scans the repo into a fresh
-    bundle. ``registry`` is the project-first merge of project + bundled skills (the
-    ``skills_for`` answer); ``names`` is the project-owned skill set the resolver
-    subtracts ``skills_project_disabled`` from.
-    """
-
-    registry: SkillRegistry
-    names: frozenset[str]
 
 
 class _StorageBlockBackend(Protocol):
@@ -336,38 +275,6 @@ class _StorageManagerBlockStore:
         return scope_key
 
 
-# ---------------------------------------------------------------------------
-# Adapter factory mapping
-# ---------------------------------------------------------------------------
-
-# At most one auto-refresh sweep of local model catalogs per this window —
-# successes AND failures count, so a stopped local server (e.g. Ollama down)
-# is not re-probed on every picker open.
-_LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
-
-_ADAPTER_MAP: dict[
-    str,
-    type[ProviderAdapter],
-] = {
-    "openai_compatible": OpenAICompatibleAdapter,
-    "openai": OpenAIAdapter,
-    "openrouter": OpenRouterAdapter,
-    "kimi": KimiAdapter,
-    "minimax": MiniMaxAdapter,
-    "mistral": MistralAdapter,
-    "nous": NousAdapter,
-    "stepfun": StepFunAdapter,
-    "opencode_go": OpenCodeGoAdapter,
-    "opencode_zen": OpenCodeZenAdapter,
-    "github_copilot": GitHubCopilotAdapter,
-    "anthropic": AnthropicAdapter,
-    "ollama": OllamaAdapter,
-    "ollama_cloud": OllamaCloudAdapter,
-    "lmstudio": LMStudioAdapter,
-    "xai": XAIAdapter,
-}
-
-
 class Runtime:
     """Bootstraps and manages the vBot application lifecycle.
 
@@ -401,15 +308,7 @@ class Runtime:
         self._log_manager = LogManager(level=log_level, data_dir=self._data_dir)
         self.logger: LoggerProtocol | None = None
         self._started: bool = False
-        # Auto-refresh throttle state for local model catalogs (see
-        # ``maybe_refresh_local_catalogs``). The lock is created lazily inside
-        # the first call so it binds to the running event loop.
-        self._local_catalog_refresh_lock: asyncio.Lock | None = None
-        self._local_catalog_refresh_at: float | None = None
-        # Last probe outcome per auto-refresh connection id ("provider:conn" →
-        # bool). Absent means "never probed"; consumed by the connection/model
-        # payloads so accessors can mark a not-running local endpoint.
-        self._connection_reachability: dict[str, bool] = {}
+        self._provider_runtime: ProviderRuntime | None = None
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._provider_usage: ProviderUsageService | None = None
@@ -433,17 +332,6 @@ class Runtime:
         self._process_manager: ProcessManager | None = None
         self._terminal_manager: TerminalManager | None = None
         self._skills: SkillRegistry | None = None
-        # Per-project merged skill registries + project-skill names, cached by
-        # project id like the resolver's Team cache; ``skills_for`` / project skill
-        # resolution build on miss and drop on project open, cwd change, project
-        # removal, or a global skill reload.
-        self._project_skills: dict[str, _ProjectSkillBundle] = {}
-        # Agent-aware skill registries, cached by ``(project_id, agent_id)``. Each
-        # layers an agent's own private skills (``<data_dir>/agents/<id>/skills``)
-        # over the project/global pool and marks them always-allowed for that owner.
-        # Dropped per agent on an agent skill write and per project on the same
-        # triggers as the project cache (so the embedded project layer stays fresh).
-        self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
         # Shared, validated skill-authoring write core (Phase 1), constructed at
         # start() with the bundled skills root as a protected target. Used by the
         # agent ``skill_manage`` tool and (later) the skill-mutation RPCs.
@@ -452,12 +340,9 @@ class Runtime:
         # Constructed at start() beside the skill registries; every runtime-owned
         # registry build threads its disable set through ``SkillRegistry.load``.
         self._skill_policy: SkillPolicyService | None = None
+        self._skill_runtime: SkillRuntime | None = None
         self._extensions: ExtensionRegistry | None = None
-        # Serializes every extension-layer mutation (full reload + live disable) so
-        # rapid WebUI toggles / concurrent CLI calls queue instead of interleaving
-        # rebuilds; each mutation then reads the then-current persisted settings, so
-        # the final state is the last write's state regardless of timing (AD3).
-        self._extension_reload_lock = asyncio.Lock()
+        self._extension_runtime: ExtensionRuntime | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
         self._agent_resolver: AgentResolver | None = None
@@ -549,6 +434,15 @@ class Runtime:
             resources_path,
             runtime_models_dir=self._storage.layout.models,
             custom_providers=custom_providers,
+        )
+        self._provider_runtime = ProviderRuntime(
+            providers=self._providers,
+            models=self._models,
+            credentials=self._provider_credentials,
+            token_store=self._token_store,
+            storage=self._storage,
+            resources_path=resources_path,
+            logger=self.logger,
         )
         self._model_tasks = TaskModelService(
             self._providers,
@@ -644,17 +538,35 @@ class Runtime:
                     "see vbot.extensions errors for details",
                     failed_extension_count,
                 )
+            self._extension_runtime = ExtensionRuntime(
+                storage=self._storage,
+                resources_path=resources_path,
+                tools=self._tools,
+                get_registry=lambda: self._extensions,
+                set_registry=self._set_extension_registry,
+                get_command_dispatcher=lambda: self._command_dispatcher,
+                extra_directories=self._extra_extension_directories,
+                load_options=self._extension_load_options,
+                live_config=self._live_extension_config,
+                resolve_credential=self.resolve_environment_credential,
+                reload_recall=self.reload_recall_backend,
+                refresh_prompts=self._refresh_prompt_block_definitions,
+                reload_skills=self.reload_skills,
+                recover_recall=self._recover_recall_backend_if_deactivated,
+                logger=self.logger,
+            )
             # Skills load after extensions: a loaded extension may bundle its own skills
             # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
             # global pool, so the extension layer must be in place first.
             self._skill_policy = SkillPolicyService(self._storage)
-            skill_scan_roots = self._skill_scan_roots(settings, resources_path)
-            self._skills = SkillRegistry.load(
-                skill_scan_roots[0],
-                extra_dirs=skill_scan_roots[1:],
-                environment=self._skill_environment(data_dir_credentials),
-                origins=self._bundled_skill_origins(skill_scan_roots),
+            self._skills = load_global_skill_registry(
+                storage=self._storage,
+                resources_path=resources_path,
+                settings=settings,
+                fallback_environment=data_dir_credentials,
+                extensions=self._extensions,
                 excluded_names=self._disabled_skill_names(),
+                logger=self.logger,
             )
             invalid_skill_count = len(self._skills.invalid_diagnostics())
             if invalid_skill_count > 0:
@@ -679,6 +591,17 @@ class Runtime:
             )
             register_history_tool(self._tools, self._chat_sessions)
             self._projects = ProjectStore(self._storage.data_dir, sessions=self._chat_sessions)
+            self._skill_runtime = SkillRuntime(
+                registry=self._skills,
+                policy=self._skill_policy,
+                storage=self._storage,
+                agents=self._agents,
+                projects=lambda: self.projects,
+                extensions=self._extensions,
+                resources_path=resources_path,
+                logger=self.logger,
+                reload_skills=self.reload_skills,
+            )
             register_project_tool(
                 self._tools,
                 self._projects,
@@ -991,7 +914,7 @@ class Runtime:
             self.logger.info("Runtime stopped")
 
     def _clear_service_references(self) -> None:
-        self._connection_reachability = {}
+        self._provider_runtime = None
         self._providers = None
         self._provider_credentials = None
         self._provider_usage = None
@@ -1012,11 +935,11 @@ class Runtime:
         self._process_manager = None
         self._terminal_manager = None
         self._skills = None
-        self._project_skills = {}
-        self._agent_skills = {}
         self._skill_authoring = None
         self._skill_policy = None
+        self._skill_runtime = None
         self._extensions = None
+        self._extension_runtime = None
         self._chat_sessions = None
         self._projects = None
         self._agent_resolver = None
@@ -1278,522 +1201,73 @@ class Runtime:
         agent_defaults = self._storage.load_defaults().get("agent", {})
         return agent_defaults if isinstance(agent_defaults, dict) else {}
 
-    def _skill_environment(self, fallback_environment: dict[str, str]) -> dict[str, str]:
-        environment = dict(fallback_environment)
-        environment.update(os.environ)
-        return environment
-
-    def _skill_scan_roots(self, settings: dict[str, object], resources_path: Path) -> list[Path]:
-        """Return the ordered bundled skill scan roots, data dir first.
-
-        One source of the bundled skill roots so the global registry and every
-        project-scoped registry scan exactly the same directories
-        (``<data_dir>/skills``, the bundled ``resources/skills``, the
-        settings-configured extras, then the ``skills/`` folder of every loaded
-        extension). A project registry prepends its own skill directory (its
-        declared source format's location) ahead of these. Everything from the
-        bundled root onward is tagged ``global`` by ``_bundled_skill_origins``, so
-        extension-bundled skills present as global skills; the user's own
-        ``<data_dir>/skills`` is scanned first and therefore wins a name collision.
-        """
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
-        return [
-            self._storage.data_dir / _SKILLS_DIRNAME,
-            resources_path / _SKILLS_DIRNAME,
-            *self._extra_skill_directories(settings),
-            *self._extension_skill_dirs(),
-        ]
-
-    def _extension_skill_dirs(self) -> list[Path]:
-        """Return the ``skills/`` directory of every currently-loaded extension.
-
-        A loaded extension in package/directory form may bundle skills under
-        ``<extension>/skills/`` (GLOSSARY -> Skill); ``_skill_scan_roots`` folds
-        them into the global pool, so an extension ships a skill with no code —
-        only the folder. Only ``loaded`` records contribute: a disabled, failed, or
-        overridden extension adds nothing. A single-file extension's ``root_path``
-        is its ``.py`` file, whose ``skills`` child is not a directory and is simply
-        skipped by the scan. Empty until the extension layer exists.
-        """
-        if self._extensions is None:
-            return []
-        return [
-            record.root_path / _SKILLS_DIRNAME
-            for record in self._extensions.records()
-            if record.status == "loaded"
-        ]
-
-    @staticmethod
-    def _bundled_skill_origins(scan_roots: list[Path]) -> list[str | None]:
-        """Origin tags parallel to ``_skill_scan_roots``: data-dir global, then bundled.
-
-        The first root is the data-dir global pool, the second the shipped bundled
-        pool; any configured extra ``skill_directories`` after them are user-curated,
-        so they are tagged global too.
-        """
-        origins: list[str | None] = [SKILL_ORIGIN_GLOBAL, SKILL_ORIGIN_BUNDLED]
-        origins.extend(SKILL_ORIGIN_GLOBAL for _ in scan_roots[2:])
-        return origins
+    def _skill_operations(self) -> SkillRuntime:
+        self._ensure_started()
+        if self._skill_runtime is None or self._skills is None:
+            raise RuntimeError("Skill runtime not available")
+        self._skill_runtime.rebind(
+            registry=self._skills,
+            extensions=self._extensions,
+            logger=self.logger,
+        )
+        return self._skill_runtime
 
     def agent_skills_dir(self, agent_id: str) -> Path:
-        """Return an agent's private skill home (``<data_dir>/agents/<id>/skills``)."""
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
-        return self._storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME
+        return self._skill_operations().agent_skills_dir(agent_id)
 
     def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
-        """Whether an Identity Agent's private home currently loads that Skill name."""
-        if self._skill_policy is None:
-            return False
-        environment = self._skill_environment(self.storage.load_environment())
-        return (
-            find_skill_package_dir(self.agent_skills_dir(agent_id), name, environment) is not None
-        )
+        return self._skill_operations().agent_owns_private_skill(agent_id, name)
 
     @property
     def global_skills_dir(self) -> Path:
-        """Return the user-curated global skills directory (``<data_dir>/skills``)."""
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
-        return self._storage.data_dir / _SKILLS_DIRNAME
+        return self._skill_operations().global_skills_dir
 
     def skills_for(
-        self, project_id: str | None, identity_agent_id: str | None = None
+        self,
+        project_id: str | None,
+        identity_agent_id: str | None = None,
     ) -> SkillRegistry:
-        """Return the skill registry a run should use, scoped to project and agent.
-
-        ``project_id is None`` and ``identity_agent_id is None`` (a plain identity
-        run) returns the global registry byte-for-byte. A set ``project_id`` returns
-        the project's merged registry — the project's own skill directory (its
-        declared source format's location) first,
-        then the bundled pool. When ``identity_agent_id`` names an **identity** agent,
-        its private home is layered on top when present (agent > project > global >
-        bundled). The agent's own Skills and the effective Skill set of a selected
-        Project are always allowed in that scoped registry: Project Context therefore
-        grants what the Project uses without mutating the Agent's configured personal
-        allowlist. This is the single seam every run-time skill consumer (prompt
-        assembly, triggers, the ``skill`` tool, autocomplete) resolves through, so
-        scoping lives in exactly one place.
-
-        **Contract:** ``identity_agent_id`` carries the run's agent id only when the
-        run executes as an identity agent (plain or rooted — a rooted run passes its
-        home project as ``project_id``). A config-agent run passes ``None``: config
-        agents own no private home, and agent ids are project-local, so a team slug
-        that merely collides with an identity agent's id must never pull that
-        identity agent's private skills into the project run (the project skill
-        whitelist is a trust boundary; private skills bypass it as always-allowed).
-        The identity-store existence check below is defense in depth against a stray
-        ``agents/<id>/skills`` directory that belongs to no stored agent.
-        """
-        self._ensure_started()
-        if (
-            identity_agent_id is not None
-            and self.agents.exists(identity_agent_id)
-            and (
-                project_id is not None
-                or self.agent_skills_dir(identity_agent_id).is_dir()
-                or self._receives_shared_skills(identity_agent_id)
-            )
-        ):
-            return self._agent_skill_registry(project_id, identity_agent_id)
-        if project_id is None:
-            return self.skills
-        return self._project_skill_bundle(project_id).registry
+        return self._skill_operations().skills_for(project_id, identity_agent_id)
 
     def refresh_skills_for(
-        self, project_id: str | None, identity_agent_id: str | None = None
+        self,
+        project_id: str | None,
+        identity_agent_id: str | None = None,
     ) -> SkillRegistry:
-        """Rescan every Skill source, then resolve one fresh scoped registry.
-
-        Compaction uses this as an explicit prompt-refresh boundary. The global reload
-        also invalidates Project- and Agent-scoped caches, so the returned registry
-        reflects bundled, global, extension, Project, and private Skill changes from
-        one coherent scan generation.
-        """
-        self.reload_skills()
-        return self.skills_for(project_id, identity_agent_id)
+        return self._skill_operations().refresh_skills_for(project_id, identity_agent_id)
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
-        """Return a Project's own skills for explicit Project Context loading.
-
-        Scans only the Project's own Skill directory (its declared Source Format's
-        location), so the result is exactly the Project-owned Skills with their
-        ``SKILL.md`` paths. The Project Tool lists them in its persisted result, and
-        Chat routes later Skill activation through that loaded Project context. A
-        missing directory yields an empty list.
-        """
-        self._ensure_started()
-        project = self.projects.get(project_id)
-        environment = self._skill_environment(self.storage.load_environment())
-        registry = SkillRegistry.load(
-            project_skills_dir(Path(project.cwd), project.source_format),
-            environment=environment,
-            excluded_names=self._disabled_skill_names(),
-        )
-        return registry.list_all()
+        return self._skill_operations().project_own_skills(project_id)
 
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
-        """Return the complete effective Skill set carried by Project Context.
-
-        Project-owned Skills are active by default except explicit Project
-        disables; bundled and global Skills join only through the Project's opt-in
-        lists. This is the same Project policy used for Config Agents and the
-        temporary Project grant applied to Identity Runs.
-        """
-        self._ensure_started()
-        project = self.projects.get(project_id)
-        bundle = self._project_skill_bundle(project_id)
-        allowed_names = set(effective_project_allowed_skills(project, bundle.names))
-        return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
+        return self._skill_operations().project_context_skills(project_id)
 
     def skill_inventory(self) -> dict[str, Any]:
-        """One pass over every Skill source for the human manager (no exclusions).
-
-        Unlike ``skills_for`` this never applies the policy disable switch, so a
-        disabled Skill stays visible and manageable here. Every scanned package
-        is listed per source — a same-name Skill in two sources appears once per
-        origin — annotated with its origin, owner (private homes only), share and
-        disable state, availability, and warnings. Availability is resolved
-        against one merged registry so cross-source Skill dependencies answer
-        exactly like runtime activation does. Stale policy entries (an unknown
-        owner or a vanished package) are reported for cleanup, not silently
-        dropped.
-        """
-        self._ensure_started()
-        settings = self.storage.load_settings()
-        environment = self._skill_environment(self.storage.load_environment())
-        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
-        policy = self.skill_policy.load()
-
-        # (metadata, origin, owner_id, warnings, loadable) per scanned package.
-        raw_entries: list[tuple[SkillMetadata, str | None, str | None, list[str], bool]] = []
-        merged_roots: list[Path] = []
-        merged_origins: list[str | None] = []
-
-        def add_root(root: Path, origin: str | None, owner_id: str | None) -> None:
-            registry = SkillRegistry.load(root, environment=environment)
-            for skill in registry.list_all():
-                raw_entries.append(
-                    (skill, origin, owner_id, registry.warnings_for(skill.name), True)
-                )
-            for diagnostic in registry.invalid_diagnostics():
-                placeholder = SkillMetadata(
-                    name=diagnostic.name, description="", path=diagnostic.path
-                )
-                raw_entries.append((placeholder, origin, owner_id, diagnostic.warnings, False))
-            merged_roots.append(root)
-            merged_origins.append(origin)
-
-        for root, origin in zip(scan_roots, self._bundled_skill_origins(scan_roots), strict=True):
-            add_root(root, origin, None)
-        for project in self.projects.list():
-            add_root(
-                project_skills_dir(Path(project.cwd), project.source_format),
-                project_skill_origin(project.display_name),
-                None,
-            )
-        for agent in self.agents.list():
-            add_root(self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id)
-
-        merged = SkillRegistry.load(
-            merged_roots[0],
-            extra_dirs=merged_roots[1:],
-            environment=environment,
-            origins=merged_origins,
-        )
-        skills: list[dict[str, Any]] = []
-        for skill, origin, owner_id, warnings, loadable in raw_entries:
-            if loadable:
-                availability = merged.availability_for(skill.name)
-                missing = list(availability.missing)
-                optional_missing = list(availability.optional_missing)
-                status = "available" if availability.state == "available" else "unavailable"
-            else:
-                missing = []
-                optional_missing = []
-                status = "invalid"
-            disabled = skill.name in policy.disabled
-            if disabled:
-                # The master switch outranks every other state in display.
-                status = "disabled"
-            owner_shared = policy.shared.get(owner_id, {}) if owner_id else {}
-            shared_receivers = owner_shared.get(skill.name, frozenset())
-            skills.append(
-                {
-                    "name": skill.name,
-                    "description": skill.description,
-                    "origin": origin,
-                    "owner_id": owner_id,
-                    "shared": bool(shared_receivers),
-                    "shared_with": sorted(shared_receivers),
-                    "disabled": disabled,
-                    "status": status,
-                    "missing": missing,
-                    "optional_missing": optional_missing,
-                    "warnings": warnings,
-                }
-            )
-        return {
-            "skills": skills,
-            "policy_diagnostics": self.skill_policy.validation_diagnostics(),
-            "stale_shared": self._stale_shared_entries(policy),
-        }
-
-    def _stale_shared_entries(self, policy: Any) -> list[dict[str, Any]]:
-        """Report shared policy entries whose owner or package no longer exists."""
-        environment = self._skill_environment(self.storage.load_environment())
-        stale: list[dict[str, Any]] = []
-        for owner_id, skills in sorted(policy.shared.items()):
-            owner_exists = self.agents.exists(owner_id)
-            for name in sorted(skills):
-                if not owner_exists or (
-                    find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
-                    is None
-                ):
-                    stale.append({"agent_id": owner_id, "name": name})
-        return stale
+        return self._skill_operations().skill_inventory()
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
-        """Return the names of a project's own scanned skills (empty for identity).
-
-        The resolver uses this to compute a config agent's effective skills
-        ``(project skills − disabled) ∪ enabled-bundled``. Cached with the project's
-        merged registry so it does not re-scan the repo every resolve.
-        """
-        self._ensure_started()
-        if project_id is None:
-            return frozenset()
-        return self._project_skill_bundle(project_id).names
+        return self._skill_operations().project_skill_names(project_id)
 
     def invalidate_project_skills(self, project_id: str | None = None) -> None:
-        """Drop the cached project skills for one project, or for all when ``None``.
-
-        Agent-aware registries embed the project layer, so this also drops the
-        cached agent registries for that project (or all of them when ``None``) to
-        keep them coherent with the project pool.
-        """
-        if project_id is None:
-            self._project_skills.clear()
-            self._agent_skills.clear()
-            return
-        self._project_skills.pop(project_id, None)
-        self._drop_agent_skills(lambda key: key[0] == project_id)
+        self._skill_operations().invalidate_project_skills(project_id)
 
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
-        """Drop the cached agent skills for one agent, or for all when ``None``.
-
-        Called after an agent's private skill home changes (a skill write) so the
-        next run rebuilds that agent's registry against the new pool. Drops only
-        that agent's cached registries across every project context it ran in.
-        """
-        if agent_id is None:
-            self._agent_skills.clear()
-            return
-        self._drop_agent_skills(lambda key: key[1] == agent_id)
-
-    def _drop_agent_skills(self, predicate: Callable[[tuple[str | None, str]], bool]) -> None:
-        for key in [key for key in self._agent_skills if predicate(key)]:
-            del self._agent_skills[key]
-
-    def _agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
-        key = (project_id, agent_id)
-        cached = self._agent_skills.get(key)
-        if cached is not None:
-            return cached
-        registry = self._build_agent_skill_registry(project_id, agent_id)
-        self._agent_skills[key] = registry
-        return registry
-
-    def _build_agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
-        settings = self.storage.load_settings()
-        environment = self._skill_environment(self.storage.load_environment())
-        agent_root = self.agent_skills_dir(agent_id)
-        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
-        roots: list[Path] = [agent_root]
-        origins: list[str | None] = [SKILL_ORIGIN_AGENT]
-        project_allowed_names: set[str] = set()
-        if project_id is not None:
-            project = self.projects.get(project_id)
-            roots.append(project_skills_dir(Path(project.cwd), project.source_format))
-            origins.append(project_skill_origin(project.display_name))
-            project_allowed_names.update(
-                effective_project_allowed_skills(
-                    project,
-                    self._project_skill_bundle(project_id).names,
-                )
-            )
-        # Shared layer (own > project > shared > global > bundled): every other
-        # owner's individually resolved shared package directories — never an
-        # owner's whole skills home, so unshared neighbours cannot leak. They are
-        # tagged with the receiver-facing Agent origin, so catalogs render them
-        # indistinguishably among "Your own skills", and they are NOT added to
-        # ``always_allowed``: they pass through the receiver's ``allowed_skills``
-        # filter exactly like global skills.
-        shared_package_dirs = self._shared_package_dirs(agent_id)
-        roots.extend(shared_package_dirs)
-        origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
-        roots.extend(scan_roots)
-        origins.extend(self._bundled_skill_origins(scan_roots))
-        # First-found-wins ordering makes agent skills win over project, project over
-        # shared, shared over bundled. The agent's own skills are always-allowed for
-        # it, so they bypass the owner's ``allowed_skills`` filter without leaking to
-        # other agents (whose registries never scan this home). Project Context is
-        # itself the authorization to use that Project's effective Skill set: those
-        # exact Project-granted names also bypass the Identity Agent's unrelated
-        # personal allowlist while this project-scoped registry is active.
-        agent_own_names = scan_skill_names(agent_root, environment)
-        return SkillRegistry.load(
-            roots[0],
-            extra_dirs=roots[1:],
-            environment=environment,
-            always_allowed=agent_own_names | project_allowed_names,
-            origins=origins,
-            excluded_names=self._disabled_skill_names(),
-        )
-
-    def _receives_shared_skills(self, receiver_agent_id: str) -> bool:
-        """Whether any other Identity Agent has shared Skills to this receiver.
-
-        Part of the ``skills_for`` scoping decision: an agent with no private home
-        and no Project must still get a scoped registry when others share to it.
-        """
-        if self._skill_policy is None:
-            return False
-        shared = self._skill_policy.load().shared
-        for owner_id, skills in shared.items():
-            if owner_id == receiver_agent_id:
-                continue
-            for receivers in skills.values():
-                if receiver_agent_id in receivers:
-                    return True
-        return False
+        self._skill_operations().invalidate_agent_skills(agent_id)
 
     def _resolve_shared_skills_dir(self, receiver_agent_id: str, name: str) -> Path | None:
-        """Return the owning skills home of the effective shared Skill instance.
-
-        Mirrors the registry's first-found ordering (sorted owner ids), so a
-        ``skill_manage`` mutation lands in exactly the package activation serves.
-        ``None`` when no other agent shares that name with the receiver.
-        """
-        if self._skill_policy is None:
-            return None
-        shared = self._skill_policy.load().shared
-        if not shared:
-            return None
-        environment = self._skill_environment(self.storage.load_environment())
-        for owner_id, skills in sorted(shared.items()):
-            if owner_id == receiver_agent_id:
-                continue
-            receivers = skills.get(name)
-            if receivers is None or receiver_agent_id not in receivers:
-                continue
-            if not self.agents.exists(owner_id):
-                continue
-            package_dir = find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
-            if package_dir is not None:
-                return package_dir.parent
-        return None
+        return self._skill_operations()._resolve_shared_skills_dir(receiver_agent_id, name)
 
     def _resolve_external_skill_scope(
-        self, agent_id: str, name: str, project_id: str | None
+        self,
+        agent_id: str,
+        name: str,
+        project_id: str | None,
     ) -> str | None:
-        """Return where ``name`` resolves outside the caller's own private home.
-
-        The agent-scoped registry is the same seam ``skill`` resolves through, so
-        this answers how the name is *visible* to the agent (bundled / global /
-        project / shared) — never how the authoring core sees it, which only knows
-        the target root. ``agent`` origin with the name absent from own home means a
-        Skill shared into this agent; ``None`` means genuinely unknown.
-        """
-        registry = self.skills_for(project_id, agent_id)
-        try:
-            origin = registry.get(name).origin
-        except KeyError:
-            return None
-        if origin == SKILL_ORIGIN_AGENT:
-            return "shared"
-        if origin == SKILL_ORIGIN_BUNDLED:
-            return "bundled"
-        if origin == SKILL_ORIGIN_GLOBAL:
-            return "global"
-        if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
-            return "project"
-        return None
-
-    def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
-        """Resolve every owner's shared private Skill packages for one receiver.
-
-        Deterministic order — sorted by owner id, then skill name — so first-found
-        collision handling matches activation exactly. Only existing Identity
-        Agents contribute; stale entries (an unknown owner id or a vanished package
-        directory) are ignored at load with a warning and stay in the policy file
-        for the human manager to clean up. Only skills whose receiver list
-        includes this receiver are inserted.
-        """
-        if self._skill_policy is None:
-            return []
-        shared = self._skill_policy.load().shared
-        if not shared:
-            return []
-        environment = self._skill_environment(self.storage.load_environment())
-        directories: list[Path] = []
-        for owner_id, skills in sorted(shared.items()):
-            if owner_id == receiver_agent_id:
-                # The owner keeps its own copy via its private-home layer.
-                continue
-            if not self.agents.exists(owner_id):
-                if self.logger is not None:
-                    self.logger.warning(
-                        "Ignoring stale shared skills for unknown agent '%s'",
-                        owner_id,
-                    )
-                continue
-            owner_root = self.agent_skills_dir(owner_id)
-            for name, receivers in sorted(skills.items()):
-                if receiver_agent_id not in receivers:
-                    continue
-                package_dir = find_skill_package_dir(owner_root, name, environment)
-                if package_dir is None:
-                    if self.logger is not None:
-                        self.logger.warning(
-                            "Ignoring stale shared skill '%s' of agent '%s' "
-                            "(no such private skill)",
-                            name,
-                            owner_id,
-                        )
-                    continue
-                directories.append(package_dir)
-        return directories
-
-    def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        cached = self._project_skills.get(project_id)
-        if cached is not None:
-            return cached
-        bundle = self._build_project_skill_bundle(project_id)
-        self._project_skills[project_id] = bundle
-        return bundle
-
-    def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        project = self.projects.get(project_id)
-        project_cwd = Path(project.cwd)
-        settings = self.storage.load_settings()
-        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
-        environment = self._skill_environment(self.storage.load_environment())
-        disabled = self._disabled_skill_names()
-        registry = load_project_skill_registry(
-            project_cwd,
-            project.source_format,
-            scan_roots,
-            environment,
-            project_origin=project_skill_origin(project.display_name),
-            bundled_origins=self._bundled_skill_origins(scan_roots),
-            excluded_names=disabled,
+        return self._skill_operations()._resolve_external_skill_scope(
+            agent_id,
+            name,
+            project_id,
         )
-        # The resolver's config-agent input must be clean of disabled names too —
-        # a disabled project skill is invisible everywhere, including opt-ins.
-        names = scan_project_skill_names(project_cwd, project.source_format, environment)
-        return _ProjectSkillBundle(registry=registry, names=names - disabled)
 
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
@@ -1914,143 +1388,22 @@ class Runtime:
                 self._recall_backend_name,
             )
 
+    def _set_extension_registry(self, registry: ExtensionRegistry) -> None:
+        self._extensions = registry
+
+    def _extension_operations(self) -> ExtensionRuntime:
+        self._ensure_started()
+        if self._extension_runtime is None:
+            raise RuntimeError("Extension runtime not available")
+        return self._extension_runtime
+
     async def reload_extensions(self) -> None:
-        """Rebuild the whole extension layer from disk — restart-equivalent, live.
-
-        The explicit reload seam behind ``extensions.reload`` (RPC/CLI/WebUI) and
-        behind enabling an extension: it tears the current layer down and builds a
-        fresh one from the current persisted settings, so the end state equals
-        exactly what a restart from those settings would produce. It picks up edited
-        code of loaded extensions (including submodules of package extensions, via
-        the module-cache purge), extensions newly added to or deleted from a scan
-        root, previously ``failed`` extensions whose code was fixed, and
-        boot-disabled extensions that were enabled.
-
-        The rebuild is **async** on purpose: extension startup/shutdown handlers run
-        on the live serving loop (they may schedule background tasks there), so they
-        are awaited directly here — never driven through a blocking worker loop. The
-        whole body runs under ``_extension_reload_lock`` (AD3), so a rapid burst of
-        toggles / concurrent calls serialize and the last write wins.
-
-        Sequence (AD2): read fresh inputs; detach the old layer's tools and fire its
-        shutdown; purge the ``vbot_ext`` module cache; ``ExtensionRegistry.load`` a
-        new registry with the same arguments ``start()`` uses; swap it in; re-apply
-        tools, recall backends (via ``reload_recall_backend``), and prompt blocks;
-        then fire the new layer's startup. During the swap window a concurrent run
-        can still dispatch into an already-shut-down old extension for a moment; that
-        is accepted (per-handler fail-open isolation catches it, the same window
-        exists in live disable) — no drain.
-        """
-        async with self._extension_reload_lock:
-            self._ensure_started()
-            storage = self.storage
-            tool_registry = self.tools
-            settings = storage.load_settings()
-            resources_path = self._resolve_resources_path()
-            extension_dirs = self._extra_extension_directories(settings)
-            disabled, config = self._extension_load_options(settings)
-
-            old_registry = self._extensions
-            if old_registry is not None:
-                old_registry.remove_applied_tools(tool_registry)
-                if self._command_dispatcher is not None:
-                    old_registry.remove_applied_commands(self._command_dispatcher)
-                await old_registry.fire_shutdown()
-
-            # An edited submodule of a package extension keeps its stale cached copy
-            # unless the whole vbot_ext namespace is dropped before the fresh load.
-            purge_extension_modules()
-
-            new_registry = await ExtensionRegistry.aload(
-                storage.data_dir / "extensions",
-                extra_dirs=extension_dirs,
-                disabled=disabled,
-                config=config,
-                bundled_dir=resources_path / "extensions",
-                config_provider=self._live_extension_config,
-                credential_resolver=self.resolve_environment_credential,
-            )
-            failed_extension_count = len(new_registry.diagnostics())
-            if failed_extension_count > 0 and self.logger is not None:
-                self.logger.warning(
-                    "Reloaded extensions with %s failed extensions; "
-                    "see vbot.extensions errors for details",
-                    failed_extension_count,
-                )
-
-            self._extensions = new_registry
-
-            new_registry.apply_tools(tool_registry)
-            if self._command_dispatcher is not None:
-                new_registry.apply_commands(self._command_dispatcher)
-            self.reload_recall_backend()
-            self._refresh_prompt_block_definitions()
-            # The rebuilt layer may change which extensions bundle skills (added,
-            # removed, edited, or enabled), so rebuild the skill registry — and its
-            # project/agent caches — against the fresh set of extension skill dirs.
-            self.reload_skills()
-
-            await new_registry.fire_startup()
-
-            if self.logger is not None:
-                records = new_registry.records()
-                self.logger.info(
-                    "Extension layer reloaded: %s loaded, %s failed, %s disabled, %s overridden",
-                    sum(1 for record in records if record.status == "loaded"),
-                    sum(1 for record in records if record.status == "failed"),
-                    sum(1 for record in records if record.status == "disabled"),
-                    sum(1 for record in records if record.status == "overridden"),
-                )
+        """Rebuild the entire Extension layer from current Settings and disk."""
+        await self._extension_operations().reload()
 
     async def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
-        """Deactivate each newly-disabled extension live, without a restart.
-
-        Called by ``settings.update`` after the new ``disabled`` set is persisted,
-        with the names that were **added** to it (enabling routes through the full
-        ``reload_extensions`` instead). For each name it drives
-        ``ExtensionRegistry.deactivate`` (hooks off, tools unregistered, shutdown
-        fired, record marked disabled), then refreshes the prompt block definitions
-        so any extension-owned block drops immediately, and guards the recall edge
-        (below). Names that are not currently ``loaded`` are clean no-ops inside the
-        registry. The whole mutation runs under ``_extension_reload_lock`` (AD3), so
-        it can never interleave with a concurrent ``reload_extensions``.
-        """
-        self._ensure_started()
-        if not newly_disabled:
-            return
-
-        async with self._extension_reload_lock:
-            if self._extensions is None:
-                return
-
-            # Capture each deactivating extension's declared recall backends before
-            # the registry clears its declarations, so we can detect whether one of
-            # them is the currently-active backend and fall back (see below).
-            deactivating_backend_names = self._extension_recall_backend_names(newly_disabled)
-
-            for name in newly_disabled:
-                await self._extensions.deactivate(
-                    name,
-                    self._tools,
-                    self._command_dispatcher,
-                )
-
-            self._refresh_prompt_block_definitions()
-            # A deactivated extension's bundled skills must drop from the global
-            # pool too, so rebuild the skill registry against the now-smaller set.
-            self.reload_skills()
-            self._recover_recall_backend_if_deactivated(deactivating_backend_names)
-
-    def _extension_recall_backend_names(self, names: set[str]) -> set[str]:
-        """Return the recall-backend names declared by the given loaded extensions."""
-        if self._extensions is None:
-            return set()
-        backend_names: set[str] = set()
-        for record in self._extensions.records():
-            if record.name in names and record.status == "loaded":
-                for declaration in record.declarations.recall_backends:
-                    backend_names.add(declaration.name)
-        return backend_names
+        """Deactivate newly disabled Extensions through the serialized live layer."""
+        await self._extension_operations().apply_disabled_change(newly_disabled)
 
     def _recover_recall_backend_if_deactivated(self, removed_backend_names: set[str]) -> None:
         """Fall the active recall backend back to the default if its provider left.
@@ -2133,26 +1486,12 @@ class Runtime:
 
     def _load_reloaded_skills(self) -> SkillRegistry:
         """Build one replacement Skill registry without mutating Runtime state."""
-        self._ensure_started()
-        settings = self.storage.load_settings()
-        resources_path = self._resolve_resources_path()
-        skill_scan_roots = self._skill_scan_roots(settings, resources_path)
-        return SkillRegistry.load(
-            skill_scan_roots[0],
-            extra_dirs=skill_scan_roots[1:],
-            environment=self._skill_environment(self.storage.load_environment()),
-            origins=self._bundled_skill_origins(skill_scan_roots),
-            excluded_names=self._disabled_skill_names(),
-        )
+        return self._skill_operations().load_global_registry()
 
     def _apply_reloaded_skills(self, skills: SkillRegistry) -> None:
         """Install a fully built Skill registry and refresh its loop-owned consumers."""
         self._skills = skills
-        # Project- and agent-scoped registries merge in the same bundled roots, so a
-        # global skill reload makes every cached project *and* agent registry stale —
-        # invalidate_project_skills() with no project drops both caches so the next
-        # run rebuilds against the fresh pool.
-        self.invalidate_project_skills()
+        self._skill_operations().replace_registry(skills)
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if self.logger is not None:
             # Routine cache maintenance (fires on every project open), not an event.
@@ -2645,370 +1984,59 @@ class Runtime:
     # Adapter factory
     # ------------------------------------------------------------------
 
-    def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
-        """Return a wired adapter instance for the given provider.
-
-        Looks up the provider config from the registry, resolves the
-        provider credential through the runtime's central credential
-        resolver, and instantiates the correct adapter class.
-
-        Args:
-            connection: Connection reference whose *connection_id* uses the
-                compositional ``provider:connection[:account]`` grammar
-                (e.g. ``"openai:api-key"`` or ``"openai:api-key:work"``).
-                An absent account resolves to the connection's first usable
-                account (``default`` first, then sorted alphabetically).
-
-        Returns:
-            A ``ProviderAdapter`` instance ready to make API calls.
-
-        Raises:
-            RuntimeError: If the runtime has not been started.
-            KeyError: If no provider with *provider_id* is registered.
-            ConfigError: If the provider credential is not configured,
-                or if the adapter type is unknown.
-        """
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        provider_id = connection.provider_id
-        connection_id = connection.connection_id
-        provider_config = self.providers.get(provider_id)
-        provider_replay_override = self.models.provider_reasoning_replay(provider_id)
-        if provider_replay_override is not None:
-            provider_config = replace(
-                provider_config,
-                reasoning_replay=cast(ReasoningReplayPolicy, provider_replay_override),
-            )
-        connection_config, account_id = self._get_connection_config(provider_config, connection_id)
-        if not self.provider_credentials.is_connection_enabled(provider_id, connection_id):
-            raise ConfigError(
-                f"Provider connection '{provider_id}:{connection_config.id}' is disabled — "
-                f"enable it in Settings → Providers or via the provider CLI"
-            )
-        token_getter = self._get_token_getter(connection, connection_config, account_id)
-
-        adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
-        if adapter_class is None:
-            raise ConfigError(
-                f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
-            )
-
-        debug_recorder = self._build_debug_recorder()
-
-        extra_kwargs: dict[str, Any] = {}
-        if adapter_class in (OllamaAdapter, LMStudioAdapter):
-            # Local adapters enforce the live effective context when they load
-            # a model; no runtime reload hook is needed.
-            extra_kwargs["local_context_resolver"] = self._local_context_resolver_for(provider_id)
-        if adapter_class is OpenRouterAdapter:
-            # Snapshot routing policy for this Adapter/Run. A Settings save
-            # applies to the next Run without changing providers midway through
-            # an active Tool loop and invalidating its warm prompt cache.
-            extra_kwargs["routing"] = self.storage.load_openrouter_routing_settings()
-
-        base_url = connection_config.base_url
-        if adapter_class is GitHubCopilotAdapter:
-            copilot_endpoint = self.get_connection_token_extra(connection).get(
-                COPILOT_API_ENDPOINT_EXTRA_KEY
-            )
-            if copilot_endpoint:
-                base_url = copilot_endpoint
-
-        adapter = cast(Any, adapter_class)(
-            provider_config,
-            token_getter,
-            base_url,
-            connection_config.auth,
-            model_lookup=self._model_lookup_for(provider_id),
-            debug_recorder=debug_recorder,
-            connection_mode=connection_config.mode,
-            **extra_kwargs,
+    def _provider_operations(self) -> ProviderRuntime:
+        self._ensure_started()
+        if self._provider_runtime is None:
+            raise RuntimeError("Provider runtime not available")
+        self._provider_runtime.rebind(
+            providers=self.providers,
+            models=self.models,
+            credentials=self.provider_credentials,
+            token_store=self.token_store,
+            storage=self.storage,
+            logger=self.logger,
         )
+        return self._provider_runtime
 
-        return cast(ProviderAdapter, adapter)
+    def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
+        """Return a fully wired Adapter for one exact Provider Connection."""
+        return self._provider_operations().get_adapter(connection)
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
-        """Return a token getter for one provider connection.
-
-        Public, DI-friendly wrapper over the same connection resolution and
-        token-getter construction :meth:`get_adapter` uses, so non-chat
-        provider clients (e.g. the usage probe) can obtain a per-connection
-        token without re-implementing OAuth refresh. The returned getter is a
-        :class:`StaticTokenGetter` for api-key connections, or a refresh-capable
-        :class:`OAuthTokenGetter` for OAuth connections.
-
-        Args:
-            connection: Reference whose *connection_id* uses the compositional
-                ``provider:connection[:account]`` id.
-
-        Raises:
-            RuntimeError: If the runtime has not been started.
-            KeyError: If no provider with *provider_id* is registered.
-            ConfigError: If the connection id is unknown.
-        """
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        provider_config = self.providers.get(connection.provider_id)
-        connection_config, account_id = self._get_connection_config(
-            provider_config, connection.connection_id
-        )
-        return self._get_token_getter(connection, connection_config, account_id)
+        """Return the refresh-capable token getter for one Provider Connection."""
+        return self._provider_operations().get_connection_token_getter(connection)
 
     def get_connection_token_extra(self, connection: ConnectionRef) -> Mapping[str, str]:
-        """Return the stored OAuth token ``extra`` metadata for a connection.
-
-        Reads the persisted token-store ``extra`` map for the resolved account
-        (e.g. Copilot's ``github_oauth_token`` or OpenAI's mirrored
-        ``chatgpt_account_id``). Returns an empty mapping when no token is
-        stored — api-key connections and not-yet-connected OAuth connections
-        both yield ``{}`` rather than raising.
-
-        Args:
-            connection: Reference whose *connection_id* uses the compositional
-                ``provider:connection[:account]`` id.
-
-        Raises:
-            RuntimeError: If the runtime has not been started.
-            KeyError: If no provider with *provider_id* is registered.
-            ConfigError: If the connection id is unknown.
-        """
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        provider_config = self.providers.get(connection.provider_id)
-        connection_config, account_id = self._get_connection_config(
-            provider_config, connection.connection_id
-        )
-        resolved_account_id = account_id
-        if resolved_account_id is None:
-            try:
-                resolved_account_id = self.provider_credentials.resolve_account_id(
-                    connection.provider_id, connection_config.id
-                )
-            except ConfigError:
-                resolved_account_id = DEFAULT_ACCOUNT_ID
-        token = self.token_store.load(
-            connection.provider_id, connection_config.id, account_id=resolved_account_id
-        )
-        if token is None:
-            return {}
-        return dict(token.extra)
-
-    def _build_debug_recorder(self) -> ProviderDebugRecorder | None:
-        """Create a debug recorder when debug mode is enabled, else ``None``.
-
-        The recorder is passed into the adapter constructor so its HTTP
-        client is built with wire capture wired into the transport.
-        """
-        if self._storage is None:
-            return None
-        debug_settings = self._storage.load_debug_settings()
-        if not debug_settings.get("enabled", False):
-            return None
-        trace_limit = debug_settings.get("trace_limit", 50)
-        debug_store = DebugTraceStore(self._data_dir, trace_limit=trace_limit)
-        return ProviderDebugRecorder(store=debug_store)
-
-    def _model_lookup_for(self, provider_id: str) -> ModelLookup:
-        def _lookup(model_id: str) -> Model | None:
-            try:
-                return self.models.get(provider_id, model_id)
-            except KeyError:
-                return None
-
-        return _lookup
+        """Return persisted OAuth metadata for one Provider Connection."""
+        return self._provider_operations().get_connection_token_extra(connection)
 
     def describe_reasoning_render(
-        self, provider_id: str, model_id: str, effort: str | None
+        self,
+        provider_id: str,
+        model_id: str,
+        effort: str | None,
     ) -> ReasoningIntent | None:
-        """Return the reasoning intent an adapter would render for one request.
-
-        ``/status`` seam: resolves the provider's adapter *class* and asks it
-        to describe its render — no adapter instance, credentials, or HTTP.
-        Returns ``None`` when the provider or adapter type cannot be resolved;
-        resolution failures propagate to the caller, whose presentation layer
-        degrades to the declared-control fallback.
-        """
-
-        provider_config = self._providers.get(provider_id) if self._providers else None
-        if provider_config is None:
-            return None
-        adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
-        if adapter_class is None:
-            return None
-        return adapter_class.describe_reasoning_render(
-            model_lookup=self._model_lookup_for(provider_id),
-            provider_config=provider_config,
-            model_id=model_id,
-            effort=effort,
+        """Return the Adapter's Provider-neutral Reasoning render description."""
+        return self._provider_operations().describe_reasoning_render(
+            provider_id,
+            model_id,
+            effort,
         )
 
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
-        """Refresh every enabled ``auto_refresh`` connection's model catalog, throttled.
-
-        Local providers (e.g. Ollama) change their installed-model set outside
-        vBot, so their catalogs refresh automatically — at startup
-        (fire-and-forget) and when a model picker opens (``model.list``,
-        awaited with a small time budget). Disabled connections are never
-        probed. Semantics:
-
-        - **Throttled**: at most one refresh sweep per
-          :data:`_LOCAL_CATALOG_REFRESH_TTL_SECONDS`, counting failures too —
-          a stopped local server must not be re-probed on every picker open.
-          ``force=True`` bypasses the throttle (used right after the user
-          enables a local connection, so feedback is immediate).
-        - **Never raises**: a refresh failure (server down, malformed catalog)
-          logs and leaves the last known catalog untouched.
-        - **Serialized**: concurrent callers share one sweep; the second
-          caller waits for the in-flight sweep and returns.
-        - **Reachability**: each probe outcome is recorded per connection
-          (see :meth:`connection_reachability`).
-        """
-
-        if not self._started:
+        """Refresh enabled local Provider catalogs without disrupting live registries."""
+        if self._provider_runtime is None:
             return
-        if self._local_catalog_refresh_lock is None:
-            self._local_catalog_refresh_lock = asyncio.Lock()
-        async with self._local_catalog_refresh_lock:
-            now = time.monotonic()
-            last = self._local_catalog_refresh_at
-            if not force and last is not None and now - last < _LOCAL_CATALOG_REFRESH_TTL_SECONDS:
-                return
-
-            targets = self._auto_refresh_targets()
-            if not targets:
-                return
-            # Stamp before the work so a failing local server is also throttled.
-            self._local_catalog_refresh_at = now
-
-            # Local import: core.models.discovery imports core.providers.* at
-            # module load; importing it lazily here keeps runtime import time flat.
-            from core.models.discovery import ModelDiscoveryError, refresh_models
-
-            system_resources_dir = self._resolve_resources_path()
-            database_refresh = None
-            refresh_resources_dir = None
-            refreshed_any = False
-            try:
-                database_refresh = begin_runtime_model_database_refresh(
-                    system_resources_dir,
-                    self.storage.data_dir,
-                )
-                refresh_resources_dir = database_refresh.resources_dir
-                for provider_id, provider, connection in targets:
-                    connection_id = f"{provider_id}:{connection.id}"
-                    try:
-                        credential_value = self.provider_credentials.get_credentials(
-                            provider_id, connection_id
-                        )
-                    except ConfigError as error:
-                        if self.logger is not None:
-                            self.logger.debug(
-                                f"Skipping local catalog refresh for {connection_id}: {error}"
-                            )
-                        continue
-                    try:
-                        await refresh_models(
-                            provider,
-                            credential_value,
-                            refresh_resources_dir,
-                            credential_connection=connection,
-                        )
-                    except ModelDiscoveryError as error:
-                        # Expected when the local server is not running — keep the
-                        # last known catalog, never block or error the caller.
-                        previous_reachability = self._connection_reachability.get(connection_id)
-                        self._connection_reachability[connection_id] = False
-                        if self.logger is not None:
-                            if previous_reachability is True:
-                                self.logger.warning(
-                                    "Local provider connection became unreachable "
-                                    "(provider=%s connection=%s): %s",
-                                    provider_id,
-                                    connection.id,
-                                    error,
-                                )
-                            else:
-                                self.logger.debug(
-                                    f"Local catalog refresh failed for {connection_id}: {error}"
-                                )
-                        continue
-                    previous_reachability = self._connection_reachability.get(connection_id)
-                    self._connection_reachability[connection_id] = True
-                    if previous_reachability is False and self.logger is not None:
-                        self.logger.info(
-                            "Local provider connection recovered (provider=%s connection=%s)",
-                            provider_id,
-                            connection.id,
-                        )
-                    refreshed_any = True
-
-                if refreshed_any:
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                    ModelRegistry.load(refresh_resources_dir)
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                    database_refresh.commit()
-                    # In-place reload so services holding the registry instance
-                    # (task targets, status, recall) see the fresh catalog.
-                    self.models.reload(
-                        system_resources_dir,
-                        runtime_models_dir=self.storage.layout.models,
-                        custom_providers=self.storage.load_custom_providers_settings(),
-                    )
-            except Exception as error:
-                # This background convenience path is deliberately fail-soft:
-                # an unpublished staging failure must not disturb runtime or the
-                # last complete Model DB.
-                if self.logger is not None:
-                    self.logger.warning("Local catalog refresh could not be published: %s", error)
-            finally:
-                if refresh_resources_dir is not None:
-                    ModelRegistry.invalidate(refresh_resources_dir)
-                if database_refresh is not None:
-                    database_refresh.discard()
+        await self._provider_operations().maybe_refresh_local_catalogs(force=force)
 
     def connection_reachability(self, connection_id: str) -> bool | None:
-        """Return the last catalog-probe outcome for one auto-refresh connection.
-
-        ``True``/``False`` reflect the most recent sweep; ``None`` means the
-        connection was never probed (not an auto-refresh connection, disabled,
-        or no sweep has run yet). Only meaningful for local auto-refresh
-        connections — remote connections are never probed and stay ``None``.
-        """
-
-        return self._connection_reachability.get(connection_id)
-
-    def _auto_refresh_targets(self) -> list[tuple[str, ProviderConfig, ConnectionConfig]]:
-        """Return ``(provider_id, provider, connection)`` for auto-refresh connections.
-
-        Only enabled connections qualify — a disabled local provider is
-        completely passive (no startup probe, no picker probe).
-        """
-
-        targets: list[tuple[str, ProviderConfig, ConnectionConfig]] = []
-        for provider_id in self.providers.list_ids():
-            provider = self.providers.get(provider_id)
-            for connection in provider.connections:
-                if not connection.auto_refresh:
-                    continue
-                if not (connection.models_endpoint or provider.models_endpoint):
-                    continue
-                if not self.provider_credentials.is_usable(
-                    provider_id, f"{provider_id}:{connection.id}"
-                ):
-                    continue
-                targets.append((provider_id, provider, connection))
-        return targets
+        """Return the latest local catalog probe outcome for one Connection."""
+        if self._provider_runtime is None:
+            return None
+        return self._provider_operations().connection_reachability(connection_id)
 
     def _provider_connection_enabled_overrides(self) -> Mapping[str, bool]:
-        """Return the live per-connection enabled overrides from settings, or empty.
-
-        Injected into the provider credential resolver; read from settings at
-        every check (no reload hook) so an enable/disable applies immediately.
-        """
-
+        """Return live per-Connection enabled overrides used during credential checks."""
         if self._storage is None:
             return {}
         try:
@@ -3016,158 +2044,27 @@ class Runtime:
         except StorageError as error:
             if self.logger is not None:
                 self.logger.warning(
-                    f"Failed to load provider connection overrides from settings: {error}"
+                    "Failed to load Provider Connection overrides: %s",
+                    error,
                 )
             return {}
         return cast("Mapping[str, bool]", connections)
 
     def local_context_windows(self) -> Mapping[str, Any]:
-        """Return the live user-configured local-model window map, or empty.
-
-        Read from settings at every call (no reload hook) so a change applies
-        to the next request/status/list without a restart.
-        """
-        if self._storage is None:
-            return {}
-        try:
-            windows = self._storage.load_local_models_settings()["context_windows"]
-        except StorageError as error:
-            if self.logger is not None:
-                self.logger.warning(
-                    f"Failed to load local-model context windows from settings: {error}"
-                )
-            return {}
-        return cast("Mapping[str, Any]", windows)
-
-    def _local_context_resolver_for(self, provider_id: str) -> Callable[[str], int | None]:
-        """Build the per-provider context resolver local adapters enforce on load.
-
-        Returns the effective context window for flagged-local models and
-        ``None`` for everything else (proxied ``:cloud`` models, unknown
-        models) — the adapter then omits ``options.num_ctx`` entirely.
-        """
-
-        def _resolve(model_id: str) -> int | None:
-            bare_model_id = model_id.split("::", 1)[0]
-            try:
-                model = self.models.get(provider_id, bare_model_id)
-            except (KeyError, AttributeError):
-                return None
-            if not model_is_local(model.metadata):
-                return None
-            try:
-                provider_config = self.providers.get(provider_id)
-            except (KeyError, AttributeError):
-                provider_config = None
-            return resolve_effective_context_window(
-                model.context_window,
-                provider_config,
-                model_metadata=model.metadata,
-                model_key=f"{provider_id}/{bare_model_id}",
-                local_context_windows=self.local_context_windows(),
-            )
-
-        return _resolve
-
-    def _get_token_getter(
-        self,
-        connection: ConnectionRef,
-        connection_config: ConnectionConfig,
-        account_id: str | None,
-    ) -> TokenGetter:
-        provider_id = connection.provider_id
-        if connection_config.type == "none":
-            # Keyless connection: adapters and discovery skip the auth header
-            # when the credential value is empty.
-            return StaticTokenGetter("")
-        if connection_config.type == "api_key":
-            raw_token = self.provider_credentials.get_credentials(
-                provider_id, connection.connection_id
-            )
-            return StaticTokenGetter(raw_token)
-        if connection_config.type == "oauth":
-            if connection_config.oauth is None:
-                # OAuth stubs with a credential_key still resolve through the
-                # central credential path until they get token-store metadata.
-                raw_token = self.provider_credentials.get_credentials(
-                    provider_id, connection.connection_id
-                )
-                return StaticTokenGetter(raw_token)
-            # An explicitly pinned account is used exactly as given (a
-            # mid-flight login must still work); only an absent account
-            # resolves to the first usable one.
-            resolved_account_id = account_id
-            if resolved_account_id is None:
-                resolved_account_id = self.provider_credentials.resolve_account_id(
-                    provider_id,
-                    connection_config.id,
-                )
-            return OAuthTokenGetter(
-                self.token_store,
-                provider_id,
-                connection_config.id,
-                connection_config.oauth,
-                account_id=resolved_account_id,
-            )
-        raise ConfigError(
-            f"Unknown connection type '{connection_config.type}' for provider '{provider_id}' "
-            f"connection '{connection_config.id}'"
-        )
-
-    def _get_connection_config(
-        self,
-        provider_config: ProviderConfig,
-        connection_id: str,
-    ) -> tuple[ConnectionConfig, str | None]:
-        local_connection_id, account_id = split_connection_id(provider_config.id, connection_id)
-        try:
-            return provider_config.get_connection(local_connection_id), account_id
-        except KeyError as error:
-            raise ConfigError(
-                f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
-            ) from error
+        """Return live user-configured context windows for local Models."""
+        return self._provider_operations().local_context_windows()
 
     def has_provider_credentials(self, provider_id: str) -> bool:
-        """Return whether *provider_id* has usable configured credentials."""
-
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        return self.provider_credentials.has_credentials(provider_id)
+        """Return whether a Provider has usable configured credentials."""
+        return self._provider_operations().has_provider_credentials(provider_id)
 
     def get_provider_credentials(self, provider_id: str) -> str:
-        """Return the configured credential value for *provider_id*."""
-
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        return self.provider_credentials.get_credentials(provider_id)
-
-    # ------------------------------------------------------------------
-    # Model lookup convenience
-    # ------------------------------------------------------------------
+        """Return the configured credential value for a Provider."""
+        return self._provider_operations().get_provider_credentials(provider_id)
 
     def get_model(self, provider_id: str, model_id: str) -> Model:
-        """Look up a model by provider ID and model ID.
-
-        Convenience method that delegates to
-        :meth:`ModelRegistry.get`.
-
-        Args:
-            provider_id: The provider identifier (e.g. ``"openai"``).
-            model_id: The exact model ID sent in API requests.
-
-        Returns:
-            The matching :class:`Model` entry.
-
-        Raises:
-            RuntimeError: If the runtime has not been started.
-            KeyError: If no model matches the given provider and model ID.
-        """
-        if not self._started:
-            raise RuntimeError("Runtime not started — call start() first")
-
-        return self.models.get(provider_id, model_id)
+        """Look up one Model through the live Provider-owned registry view."""
+        return self._provider_operations().get_model(provider_id, model_id)
 
     def _ensure_started(self) -> None:
         if not self._started:

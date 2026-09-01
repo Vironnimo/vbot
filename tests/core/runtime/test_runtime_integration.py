@@ -21,6 +21,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.runtime import ADAPTER_TYPES
 from core.providers.token_store import OAuthToken
 from core.recall import (
     CanonicalSessionRecallBackend,
@@ -628,8 +629,8 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
     runtime.start()
 
     # Patch the adapter map to remove the openai entry
-    original_map = runtime.get_adapter.__globals__["_ADAPTER_MAP"].copy()
-    runtime.get_adapter.__globals__["_ADAPTER_MAP"].pop("openai")
+    original_map = ADAPTER_TYPES.copy()
+    ADAPTER_TYPES.pop("openai")
 
     try:
         # Act & Assert
@@ -637,7 +638,7 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
             runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
     finally:
         # Restore the original map
-        runtime.get_adapter.__globals__["_ADAPTER_MAP"].update(original_map)
+        ADAPTER_TYPES.update(original_map)
 
 
 # ------------------------------------------------------------------

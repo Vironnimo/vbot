@@ -20,7 +20,7 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 
 ### Extension Reload
 
-**Definition:** `Runtime.reload_extensions()`, the serialized, restart-equivalent rebuild of the whole Extension layer from current disk and persisted settings. It picks up added, deleted, edited, fixed, and newly enabled Extensions without restarting the server process.
+**Definition:** The serialized, restart-equivalent rebuild in `core/extensions/runtime.py::ExtensionRuntime`, exposed through `Runtime.reload_extensions()`. It picks up added, deleted, edited, fixed, and newly enabled Extensions without restarting the server process.
 
 **Not:** Live disable, which surgically deactivates only the newly disabled loaded Extension.
 
@@ -52,7 +52,7 @@ Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle
 - Public declarations, records, loader, capability application, hooks, and lifecycle: `core/extensions/extensions.py`
 - Neutral channel-interaction types and reserved prefixes: `core/extensions/interactions.py`
 - Settings field parsing and config validation: `core/extensions/settings_schema.py`
-- Runtime bootstrap, rebuild, disable, Prompt/Recall/Skill refresh: `core/runtime/runtime.py`
+- Bootstrap construction and cross-domain callback wiring: `core/runtime/runtime.py`; serialized rebuild, disable, registry swap, and lifecycle ordering: `core/extensions/runtime.py`
 - Management and secret RPC projection: `server/rpc/extensions_methods.py`, with disabled/config persistence in `server/rpc/settings_methods.py` and the Settings domain
 - Bundled implementations: `resources/extensions/`; examples: `examples/extensions/`
 
