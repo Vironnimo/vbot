@@ -26,9 +26,8 @@ const MONTH_GRID_DAYS = 42;
 // touches the browser's local zone.
 // ---------------------------------------------------------------------------
 
-export function todayKey() {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`;
+export function todayKey(timeZone = 'UTC') {
+  return dayKeyInZone(new Date().toISOString(), timeZone);
 }
 
 export function isDayKey(value) {
@@ -70,7 +69,7 @@ export function monthGridStartKey(anchorKey) {
   return weekStartKey(firstOfMonth);
 }
 
-export function monthGridDays(anchorKey) {
+export function monthGridDays(anchorKey, currentDayKey = todayKey()) {
   const anchor = dayKeyToUtcDate(anchorKey);
   const firstOfMonth = `${anchor.getUTCFullYear()}-${pad(anchor.getUTCMonth() + 1)}-01`;
   const gridStart = dayKeyToUtcDate(monthGridStartKey(anchorKey));
@@ -82,7 +81,7 @@ export function monthGridDays(anchorKey) {
       key,
       dayOfMonth: day.getUTCDate(),
       inMonth: monthKeyOf(key) === monthKeyOf(firstOfMonth),
-      isToday: key === todayKey(),
+      isToday: key === currentDayKey,
     });
   }
   return days;
@@ -187,8 +186,7 @@ export function windowForView(view, anchorKey) {
   if (view === 'day') {
     return { from: anchorKey, to: anchorKey };
   }
-  const today = todayKey();
-  return { from: today, to: addDaysToKey(today, AGENDA_DAYS - 1) };
+  return { from: anchorKey, to: addDaysToKey(anchorKey, AGENDA_DAYS - 1) };
 }
 
 export function navigateAnchor(view, anchorKey, direction) {
@@ -350,6 +348,7 @@ export function createCalendarViewState() {
     events: [],
     cron: [],
     systemTimeZone: 'UTC',
+    timeZoneResolved: false,
     showLocalLayer: true,
     showCronLayer: true,
   };
@@ -357,6 +356,7 @@ export function createCalendarViewState() {
 
 export function createCalendarController({ state }) {
   let loadRequestId = 0;
+  const initialAnchorKey = state.anchorKey;
 
   async function load({ silent = false } = {}) {
     if (!silent) {
@@ -370,10 +370,20 @@ export function createCalendarController({ state }) {
       if (requestId !== loadRequestId) {
         return;
       }
+      const systemTimeZone = result.system_timezone ?? 'UTC';
+      const initialZoneResolution = !state.timeZoneResolved;
+      state.systemTimeZone = systemTimeZone;
+      state.timeZoneResolved = true;
+      if (initialZoneResolution && state.anchorKey === initialAnchorKey) {
+        const serverToday = todayKey(systemTimeZone);
+        if (serverToday !== state.anchorKey) {
+          state.anchorKey = serverToday;
+          return load({ silent: true });
+        }
+      }
       state.occurrences = result.occurrences ?? [];
       state.events = result.events ?? [];
       state.cron = result.cron ?? [];
-      state.systemTimeZone = result.system_timezone ?? 'UTC';
     } catch (error) {
       if (requestId !== loadRequestId) {
         return;
@@ -402,7 +412,7 @@ export function createCalendarController({ state }) {
   }
 
   function goToday() {
-    state.anchorKey = todayKey();
+    state.anchorKey = todayKey(state.systemTimeZone);
     load({ silent: true });
   }
 

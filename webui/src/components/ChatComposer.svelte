@@ -99,6 +99,8 @@
   let inputOrigin = $state('');
   let submitInFlight = $state(false);
   let activeRecorder = null;
+  let recorderRequestGeneration = 0;
+  let destroyed = false;
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
   let _triggerClosed = false;
@@ -194,6 +196,8 @@
   let isRecording = $derived(recordingState === 'recording');
 
   onDestroy(() => {
+    destroyed = true;
+    recorderRequestGeneration += 1;
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
       attachmentToastTimeoutId = null;
@@ -480,11 +484,22 @@
     }
 
     recordingState = 'requesting';
+    const requestGeneration = ++recorderRequestGeneration;
     try {
-      activeRecorder = await createAudioRecorder();
+      const recorder = await createAudioRecorder();
+      if (destroyed || requestGeneration !== recorderRequestGeneration) {
+        // getUserMedia cannot be aborted once the browser permission prompt is
+        // visible. Release tracks immediately when its late result arrives.
+        recorder.cancel?.();
+        return;
+      }
+      activeRecorder = recorder;
       activeRecorder.start();
       recordingState = 'recording';
     } catch (error) {
+      if (destroyed || requestGeneration !== recorderRequestGeneration) {
+        return;
+      }
       try {
         activeRecorder?.cancel?.();
       } catch {
@@ -531,6 +546,7 @@
   };
 
   const cancelActiveRecording = () => {
+    recorderRequestGeneration += 1;
     if (!activeRecorder) {
       return;
     }

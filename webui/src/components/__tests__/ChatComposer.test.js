@@ -606,6 +606,33 @@ describe('ChatComposer', () => {
     ).toBeTruthy();
   });
 
+  it('releases a recorder whose microphone permission resolves after unmount', async () => {
+    let resolveRecorder;
+    const recorder = {
+      start: vi.fn(),
+      cancel: vi.fn(),
+    };
+    createAudioRecorder.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRecorder = resolve;
+        }),
+    );
+    mountedComponent = mount(ChatComposer, { target: document.body });
+    flushSync();
+
+    document.body
+      .querySelector('button[aria-label="Start voice input"]')
+      .click();
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    resolveRecorder(recorder);
+    await flushComposerAsyncWork();
+
+    expect(recorder.cancel).toHaveBeenCalledOnce();
+    expect(recorder.start).not.toHaveBeenCalled();
+  });
+
   it('cancels the recorder when browser recording stop fails', async () => {
     const recorder = {
       start: vi.fn(),
