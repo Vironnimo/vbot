@@ -20,6 +20,7 @@ from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server.app import (
+    JSON_REQUEST_BODY_MAX_BYTES,
     WEBUI_DOCUMENT_CACHE_HEADERS,
     ServerEventBus,
     _active_runs_snapshot,
@@ -324,11 +325,59 @@ def test_http_transport_allows_same_origin_and_non_browser_requests(tmp_path: Pa
     app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
 
     with TestClient(app) as client:
-        same_origin = client.get("/health", headers={"origin": "http://testserver"})
+        same_origin = client.get("/health", headers={"origin": "http://127.0.0.1:8420"})
         without_origin = client.get("/health")
 
     assert same_origin.status_code == 200
     assert without_origin.status_code == 200
+
+
+def test_http_transport_rejects_host_header_origin_rebinding(tmp_path: Path) -> None:
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/health",
+            headers={"origin": "http://attacker.example", "host": "attacker.example"},
+        )
+
+    assert response.status_code == 403
+
+
+def test_rpc_rejects_oversized_body_before_dispatch(monkeypatch, tmp_path: Path) -> None:
+    import server.app as server_app
+
+    dispatch_calls: list[object] = []
+
+    async def record_dispatch(_state: Any, payload: object) -> dict[str, object]:
+        dispatch_calls.append(payload)
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", record_dispatch)
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/rpc",
+            content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 413
+    assert dispatch_calls == []
+
+
+def test_speech_synthesis_rejects_oversized_body(tmp_path: Path) -> None:
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/speech/synthesize",
+            content=b"x" * (JSON_REQUEST_BODY_MAX_BYTES + 1),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 413
 
 
 def test_rpc_rejects_non_json_media_type_before_dispatch(monkeypatch, tmp_path: Path) -> None:
@@ -357,7 +406,7 @@ def test_rpc_rejects_non_json_media_type_before_dispatch(monkeypatch, tmp_path: 
             content='{"method":"terminal.start"}',
             headers={
                 "content-type": "text/plain",
-                "origin": "http://testserver",
+                "origin": "http://127.0.0.1:8420",
             },
         )
 

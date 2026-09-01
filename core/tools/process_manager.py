@@ -286,6 +286,7 @@ class TrackedProcess:
 
     process_id: str
     agent_id: str
+    project_id: str | None
     scope_key: str
     proc: Process
     combined_buffer: bytearray
@@ -389,6 +390,7 @@ class ProcessManager:
         agent_id: str,
         argv: Sequence[str],
         *,
+        project_id: str | None = None,
         env: dict[str, str] | None,
         cwd: str | Path | None,
     ) -> str:
@@ -425,6 +427,7 @@ class ProcessManager:
         tracked = TrackedProcess(
             process_id=process_id,
             agent_id=agent_id,
+            project_id=project_id,
             scope_key=scope_key,
             proc=proc,
             combined_buffer=bytearray(),
@@ -472,20 +475,35 @@ class ProcessManager:
         )
         return process_id
 
-    def get_process(self, process_id: str, agent_id: str) -> TrackedProcess:
-        """Return a tracked process owned by agent_id, hiding cross-agent processes."""
-        return self._process_for_agent(process_id, agent_id)
+    def get_process(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> TrackedProcess:
+        """Return a tracked process owned by one complete Agent address."""
+        return self._process_for_agent(process_id, agent_id, project_id=project_id)
 
-    def list_processes(self, agent_id: str) -> list[TrackedProcess]:
-        """Return processes visible to one agent."""
+    def list_processes(
+        self, agent_id: str, *, project_id: str | None = None
+    ) -> list[TrackedProcess]:
+        """Return processes visible to one complete Agent address."""
         return sorted(
-            [tracked for tracked in self._processes.values() if tracked.agent_id == agent_id],
+            [
+                tracked
+                for tracked in self._processes.values()
+                if tracked.agent_id == agent_id and tracked.project_id == project_id
+            ],
             key=lambda tracked: tracked.started_at,
         )
 
-    async def poll(self, process_id: str, agent_id: str, timeout_ms: int = 0) -> dict[str, object]:
+    async def poll(
+        self,
+        process_id: str,
+        agent_id: str,
+        timeout_ms: int = 0,
+        *,
+        project_id: str | None = None,
+    ) -> dict[str, object]:
         """Return output produced since the previous poll for this process."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         timeout_seconds = max(timeout_ms, 0) / 1000
         deadline = asyncio.get_running_loop().time() + timeout_seconds
 
@@ -514,6 +532,8 @@ class ProcessManager:
         agent_id: str,
         offset: int = 0,
         limit: int | None = None,
+        *,
+        project_id: str | None = None,
     ) -> dict[str, object]:
         """Return a line window from the combined output buffer."""
         if offset < 0:
@@ -521,7 +541,7 @@ class ProcessManager:
         if limit is not None and limit < 0:
             raise ValueError("Log limit must not be negative")
 
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         async with tracked.lock:
             text = _decode(bytes(tracked.combined_buffer))
             lines = text.splitlines(keepends=True)
@@ -533,9 +553,11 @@ class ProcessManager:
                 "truncated": tracked.truncated,
             }
 
-    async def snapshot(self, process_id: str, agent_id: str) -> dict[str, object]:
+    async def snapshot(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> dict[str, object]:
         """Return one non-consuming snapshot of one tracked process."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         async with tracked.lock:
             return {
                 "process_id": tracked.process_id,
@@ -558,9 +580,10 @@ class ProcessManager:
         *,
         newline: bool,
         eof: bool,
+        project_id: str | None = None,
     ) -> None:
         """Send UTF-8 text, an optional line ending, and optional EOF to stdin."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         stdin = tracked.proc.stdin
         if stdin is None or not tracked.stdin_open:
             raise ProcessInputClosedError(f"Process stdin is closed: {process_id}")
@@ -596,20 +619,24 @@ class ProcessManager:
                 f"Process stdin is closed: {tracked.process_id}"
             ) from error
 
-    async def kill(self, process_id: str, agent_id: str) -> None:
+    async def kill(self, process_id: str, agent_id: str, *, project_id: str | None = None) -> None:
         """Terminate a tracked process with SIGKILL / platform equivalent."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         await self._kill_process(tracked)
 
-    async def cancel_for_user(self, process_id: str, agent_id: str) -> TrackedProcess:
+    async def cancel_for_user(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> TrackedProcess:
         """Terminate one running process and retain its explicit user origin."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         await self._kill_process(tracked, cancelled_by_user=True)
         return tracked
 
-    def mark_backgrounded(self, process_id: str, agent_id: str) -> None:
+    def mark_backgrounded(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> None:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         tracked.foreground_capture_open = False
 
     def register_completion_notification(
@@ -617,9 +644,11 @@ class ProcessManager:
         process_id: str,
         agent_id: str,
         task: asyncio.Task[None],
+        *,
+        project_id: str | None = None,
     ) -> None:
         """Track the automatic completion delivery for one background process."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         current = tracked.completion_notification_task
         if current is not None and not current.done():
             raise ProcessManagerError(
@@ -629,9 +658,11 @@ class ProcessManager:
         if tracked.completion_acknowledged:
             task.cancel()
 
-    def acknowledge_completion(self, process_id: str, agent_id: str) -> None:
+    def acknowledge_completion(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> None:
         """Cancel automatic delivery after a terminal result was durably delivered."""
-        tracked = self._process_for_agent(process_id, agent_id)
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         if tracked.status == "running":
             raise ProcessStillRunningError(f"Process is still running: {process_id}")
         tracked.completion_acknowledged = True
@@ -975,9 +1006,11 @@ class ProcessManager:
             return
         pipes.clear()
 
-    def _process_for_agent(self, process_id: str, agent_id: str) -> TrackedProcess:
+    def _process_for_agent(
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> TrackedProcess:
         tracked = self._processes.get(process_id)
-        if tracked is None or tracked.agent_id != agent_id:
+        if tracked is None or tracked.agent_id != agent_id or tracked.project_id != project_id:
             raise ProcessNotFoundError(f"Process not found: {process_id}")
         return tracked
 

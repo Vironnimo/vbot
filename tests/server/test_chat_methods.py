@@ -238,11 +238,13 @@ class TestChatCancelProcess:
     @pytest.mark.asyncio
     async def test_cancels_process_as_user_for_addressed_agent(self, tmp_path: Path) -> None:
         state = make_state(tmp_path, StubAdapter())
-        calls: list[tuple[str, str]] = []
+        calls: list[tuple[str, str, str | None]] = []
 
         class RecordingProcessManager:
-            async def cancel_for_user(self, process_id: str, agent_id: str) -> Any:
-                calls.append((process_id, agent_id))
+            async def cancel_for_user(
+                self, process_id: str, agent_id: str, *, project_id: str | None = None
+            ) -> Any:
+                calls.append((process_id, agent_id, project_id))
                 return SimpleNamespace(status="killed", cancelled_by_user=True)
 
         state.runtime.process_manager = RecordingProcessManager()
@@ -265,7 +267,7 @@ class TestChatCancelProcess:
                 "status": "cancelled",
             },
         }
-        assert calls == [("process-one", "builder")]
+        assert calls == [("process-one", "builder", "project-one")]
 
 
 # ---------------------------------------------------------------------------

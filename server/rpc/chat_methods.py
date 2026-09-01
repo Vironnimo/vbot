@@ -634,12 +634,13 @@ async def _cancel_process_chat(state: Any, params: JsonObject) -> JsonObject:
         "chat.cancel_process",
     )
 
-    agent_id, _project_id = _required_agent_address(params, "agent_id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
     process_id = _required_string(params, "process_id")
     try:
         tracked = await state.runtime.process_manager.cancel_for_user(
             process_id,
             agent_id,
+            project_id=project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

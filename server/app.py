@@ -136,9 +136,9 @@ REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
 HTTP_ORIGIN_REJECTED_STATUS_CODE = 403
 WEBSOCKET_POLICY_VIOLATION_CODE = 1008
 JSON_MEDIA_TYPE = "application/json"
+JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
 HTTP_ORIGIN_SCHEMES = frozenset({"http", "https"})
 ORIGIN_HEADER_NAME = b"origin"
-HOST_HEADER_NAME = b"host"
 
 
 class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
@@ -177,14 +177,17 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
 
 
 class _BrowserOriginGuardMiddleware:
-    """Reject browser transports whose Origin differs from the request target."""
+    """Reject browser transports whose Origin is not a configured server origin."""
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, *, allowed_origins: frozenset[tuple[str, str, int]]) -> None:
         self._app = app
+        self._allowed_origins = allowed_origins
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
-        if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(scope):
+        if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(
+            scope, self._allowed_origins
+        ):
             await self._app(scope, receive, send)
             return
         if scope_type == "http":
@@ -200,19 +203,16 @@ class _BrowserOriginGuardMiddleware:
         )
 
 
-def _scope_has_allowed_origin(scope: MutableMapping[str, Any]) -> bool:
+def _scope_has_allowed_origin(
+    scope: MutableMapping[str, Any], allowed_origins: frozenset[tuple[str, str, int]]
+) -> bool:
     origin_values = _scope_header_values(scope, ORIGIN_HEADER_NAME)
     if not origin_values:
         return True
     if len(origin_values) != 1:
         return False
-    target_scheme = _http_scheme(scope.get("scheme"))
-    host_values = _scope_header_values(scope, HOST_HEADER_NAME)
-    if target_scheme is None or len(host_values) != 1:
-        return False
     origin = _parse_origin(origin_values[0])
-    target = _parse_origin(f"{target_scheme}://{host_values[0]}")
-    return origin is not None and origin == target
+    return origin is not None and origin in allowed_origins
 
 
 def _scope_header_values(scope: MutableMapping[str, Any], name: bytes) -> list[str]:
@@ -248,6 +248,24 @@ def _parse_origin(value: str) -> tuple[str, str, int] | None:
     return scheme, cast(str, parsed.hostname).casefold(), effective_port
 
 
+def _configured_browser_origins(server_bind: ServerBindState) -> frozenset[tuple[str, str, int]]:
+    """Return browser origins directly bound by this server, never request headers."""
+    host = server_bind["listen_host"]
+    if host in {"0.0.0.0", "::"}:
+        # A wildcard listener has no one stable browser authority. Requiring an
+        # explicit listening address keeps Origin validation independent of a
+        # caller-controlled Host header and therefore blocks DNS rebinding.
+        return frozenset()
+    origin = _parse_origin(f"http://{_format_origin_host(host)}:{server_bind['listen_port']}")
+    if origin is None:
+        raise RuntimeError(f"Invalid server bind host for browser origin guard: {host!r}")
+    return frozenset({origin})
+
+
+def _format_origin_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
 def _is_serialized_origin(parsed: SplitResult) -> bool:
     return (
         parsed.scheme.casefold() in HTTP_ORIGIN_SCHEMES
@@ -268,6 +286,39 @@ def _require_json_media_type(request: Request) -> None:
             status_code=415,
             detail="Content-Type must be application/json",
         )
+
+
+async def _read_json_body_with_limit(request: Request) -> bytes:
+    """Read a JSON request body incrementally without allowing unbounded buffering."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Content-Length must be an integer"
+            ) from exc
+        if declared_size < 0:
+            raise HTTPException(status_code=400, detail="Content-Length must not be negative")
+        if declared_size > JSON_REQUEST_BODY_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Request body exceeds size limit")
+
+    chunks: list[bytes] = []
+    size_bytes = 0
+    async for chunk in request.stream():
+        size_bytes += len(chunk)
+        if size_bytes > JSON_REQUEST_BODY_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Request body exceeds size limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _read_json_payload_with_limit(request: Request) -> object:
+    body = await _read_json_body_with_limit(request)
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Request body must be valid JSON") from exc
 
 
 def create_app(
@@ -336,7 +387,10 @@ def create_app(
             await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
-    app.add_middleware(_BrowserOriginGuardMiddleware)
+    app.add_middleware(
+        _BrowserOriginGuardMiddleware,
+        allowed_origins=_configured_browser_origins(resolved_server_bind),
+    )
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -356,8 +410,8 @@ def create_app(
     async def rpc(request: Request) -> JsonObject:
         _require_json_media_type(request)
         try:
-            payload = await request.json()
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = await _read_json_payload_with_limit(request)
+        except ValueError:
             return {
                 "ok": False,
                 "error": {
@@ -444,8 +498,8 @@ def create_app(
         _require_json_media_type(request)
         speech_service = request.app.state.runtime.speech
         try:
-            payload = await request.json()
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            payload = await _read_json_payload_with_limit(request)
+        except ValueError as exc:
             raise HTTPException(
                 status_code=400,
                 detail="Request body must be valid JSON",
