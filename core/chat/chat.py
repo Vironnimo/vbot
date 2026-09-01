@@ -2219,20 +2219,24 @@ class ChatLoop:
             for skill in skill_registry.filter_allowed(allowed)
         }
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        metadata = self._dependencies.sessions.get_metadata(address)
-        seen = metadata.get(SEEN_SKILLS_META_KEY)
-        if not isinstance(seen, list):
-            metadata[SEEN_SKILLS_META_KEY] = available_names
-            self._dependencies.sessions.set_metadata(address, metadata)
-            return
-        new_names = sorted(set(available) - set(seen))
+        new_names: list[str] = []
+
+        def update(metadata: JsonObject) -> None:
+            nonlocal new_names
+            seen = metadata.get(SEEN_SKILLS_META_KEY)
+            if not isinstance(seen, list):
+                metadata[SEEN_SKILLS_META_KEY] = available_names
+                return
+            new_names = sorted(set(available) - set(seen))
+            if new_names:
+                metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
+
+        self._dependencies.sessions.mutate_metadata(address, update)
         if not new_names:
             return
         lines = [SKILL_AVAILABLE_NEW_SKILLS_HEADER]
         lines.extend(f"- {name}: {available[name]}" for name in new_names)
         session.add_note(SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines))
-        metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
-        self._dependencies.sessions.set_metadata(address, metadata)
 
     async def _build_request_messages(
         self,
@@ -2857,7 +2861,7 @@ class ChatLoop:
                     )
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
-                    # It is not a full JSONL guarantee, though: the forceful
+                    # It is not a full persistence guarantee, though: the forceful
                     # task.cancel() in Run.request_cancel (and a process kill) can
                     # still interrupt the dispatch above with tool_calls left
                     # unanswered on disk. That persisted state is not corruption —

@@ -41,4 +41,4 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 
 - `allowed_chat_ids` are channel/thread ids, not guild ids.
 - Discord reply-to-bot detection depends on the Gateway payload resolving or caching the referenced message. Quoted-attachment ingestion has a separate on-demand `fetch_message` fallback for non-bot references; an unresolved/deleted reference does not count as `is_reply_to_bot` and cannot supply attachment bytes.
-- History backfill is bounded context, not a parallel transcript. Session JSONL remains canonical, and only observed notes selected at trigger time are persisted.
+- History backfill is bounded context, not a parallel transcript. SQLite-backed Session history remains canonical, and only observed notes selected at trigger time are persisted.

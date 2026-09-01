@@ -70,7 +70,7 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
     }
     actual_files = {path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_file()}
     assert actual_directories == set(DATA_DIRECTORY_RELATIVE_PATHS)
-    assert actual_files == {Path(".env"), Path("settings.json")}
+    assert actual_files == {Path(".env"), Path("settings.json"), Path("session-store.json")}
     assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
     assert (data_dir / "settings.json").read_bytes() == b"{}\n"
     assert result.layout.root == data_dir
@@ -89,6 +89,8 @@ def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> No
 
     assert (data_dir / ".env").read_bytes() == environment_bytes
     assert (data_dir / "settings.json").read_bytes() == settings_bytes
+    # A pre-created root is not a genuinely new root, so initialization does
+    # not manufacture Session-store authorization for it.
     assert first.created_files == ()
     assert second.created_directories == ()
     assert second.created_files == ()
@@ -109,7 +111,11 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
 
     assert (data_dir / ".env").read_bytes() == b""
     assert (data_dir / "settings.json").read_bytes() == b"{}\n"
-    assert result.created_files == (data_dir / ".env", data_dir / "settings.json")
+    assert result.created_files == (
+        data_dir / "session-store.json",
+        data_dir / ".env",
+        data_dir / "settings.json",
+    )
     assert str(template_path) in caplog.text
 
 

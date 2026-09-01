@@ -41,7 +41,7 @@ Some directories are created only when their owning feature first writes data.
 | `.env` | Sensitive fallback credentials; the process environment has higher precedence | Use Provider, Channel, or Extension credential commands; never print the file or expose values |
 | `agents/<agent-id>/agent.json` | Identity Agent configuration | `vbot agent show/list/update` |
 | `agents/<agent-id>/workspace/` | Default Workspace with `SOUL.md`, `USER.md`, and `MEMORY.md`; the configured Workspace may instead be external | `vbot agent show`; use the Memory and file Tools according to their ownership |
-| `agents/<agent-id>/sessions/<session-id>.jsonl` | Identity Agent Session transcript, with adjacent metadata/activity sidecars when present | `vbot session list` and Session commands; treat live transcript files as system-owned append stores |
+| `sessions.db` and `session-store.json` | Canonical current-format Session history, marker, and database identity | Use `vbot session ...` for Sessions and `vbot session-store ...` for health, snapshots, recovery, and incident acknowledgement; legacy JSONL is input only for the explicit offline converter. |
 | `agents/<agent-id>/skills/` | Skills private to one Identity Agent | `vbot skill read/create/update/delete --scope agent:<agent-id>` |
 | `agents/<agent-id>/prompts/` | Agent-scoped System Prompt layout and overrides when custom prompting is enabled | `vbot prompt ... --scope agent:<agent-id>` |
 | `projects/<project-id>/project.json` | Project record, including the external cwd and Project policy | `vbot project show/list/set` |
@@ -70,6 +70,6 @@ Project Skills do not live in the data directory: they stay in the Project cwd u
 1. Resolve the target instance and path role before searching.
 2. Use the owning CLI list/show/status command first; it understands identifiers, validation, and live state better than a filesystem scan.
 3. Search the narrowest owning directory using a known Agent, Project, Session, Channel, trace, or artifact id. Do not recursively dump the whole data directory: it contains credentials, OAuth tokens, private conversations, and attachments.
-4. Treat Session JSONL, recall indexes, Model DB files, OAuth state, `.tmp`, Queue state, and active Runtime files as system-owned. Inspect read-only unless a documented recovery procedure explicitly requires otherwise.
+4. Treat `sessions.db`, `session-store.json`, session snapshots and quarantine bundles, recall indexes, Model DB files, OAuth state, `.tmp`, Queue state, and active Runtime files as system-owned. Inspect read-only unless a documented recovery procedure explicitly requires otherwise.
 5. Prefer CLI mutations. If a user-editable JSON file had to be changed manually, stop concurrent writes where appropriate, preserve a backup, and run `vbot doctor config` before restart or further mutation.
 6. Verify the result through the same owning CLI area rather than assuming a successful filesystem write changed live Runtime state.

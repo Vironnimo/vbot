@@ -50,6 +50,47 @@ export function applySessionList(state, sessions) {
   };
 }
 
+export function overlayLiveSessionActivity(
+  sessions,
+  activityRows,
+  defaultAgentAddress,
+) {
+  const fallbackAddress = asOptionalText(defaultAgentAddress);
+  const activityBySession = new Map();
+  for (const activity of Array.isArray(activityRows) ? activityRows : []) {
+    const agentAddress = asOptionalText(activity?.agent_address);
+    const sessionId = asOptionalText(activity?.session_id);
+    if (agentAddress === null || sessionId === null) {
+      continue;
+    }
+    activityBySession.set(`${agentAddress}::${sessionId}`, activity);
+  }
+
+  return (Array.isArray(sessions) ? sessions : []).map((session) => {
+    const sessionId = asOptionalText(session?.id);
+    const agentAddress =
+      asOptionalText(session?.agent_address) ?? fallbackAddress;
+    if (sessionId === null || agentAddress === null) {
+      return session;
+    }
+    const activity = activityBySession.get(`${agentAddress}::${sessionId}`);
+    if (!activity) {
+      return session;
+    }
+    return {
+      ...session,
+      has_active_run: activity.has_active_run === true,
+      has_unread_completion: activity.has_unread_completion === true,
+      latest_completion_run_id: asOptionalText(
+        activity.latest_completion_run_id,
+      ),
+      unread_run_id: asOptionalText(activity.unread_run_id),
+      unread_run_status: asOptionalText(activity.unread_run_status),
+      unread_run_at: asOptionalText(activity.unread_run_at),
+    };
+  });
+}
+
 export function selectSession(state, sessionId) {
   const normalizedSessionId = asOptionalText(sessionId);
   const sessions = Array.isArray(state?.sessions) ? state.sessions : [];

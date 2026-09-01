@@ -115,8 +115,7 @@ async def test_initial_session_validation_failure_creates_no_checkpoint(tmp_path
     with pytest.raises(ChatSessionError):
         await build_chat_loop(runtime).start_run("coder", "work", session_id="missing-session")
 
-    sessions_dir = runtime.chat_sessions.sessions_dir("coder")
-    assert not list(sessions_dir.glob("*.continuation.jsonl"))
+    assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
 
 
 @pytest.mark.asyncio

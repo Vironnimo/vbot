@@ -4,7 +4,7 @@ The typed first-party search contract builds source-derived Passages, applies
 scope/Session/time metadata filters inside KNN, and returns pure semantic top-K
 Passages without Session deduplication, a universal distance cutoff, or literal
 fallback. The older ``RecallBackend.search`` entry point retains its chunk-based
-payload and degraded JSONL behavior solely for compatibility with legacy callers.
+payload and degraded canonical behavior solely for compatibility with legacy callers.
 
 Separate disposable stores pin the full embedding-space fingerprint,
 index policy, and dimension in their headers; any incompatible change drops
@@ -29,8 +29,8 @@ from core.model_tasks import (
     EmbeddingUsage,
 )
 from core.models.models import ModelRegistry
-from core.recall.jsonl import (
-    JsonlSessionRecallBackend,
+from core.recall.canonical import (
+    CanonicalSessionRecallBackend,
     compact_text,
     is_context_message,
     is_recall_artifact_message,
@@ -194,7 +194,7 @@ class _EmbeddingOperationUsage:
         self.model_id = result.actual_model_id
 
 
-class VectorRecallBackend(JsonlSessionRecallBackend):
+class VectorRecallBackend(CanonicalSessionRecallBackend):
     """Recall backend backed by sqlite-vec per-chunk vectors."""
 
     def __init__(self, context: RecallBackendContext) -> None:
@@ -211,7 +211,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self.logger = context.logger
         self.embeddings: EmbeddingService | None = context.embeddings
         self.model_registry: ModelRegistry | None = context.model_registry
-        self._fallback = JsonlSessionRecallBackend(context.sessions)
+        self._fallback = CanonicalSessionRecallBackend(context.sessions)
         # Cached resolved binding for the lifetime of the index — the store
         # itself drops+rebuilds on a binding change, so the cache is always
         # in sync with the on-disk header after the first successful embed.
@@ -419,7 +419,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         try:
             return await self._search_with_vector_store(request, summaries, usage)
         except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
-            self._warning("Vector recall failed; falling back to JSONL scan: %s", error)
+            self._warning("Vector recall failed; falling back to canonical scan: %s", error)
             fallback = await self._fallback.search(request)
             return self._degraded_result(fallback, _SEMANTIC_FAILED_NOTICE)
         finally:
@@ -441,7 +441,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                     )
                     if binding_header is None:
                         self._warning(
-                            "Vector recall has no embedding binding; falling back to JSONL scan"
+                            "Vector recall has no embedding binding; falling back to canonical scan"
                         )
                         fallback = await self._fallback.search(request)
                         return self._degraded_result(fallback, _SEMANTIC_UNAVAILABLE_NOTICE)
@@ -891,7 +891,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         usage: _EmbeddingOperationUsage,
         allow_header_rebuild: bool = True,
     ) -> None:
-        """Make sure every JSONL session in this scope has fresh chunk vectors."""
+        """Make sure every canonical session in this scope has fresh chunk vectors."""
 
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
@@ -903,7 +903,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         active = {str(summary["id"]): summary for summary in summaries}
         indexed = await asyncio.to_thread(store.list_indexed_sessions, agent_id, scope)
 
-        # Drop JSONL sessions that have been removed since last index.
+        # Drop canonical Sessions that have been removed since last index.
         stale_to_remove = sorted(set(indexed) - set(active))
         if stale_to_remove:
             await asyncio.to_thread(
@@ -913,9 +913,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 stale_to_remove,
             )
 
-        # Collect every (session summary, mtime, size) that's missing or
-        # whose JSONL changed since the last backfill. Sessions whose
-        # mtime/size already match are skipped.
+        # Collect every Session whose canonical message history revision changed.
         all_chunks = await asyncio.to_thread(
             self._collect_stale_chunks,
             request,
@@ -975,7 +973,9 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # will reject duplicates, so a stable, ordered counter is required.
         records: list[tuple[ChunkVectorRecord, list[float]]] = []
         per_session_index: dict[str, int] = {}
-        for (summary, mtime_ns, size_bytes, chunk), vector in zip(all_chunks, vectors, strict=True):
+        for (summary, generation_id, history_revision, chunk), vector in zip(
+            all_chunks, vectors, strict=True
+        ):
             session_id = str(summary["id"])
             index = per_session_index.get(session_id, 0)
             per_session_index[session_id] = index + 1
@@ -986,8 +986,8 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         agent_id=agent_id,
                         project_id=scope,
                         started_at=format_started_at(summary.get("created_at")),
-                        mtime_ns=mtime_ns,
-                        size_bytes=size_bytes,
+                        generation_id=generation_id,
+                        history_revision=history_revision,
                         anchor_message_id=chunk.anchor_message_id,
                         snippet=chunk.snippet,
                         chunk_index=index,
@@ -1015,30 +1015,41 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self,
         request: RecallRequest | RecallSearchRequest,
         active: dict[str, JsonObject],
-        indexed: dict[str, tuple[int, int]],
+        indexed: dict[str, tuple[str, int]],
         store: VectorStore,
-    ) -> list[tuple[JsonObject, int, int, Chunk]]:
+    ) -> list[tuple[JsonObject, str, int, Chunk]]:
         """Load changed Sessions and pack their chunks off the event loop."""
 
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
-        stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
+        stale_sessions: list[tuple[JsonObject, str, int, list[Any]]] = []
+        # One batched canonical-freshness query instead of one per Session.
+        addresses = [
+            SessionAddress(project_id=request.project_id, agent_id=agent_id, session_id=session_id)
+            for session_id in active
+        ]
+        versions = self.sessions.list_history_versions(addresses)
         for session_id, summary in active.items():
-            session = self.sessions.get(
-                SessionAddress(
-                    project_id=request.project_id, agent_id=agent_id, session_id=session_id
-                )
+            address = SessionAddress(
+                project_id=request.project_id, agent_id=agent_id, session_id=session_id
             )
-            stat = session.path.stat()
-            cached = indexed.get(session_id)
-            if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            version = versions.get(address)
+            if version is None:
+                # The Session vanished between listing and indexing; treat as
+                # unchanged so the stale-row cleanup handles it.
                 continue
-            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, session.load_active()))
+            generation_id, history_revision = version
+            cached = indexed.get(session_id)
+            if cached is not None and cached == (generation_id, history_revision):
+                continue
+            stale_sessions.append(
+                (summary, generation_id, history_revision, self.sessions.get(address).load_active())
+            )
 
         # A session that yields zero indexable chunks is not covered by
         # ``upsert_many_chunks``. Clear its old rows explicitly.
-        all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
-        for summary, mtime_ns, size_bytes, messages in stale_sessions:
+        all_chunks: list[tuple[JsonObject, str, int, Chunk]] = []
+        for summary, generation_id, history_revision, messages in stale_sessions:
             if isinstance(request, RecallSearchRequest):
                 chunks = [
                     _chunk_from_passage(passage) for passage in build_session_passages(messages)
@@ -1048,7 +1059,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             if not chunks:
                 store.delete_session(agent_id, scope, str(summary["id"]))
                 continue
-            all_chunks.extend((summary, mtime_ns, size_bytes, chunk) for chunk in chunks)
+            all_chunks.extend((summary, generation_id, history_revision, chunk) for chunk in chunks)
         return all_chunks
 
     # ------------------------------------------------------------------
@@ -1156,7 +1167,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     @staticmethod
     def _degraded_result(base_result: JsonObject, notice: str) -> JsonObject:
-        """Wrap a JSONL fallback result with a notice that semantic search did not run.
+        """Wrap a canonical fallback result with a notice that semantic search did not run.
 
         The notice is prepended to ``content`` (the model-facing tool output) so the
         agent knows the results are literal-only, and exposed as a structured

@@ -294,7 +294,12 @@ async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
     assert [hit.session_id for hit in page.hits] == ["fruit", "vegetable"]
     assert page.hits[-1].score > _MAX_DISTANCE
 
-    unavailable = backend(tmp_path / "none", ChatSessionManager(tmp_path / "none"))
+    none_dir = tmp_path / "none"
+    none_dir.mkdir()
+    from core.sessions.format import write_bootstrap_marker
+
+    write_bootstrap_marker(none_dir)
+    unavailable = backend(none_dir, ChatSessionManager(none_dir))
     with pytest.raises(RecallSearchError):
         await unavailable.search_page(search_request("literal"))
 
@@ -581,7 +586,7 @@ async def test_vector_backend_ranks_semantically_nearest_sessions(tmp_path: Path
     )
 
     assert [match["session_id"] for match in data["matches"]] == ["cars", "vehicles"]
-    # ``distance`` is set by the vector backend and absent from the JSONL fallback.
+    # ``distance`` is set by the vector backend and absent from the canonical fallback.
     assert data["matches"][0]["distance"] == pytest.approx(0.0, abs=1e-5)
 
 
@@ -622,7 +627,7 @@ async def test_vector_backend_reuses_indexed_vectors_on_second_search(tmp_path: 
     assert len(embeddings.embed_calls) == 3
 
 
-async def test_vector_backend_reindexes_when_jsonl_changes(tmp_path: Path) -> None:
+async def test_vector_backend_reindexes_when_canonical_changes(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="dynamic")
     session.append(ChatMessage.user("hello there", timestamp=timestamp(1)))
@@ -640,7 +645,9 @@ async def test_vector_backend_reindexes_when_jsonl_changes(tmp_path: Path) -> No
     assert "dynamic" in [match["session_id"] for match in second["matches"]]
 
 
-async def test_vector_backend_drops_indexed_session_when_jsonl_file_removed(tmp_path: Path) -> None:
+async def test_vector_backend_drops_indexed_session_when_canonical_file_removed(
+    tmp_path: Path,
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="carrots").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
@@ -659,7 +666,7 @@ async def test_vector_backend_drops_indexed_session_when_jsonl_file_removed(tmp_
     assert "carrots" not in [match["session_id"] for match in data["matches"]]
 
 
-async def test_vector_backend_falls_back_to_jsonl_when_no_embedding_binding(
+async def test_vector_backend_falls_back_to_canonical_when_no_embedding_binding(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -670,7 +677,7 @@ async def test_vector_backend_falls_back_to_jsonl_when_no_embedding_binding(
     data = await backend(tmp_path, sessions, embeddings=None).search(request(query="carrot"))
 
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
-    # JSONL fallback does not produce a ``distance`` field.
+    # canonical fallback does not produce a ``distance`` field.
     assert all("distance" not in match for match in data["matches"])
     # The degraded result tells the agent semantic search was unavailable, and
     # the notice is prepended to the model-facing content.
@@ -678,7 +685,7 @@ async def test_vector_backend_falls_back_to_jsonl_when_no_embedding_binding(
     assert data["content"].startswith(_SEMANTIC_UNAVAILABLE_NOTICE)
 
 
-async def test_vector_backend_falls_back_to_jsonl_when_binding_raises(
+async def test_vector_backend_falls_back_to_canonical_when_binding_raises(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -742,7 +749,7 @@ async def test_vector_backend_respects_limit(tmp_path: Path) -> None:
     assert data["truncated"] is True
 
 
-async def test_vector_backend_browse_delegates_to_jsonl(tmp_path: Path) -> None:
+async def test_vector_backend_browse_delegates_to_canonical(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="carrots").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
@@ -768,7 +775,7 @@ async def test_vector_backend_browse_delegates_to_jsonl(tmp_path: Path) -> None:
     assert [session["session_id"] for session in data["sessions"]] == ["carrots"]
 
 
-async def test_vector_backend_scroll_delegates_to_jsonl(tmp_path: Path) -> None:
+async def test_vector_backend_scroll_delegates_to_canonical(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="carrots")
     first = ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
@@ -828,7 +835,7 @@ async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
     assert header.model_id == "model-b"
 
 
-async def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
+async def test_vector_backend_falls_back_to_canonical_when_embed_call_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -851,7 +858,7 @@ async def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
         request(query="carrot")
     )
 
-    # Falls back to JSONL substring match on "carrot".
+    # Falls back to canonical substring match on "carrot".
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
     # A transient embed failure (binding resolves, embed raises) → failed notice,
     # distinct from the "not configured" case.
@@ -1327,7 +1334,7 @@ async def test_vector_backend_chunk_count_resets_when_session_is_appended(
 ) -> None:
     """Appending messages to a session reindexes wholesale — the row count reflects the new content.
 
-    The recall backend re-chunks the **entire** session on every JSONL
+    The recall backend re-chunks the **entire** session on every canonical
     change (chunks are not deltas). After appending new content the
     chunk table must hold rows whose chunk text comes from the
     up-to-date message list, with no rows left over from the prior
@@ -1389,7 +1396,7 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session whose JSONL no longer yields chunks is purged from the index.
+    """A session whose canonical no longer yields chunks is purged from the index.
 
     Regression: ``upsert_many_chunks`` only wipes sessions that appear in
     its ``records`` parameter. If a stale session's
@@ -1409,7 +1416,7 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     assert "becomes-empty" in [match["session_id"] for match in first["matches"]]
     assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 1
 
-    # Simulate the JSONL changing such that ``build_session_chunks`` now
+    # Simulate the canonical history changing such that ``build_session_chunks`` now
     # yields nothing (e.g. the session turned into a stream of empty
     # system-only messages). Append a real message so the session's
     # mtime/size change and the staleness path is exercised.
@@ -1433,7 +1440,7 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     whose ``build_session_chunks`` returns nothing — and that happens
     *before* any upsert has created the chunk table. The delete must be
     a no-op on a schema-less store rather than raising a bare
-    ``sqlite3.OperationalError`` that escapes the JSONL fallback.
+    ``sqlite3.OperationalError`` that escapes the canonical fallback.
     """
 
     sessions = ChatSessionManager(tmp_path)

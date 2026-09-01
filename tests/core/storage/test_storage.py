@@ -246,17 +246,25 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
     env_path = tmp_path / ".env"
     env_path.write_text("OPENROUTER_API_KEY=old\nOTHER_KEY=value\n", encoding="utf-8")
     replace_calls: list[tuple[Path, Path]] = []
+    import os as _os_module
+
+    _original_replace = _os_module.replace
 
     def fail_replace(source: Path, target: Path) -> None:
         replace_calls.append((source, target))
-        raise OSError("replace failed")
+        # Only fail the .env atomic replace; the session marker uses a
+        # separate ``os.replace`` path and must not be affected.
+        if target == env_path:
+            raise OSError("replace failed")
+        # Fall back to the real replace for marker and other files.
+        return _original_replace(source, target)
 
     monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
 
     with pytest.raises(StorageError):
         storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
 
-    assert replace_calls and replace_calls[0][1] == env_path
+    assert any(target == env_path for _, target in replace_calls)
     assert env_path.read_text(encoding="utf-8") == "OPENROUTER_API_KEY=old\nOTHER_KEY=value\n"
     assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 
@@ -598,10 +606,10 @@ def test_load_subagent_settings_reads_custom_values(tmp_path: Path) -> None:
     }
 
 
-def test_load_recall_settings_defaults_to_jsonl_scan(tmp_path: Path) -> None:
+def test_load_recall_settings_defaults_to_sqlite_fts(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
-    assert storage.load_recall_settings() == {"backend": "jsonl_scan"}
+    assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 
 
 def test_session_title_settings_default_disabled_and_replace_as_complete_section(
@@ -826,7 +834,7 @@ def test_load_recall_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage.ensure_directories()
     storage.settings_path.write_text('{"recall": []}', encoding="utf-8")
 
-    assert storage.load_recall_settings() == {"backend": "jsonl_scan"}
+    assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 
 
 def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) -> None:

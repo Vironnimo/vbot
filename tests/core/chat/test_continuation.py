@@ -20,8 +20,10 @@ from core.chat.continuation import (
 )
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import NetworkError, ProviderTimeoutError
-from core.sessions import ChatSession
+from core.sessions import ChatSession, ChatSessionManager
 from core.utils.errors import ProviderError
+
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 
 def _record(record_type: str, run_id: str = "run-one", **fields: Any) -> dict[str, Any]:
@@ -60,6 +62,10 @@ class _ManualClock:
         self.sleepers = remaining
 
 
+def _session(tmp_path: Path, *, session_id: str = "session") -> ChatSession:
+    return ChatSessionManager(tmp_path).create("agent", session_id=session_id)
+
+
 @pytest.mark.asyncio
 async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
     tmp_path: Path,
@@ -67,8 +73,9 @@ async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
     clock = _ManualClock()
     batches: list[list[list[dict[str, Any]]]] = [[] for _ in range(10)]
     trackers: list[ContinuationTracker] = []
+    sessions = ChatSessionManager(tmp_path)
     for index in range(10):
-        session = ChatSession.create(tmp_path / str(index), session_id="session")
+        session = sessions.create("agent", session_id=f"session-{index}")
 
         def sink(records: list[dict[str, Any]], *, index: int = index) -> None:
             batches[index].append(records)
@@ -118,7 +125,7 @@ async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
 async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path: Path) -> None:
     clock = _ManualClock()
     batches: list[list[dict[str, Any]]] = []
-    session = ChatSession.create(tmp_path, session_id="session")
+    session = _session(tmp_path)
     tracker = ContinuationTracker(
         session,
         run_id="run-one",
@@ -162,7 +169,7 @@ async def test_periodic_flush_cannot_land_after_its_assistant_boundary(tmp_path:
         batches.append(records)
 
     tracker = ContinuationTracker(
-        ChatSession.create(tmp_path, session_id="session"),
+        _session(tmp_path),
         run_id="run-one",
         request="work",
         record_sink=sink,
@@ -429,7 +436,7 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
 
 @pytest.mark.asyncio
 async def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path) -> None:
-    session = ChatSession.create(tmp_path, session_id="session")
+    session = _session(tmp_path)
     session.append_continuation_record(
         _record(
             "run_started",
@@ -447,7 +454,7 @@ async def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path:
 
 @pytest.mark.asyncio
 async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:
-    session = ChatSession.create(tmp_path, session_id="session")
+    session = _session(tmp_path)
     session.append(ChatMessage.user("old work"))
     session.append(
         ChatMessage.assistant(
@@ -504,7 +511,7 @@ async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path
 async def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
     tmp_path: Path,
 ) -> None:
-    session = ChatSession.create(tmp_path, session_id="session")
+    session = _session(tmp_path)
     session.append(ChatMessage.user("work"))
     session.append(ChatMessage.assistant(model="test/model", content="done"))
     session.append(
@@ -529,4 +536,4 @@ async def test_recover_clears_stale_journal_when_transcript_proves_normal_comple
     )
 
     assert await recover_continuation(session) is None
-    assert not session.continuation_path.exists()
+    assert session.load_continuation_records() == []

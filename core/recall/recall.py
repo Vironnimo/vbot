@@ -16,14 +16,14 @@ RecallSortMode = Literal["newest", "oldest"]
 RecallOrder = Literal["relevance", "newest", "oldest"]
 RecallResultType = Literal["message", "passage", "backend_defined"]
 
-RECALL_BACKEND_JSONL_SCAN = "jsonl_scan"
+RECALL_BACKEND_CANONICAL_SCAN = "canonical_scan"
 RECALL_BACKEND_SQLITE_FTS = "sqlite_fts"
 RECALL_BACKEND_VECTOR = "vector"
 RECALL_BACKEND_HYBRID = "hybrid"
-DEFAULT_RECALL_BACKEND = RECALL_BACKEND_JSONL_SCAN
+DEFAULT_RECALL_BACKEND = RECALL_BACKEND_SQLITE_FTS
 FIRST_PARTY_RECALL_BACKENDS = frozenset(
     {
-        RECALL_BACKEND_JSONL_SCAN,
+        RECALL_BACKEND_CANONICAL_SCAN,
         RECALL_BACKEND_SQLITE_FTS,
         RECALL_BACKEND_VECTOR,
         RECALL_BACKEND_HYBRID,
@@ -55,8 +55,8 @@ class RecallRequest:
     sort: RecallSortMode
     # Project the recall is scoped to, or ``None`` for the identity/global scope.
     # A recall run searches and indexes the Sessions of *its* scope: ``None``
-    # reaches the identity Sessions under ``agents/<id>/sessions/`` exactly as
-    # before; a project id reaches that project's anchored Sessions. Additive
+    # reaches the Identity Agent's canonical Sessions; a Project id reaches that
+    # Project's Sessions. Additive
     # with a ``None`` default so every existing caller keeps today's behavior.
     project_id: str | None = None
 
@@ -136,7 +136,7 @@ class RecallBackendContext:
     logger: Any | None = None
     # The vector recall backend uses these to resolve the embedding binding
     # and look up the bound model's context window; both are optional so
-    # the JSONL/FTS backends keep working unchanged.
+    # the canonical/FTS backends keep working unchanged.
     embeddings: Any | None = None
     model_registry: Any | None = None
 
@@ -173,7 +173,7 @@ class SupportsSessionRemoval(Protocol):
     Recall is otherwise read-only (:class:`RecallBackend`). Backends that keep a
     derived index (SQLite FTS, vector) implement this so session deletion can
     evict a removed session immediately instead of waiting for the next
-    self-healing reconcile on search. The JSONL live-scan backend has no derived
+    self-healing reconcile on search. The canonical live-scan backend has no derived
     index and deliberately does not implement it — an archived session is already
     absent from the live directory it scans. The runtime checks ``isinstance``
     before calling, so a backend without removal simply falls back to
@@ -197,15 +197,15 @@ class RecallBackendRegistry:
 
     @classmethod
     def with_builtins(cls) -> RecallBackendRegistry:
+        from core.recall.canonical import CanonicalSessionRecallBackend
         from core.recall.hybrid import HybridRecallBackend
-        from core.recall.jsonl import JsonlSessionRecallBackend
         from core.recall.sqlite_fts import SqliteFtsRecallBackend
         from core.recall.vector import VectorRecallBackend
 
         registry = cls()
         registry.register(
-            RECALL_BACKEND_JSONL_SCAN,
-            lambda context: JsonlSessionRecallBackend(context.sessions),
+            RECALL_BACKEND_CANONICAL_SCAN,
+            lambda context: CanonicalSessionRecallBackend(context.sessions),
         )
         registry.register(RECALL_BACKEND_SQLITE_FTS, SqliteFtsRecallBackend)
         registry.register(RECALL_BACKEND_VECTOR, VectorRecallBackend)

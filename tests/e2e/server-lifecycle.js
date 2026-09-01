@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { environment } from "./environment.js";
@@ -30,7 +30,11 @@ function assertDisposableDirectory(directory) {
 
 function prepareTestData() {
   rmSync(environment.dataDir, { force: true, recursive: true });
-  mkdirSync(environment.dataDir, { recursive: true });
+  execFileSync(
+    environment.python,
+    ["-m", "core.storage.layout", environment.dataDir],
+    { cwd: environment.repoRoot, stdio: "inherit" },
+  );
   const settings = JSON.parse(
     readFileSync(
       path.join(environment.e2eRoot, "fake-provider-settings.json"),

@@ -18,7 +18,7 @@ from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmission, RunKind
 from core.sessions import SessionAddress
 from core.subagents import SubAgentBatchTracker
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 
 def make_run(run_id: str, agent_id: str = "coder", session_id: str = "session-one") -> Run:

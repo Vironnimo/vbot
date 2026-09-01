@@ -19,6 +19,7 @@ from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
 from core.utils.errors import ConfigError
@@ -226,7 +227,7 @@ class IntegrationStorage:
         }
 
     def load_recall_settings(self) -> JsonObject:
-        return {"backend": "jsonl_scan"}
+        return {"backend": "canonical_scan"}
 
     def load_web_search_settings(self) -> JsonObject:
         return {
@@ -410,6 +411,9 @@ class IntegrationRuntime:
         )
         self.agent_resolver = IntegrationAgentResolver(self.agents)
         self.projects = IntegrationProjects()
+        marker = tmp_path / "session-store.json"
+        if not marker.exists():
+            write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)
@@ -657,8 +661,8 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "summary_model": None,
             },
             "recall": {
-                "backend": "jsonl_scan",
-                "available_backends": ["hybrid", "jsonl_scan", "sqlite_fts", "vector"],
+                "backend": "canonical_scan",
+                "available_backends": ["canonical_scan", "hybrid", "sqlite_fts", "vector"],
             },
             "web_search": {
                 "provider": "brave",
@@ -693,7 +697,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
     assert "missing_api_key" not in json.dumps(settings_response.json())
 
 
-def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> None:
+def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> None:
     adapter = SequencedAdapter(
         [
             {

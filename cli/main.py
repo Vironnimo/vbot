@@ -9,6 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# A source checkout documents both ``python -m cli.main`` and the direct
+# ``python cli/main.py`` form; make the latter resolve this checkout's package
+# before an installed vBot package can shadow it.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from cli.agent_management import (
     agent_create,
     agent_delete,
@@ -145,6 +151,14 @@ from cli.session_management import (
     session_list,
     session_rename,
     session_set_compaction_policy,
+)
+from cli.session_store_management import (
+    session_store_incident_acknowledge,
+    session_store_snapshot_create,
+    session_store_snapshot_list,
+    session_store_snapshot_restore,
+    session_store_snapshot_verify,
+    session_store_status,
 )
 from cli.skill_management import (
     list_skills,
@@ -403,6 +417,11 @@ def run(
 
     if args.area == "session":
         result = dispatch_session_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "session-store":
+        result = dispatch_session_store_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -795,6 +814,43 @@ def dispatch_session_command(
     if args.command == "link-channel":
         return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
     raise ValueError(f"Unsupported session command: {args.command}")
+
+
+def dispatch_session_store_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    status_fn: Callable[[ServerInstance], CommandResult] = session_store_status,
+    snapshot_list_fn: Callable[[ServerInstance], CommandResult] = session_store_snapshot_list,
+    snapshot_create_fn: Callable[
+        [ServerInstance, str], CommandResult
+    ] = session_store_snapshot_create,
+    snapshot_verify_fn: Callable[
+        [ServerInstance, str], CommandResult
+    ] = session_store_snapshot_verify,
+    snapshot_restore_fn: Callable[
+        [ServerInstance, str, bool], CommandResult
+    ] = session_store_snapshot_restore,
+    incident_acknowledge_fn: Callable[
+        [ServerInstance, str], CommandResult
+    ] = session_store_incident_acknowledge,
+) -> CommandResult:
+    """Dispatch operator controls for the current-format SQLite Session store."""
+
+    if args.command == "status":
+        return status_fn(instance)
+    if args.command == "snapshot":
+        if args.snapshot_command == "list":
+            return snapshot_list_fn(instance)
+        if args.snapshot_command == "create":
+            return snapshot_create_fn(instance, args.reason)
+        if args.snapshot_command == "verify":
+            return snapshot_verify_fn(instance, args.snapshot_id)
+        if args.snapshot_command == "restore":
+            return snapshot_restore_fn(instance, args.snapshot_id, args.yes)
+    if args.command == "incident" and args.incident_command == "acknowledge":
+        return incident_acknowledge_fn(instance, args.incident_id)
+    raise ValueError(f"Unsupported Session-store command: {args.command}")
 
 
 def dispatch_tool_command(

@@ -21,8 +21,15 @@ from core.extensions import InteractionButton, InteractionEvent
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime import runtime as runtime_module
 from core.runtime.runtime import Runtime
+from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext
 from core.utils.config import Config
+
+
+def _authorize_session_store(data_dir: Path) -> None:
+    if not (data_dir / "sessions.db").is_file():
+        write_bootstrap_marker(data_dir)
+
 
 _CAPABILITY_EXT_SOURCE = (
     "from core.tools import tool_success\n"
@@ -86,11 +93,13 @@ def _clean_extension_modules() -> Iterator[None]:
 def _write_extension(data_dir: Path, name: str, source: str) -> None:
     extensions_dir = data_dir / "extensions"
     extensions_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(data_dir)
     (extensions_dir / f"{name}.py").write_text(source, encoding="utf-8")
 
 
 def _write_settings(data_dir: Path, settings: dict) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(data_dir)
     (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
 
@@ -443,7 +452,7 @@ def test_apply_extension_disabled_change_ignores_active_builtin_backend(
     config = Config(data_dir=tmp_path / "data")
     data_dir = config.data_dir
     _write_extension(data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
-    # Default backend (jsonl_scan) is active, not the extension's ext_recall.
+    # Default backend (sqlite_fts) is active, not the extension's ext_recall.
 
     runtime = Runtime(config)
     runtime.start()
@@ -529,6 +538,7 @@ def _write_package_extension(data_dir: Path, name: str, helper_value: str) -> Pa
     """Write a package extension whose tool returns a value from its submodule."""
     ext_dir = data_dir / "extensions" / name
     ext_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(data_dir)
     (ext_dir / "helper.py").write_text(f"VALUE = {helper_value!r}\n", encoding="utf-8")
     (ext_dir / "__init__.py").write_text(
         "from core.tools import tool_success\n"

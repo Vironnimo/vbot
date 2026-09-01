@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
-from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from core.recall.jsonl import (
-    JsonlSessionRecallBackend,
+from core.chat.messages import ChatMessage
+from core.recall.canonical import (
+    CanonicalSessionRecallBackend,
     compact_text,
     first_match_span,
-    is_recall_artifact_message,
     message_index_by_id,
     message_match_payload,
     message_matches_request,
@@ -38,9 +38,9 @@ from core.recall.recall import (
     RecallSearchHit,
     RecallSearchPage,
     RecallSearchRequest,
-    RecallSortMode,
 )
-from core.sessions import SessionAddress, is_skill_context_note
+from core.sessions import SessionAddress
+from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
@@ -59,8 +59,11 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 #      same session UUID under a project vs. the global scope never collides.
 # v3 → persisted session_search results are excluded before candidate limiting.
 # v4 → a shared Passage FTS index powers Hybrid's literal retrieval arm.
-_SCHEMA_VERSION = 4
-# FTS5 trigram needs at least three characters; shorter queries fall back to the JSONL scan.
+# v5 → canonical Session generations/revisions replace filesystem freshness,
+#      and this disposable index owns Passage retrieval only while message
+#      search moves into the canonical Session store.
+_SCHEMA_VERSION = 5
+# FTS5 trigram needs at least three characters; shorter queries fall back to the canonical scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
 # empty string keeps the PRIMARY KEY/UNIQUE constraints reliable — SQLite treats
@@ -79,7 +82,7 @@ def _scope(project_id: str | None) -> str:
     return project_id if project_id is not None else _GLOBAL_SCOPE
 
 
-class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
+class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     """Recall backend backed by a disposable SQLite FTS index."""
 
     def __init__(self, context: RecallBackendContext) -> None:
@@ -87,7 +90,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         self.data_dir = context.data_dir
         self.index_path = self.data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
         self.logger = context.logger
-        self._fallback = JsonlSessionRecallBackend(context.sessions)
+        self._fallback = CanonicalSessionRecallBackend(context.sessions)
         self._index_lock = asyncio.Lock()
 
     async def search(self, request: RecallRequest) -> JsonObject:
@@ -99,31 +102,140 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         expression = _fts_expression(request)
         if expression is None:
             return await self._fallback.search(request)
-
-        async with self._index_lock:
+        # Integrated FTS is the only lexical index; fallback is canonical scan.
+        if self.sessions.is_fts_available():
             try:
-                return await asyncio.to_thread(
-                    self._search_with_sqlite, request, summaries, expression
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite recall index failed; rebuilding once: %s", error)
-                await asyncio.to_thread(self._delete_index_file)
-
-            try:
-                return await asyncio.to_thread(
-                    self._search_with_sqlite, request, summaries, expression
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning(
-                    "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
-                )
+                return await asyncio.to_thread(self._search_with_canonical_fts, request, summaries)
+            except Exception as error:  # pragma: no cover - fallback
+                self._warning("Canonical FTS search failed; falling back: %s", error)
         return await self._fallback.search(request)
+
+    def _search_with_canonical_fts(
+        self, request: RecallRequest, summaries: list[JsonObject]
+    ) -> JsonObject:
+        # Use integrated FTS; combine with canonical scan fallback for gap if needed.
+        # For now, canonical FTS is synchronous so no gap.
+        rows = self.sessions.fts_search(
+            request.query or "",
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            session_id=request.session_id,
+            match_mode=request.match_mode,
+            limit=max(256, (request.limit + 1) * 8),
+            roles=request.roles,
+            since=None if request.since is None else request.since.isoformat(),
+            until=None if request.until is None else request.until.isoformat(),
+        )
+        # Rows carry one reconstructed payload from the normalized canonical tables.
+        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
+        messages_by_session: dict[str, list[Any]] = {}
+        matches: list[JsonObject] = []
+        for address, message_id, _ts, _mj, _rank in rows:
+            session_id = address.session_id
+            if session_id not in summaries_by_id:
+                continue
+            if session_id not in messages_by_session:
+                messages_by_session[session_id] = self.sessions.get(address).load_active()
+            messages = messages_by_session[session_id]
+            idx = message_index_by_id(messages, message_id)
+            if idx is None:
+                continue
+            message = messages[idx]
+            if not message_matches_request(message, request):
+                continue
+            text = message_search_text(message)
+            if not text_matches_query(text, request):
+                continue
+            matches.append(
+                message_match_payload(request, summaries_by_id[session_id], messages, idx, text)
+            )
+            if len(matches) >= request.limit + 1:
+                break
+        truncated = len(matches) > request.limit
+        return self._message_result(
+            request,
+            matches[: request.limit],
+            searched_sessions=len(summaries),
+            total_candidates=len(summaries),
+            truncated=truncated,
+        )
+
+    def _search_page_with_canonical_fts(
+        self, request: RecallSearchRequest, summaries: list[JsonObject], snapshot_id: str
+    ) -> RecallSearchPage:
+        rows = self.sessions.fts_search(
+            request.query,
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            session_id=request.session_id,
+            match_mode=request.match_mode,
+            limit=request.offset + request.limit + 1,
+            roles=request.roles,
+            since=None if request.since is None else request.since.isoformat(),
+            until=None if request.until is None else request.until.isoformat(),
+            excluded_session_ids=request.excluded_session_ids,
+        )
+        summaries_by_id = {str(s["id"]): s for s in summaries}
+        hits: list[tuple[float, str, str, RecallSearchHit]] = []
+        for address, message_id, timestamp, message_payload, rank in rows:
+            session_id = address.session_id
+            if session_id not in summaries_by_id:
+                continue
+            message = _message_from_fts_payload(message_payload)
+            if str(message.id) != message_id:
+                continue
+            if not message_matches_search_request(message, request):
+                continue
+            text = message_search_text(message)
+            if not text_matches_search_request(text, request):
+                continue
+            sort_rank = float(rank) if request.order == "relevance" else 0.0
+            hits.append(
+                (
+                    sort_rank,
+                    timestamp,
+                    session_id,
+                    RecallSearchHit(
+                        result_type="message",
+                        session_id=session_id,
+                        message_id=str(message.id),
+                        role=str(message.role),
+                        timestamp=str(message.timestamp),
+                        text=text,
+                        score=float(rank),
+                        match_start=first_match_span(text, request.query, request.match_mode)[0],
+                        match_end=first_match_span(text, request.query, request.match_mode)[1],
+                    ),
+                )
+            )
+
+        def _ts(value: str) -> float:
+            parsed_ts = parse_persisted_timestamp(value)
+            return parsed_ts.timestamp() if parsed_ts is not None else 0.0
+
+        if request.order == "relevance":
+            hits.sort(key=lambda x: (x[0], -_ts(x[1])))
+        elif request.order == "newest":
+            hits.sort(key=lambda x: _ts(x[1]), reverse=True)
+        else:
+            hits.sort(key=lambda x: _ts(x[1]))
+        page_hits = hits[request.offset : request.offset + request.limit + 1]
+        has_more = len(page_hits) > request.limit
+        page_hits = page_hits[: request.limit]
+        return RecallSearchPage(
+            hits=tuple(h[3] for h in page_hits),
+            result_type="message",
+            ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
+            snapshot_id=snapshot_id,
+            has_more=has_more,
+            total_candidate_sessions=len(summaries),
+        )
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         query_description = (
-            "Literal terms to find. Every whitespace-separated term must occur as a "
-            "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
-            "text relevance."
+            "Literal terms to find. Every whitespace-separated term must occur. One- or "
+            "two-character terms match whole tokens; longer terms also match inside words. "
+            "Omit to list recent Sessions. Matches are ranked by text relevance."
         )
         return RecallSearchCapabilities(
             result_type="message",
@@ -147,100 +259,19 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             raise RecallSearchError(
                 "stale_cursor", "Session search source changed; repeat the search."
             )
-        expression = _fts_expression_search(request)
-        if expression is None:
-            if request.order == "relevance":
-                return await asyncio.to_thread(
-                    self._scan_messages_by_relevance,
-                    request,
-                    summaries,
-                    snapshot_id,
-                )
-            fallback_request = (
-                replace(request, order="newest") if request.order == "relevance" else request
-            )
-            page = await self._fallback.search_page(fallback_request)
-            return replace(page, ranking=f"substring_scan_{fallback_request.order}")
-
-        async with self._index_lock:
+        # Integrated FTS only; otherwise canonical scan.
+        if self.sessions.is_fts_available():
             try:
                 return await asyncio.to_thread(
-                    self._search_page_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
+                    self._search_page_with_canonical_fts, request, summaries, snapshot_id
                 )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite recall index failed; rebuilding once: %s", error)
-                await asyncio.to_thread(self._delete_index_file)
-            try:
-                return await asyncio.to_thread(
-                    self._search_page_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning(
-                    "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
-                )
+            except Exception as error:  # pragma: no cover
+                self._warning("Canonical FTS page failed; falling back: %s", error)
         fallback_request = (
             replace(request, order="newest") if request.order == "relevance" else request
         )
         page = await self._fallback.search_page(fallback_request)
         return replace(page, ranking=f"substring_scan_{fallback_request.order}")
-
-    def _scan_messages_by_relevance(
-        self,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        snapshot_id: str,
-    ) -> RecallSearchPage:
-        ranked: list[tuple[float, float, str, int, RecallSearchHit]] = []
-        needles = (
-            (compact_text(request.query).casefold(),)
-            if request.match_mode == "phrase"
-            else query_terms(request.query)
-        )
-        for summary in summaries:
-            session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load_active()
-            for message_index, message in enumerate(messages):
-                if not message_matches_search_request(message, request):
-                    continue
-                text = message_search_text(message)
-                if not text_matches_search_request(text, request):
-                    continue
-                haystack = compact_text(text).casefold()
-                frequency = sum(haystack.count(needle) for needle in needles if needle)
-                score = -float(frequency)
-                parsed = parse_persisted_timestamp(str(message.timestamp))
-                recency = -(parsed.timestamp() if parsed is not None else 0.0)
-                start, end = first_match_span(text, request.query, request.match_mode)
-                hit = RecallSearchHit(
-                    result_type="message",
-                    session_id=session_id,
-                    message_id=str(message.id),
-                    role=str(message.role),
-                    timestamp=str(message.timestamp),
-                    text=text,
-                    score=score,
-                    match_start=start,
-                    match_end=end,
-                )
-                ranked.append((score, recency, session_id, message_index, hit))
-        ranked.sort(key=lambda item: item[:4])
-        page = ranked[request.offset : request.offset + request.limit]
-        return RecallSearchPage(
-            hits=tuple(item[4] for item in page),
-            result_type="message",
-            ranking="substring_scan_relevance",
-            snapshot_id=snapshot_id,
-            has_more=request.offset + len(page) < len(ranked),
-            total_candidate_sessions=len(summaries),
-        )
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""
@@ -289,9 +320,8 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             return _empty_passage_page(snapshot_id)
         with closing(self._connect()) as connection:
             self._initialize_schema(connection)
-            legacy_request = _legacy_request_for_index(request)
-            self._cleanup_missing_sessions(connection, legacy_request, summaries)
-            self._ensure_indexed(connection, legacy_request, summaries)
+            self._cleanup_missing_sessions(connection, request)
+            self._ensure_indexed(connection, request, summaries)
             rows = self._query_passages(connection, request, summaries, expression)
         has_more = len(rows) > request.limit
         hits = tuple(_passage_hit_from_row(row, request) for row in rows[: request.limit])
@@ -351,105 +381,17 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             total_candidate_sessions=len(summaries),
         )
 
-    def _search_page_with_sqlite(
-        self,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        expression: str,
-        snapshot_id: str,
-    ) -> RecallSearchPage:
-        if not summaries:
-            return RecallSearchPage(
-                hits=(),
-                result_type="message",
-                ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
-                snapshot_id=snapshot_id,
-                has_more=False,
-                total_candidate_sessions=0,
-            )
-        with closing(self._connect()) as connection:
-            self._initialize_schema(connection)
-            legacy_request = _legacy_request_for_index(request)
-            self._cleanup_missing_sessions(connection, legacy_request, summaries)
-            self._ensure_indexed(connection, legacy_request, summaries)
-            rows = self._query_search_page(connection, request, summaries, expression)
-        has_more = len(rows) > request.limit
-        rows = rows[: request.limit]
-        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
-        hits: list[RecallSearchHit] = []
-        for row in rows:
-            session_id = str(row["session_id"])
-            if session_id not in summaries_by_id:
-                continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(
-                    _session_address(request, session_id)
-                ).load_active()
-            messages = messages_by_session[session_id]
-            message_index = message_index_by_id(messages, str(row["message_id"]))
-            if message_index is None:
-                continue
-            message = messages[message_index]
-            if not message_matches_search_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_search_request(text, request):
-                continue
-            match_start, match_end = first_match_span(text, request.query, request.match_mode)
-            hits.append(
-                RecallSearchHit(
-                    result_type="message",
-                    session_id=session_id,
-                    message_id=str(message.id),
-                    role=str(message.role),
-                    timestamp=str(message.timestamp),
-                    text=text,
-                    score=float(row["rank"]),
-                    match_start=match_start,
-                    match_end=match_end,
-                )
-            )
-        return RecallSearchPage(
-            hits=tuple(hits),
-            result_type="message",
-            ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
-            snapshot_id=snapshot_id,
-            has_more=has_more,
-            total_candidate_sessions=len(summaries),
-        )
-
-    def _search_with_sqlite(
-        self,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> JsonObject:
-        with closing(self._connect()) as connection:
-            self._initialize_schema(connection)
-            self._cleanup_missing_sessions(connection, request, summaries)
-            self._ensure_indexed(connection, request, summaries)
-            rows = self._query_matches(connection, request, summaries, expression)
-        matches = self._hydrate_matches(request, summaries, rows)
-        truncated = len(matches) > request.limit
-        return self._message_result(
-            request,
-            matches[: request.limit],
-            searched_sessions=len(summaries),
-            total_candidates=len(summaries),
-            truncated=truncated,
-        )
-
     def _connect(self) -> sqlite3.Connection:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.index_path)
         connection.row_factory = sqlite3.Row
         connection.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
+            journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
+            connection.execute(f"PRAGMA journal_mode={journal_mode.upper()}")
             connection.execute("PRAGMA synchronous=NORMAL")
         except sqlite3.DatabaseError as error:
-            self._warning("Could not enable WAL for SQLite recall index: %s", error)
+            self._warning("Could not configure the SQLite recall index journal: %s", error)
         return connection
 
     @staticmethod
@@ -471,37 +413,10 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
               agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
               session_id TEXT NOT NULL,
-              session_mtime_ns INTEGER NOT NULL,
-              session_size_bytes INTEGER NOT NULL,
+              generation_id TEXT NOT NULL,
+              history_revision INTEGER NOT NULL,
               indexed_at TEXT NOT NULL,
               PRIMARY KEY (agent_id, project_id, session_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-              row_id INTEGER PRIMARY KEY,
-              agent_id TEXT NOT NULL,
-              project_id TEXT NOT NULL,
-              session_id TEXT NOT NULL,
-              message_id TEXT NOT NULL,
-              message_index INTEGER NOT NULL,
-              timestamp TEXT NOT NULL,
-              role TEXT NOT NULL,
-              search_text TEXT NOT NULL,
-              UNIQUE (agent_id, project_id, session_id, message_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_session
-              ON messages(agent_id, project_id, session_id, message_index);
-
-            CREATE INDEX IF NOT EXISTS idx_messages_time
-              ON messages(agent_id, project_id, timestamp);
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
-            USING fts5(
-              search_text,
-              content='messages',
-              content_rowid='row_id',
-              tokenize='trigram'
             );
 
             CREATE TABLE IF NOT EXISTS passages (
@@ -538,14 +453,15 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
     def _cleanup_missing_sessions(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest,
-        _summaries: list[JsonObject],
+        request: RecallRequest | RecallSearchRequest,
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
         active_session_ids = {
             str(summary["id"])
-            for summary in self.sessions.list_with_metadata(agent_id, request.project_id)
+            for summary in cast(
+                list[JsonObject], self.sessions.list_with_metadata(agent_id, request.project_id)
+            )
         }
         indexed_session_ids = {
             str(row["session_id"])
@@ -561,18 +477,27 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
     def _ensure_indexed(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest,
+        request: RecallRequest | RecallSearchRequest,
         summaries: list[JsonObject],
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
+        # One batched canonical-freshness query for the whole scope instead
+        # of one query per Session.
+        addresses = [_session_address(request, str(summary["id"])) for summary in summaries]
+        versions = self.sessions.list_history_versions(addresses)
         for summary in summaries:
             session_id = str(summary["id"])
-            session = self.sessions.get(_session_address(request, session_id))
-            stat = session.path.stat()
+            address = _session_address(request, session_id)
+            version = versions.get(address)
+            if version is None:
+                # The Session vanished between listing and indexing; skip and
+                # let the cleanup pass remove any stale indexed rows.
+                continue
+            generation_id, history_revision = version
             indexed = connection.execute(
                 """
-                SELECT session_mtime_ns, session_size_bytes
+                SELECT generation_id, history_revision
                 FROM indexed_sessions
                 WHERE agent_id = ? AND project_id = ? AND session_id = ?
                 """,
@@ -580,18 +505,19 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             ).fetchone()
             if (
                 indexed is not None
-                and int(indexed["session_mtime_ns"]) == stat.st_mtime_ns
-                and int(indexed["session_size_bytes"]) == stat.st_size
+                and str(indexed["generation_id"]) == generation_id
+                and int(indexed["history_revision"]) == history_revision
             ):
                 continue
+            session = self.sessions.get(address)
             self._reindex_session(
                 connection,
                 agent_id,
                 scope,
                 session_id,
                 session.load_active(),
-                mtime_ns=stat.st_mtime_ns,
-                size_bytes=stat.st_size,
+                generation_id=generation_id,
+                history_revision=history_revision,
             )
 
     def _reindex_session(
@@ -602,47 +528,11 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         session_id: str,
         messages: list[Any],
         *,
-        mtime_ns: int,
-        size_bytes: int,
+        generation_id: str,
+        history_revision: int,
     ) -> None:
         with connection:
             self._delete_session_rows(connection, agent_id, scope, session_id)
-            for message_index, message in enumerate(messages):
-                if is_skill_context_note(message) or is_recall_artifact_message(message):
-                    continue
-                search_text = compact_text(message_search_text(message))
-                cursor = connection.execute(
-                    """
-                    INSERT INTO messages (
-                      agent_id,
-                      project_id,
-                      session_id,
-                      message_id,
-                      message_index,
-                      timestamp,
-                      role,
-                      search_text
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        agent_id,
-                        scope,
-                        session_id,
-                        message.id,
-                        message_index,
-                        message.timestamp,
-                        message.role,
-                        search_text,
-                    ),
-                )
-                row_id = cursor.lastrowid
-                if row_id is None:
-                    raise sqlite3.DatabaseError("failed to insert recall message row")
-                connection.execute(
-                    "INSERT INTO messages_fts(rowid, search_text) VALUES (?, ?)",
-                    (row_id, search_text),
-                )
             for passage in build_session_passages(messages):
                 cursor = connection.execute(
                     """
@@ -679,8 +569,8 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                   agent_id,
                   project_id,
                   session_id,
-                  session_mtime_ns,
-                  session_size_bytes,
+                  generation_id,
+                  history_revision,
                   indexed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -689,8 +579,8 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                     agent_id,
                     scope,
                     session_id,
-                    mtime_ns,
-                    size_bytes,
+                    generation_id,
+                    history_revision,
                     datetime.now(UTC).isoformat(),
                 ),
             )
@@ -702,16 +592,6 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         scope: str,
         session_id: str,
     ) -> None:
-        row_ids = [
-            int(row["row_id"])
-            for row in connection.execute(
-                "SELECT row_id FROM messages "
-                "WHERE agent_id = ? AND project_id = ? AND session_id = ?",
-                (agent_id, scope, session_id),
-            )
-        ]
-        for row_id in row_ids:
-            connection.execute("DELETE FROM messages_fts WHERE rowid = ?", (row_id,))
         passage_row_ids = [
             int(row["row_id"])
             for row in connection.execute(
@@ -722,10 +602,6 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         ]
         for row_id in passage_row_ids:
             connection.execute("DELETE FROM passages_fts WHERE rowid = ?", (row_id,))
-        connection.execute(
-            "DELETE FROM messages WHERE agent_id = ? AND project_id = ? AND session_id = ?",
-            (agent_id, scope, session_id),
-        )
         connection.execute(
             "DELETE FROM passages WHERE agent_id = ? AND project_id = ? AND session_id = ?",
             (agent_id, scope, session_id),
@@ -758,105 +634,6 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             self._initialize_schema(connection)
             with connection:
                 self._delete_session_rows(connection, agent_id, scope, session_id)
-
-    def _query_matches(
-        self,
-        connection: sqlite3.Connection,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> list[sqlite3.Row]:
-        session_ids = [str(summary["id"]) for summary in summaries]
-        session_placeholders = ", ".join("?" for _ in session_ids)
-        role_placeholders = ", ".join("?" for _ in request.roles)
-        conditions = [
-            "messages_fts MATCH ?",
-            "m.agent_id = ?",
-            "m.project_id = ?",
-            f"m.session_id IN ({session_placeholders})",
-            f"m.role IN ({role_placeholders})",
-        ]
-        parameters: list[Any] = [
-            expression,
-            request.agent_id,
-            _scope(request.project_id),
-            *session_ids,
-            *request.roles,
-        ]
-        if request.since is not None:
-            conditions.append("m.timestamp >= ?")
-            parameters.append(request.since.isoformat())
-        if request.until is not None:
-            conditions.append("m.timestamp <= ?")
-            parameters.append(request.until.isoformat())
-
-        direction = "DESC" if request.sort == "newest" else "ASC"
-        parameters.append(request.limit + 1)
-        sql = f"""
-            SELECT
-              m.session_id,
-              m.message_id,
-              m.message_index,
-              m.timestamp,
-              bm25(messages_fts) AS rank
-            FROM messages_fts
-            JOIN messages AS m ON m.row_id = messages_fts.rowid
-            WHERE {" AND ".join(conditions)}
-            ORDER BY m.timestamp {direction}, m.session_id ASC, m.message_index ASC
-            LIMIT ?
-        """
-        return list(connection.execute(sql, parameters))
-
-    def _query_search_page(
-        self,
-        connection: sqlite3.Connection,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        expression: str,
-    ) -> list[sqlite3.Row]:
-        session_ids = [str(summary["id"]) for summary in summaries]
-        session_placeholders = ", ".join("?" for _ in session_ids)
-        role_placeholders = ", ".join("?" for _ in request.roles)
-        conditions = [
-            "messages_fts MATCH ?",
-            "m.agent_id = ?",
-            "m.project_id = ?",
-            f"m.session_id IN ({session_placeholders})",
-            f"m.role IN ({role_placeholders})",
-        ]
-        parameters: list[Any] = [
-            expression,
-            request.agent_id,
-            _scope(request.project_id),
-            *session_ids,
-            *request.roles,
-        ]
-        if request.since is not None:
-            conditions.append("m.timestamp >= ?")
-            parameters.append(request.since.isoformat())
-        if request.until is not None:
-            conditions.append("m.timestamp <= ?")
-            parameters.append(request.until.isoformat())
-        if request.order == "relevance":
-            order_by = "rank ASC, m.timestamp DESC, m.session_id ASC, m.message_index ASC"
-        else:
-            direction = "DESC" if request.order == "newest" else "ASC"
-            order_by = f"m.timestamp {direction}, m.session_id ASC, m.message_index ASC"
-        parameters.extend((request.limit + 1, request.offset))
-        sql = f"""
-            SELECT
-              m.session_id,
-              m.message_id,
-              m.message_index,
-              m.timestamp,
-              bm25(messages_fts) AS rank
-            FROM messages_fts
-            JOIN messages AS m ON m.row_id = messages_fts.rowid
-            WHERE {" AND ".join(conditions)}
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?
-        """
-        return list(connection.execute(sql, parameters))
 
     def _query_passages(
         self,
@@ -906,37 +683,6 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         """
         return list(connection.execute(sql, parameters))
 
-    def _hydrate_matches(
-        self,
-        request: RecallRequest,
-        summaries: list[JsonObject],
-        rows: Iterable[sqlite3.Row],
-    ) -> list[JsonObject]:
-        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
-        matches: list[JsonObject] = []
-        for row in rows:
-            session_id = str(row["session_id"])
-            summary = summaries_by_id.get(session_id)
-            if summary is None:
-                continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(
-                    _session_address(request, session_id)
-                ).load_active()
-            messages = messages_by_session[session_id]
-            message_index = message_index_by_id(messages, str(row["message_id"]))
-            if message_index is None:
-                continue
-            message = messages[message_index]
-            if not message_matches_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_query(text, request):
-                continue
-            matches.append(message_match_payload(request, summary, messages, message_index, text))
-        return matches
-
     @staticmethod
     def _message_result(
         request: RecallRequest,
@@ -964,6 +710,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             self.index_path,
             self.index_path.with_name(f"{self.index_path.name}-wal"),
             self.index_path.with_name(f"{self.index_path.name}-shm"),
+            self.index_path.with_name(f"{self.index_path.name}-journal"),
         ]
 
     def _warning(self, message: str, *args: object) -> None:
@@ -1016,8 +763,8 @@ def _passage_in_time_range(
 
 
 def _fts_expression(request: RecallRequest) -> str | None:
-    # Trigram MATCH does substring lookup, mirroring the JSONL scanner's `term in haystack`.
-    # Terms are split the same way as the JSONL backend so both backends agree on what a term is.
+    # Trigram MATCH does substring lookup, mirroring the canonical scanner's `term in haystack`.
+    # Terms are split like the canonical backend so both agree on what a term is.
     if request.query is None:
         return None
     if request.match_mode == "phrase":
@@ -1046,24 +793,12 @@ def _fts_expression_search(request: RecallSearchRequest) -> str | None:
     return operator.join(_quote_fts_value(term) for term in terms)
 
 
-def _legacy_request_for_index(request: RecallSearchRequest) -> RecallRequest:
-    sort: RecallSortMode = "oldest" if request.order == "oldest" else "newest"
-    return RecallRequest(
-        agent_id=request.agent_id,
-        session_id=request.session_id,
-        around_message_id=None,
-        query=request.query,
-        since=request.since,
-        until=request.until,
-        roles=request.roles,
-        match_mode=request.match_mode,
-        limit=request.offset + request.limit + 1,
-        context_messages=0,
-        bookend_messages=0,
-        sort=sort,
-        project_id=request.project_id,
-    )
-
-
 def _quote_fts_value(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+def _message_from_fts_payload(payload: str) -> ChatMessage:
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError("canonical FTS payload must be a Message object")
+    return ChatMessage.from_dict(cast(JsonObject, data))

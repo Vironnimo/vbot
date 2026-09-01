@@ -22,6 +22,7 @@ from core.projects.resolver import (
 from core.projects.scan_report import FindingType
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
+from core.sessions.format import write_bootstrap_marker
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,10 @@ def template_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
-    return tmp_path / "data"
+    directory = tmp_path / "data"
+    directory.mkdir()
+    write_bootstrap_marker(directory)
+    return directory
 
 
 @pytest.fixture

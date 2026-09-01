@@ -105,9 +105,18 @@ def pinned_skill_catalog(
     if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
         return PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
     snapshot = dependencies.get_system_prompts().render_skill_catalog(agent, skill_registry)
-    metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
-    dependencies.sessions.set_metadata(address, metadata)
-    return snapshot
+    selected = snapshot
+
+    def update(current: dict[str, Any]) -> None:
+        nonlocal selected
+        pinned = current.get(PINNED_SKILL_CATALOG_META_KEY)
+        if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
+            selected = PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
+        else:
+            current[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
+
+    dependencies.sessions.mutate_metadata(address, update)
+    return selected
 
 
 def _pinned_epoch_text(
@@ -137,9 +146,19 @@ def _pinned_epoch_text(
     if isinstance(pinned_text, str):
         return pinned_text
     text = render()
-    metadata[meta_key] = {"text": text}
-    dependencies.sessions.set_metadata(address, metadata)
-    return text
+    selected = text
+
+    def update(current: dict[str, Any]) -> None:
+        nonlocal selected
+        pinned = current.get(meta_key)
+        pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
+        if isinstance(pinned_text, str):
+            selected = pinned_text
+        else:
+            current[meta_key] = {"text": text}
+
+    dependencies.sessions.mutate_metadata(address, update)
+    return selected
 
 
 def pinned_working_project_context(

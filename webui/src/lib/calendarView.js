@@ -28,7 +28,7 @@ const MONTH_GRID_DAYS = 42;
 
 export function todayKey() {
   const now = new Date();
-  return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${now.getUTCDate()}`;
+  return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`;
 }
 
 export function isDayKey(value) {

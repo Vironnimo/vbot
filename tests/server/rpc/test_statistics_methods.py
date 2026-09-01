@@ -20,6 +20,7 @@ import pytest
 from core.chat.messages import ChatMessage
 from core.projects import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
@@ -69,7 +70,7 @@ class _RuntimeStub:
         self._data_dir = data_dir
         self.chat_sessions = manager
         self.agents = _FakeAgents(agent_ids)
-        self.projects = ProjectStore(data_dir)
+        self.projects = ProjectStore(data_dir, sessions=manager)
         self.global_skills: list = []
 
     def skills_for(self, project_id, agent_id=None) -> _FakeSkillRegistry:
@@ -91,6 +92,7 @@ def _timing(start: datetime, duration_ms: int) -> dict:
 
 
 def _state(tmp_path: Path, agent_ids: list[str]) -> tuple[SimpleNamespace, ChatSessionManager]:
+    write_bootstrap_marker(tmp_path)
     manager = ChatSessionManager(tmp_path)
     runtime = _RuntimeStub(tmp_path, manager, agent_ids)
     return SimpleNamespace(runtime=runtime), manager
@@ -281,6 +283,7 @@ def _skill(name: str, origin: str | None = None) -> SimpleNamespace:
 
 
 def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
     manager = ChatSessionManager(tmp_path)
     runtime = _RuntimeStub(tmp_path, manager, ["assistant"])
     runtime.global_skills = [_skill("deploy", "bundled"), _skill("teach", "global")]

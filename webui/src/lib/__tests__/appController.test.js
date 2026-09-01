@@ -138,6 +138,23 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it('reloads the Session-store projection on connect and invalidation', async () => {
+    const onLoadSessionStoreStatus = vi.fn().mockResolvedValue(undefined);
+    const { controller } = setup({ onLoadSessionStoreStatus });
+
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      replay_status: 'resumed',
+      active_runs: [],
+    });
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: { kind: 'session_store' },
+    });
+
+    expect(onLoadSessionStoreStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('applies an Agent rename mapping before reloading and remaps old history entries', async () => {
     const onAgentIdChanged = vi.fn();
     const { actions, controller, state } = setup({ onAgentIdChanged });

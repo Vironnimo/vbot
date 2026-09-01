@@ -35,7 +35,8 @@ from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, Run, RunAdmission
 from core.runtime.runtime import Runtime
-from core.sessions import SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY, RpcError
@@ -191,8 +192,11 @@ def _make_state(
     bootstrap_jobs: list | None = None,
 ) -> SimpleNamespace:
     data_dir = tmp_path / "data"
-    projects = ProjectStore(data_dir)
-    agents = AgentStore(data_dir)
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    projects = ProjectStore(data_dir, sessions=sessions)
+    agents = AgentStore(data_dir, sessions=sessions)
     resolver = AgentResolver(
         agents=agents,
         projects=projects,
@@ -205,6 +209,7 @@ def _make_state(
     runtime = SimpleNamespace(
         projects=projects,
         agents=agents,
+        sessions=sessions,
         agent_resolver=resolver,
         terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,
@@ -1416,11 +1421,8 @@ async def test_rm_blocked_by_active_run_of_project_agent(tmp_path: Path) -> None
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
-    # A session-owning agent is one with a session file under the anchor; create
-    # one so the busy check has an owner to match.
-    session_dir = state.runtime.projects.sessions_dir("vbot", "builder")
-    session_dir.mkdir(parents=True, exist_ok=True)
-    (session_dir / "s1.jsonl").write_text("", encoding="utf-8")
+    # Create the canonical Session so the busy check has an owner to match.
+    state.runtime.sessions.create("builder", session_id="s1", project_id="vbot")
 
     release = asyncio.Event()
 

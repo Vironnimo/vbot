@@ -12,7 +12,7 @@ input the service takes. Local targets are out of scope for this
 iteration (the spec keeps the local-target hook dependency-free, the
 same way local speech/image engines stay optional). A configured
 local target raises :class:`EmbeddingUnsupportedTargetError` so
-callers (the recall backend in particular) can fall back to JSONL
+callers (the Recall backend in particular) can fall back to canonical scan
 with a logged warning — mirroring the recall backend's pattern for
 missing bindings.
 """

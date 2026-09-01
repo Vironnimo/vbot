@@ -4,7 +4,7 @@ Persisted agent configuration and workspace lifecycle management.
 
 ## Overview
 
-`core/agents/` owns `agent.json` CRUD, the canonical Identity Agent roster order, and coordinated Identity Agent rename under `<data_dir>/agents/`. Creating an agent creates its sessions directory, an initial empty Session, and seeds a workspace from bundled templates; renaming moves the complete Agent-owned tree; deleting archives instead of deleting. A **per-agent private skills home** may exist at `<agent-dir>/skills/` (created on first write by `skill_manage` or skill RPCs, private and always-allowed - see `skills.md`); it moves/archives with the agent for free and is not seeded at creation.
+`core/agents/` owns `agent.json` CRUD, the canonical Identity Agent roster order, and coordinated Identity Agent rename under `<data_dir>/agents/`. Creating an Agent creates an initial empty database Session and seeds a workspace from bundled templates; a later file failure deletes that new Session. Renaming moves the Agent-owned tree and retargets live global Session addresses atomically, with a compensating retarget on restore. Deleting moves filesystem state first, then archives live database Sessions and restores the filesystem on failure. A **per-agent private skills home** may exist at `<agent-dir>/skills/` (created on first write by `skill_manage` or skill RPCs, private and always-allowed - see `skills.md`); it moves/archives with the Agent and is not seeded at creation.
 
 ## Data Model
 

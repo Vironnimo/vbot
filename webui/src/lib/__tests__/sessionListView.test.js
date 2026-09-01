@@ -5,6 +5,7 @@ import {
   createSessionListFilters,
   createSessionListState,
   isSessionHiddenByDefault,
+  overlayLiveSessionActivity,
   selectSession,
   sessionDisplayName,
   visibleSessionsForSelection,
@@ -68,6 +69,63 @@ describe('sessionListView helpers', () => {
       source_channel_id: 'tg-assistant',
       is_channel_session: true,
     });
+  });
+
+  it('overlays live activity by complete agent address and Session id', () => {
+    const sessions = applySessionList(createSessionListState(), [
+      { id: 'shared-id', has_active_run: false },
+      {
+        id: 'shared-id',
+        agent_address: 'reviewer@project',
+        has_unread_completion: false,
+      },
+      { id: 'server-only', has_active_run: true },
+    ]).sessions;
+
+    const projected = overlayLiveSessionActivity(
+      sessions,
+      [
+        {
+          agent_address: 'alpha',
+          session_id: 'shared-id',
+          has_active_run: true,
+          has_unread_completion: false,
+        },
+        {
+          agent_address: 'reviewer@project',
+          session_id: 'shared-id',
+          has_active_run: false,
+          has_unread_completion: true,
+          latest_completion_run_id: 'run-two',
+          unread_run_id: 'run-two',
+          unread_run_status: 'completed',
+          unread_run_at: '2026-08-31T12:00:00+00:00',
+        },
+      ],
+      'alpha',
+    );
+
+    expect(
+      projected.find(
+        (session) =>
+          session.id === 'shared-id' && session.agent_address === null,
+      ),
+    ).toMatchObject({
+      id: 'shared-id',
+      has_active_run: true,
+      has_unread_completion: false,
+    });
+    expect(
+      projected.find((session) => session.agent_address === 'reviewer@project'),
+    ).toMatchObject({
+      id: 'shared-id',
+      has_active_run: false,
+      has_unread_completion: true,
+      unread_run_id: 'run-two',
+    });
+    expect(
+      projected.find((session) => session.id === 'server-only'),
+    ).toMatchObject({ has_active_run: true });
   });
 
   it('normalizes sub-agent session metadata', () => {

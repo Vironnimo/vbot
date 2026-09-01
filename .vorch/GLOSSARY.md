@@ -25,7 +25,7 @@
 **Not:** Chain of Thought itself (the content, not its round-trip). Also not "replay everything by default" - minimality is the invariant; mechanics and per-provider policy live in `providers/request-policy.md`.
 
 ## Session
-**Definition:** A system-owned persisted chat container that belongs to exactly one Agent within its Identity or Project scope and owns the message history - one JSONL file per Session under the data directory (paths in `sessions.md`).
+**Definition:** A system-owned persisted chat container that belongs to exactly one Agent within its Identity or Project scope and owns canonical Message history in `<data-dir>/sessions.db` (storage and generation rules in `sessions.md`).
 **Not:** The agent itself, the currently executing work, or the agent's Workspace files. The Session is the persisted conversation container; the Run is the active execution inside it.
 
 ## Memory
@@ -86,4 +86,3 @@
 ## Rooted Agent
 **Definition:** An Identity Agent whose nullable saved `Project` selection names a registered Project. It keeps its own Workspace, Memory, private Skills, Sessions, permissions, and bare addressing while relative file/shell work, Project Files, and Project Skills use the selected Project.
 **Not:** A Project Agent or Config Agent. Rooting does not move Session ownership, apply Project Config-Agent ceilings, expose the Project Team automatically, or derive from Workspace path equality.
-

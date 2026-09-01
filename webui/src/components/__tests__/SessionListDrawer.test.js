@@ -193,6 +193,71 @@ describe('SessionListDrawer', () => {
     ).toBeNull();
   });
 
+  it('updates a mounted row from live running to unread activity without reloading', async () => {
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const harness = createChatViewParentHarness();
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          has_active_run: false,
+          has_unread_completion: false,
+        },
+      ],
+    });
+
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'another-session',
+        get liveActivity() {
+          return harness.sessionListActivity;
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+    expect(document.querySelector('.session-row__active-dot')).toBeNull();
+
+    harness.setSessionListActivity([
+      {
+        agent_address: 'alpha',
+        session_id: 'session-1',
+        has_active_run: true,
+        has_unread_completion: false,
+      },
+    ]);
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row__active-dot') !== null,
+    );
+    expect(listSessionsMock).toHaveBeenCalledTimes(1);
+
+    harness.setSessionListActivity([
+      {
+        agent_address: 'alpha',
+        session_id: 'session-1',
+        has_active_run: false,
+        has_unread_completion: true,
+        latest_completion_run_id: 'run-one',
+        unread_run_id: 'run-one',
+        unread_run_status: 'completed',
+        unread_run_at: '2026-08-31T12:00:00+00:00',
+      },
+    ]);
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row__unread-dot') !== null,
+    );
+    expect(document.querySelector('.session-row__active-dot')).toBeNull();
+    expect(listSessionsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('renders the centered row-action affordance as a vertical ellipsis', async () => {
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,

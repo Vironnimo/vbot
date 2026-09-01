@@ -24,7 +24,7 @@ from .runs_test_support import (
     pytest,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 
 async def test_rejects_second_active_run_for_same_session() -> None:

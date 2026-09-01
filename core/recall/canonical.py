@@ -1,4 +1,4 @@
-"""JSONL scan recall backend for persisted Sessions."""
+"""Canonical Session scan backend for persisted Sessions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
 from core.recall.recall import (
@@ -79,7 +79,7 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
 # Names of the built-in recall tools whose results are persisted into sessions
 # as ``role="tool"`` messages. Indexing or returning those results creates a
 # feedback loop where every search matches its own prior output, so they are
-# excluded from recall (the JSONL scan, context/bookends, and the semantic
+# excluded from recall (the canonical scan, context/bookends, and the semantic
 # index). This duplicates the Tool names from ``core.tools.session_search``
 # because recall is a lower layer than tools and cannot import it without an
 # import cycle; a test in ``test_session_search`` asserts the two stay in sync.
@@ -88,8 +88,8 @@ RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
-class JsonlSessionRecallBackend:
-    """Recall backend that scans canonical JSONL Sessions on demand."""
+class CanonicalSessionRecallBackend:
+    """Recall backend that scans canonical Session history on demand."""
 
     def __init__(self, sessions: ChatSessionManager) -> None:
         self.sessions = sessions
@@ -126,7 +126,7 @@ class JsonlSessionRecallBackend:
         """Backend-specific guidance for the session_search tool description.
 
         Appended to the generic tool description so the agent knows how queries
-        behave for the active backend. The JSONL scan matches literal substrings;
+        behave for the active backend. The canonical scan matches literal substrings;
         the FTS backend inherits this fragment, and the vector/hybrid backends
         override it.
         """
@@ -204,7 +204,9 @@ class JsonlSessionRecallBackend:
         )
 
     def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
-        summaries = self.sessions.list_with_metadata(request.agent_id, request.project_id)
+        summaries = cast(
+            list[JsonObject], self.sessions.list_with_metadata(request.agent_id, request.project_id)
+        )
         return [
             summary
             for summary in summaries
@@ -213,25 +215,29 @@ class JsonlSessionRecallBackend:
         ]
 
     def _search_snapshot(self, request: RecallSearchRequest, summaries: list[JsonObject]) -> str:
+        # Recall tracks only canonical history. Metadata-only changes must not
+        # invalidate a continuation or trigger a rebuild of this projection.
+        # One batched canonical-freshness query instead of one per Session.
+        versions = self.sessions.list_history_versions(
+            [_session_address(request, str(summary["id"])) for summary in summaries]
+        )
         fingerprint: list[str] = []
         for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
             session_id = str(summary["id"])
-            session = self.sessions.get(_session_address(request, session_id))
-            stat = session.path.stat()
-            try:
-                metadata_stat = session.sidecar_path.stat()
-                metadata_fingerprint = f"{metadata_stat.st_mtime_ns}:{metadata_stat.st_size}"
-            except FileNotFoundError:
-                metadata_fingerprint = "absent"
-            fingerprint.append(
-                f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}:metadata:{metadata_fingerprint}"
-            )
+            version = versions.get(_session_address(request, session_id))
+            if version is None:
+                continue
+            generation_id, revision = version
+            fingerprint.append(f"{session_id}:{generation_id}:{revision}")
         return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
         summaries = [
             summary
-            for summary in self.sessions.list_with_metadata(request.agent_id, request.project_id)
+            for summary in cast(
+                list[JsonObject],
+                self.sessions.list_with_metadata(request.agent_id, request.project_id),
+            )
             if session_matches_request(summary, request)
         ]
         summaries.sort(

@@ -44,7 +44,7 @@ from core.utils.errors import StorageError
 
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
-DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
+DEFAULT_RECALL_SETTINGS = {"backend": "sqlite_fts"}
 DEFAULT_WEB_SEARCH_SETTINGS = {
     "provider": DEFAULT_WEB_SEARCH_PROVIDER,
     "default_count": DEFAULT_WEB_SEARCH_COUNT,

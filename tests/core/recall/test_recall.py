@@ -6,12 +6,12 @@ import pytest
 
 from core.recall import (
     FIRST_PARTY_RECALL_BACKENDS,
+    RECALL_BACKEND_CANONICAL_SCAN,
     RECALL_BACKEND_HYBRID,
-    RECALL_BACKEND_JSONL_SCAN,
     RECALL_BACKEND_SQLITE_FTS,
     RECALL_BACKEND_VECTOR,
+    CanonicalSessionRecallBackend,
     HybridRecallBackend,
-    JsonlSessionRecallBackend,
     RecallBackendContext,
     RecallBackendRegistry,
     SqliteFtsRecallBackend,
@@ -41,7 +41,7 @@ def test_first_party_recall_backends_include_vector() -> None:
     assert (
         frozenset(
             {
-                RECALL_BACKEND_JSONL_SCAN,
+                RECALL_BACKEND_CANONICAL_SCAN,
                 RECALL_BACKEND_SQLITE_FTS,
                 RECALL_BACKEND_VECTOR,
                 RECALL_BACKEND_HYBRID,
@@ -62,7 +62,7 @@ def test_registry_create_returns_expected_backend_type(
     context: RecallBackendContext,
 ) -> None:
     assert isinstance(
-        registry.create(RECALL_BACKEND_JSONL_SCAN, context), JsonlSessionRecallBackend
+        registry.create(RECALL_BACKEND_CANONICAL_SCAN, context), CanonicalSessionRecallBackend
     )
     assert isinstance(registry.create(RECALL_BACKEND_SQLITE_FTS, context), SqliteFtsRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_VECTOR, context), VectorRecallBackend)
@@ -77,7 +77,7 @@ def test_session_removal_capability_is_opt_in_for_indexed_backends(
     backends opt in. ``remove_session_from_recall`` checks ``isinstance`` before
     calling, so an opt-out backend simply falls back to self-healing."""
 
-    assert not isinstance(JsonlSessionRecallBackend(context.sessions), SupportsSessionRemoval)
+    assert not isinstance(CanonicalSessionRecallBackend(context.sessions), SupportsSessionRemoval)
     assert isinstance(SqliteFtsRecallBackend(context), SupportsSessionRemoval)
     assert isinstance(VectorRecallBackend(context), SupportsSessionRemoval)
     assert isinstance(HybridRecallBackend(context), SupportsSessionRemoval)
@@ -93,17 +93,21 @@ def test_registry_create_unknown_backend_raises_key_error(
 
 def test_registry_rejects_duplicate_registration() -> None:
     registry = RecallBackendRegistry()
-    registry.register("alpha", lambda context: JsonlSessionRecallBackend(context.sessions))
+    registry.register("alpha", lambda context: CanonicalSessionRecallBackend(context.sessions))
     with pytest.raises(ValueError):
-        registry.register("alpha", lambda context: JsonlSessionRecallBackend(context.sessions))
+        registry.register("alpha", lambda context: CanonicalSessionRecallBackend(context.sessions))
 
 
 def test_registry_rejects_non_lowercase_snake_case_names() -> None:
     registry = RecallBackendRegistry()
     with pytest.raises(ValueError):
-        registry.register("CamelCase", lambda context: JsonlSessionRecallBackend(context.sessions))
+        registry.register(
+            "CamelCase", lambda context: CanonicalSessionRecallBackend(context.sessions)
+        )
     with pytest.raises(ValueError):
-        registry.register("Mixed_Case", lambda context: JsonlSessionRecallBackend(context.sessions))
+        registry.register(
+            "Mixed_Case", lambda context: CanonicalSessionRecallBackend(context.sessions)
+        )
 
 
 def test_registry_passes_extended_context_to_vector_backend(

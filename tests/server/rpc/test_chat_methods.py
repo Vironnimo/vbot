@@ -618,10 +618,18 @@ def _make_reflect_state(
 
     title_log = titles if titles is not None else []
     metadata_log = metadata_writes if metadata_writes is not None else []
+
+    def mutate_metadata(address: SessionAddress, mutation: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        mutation(metadata)
+        metadata_log.append((address.session_id, metadata))
+        return metadata
+
     chat_sessions = SimpleNamespace(
         fork=fork,
         get_metadata=lambda address: {},
         set_metadata=lambda address, data: metadata_log.append((address.session_id, data)),
+        mutate_metadata=mutate_metadata,
         set_title=lambda address, title: title_log.append((address.session_id, title)),
         record_run_kind=lambda address, run_kind: None,
     )

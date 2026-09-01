@@ -20,6 +20,7 @@ from core.chat import ChatSessionManager
 from core.debug.recorder import DebugContext
 from core.providers.accounts import ConnectionRef
 from core.runs import ChatRunManager
+from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
 from core.tools.file_state import FileReadState
@@ -272,6 +273,8 @@ class StubRuntime:
         adapter: DebugTrackingStubAdapter,
         tools: ToolRegistry | None = None,
     ) -> None:
+        if not (data_dir / "session-store.json").exists():
+            write_bootstrap_marker(data_dir)
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects({})
