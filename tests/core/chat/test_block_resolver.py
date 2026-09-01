@@ -23,6 +23,8 @@ from core.tools.read import render_text_file
 from core.utils.paths import model_path
 from tests.core.chat.chat_loop_support import build_chat_loop
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})
 TEXT_IMAGE_AUDIO = frozenset({"text", "image", "audio"})

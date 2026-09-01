@@ -8,7 +8,6 @@ import asyncio
 import inspect
 import os
 import sqlite3
-import threading
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
@@ -186,7 +185,6 @@ _PACKAGE_NAME = "vbot"
 _UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
-_SESSION_SNAPSHOT_INTERVAL_S = 300.0
 
 
 def _detect_vbot_version() -> str:
@@ -462,9 +460,6 @@ class Runtime:
         self._extension_reload_lock = asyncio.Lock()
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
-        self._snapshot_periodic_thread: threading.Thread | None = None
-        self._snapshot_stop_event: threading.Event | None = None
-        self._last_session_snapshot_revisions: tuple[int, int] | None = None
         self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
@@ -584,7 +579,6 @@ class Runtime:
                 self._storage.data_dir,
                 store_path=self._storage.layout.sessions_db_path,
             )
-            self._take_startup_snapshot()
             self._agents = AgentStore(
                 self._storage.data_dir,
                 template_dir=resources_path / "workspace-templates",
@@ -930,8 +924,6 @@ class Runtime:
         """
         self._log_shutdown()
         self._started = False
-        self._stop_periodic_snapshots()
-
         if self._extensions is not None:
             self._extensions.fire_shutdown_blocking()
 
@@ -961,8 +953,6 @@ class Runtime:
         """Gracefully shut down the runtime and await async service cleanup."""
         self._log_shutdown()
         self._started = False
-        self._stop_periodic_snapshots()
-
         if self._extensions is not None:
             await self._extensions.fire_shutdown()
 
@@ -1218,136 +1208,6 @@ class Runtime:
             return {}
         value = config.get(name, {})
         return value if isinstance(value, dict) else {}
-
-    def _take_startup_snapshot(self) -> None:
-        """Restore snapshot cadence state and leave expensive copying off readiness."""
-        if self._storage is None or self._chat_sessions is None:
-            return
-        from core.sessions.format import read_session_store_marker
-        from core.sessions.snapshots import snapshot_inventory
-
-        marker = read_session_store_marker(self._storage.data_dir)
-        database_id = None if marker is None else str(marker["database_id"])
-        current_revisions = self._chat_sessions.snapshot_revisions()
-        inventory = snapshot_inventory(self._storage.data_dir, expected_database_id=database_id)
-        checkpoint = self._chat_sessions.snapshot_checkpoint()
-        if checkpoint is not None:
-            snapshot_id, revisions = checkpoint
-            matching = next(
-                (
-                    snapshot
-                    for snapshot in inventory
-                    if snapshot["snapshot_id"] == snapshot_id
-                    and (
-                        int(snapshot["latest_history_revision"]),
-                        int(snapshot["latest_state_revision"]),
-                    )
-                    == revisions
-                ),
-                None,
-            )
-            if matching is not None and revisions == current_revisions:
-                self._last_session_snapshot_revisions = revisions
-        if self._last_session_snapshot_revisions is None:
-            reusable = next(
-                (
-                    snapshot
-                    for snapshot in inventory
-                    if (
-                        int(snapshot["latest_history_revision"]),
-                        int(snapshot["latest_state_revision"]),
-                    )
-                    == current_revisions
-                ),
-                None,
-            )
-            if reusable is not None:
-                snapshot_id = str(reusable["snapshot_id"])
-                self._chat_sessions.record_snapshot_checkpoint(snapshot_id, current_revisions)
-                self._last_session_snapshot_revisions = current_revisions
-        self._start_periodic_snapshots()
-
-    def _capture_session_snapshot(self, *, reason: str) -> Path | None:
-        if self._storage is None or self._chat_sessions is None:
-            return None
-        from core.sessions.format import read_session_store_marker
-        from core.sessions.snapshots import create_snapshot
-
-        data_dir = self._storage.data_dir
-        database_path = self._storage.layout.sessions_db_path
-        marker = read_session_store_marker(data_dir)
-        database_id = None if marker is None else str(marker["database_id"])
-        before = self._chat_sessions.snapshot_revisions()
-        stop_event = self._snapshot_stop_event
-        outcome = create_snapshot(
-            data_dir,
-            database_path,
-            lambda destination: self._chat_sessions.backup_snapshot(
-                destination,
-                cancel_event=stop_event,
-            ),
-            database_id=database_id,
-            reason=reason,
-            cancelled=None if stop_event is None else stop_event.is_set,
-        )
-        if outcome is None:
-            if self.logger is not None:
-                self.logger.warning("Session snapshot was not created: reason=%s", reason)
-            return None
-        after = self._chat_sessions.snapshot_revisions()
-        if before == after:
-            self._chat_sessions.record_snapshot_checkpoint(outcome.name, after)
-            self._last_session_snapshot_revisions = after
-        else:
-            self._last_session_snapshot_revisions = None
-        return outcome
-
-    def _start_periodic_snapshots(self) -> None:
-        """Own one revision-aware periodic snapshot worker for the Runtime lifecycle."""
-        if self._storage is None or self._chat_sessions is None:
-            return
-        if self._snapshot_periodic_thread is not None:
-            return
-        self._snapshot_stop_event = threading.Event()
-
-        def loop() -> None:
-            assert self._snapshot_stop_event is not None
-            while not self._snapshot_stop_event.is_set():
-                if self._chat_sessions is None:
-                    return
-                changed = (
-                    self._last_session_snapshot_revisions is None
-                    or self._chat_sessions.snapshot_revisions()
-                    != self._last_session_snapshot_revisions
-                )
-                if changed:
-                    try:
-                        self._capture_session_snapshot(reason="periodic")
-                    except Exception as error:
-                        if self.logger is not None:
-                            self.logger.error(
-                                "Session periodic snapshot failed: %s: %s",
-                                type(error).__name__,
-                                error,
-                            )
-                if self._snapshot_stop_event.wait(_SESSION_SNAPSHOT_INTERVAL_S):
-                    return
-
-        thread = threading.Thread(
-            target=loop,
-            name="session-snapshot-periodic",
-            daemon=True,
-        )
-        thread.start()
-        self._snapshot_periodic_thread = thread
-
-    def _stop_periodic_snapshots(self) -> None:
-        if self._snapshot_stop_event is not None:
-            self._snapshot_stop_event.set()
-        if self._snapshot_periodic_thread is not None:
-            self._snapshot_periodic_thread.join()
-        self._snapshot_periodic_thread = None
-        self._snapshot_stop_event = None
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:
@@ -2642,7 +2502,7 @@ class Runtime:
 
     @property
     def chat_sessions(self) -> ChatSessionManager:
-        """Access to agent chat session files."""
+        """Access to canonical Sessions."""
         self._ensure_started()
         if self._chat_sessions is None:
             raise RuntimeError("Chat session service not available")

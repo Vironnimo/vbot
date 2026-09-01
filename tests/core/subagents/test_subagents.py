@@ -37,7 +37,7 @@ from core.subagents.subagents import (
 )
 from core.tools.tools import ToolContext
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 JsonObject = dict[str, Any]
 SUBAGENT_TOOL_NAME = "subagent"

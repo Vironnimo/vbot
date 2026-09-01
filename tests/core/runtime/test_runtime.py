@@ -5,8 +5,6 @@ import json
 import logging
 import re
 import sys
-import threading
-import time
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +35,12 @@ from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
+
+
+def _authorize_session_store(data_dir: Path) -> None:
+    if not (data_dir / "sessions.db").is_file():
+        write_bootstrap_marker(data_dir)
+
 
 CANONICAL_BUILTIN_TOOLS = [
     "analyze_image",
@@ -198,8 +202,8 @@ def test_runtime_start_survives_corrupt_optional_configuration(tmp_path: Path) -
         encoding="utf-8",
     )
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_bytes(b"\xff")
     config = Config(data_dir=data_dir)
     config._data["RESOURCES_PATH"] = str(resources_dir)
@@ -332,7 +336,7 @@ def test_runtime_start_logs_inventory_counts(
 def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     """Runtime warnings emitted during startup use the managed logger contract."""
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     extra_skills_dir = config.data_dir / "extra-skills"
     broken_skill_dir = extra_skills_dir / "broken"
     broken_skill_dir.mkdir(parents=True)
@@ -366,98 +370,21 @@ metadata:
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
 
 
-def test_runtime_snapshot_records_captured_revisions(config: Config) -> None:
+def test_runtime_never_creates_automatic_session_snapshots(config: Config, monkeypatch) -> None:
+    from core.sessions import snapshots
+
+    def reject_snapshot(*_args, **_kwargs):
+        raise AssertionError("normal Runtime operation must not create a Session snapshot")
+
+    monkeypatch.setattr(snapshots, "create_snapshot", reject_snapshot)
     runtime = Runtime(config)
     runtime.start()
     try:
-        runtime._stop_periodic_snapshots()
-        runtime.chat_sessions.create("main", session_id="snapshot-revision").append(
-            ChatMessage.user("snapshot revision")
+        runtime.chat_sessions.create("main", session_id="no-automatic-snapshot").append(
+            ChatMessage.user("normal Runtime write")
         )
-        revisions = runtime.chat_sessions.snapshot_revisions()
-        outcome = runtime._capture_session_snapshot(reason="test")
-
-        assert outcome is not None
-        assert runtime._last_session_snapshot_revisions == revisions
-        assert runtime.chat_sessions.snapshot_checkpoint() == (outcome.name, revisions)
     finally:
         runtime.stop()
-
-
-def test_large_startup_snapshot_work_never_blocks_runtime_readiness(
-    config: Config, monkeypatch
-) -> None:
-    from core.sessions import snapshots
-
-    entered = threading.Event()
-    release = threading.Event()
-    original = snapshots.create_snapshot
-
-    def delayed_snapshot(*args, **kwargs):
-        entered.set()
-        assert release.wait(10)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(snapshots, "create_snapshot", delayed_snapshot)
-    runtime = Runtime(config)
-    started_at = time.monotonic()
-    runtime.start()
-    try:
-        assert time.monotonic() - started_at < 5
-        assert entered.wait(5)
-    finally:
-        release.set()
-        runtime.stop()
-
-
-def test_runtime_stop_cancels_an_in_progress_snapshot(config: Config, monkeypatch) -> None:
-    from core.sessions import snapshots
-
-    entered = threading.Event()
-
-    def cancellable_snapshot(*args, cancelled=None, **kwargs):
-        entered.set()
-        assert cancelled is not None
-        while not cancelled():
-            time.sleep(0.01)
-        return None
-
-    monkeypatch.setattr(snapshots, "create_snapshot", cancellable_snapshot)
-    runtime = Runtime(config)
-    runtime.start()
-    assert entered.wait(5)
-
-    stopped_at = time.monotonic()
-    runtime.stop()
-
-    assert time.monotonic() - stopped_at < 2
-
-
-def test_unchanged_restart_reuses_durable_snapshot_checkpoint(config: Config, monkeypatch) -> None:
-    first = Runtime(config)
-    first.start()
-    deadline = time.monotonic() + 5
-    while first._last_session_snapshot_revisions is None and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert first._last_session_snapshot_revisions is not None
-    first.stop()
-
-    from core.sessions import snapshots
-
-    calls = 0
-    original = snapshots.create_snapshot
-
-    def counted_snapshot(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(snapshots, "create_snapshot", counted_snapshot)
-    second = Runtime(config)
-    second.start()
-    second.stop()
-
-    assert calls == 0
 
 
 def test_runtime_stop_runs_cleanly(tmp_path: Path):
@@ -532,7 +459,7 @@ def test_runtime_selects_sqlite_fts_recall_backend_by_default(config: Config) ->
 def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "sqlite_fts"}}),
         encoding="utf-8",
@@ -547,7 +474,7 @@ def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> 
 def test_runtime_unknown_recall_backend_falls_back_to_sqlite_fts(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "team_backend"}}),
         encoding="utf-8",
@@ -565,7 +492,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_sqlite_fts(
 ) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "broken_backend"}}),
         encoding="utf-8",
@@ -680,7 +607,7 @@ def test_runtime_resolve_environment_credential_prefers_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -702,7 +629,7 @@ def test_runtime_resolve_environment_credential_uses_data_dir_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -773,7 +700,7 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
     channel_dir = config.data_dir / "channels" / "tg-assistant"
     channel_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     channel_dir.joinpath("channel.json").write_text(
         "\n".join(
             (
@@ -1272,7 +1199,7 @@ def _write_extension_with_skill(
     """Write a package extension bundling one skill under ``<ext>/skills/<name>/``."""
     ext_dir = data_dir / "extensions" / ext_name
     ext_dir.mkdir(parents=True)
-    write_bootstrap_marker(data_dir)
+    _authorize_session_store(data_dir)
     ext_dir.joinpath("__init__.py").write_text("", encoding="utf-8")
     _write_test_skill(ext_dir / "skills", skill_name, description)
 
@@ -1768,7 +1695,7 @@ class _ChatRuntimeStub:
         self.projects = _StubProjects()
         self.providers = _StubProviders()
         self.provider_credentials = _StubCredentials()
-        write_bootstrap_marker(tmp_path)
+        _authorize_session_store(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs

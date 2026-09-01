@@ -19,6 +19,25 @@ from core.sessions.schema import (
 )
 
 
+def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.sessions import store as store_module
+
+    def fail_backfill(_connection: sqlite3.Connection) -> None:
+        raise AssertionError("an empty FTS projection must become healthy in its bootstrap commit")
+
+    monkeypatch.setattr(store_module, "_backfill_fts", fail_backfill)
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        health = sessions.fts_health()
+        assert health.state == "healthy"
+        assert health.target_high_water == 0
+        assert health.completed_high_water == 0
+    finally:
+        sessions.close()
+
+
 def test_detached_fts_reopens_complete_when_canonical_projection_already_exists(
     tmp_path: Path,
 ) -> None:

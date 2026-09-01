@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from functools import cache
 
 from core.sessions.errors import SessionStoreCorruptError
 
@@ -489,14 +490,16 @@ def _normalized_ddl(sql: str) -> str:
     return " ".join(sql.split())
 
 
+@cache
 def declared_schema(schema_sql: str) -> DeclaredSchema:
     """Parse the declared schema by executing the DDL in an in-memory database.
 
     SQLite itself resolves every statement shape — defaults, CHECKs, STRICT
     types, generated columns — so the declaration cannot drift from what the
     DDL means, and PRAGMA table_xinfo reports generated columns as hidden.
-    The parse runs once per store construction on a three-table schema, so
-    its result is not cached.
+    Declarations are immutable process constants in normal operation, so the
+    parsed contract is reused across store instances instead of rebuilding an
+    in-memory database for every caller.
     """
     reference = sqlite3.connect(":memory:")
     try:

@@ -28,6 +28,8 @@ from core.sessions import ChatSessionManager, SessionAddress
 
 from .engine_test_support import MemoryChannelAccessRegistry, assert_member_trigger
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="discord",
     platform_display_name="Discord",

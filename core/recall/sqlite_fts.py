@@ -126,7 +126,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             since=None if request.since is None else request.since.isoformat(),
             until=None if request.until is None else request.until.isoformat(),
         )
-        # rows are (address, message_id, timestamp, message_json, rank)
+        # Rows carry one reconstructed payload from the normalized canonical tables.
         summaries_by_id = {str(summary["id"]): summary for summary in summaries}
         messages_by_session: dict[str, list[Any]] = {}
         matches: list[JsonObject] = []
@@ -177,11 +177,11 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         )
         summaries_by_id = {str(s["id"]): s for s in summaries}
         hits: list[tuple[float, str, str, RecallSearchHit]] = []
-        for address, message_id, timestamp, message_json, rank in rows:
+        for address, message_id, timestamp, message_payload, rank in rows:
             session_id = address.session_id
             if session_id not in summaries_by_id:
                 continue
-            message = _message_from_fts_payload(message_json)
+            message = _message_from_fts_payload(message_payload)
             if str(message.id) != message_id:
                 continue
             if not message_matches_search_request(message, request):

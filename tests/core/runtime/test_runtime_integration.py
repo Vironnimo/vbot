@@ -7,6 +7,7 @@ data, and that appropriate errors are raised for invalid lookups.
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +33,11 @@ from core.sessions.format import write_bootstrap_marker
 from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_PARAMETERS
 from core.utils.config import Config
 from core.utils.errors import ConfigError
+
+
+def _authorize_session_store(data_dir: Path) -> None:
+    if not (data_dir / "sessions.db").is_file():
+        write_bootstrap_marker(data_dir)
 
 
 @pytest.fixture
@@ -359,8 +365,8 @@ async def test_runtime_start_loads_data_dir_env_for_provider_auth(
     # Arrange
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -386,8 +392,8 @@ async def test_runtime_start_does_not_overwrite_existing_provider_environment(
     # Arrange
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -411,8 +417,8 @@ def test_runtime_start_does_not_mutate_process_environment_when_loading_credenti
 
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -433,8 +439,8 @@ def test_runtime_empty_process_credential_overrides_data_dir_fallback(
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    write_bootstrap_marker(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_text(
         "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
         encoding="utf-8",
@@ -863,7 +869,7 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
 
 def _write_settings(config: Config, payload: dict[str, object]) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    write_bootstrap_marker(config.data_dir)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps(payload),
         encoding="utf-8",
@@ -934,13 +940,14 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     runtime.start()
     try:
         assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
-        jsonl_tool = runtime.tools.get("session_search")
-        jsonl_parameters = jsonl_tool.parameters
-        assert set(jsonl_parameters["properties"]) == {
+        canonical_tool = runtime.tools.get("session_search")
+        canonical_parameters = canonical_tool.parameters
+        assert set(canonical_parameters["properties"]) == {
             "query",
             "period",
             "agent_id",
             "session_id",
+            "include_subagents",
         }
         assert runtime.tools.get("session_read").name == "session_read"
 
@@ -948,14 +955,15 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
         vector_tool = runtime.tools.get("session_search")
-        assert set(vector_tool.parameters["properties"]) == set(jsonl_parameters["properties"])
+        assert set(vector_tool.parameters["properties"]) == set(canonical_parameters["properties"])
         assert (
             vector_tool.parameters["properties"]["query"]["description"]
-            != jsonl_parameters["properties"]["query"]["description"]
+            != canonical_parameters["properties"]["query"]["description"]
         )
-        for field in ("period", "agent_id", "session_id"):
+        for field in ("period", "agent_id", "session_id", "include_subagents"):
             assert (
-                vector_tool.parameters["properties"][field] == jsonl_parameters["properties"][field]
+                vector_tool.parameters["properties"][field]
+                == canonical_parameters["properties"][field]
             )
         assert runtime.tools.get("session_read").name == "session_read"
         assert "semantically related passages" in vector_tool.description

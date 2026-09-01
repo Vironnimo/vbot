@@ -20,6 +20,8 @@ from core.tools import (
     register_history_tool,
 )
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 def _context(session_id: str, *, agent_id: str = "agent") -> ToolContext:
     return ToolContext(

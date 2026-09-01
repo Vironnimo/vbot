@@ -17,12 +17,13 @@ from core.recall import (
     RecallSearchCapabilities,
     RecallSearchHit,
     RecallSearchPage,
+    RecallSearchRequest,
     SqliteFtsRecallBackend,
 )
 from core.recall.canonical import RECALL_TOOL_RESULT_NAMES
 from core.recall.hybrid import HybridRecallBackend
 from core.recall.vector import VectorRecallBackend
-from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress, SessionDescriptorSource
 from core.tools.session_search import (
     SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS,
     SESSION_READ_TOOL_NAME,
@@ -40,7 +41,7 @@ from core.tools.session_search import (
 )
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 JsonObject = dict[str, Any]
 
@@ -102,6 +103,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         "period",
         "agent_id",
         "session_id",
+        "include_subagents",
     }
     assert set(read.parameters["properties"]) == {
         "session_id",
@@ -109,6 +111,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         "agent_id",
         "continuation",
         "all_messages",
+        "include_subagents",
     }
     assert search.parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert read.parameters == SESSION_READ_TOOL_PARAMETERS
@@ -177,7 +180,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         )
         == 4
     )
-    for field in ("period", "agent_id", "session_id"):
+    for field in ("period", "agent_id", "session_id", "include_subagents"):
         assert (
             len(
                 {
@@ -201,6 +204,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         {"session_id": "target", "offset": 1},
         {"session_id": "target", "continuation": ""},
         {"session_id": "target", "all_messages": "yes"},
+        {"session_id": "target", "include_subagents": "yes"},
         {"session_id": "target", "all_messages": True, "message_id": "message-id"},
     ),
 )
@@ -304,40 +308,37 @@ async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> 
 async def test_definition_explains_active_backend(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
+    suffix = (
+        "Delegated Sub-Agent work is excluded unless include_subagents is true. Omit query to "
+        "list recent Sessions. Returns up to 10 excerpts with no paging; narrow with period or "
+        "session_id. Use a returned read_ref with session_read when exact context matters. The "
+        "current Session is unavailable."
+    )
 
     expected = {
         "canonical_scan": (
-            "Find persisted Sessions and literal matches in past conversations. "
-            "The current Session is excluded. Omit query to list recent Sessions. Returns at "
-            "most 10 items with no paging; narrow with period or session_id. Search matches "
-            "include session_read references.",
+            f"Find persisted Sessions and literal matches in past conversations. {suffix}",
             "Literal terms to find. Every whitespace-separated term must occur as a "
             "case-insensitive substring; synonyms and paraphrases do not match. Omit to list "
             "recent Sessions. Matches are newest first.",
         ),
         "sqlite_fts": (
-            "Find persisted Sessions and relevance-ranked literal matches in past "
-            "conversations. The current Session is excluded. Omit query to list recent Sessions. "
-            "Returns at most 10 items with no paging; narrow with period or session_id. Search "
-            "matches include session_read references.",
+            "Find persisted Sessions and relevance-ranked literal matches in past conversations. "
+            f"{suffix}",
             "Literal terms to find. Every whitespace-separated term must occur. One- or "
             "two-character terms match whole tokens; longer terms also match inside words. "
             "Omit to list recent Sessions. Matches are ranked by text relevance.",
         ),
         "vector": (
-            "Find persisted Sessions and semantically related passages from past "
-            "conversations. The current Session is excluded. Omit query to list recent Sessions. "
-            "Returns at most 10 items with no paging; narrow with period or session_id. Search "
-            "matches include session_read references.",
+            "Find persisted Sessions and semantically related passages from past conversations. "
+            f"{suffix}",
             "Short topic description to find by meaning. Bare keywords anchor poorly and exact "
             "occurrences may be missed. Omit to list recent Sessions. Matches are ranked by "
             "semantic relevance.",
         ),
         "hybrid": (
             "Find persisted Sessions and relevant passages using literal and semantic search. "
-            "The current Session is excluded. Omit query to list recent Sessions. Returns at "
-            "most 10 items with no paging; narrow with period or session_id. Search matches "
-            "include session_read references.",
+            f"{suffix}",
             "Literal terms or a short topic description. Every whitespace-separated term is "
             "required by literal search; the same query is also searched by meaning. Omit to "
             "list recent Sessions. Matches combine both rankings by relevance.",
@@ -371,6 +372,7 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         {"query": "needle", "limit": 1},
         {"cursor": "opaque"},
         {"session_id": "past"},
+        {"query": "needle", "include_subagents": "yes"},
     ),
 )
 async def test_search_rejects_retired_and_advanced_fields(
@@ -460,7 +462,7 @@ async def test_list_projects_bounded_session_context_without_internal_metadata(
     data = success(
         await session_search_handler(
             make_context(tmp_path),
-            {},
+            {"include_subagents": True},
             CanonicalSessionRecallBackend(sessions),
         )
     )
@@ -520,6 +522,98 @@ async def test_list_preserves_mixed_run_origins_and_marks_legacy_origin_unknown(
     assert by_id["mixed"]["is_subagent_session"] is False
 
 
+async def test_session_tools_hide_internal_work_and_require_subagent_opt_in(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    definitions: dict[str, JsonObject] = {
+        "user": {"run_kinds": ["user"]},
+        "channel": {"run_kinds": ["channel"]},
+        "cron": {"run_kinds": ["cron"]},
+        "legacy": {},
+        "system": {"run_kinds": ["system"]},
+        "reflection": {"run_kinds": ["reflection"]},
+        "memory-reflection": {"run_kinds": ["memory_reflection"]},
+        "skill-reflection": {"run_kinds": ["skill_reflection"]},
+        "mixed-reflection": {"run_kinds": ["user", "skill_reflection"]},
+        "subagent-kind": {"run_kinds": ["subagent"]},
+        "subagent-flag": {"is_subagent_session": True},
+    }
+    messages: dict[str, ChatMessage] = {}
+    for day, (session_id, metadata) in enumerate(definitions.items(), start=1):
+        session = sessions.create("coder", session_id=session_id)
+        message = ChatMessage.user(f"visibilityneedle {session_id}", timestamp=timestamp(day))
+        session.append(message)
+        messages[session_id] = message
+        if metadata:
+            sessions.set_metadata(
+                SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
+                metadata,
+            )
+    backend = CanonicalSessionRecallBackend(sessions)
+    context = make_context(tmp_path)
+    read_context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+    public_ids = {"user", "channel", "cron", "legacy"}
+    subagent_ids = {"subagent-kind", "subagent-flag"}
+    always_hidden_ids = {
+        "system",
+        "reflection",
+        "memory-reflection",
+        "skill-reflection",
+        "mixed-reflection",
+    }
+
+    listed = success(await session_search_handler(context, {}, backend))
+    searched = success(
+        await session_search_handler(context, {"query": "visibilityneedle"}, backend)
+    )
+    opted_in = success(
+        await session_search_handler(
+            context,
+            {"query": "visibilityneedle", "include_subagents": True},
+            backend,
+        )
+    )
+
+    assert {item["session_id"] for item in listed["items"]} == public_ids
+    assert {item["session_id"] for item in searched["items"]} == public_ids
+    assert {item["session_id"] for item in opted_in["items"]} == public_ids | subagent_ids
+
+    subagent_hit = next(item for item in opted_in["items"] if item["session_id"] == "subagent-kind")
+    assert subagent_hit["read_ref"]["include_subagents"] is True
+    subagent_read = success(
+        await session_read_handler(read_context, subagent_hit["read_ref"], sessions)
+    )
+    assert subagent_read["items"][0]["message"] == messages["subagent-kind"].to_dict()
+
+    blocked_subagent_read = await session_read_handler(
+        read_context,
+        {"session_id": "subagent-kind"},
+        sessions,
+    )
+    failure(blocked_subagent_read, "session_not_found")
+
+    for session_id in always_hidden_ids:
+        scoped = success(
+            await session_search_handler(
+                context,
+                {
+                    "query": "visibilityneedle",
+                    "session_id": session_id,
+                    "include_subagents": True,
+                },
+                backend,
+            )
+        )
+        assert scoped["items"] == []
+        hidden_read = await session_read_handler(
+            read_context,
+            {"session_id": session_id, "include_subagents": True},
+            sessions,
+        )
+        failure(hidden_read, "session_not_found")
+
+
 @pytest.mark.parametrize(
     "period",
     ("weekend", "/", "2026-05-03/2026-05-02", "2026-05-01/2026-05-02/2026-05-03"),
@@ -539,8 +633,14 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="dated")
     outside = ChatMessage.user("needle old", timestamp=timestamp(1))
-    first = ChatMessage.user("needle Saturday", timestamp=timestamp(2))
-    second = ChatMessage.assistant(model="test", content="needle Sunday", timestamp=timestamp(3))
+    first = ChatMessage.user(
+        "We will not implement Telegram in this Session.",
+        timestamp=timestamp(2),
+    )
+    second = ChatMessage.user(
+        "Actually, implement Telegram completely from start to finish.",
+        timestamp=timestamp(3),
+    )
     for message in (outside, first, second):
         session.append(message)
 
@@ -548,7 +648,7 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
         await session_search_handler(
             make_context(tmp_path),
             {
-                "query": "needle",
+                "query": "Telegram",
                 "period": "2026-05-02/2026-05-03",
             },
             CanonicalSessionRecallBackend(sessions),
@@ -559,7 +659,9 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
     assert data["ranking"] == "message_time_newest"
 
 
-async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path: Path) -> None:
+async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
+    tmp_path: Path,
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="repeated-context")
     first = ChatMessage.user("needle opening context", timestamp=timestamp(1))
@@ -579,7 +681,7 @@ async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path:
         )
     )
 
-    assert len(data["items"]) == 2
+    assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
     assert len(data["sessions"]) == 1
     assert data["sessions"][0] == {
         "agent_id": "coder",
@@ -601,12 +703,12 @@ async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path:
 
 async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="many-hits")
-    messages = [
-        ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)) for index in range(12)
-    ]
-    for message in messages:
+    messages = []
+    for index in range(12):
+        session = sessions.create("coder", session_id=f"hit-{index}")
+        message = ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1))
         session.append(message)
+        messages.append(message)
     backend = CanonicalSessionRecallBackend(sessions)
 
     data = success(
@@ -617,6 +719,117 @@ async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: P
     assert data["items"][0]["message_id"] == messages[-1].id
     assert data["has_more"] is True
     assert "next_cursor" not in data
+
+
+async def test_unscoped_search_filters_internal_sessions_before_result_shaping(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    root = sessions.create("coder", session_id="root")
+    duplicate = ChatMessage.user("needle duplicated", timestamp=timestamp(1))
+    root.append(duplicate)
+    for session_id in ("reflection-one", "reflection-two"):
+        reflection = sessions.create("coder", session_id=session_id)
+        reflection.append(duplicate)
+        sessions.set_metadata(
+            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
+            {
+                "fork_source": {
+                    "agent_id": "coder",
+                    "session_id": "root",
+                    "project_id": None,
+                },
+                "run_kinds": ["skill_reflection"],
+            },
+        )
+    other_messages = []
+    for index in range(2):
+        session = sessions.create("coder", session_id=f"other-{index}")
+        message = ChatMessage.user(f"needle distinct {index}", timestamp=timestamp(index + 2))
+        session.append(message)
+        other_messages.append(message)
+
+    seen_requests: list[RecallSearchRequest] = []
+
+    class _RankedBackend:
+        def search_capabilities(self) -> RecallSearchCapabilities:
+            return RecallSearchCapabilities(result_type="message", guidance="Test search.")
+
+        async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+            seen_requests.append(request)
+
+            def hit(session_id: str, message: ChatMessage, score: float) -> RecallSearchHit:
+                return RecallSearchHit(
+                    result_type="message",
+                    session_id=session_id,
+                    message_id=message.id,
+                    role=str(message.role),
+                    timestamp=str(message.timestamp),
+                    text=str(message.content),
+                    score=score,
+                )
+
+            return RecallSearchPage(
+                hits=(
+                    hit("reflection-one", duplicate, 1.0),
+                    hit("reflection-two", duplicate, 0.9),
+                    hit("root", duplicate, 0.8),
+                    hit("other-0", other_messages[0], 0.7),
+                    hit("other-1", other_messages[1], 0.6),
+                ),
+                result_type="message",
+                ranking="test",
+                snapshot_id="snapshot",
+                has_more=False,
+                total_candidate_sessions=5,
+            )
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "needle"},
+            _RankedBackend(),
+            sessions=sessions,
+            backend_name="ranked_test",
+        )
+    )
+
+    assert [request.limit for request in seen_requests] == [10]
+    assert set(seen_requests[0].excluded_session_ids) >= {
+        "reflection-one",
+        "reflection-two",
+        "current-session",
+    }
+    assert [item["session_id"] for item in data["items"]] == [
+        "root",
+        "other-0",
+        "other-1",
+    ]
+    assert data["has_more"] is False
+
+
+async def test_session_scoped_search_keeps_multiple_hits_and_does_not_overfetch(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="target")
+    messages = [
+        ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)) for index in range(2)
+    ]
+    for message in messages:
+        session.append(message)
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "needle", "session_id": "target"},
+            CanonicalSessionRecallBackend(sessions),
+        )
+    )
+
+    assert [item["message_id"] for item in data["items"]] == list(
+        reversed([message.id for message in messages])
+    )
 
 
 async def test_search_read_ref_covers_complete_conversation_block(tmp_path: Path) -> None:
@@ -1229,8 +1442,8 @@ async def test_legacy_extension_search_is_adapted_without_blocking(tmp_path: Pat
 
 async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="large-excerpts")
     for index in range(3):
+        session = sessions.create("coder", session_id=f"large-excerpt-{index}")
         session.append(
             ChatMessage.user(
                 f"needle-{index} " + (chr(65 + index) * 30_000),
@@ -1255,29 +1468,48 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
 
 async def test_large_session_descriptor_list_returns_bounded_first_ten_without_cursor(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
+    summaries: list[JsonObject] = []
+    sources: dict[SessionAddress, SessionDescriptorSource] = {}
     for index in range(100):
         session_id = f"context-{index:03d}"
-        session = sessions.create("coder", session_id=session_id)
-        session.append(
-            ChatMessage.user("opening " + (str(index % 10) * 400), timestamp=timestamp(1))
-        )
-        sessions.set_metadata(
-            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
-            {
-                "title": "T" * 200,
-                "run_kinds": ["subagent"],
-                "subagent_parent": {
-                    "agent_id": "parent-agent",
-                    "session_id": "parent-" + ("s" * 100),
-                    "project_id": "project-" + ("p" * 100),
-                },
+        metadata: JsonObject = {
+            "title": "T" * 200,
+            "run_kinds": ["subagent"],
+            "subagent_parent": {
+                "agent_id": "parent-agent",
+                "session_id": "parent-" + ("s" * 100),
+                "project_id": "project-" + ("p" * 100),
             },
+            "id": session_id,
+            "created_at": timestamp(1).isoformat(),
+            "last_active_at": timestamp(1).isoformat(),
+        }
+        summaries.append(metadata)
+        address = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
+        sources[address] = SessionDescriptorSource(
+            metadata,
+            1,
+            ChatMessage.user(
+                "opening " + (str(index % 10) * 400),
+                timestamp=timestamp(1),
+            ),
         )
+    monkeypatch.setattr(sessions, "list_with_metadata", lambda *_args: summaries)
+    monkeypatch.setattr(
+        sessions,
+        "descriptor_sources",
+        lambda addresses: {address: sources[address] for address in addresses},
+    )
     backend = CanonicalSessionRecallBackend(sessions)
 
-    result = await session_search_handler(make_context(tmp_path), {}, backend)
+    result = await session_search_handler(
+        make_context(tmp_path),
+        {"include_subagents": True},
+        backend,
+    )
     data = success(result)
 
     assert 0 < len(data["items"]) <= 10

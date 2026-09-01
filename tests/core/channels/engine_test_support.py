@@ -48,6 +48,7 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import ChatSessionManager
+from core.sessions.format import write_bootstrap_marker
 
 SESSION_ID = "ch-tg-assistant-12345"
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
@@ -321,6 +322,8 @@ def make_engine(
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
+    if not (tmp_path / "session-store.json").exists():
+        write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
 

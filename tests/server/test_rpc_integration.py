@@ -697,7 +697,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
     assert "missing_api_key" not in json.dumps(settings_response.json())
 
 
-def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> None:
+def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> None:
     adapter = SequencedAdapter(
         [
             {

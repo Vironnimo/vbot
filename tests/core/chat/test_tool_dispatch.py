@@ -36,6 +36,8 @@ from core.tools import (
 )
 from core.tools.availability import ToolAccess
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 CANCELLED_BY_USER_MESSAGE = "Command aborted by the user"
 
 
