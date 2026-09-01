@@ -111,7 +111,11 @@ function _armHeartbeatWatchdog(state) {
     state._heartbeatTimer = null;
     if (state._connection) {
       try {
-        state._connection.close();
+        // Close the underlying socket so subscribeServerEvents keeps its close
+        // listener installed. Its wrapper close() intentionally removes that
+        // listener for a user-requested disconnect, which is the wrong
+        // lifecycle for a stalled connection that must reconnect.
+        state._connection.socket.close();
       } catch {
         // Close is best-effort; onClose will schedule reconnect.
       }
@@ -133,7 +137,9 @@ export function handleVisibilityChange(state) {
   if (elapsed > WS_HEARTBEAT_TIMEOUT_MS / 2) {
     if (state._connection) {
       try {
-        state._connection.close();
+        // See _armHeartbeatWatchdog: this is a recovery close, not an
+        // intentional disconnect, so onClose must schedule a reconnect.
+        state._connection.socket.close();
       } catch {
         // Best-effort; onClose will schedule reconnect.
       }

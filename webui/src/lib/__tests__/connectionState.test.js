@@ -7,6 +7,7 @@ import {
   connect,
   createConnectionState,
   disconnect,
+  handleVisibilityChange,
 } from '../connectionState.js';
 
 let latestSocket;
@@ -343,6 +344,43 @@ describe('reconnect', () => {
     vi.advanceTimersByTime(2000);
 
     expect(latestSocket.url).toContain('after_sequence=42');
+  });
+
+  it('reconnects after the heartbeat watchdog closes a stalled socket', () => {
+    connect(state, {
+      _WebSocket: MockWebSocket,
+      _baseUrl: 'http://localhost:8420/',
+    });
+    const initialSocket = latestSocket;
+    initialSocket.emit('open', {});
+
+    vi.advanceTimersByTime(60000);
+    expect(initialSocket.closeCalls).toHaveLength(1);
+
+    initialSocket.emit('close', {});
+    expect(state._reconnectTimer).not.toBeNull();
+    vi.advanceTimersByTime(2000);
+    expect(latestSocket).not.toBe(initialSocket);
+  });
+
+  it('reconnects when returning to a visible stalled tab', () => {
+    vi.stubGlobal('document', { visibilityState: 'visible' });
+    try {
+      connect(state, {
+        _WebSocket: MockWebSocket,
+        _baseUrl: 'http://localhost:8420/',
+      });
+      const initialSocket = latestSocket;
+      initialSocket.emit('open', {});
+
+      vi.advanceTimersByTime(30001);
+      handleVisibilityChange(state);
+      expect(initialSocket.closeCalls).toHaveLength(1);
+      initialSocket.emit('close', {});
+      expect(state._reconnectTimer).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

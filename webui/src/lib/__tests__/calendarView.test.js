@@ -100,9 +100,9 @@ describe('windowForView', () => {
     });
   });
 
-  it('starts today for the agenda', () => {
+  it('starts at its anchor for the agenda', () => {
     const window = windowForView('agenda', '2020-01-01');
-    expect(window.from).toBe(todayKey());
+    expect(window.from).toBe('2020-01-01');
     expect(addDaysToKey(window.from, 13)).toBe(window.to);
   });
 });
@@ -120,6 +120,15 @@ describe('navigateAnchor', () => {
 });
 
 describe('server timezone rendering', () => {
+  it('computes today in the server timezone instead of UTC', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
+      expect(todayKey('America/Los_Angeles')).toBe('2026-08-31');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('maps a UTC instant to its local day key', () => {
     // 22:00 UTC is already the next day in Europe/Berlin.
     expect(dayKeyInZone('2026-09-02T22:00:00+00:00', 'Europe/Berlin')).toBe(
@@ -323,6 +332,60 @@ describe('event form mapping', () => {
 });
 
 describe('controller', () => {
+  it('corrects the initial anchor and reloads in the server timezone', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
+      const { getCalendarWindow } = await import('../api.js');
+      getCalendarWindow
+        .mockResolvedValueOnce({
+          events: [],
+          occurrences: [],
+          cron: [],
+          system_timezone: 'America/Los_Angeles',
+        })
+        .mockResolvedValueOnce({
+          events: [],
+          occurrences: [],
+          cron: [],
+          system_timezone: 'America/Los_Angeles',
+        });
+      const state = createCalendarViewState();
+      const controller = createCalendarController({ state });
+
+      await controller.load();
+
+      expect(state.anchorKey).toBe('2026-08-31');
+      expect(getCalendarWindow).toHaveBeenLastCalledWith({
+        from: '2026-07-27',
+        to: '2026-09-06',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the server timezone for Today after loading', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
+      const { getCalendarWindow } = await import('../api.js');
+      getCalendarWindow.mockResolvedValue({
+        events: [],
+        occurrences: [],
+        cron: [],
+        system_timezone: 'America/Los_Angeles',
+      });
+      const state = createCalendarViewState();
+      const controller = createCalendarController({ state });
+      await controller.load();
+
+      controller.goToday();
+      expect(state.anchorKey).toBe('2026-08-31');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('toggles layers', () => {
     const state = createCalendarViewState();
     const controller = createCalendarController({ state });

@@ -47,7 +47,7 @@
     title: '',
     notes: '',
     all_day: false,
-    start_date: todayKey(),
+    start_date: todayKey(viewState.systemTimeZone),
     start_time: '09:00',
     duration_minutes: 60,
     duration_days: 1,
@@ -75,7 +75,8 @@
   let deleteOccurrenceOnly = $state(false);
 
   let locale = $derived(activeLocaleTag());
-  let gridDays = $derived(monthGridDays(viewState.anchorKey));
+  let currentDayKey = $derived(todayKey(viewState.systemTimeZone));
+  let gridDays = $derived(monthGridDays(viewState.anchorKey, currentDayKey));
   let anchorDate = $derived(dayKeyToUtcDate(viewState.anchorKey));
   let heading = $derived(
     monthLabel(anchorDate.getUTCFullYear(), anchorDate.getUTCMonth(), locale),
@@ -485,7 +486,10 @@
     <div class="calendar-columns">
       {#each weekColumns as dayKey (dayKey)}
         {@const entries = dayEntries(dayKey)}
-        <section class="calendar-column" class:is-today={dayKey === todayKey()}>
+        <section
+          class="calendar-column"
+          class:is-today={dayKey === currentDayKey}
+        >
           <h2 class="calendar-column-heading">
             {dayHeadingLabel(dayKey, locale)}
           </h2>
@@ -597,11 +601,11 @@
     <div class="calendar-agenda">
       {#each agendaDays as dayKey (dayKey)}
         {@const entries = dayEntries(dayKey)}
-        {#if dayKey === todayKey() || entries.length > 0}
+        {#if dayKey === currentDayKey || entries.length > 0}
           <section class="calendar-agenda-day">
             <h2 class="calendar-agenda-heading">
               {dayHeadingLabel(dayKey, locale)}
-              {#if dayKey === todayKey()}
+              {#if dayKey === currentDayKey}
                 <span class="calendar-agenda-today"
                   >{t('calendar.today', 'Today')}</span
                 >
