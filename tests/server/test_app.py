@@ -344,6 +344,67 @@ def test_http_transport_rejects_host_header_origin_rebinding(tmp_path: Path) -> 
     assert response.status_code == 403
 
 
+@pytest.mark.parametrize(
+    ("listen_host", "request_host", "origin"),
+    [
+        ("0.0.0.0", "192.168.10.25:8420", "http://192.168.10.25:8420"),
+        ("::", "[fd00::25]:8420", "http://[fd00::25]:8420"),
+    ],
+)
+def test_wildcard_bind_allows_same_origin_ip_browser_requests(
+    tmp_path: Path,
+    listen_host: str,
+    request_host: str,
+    origin: str,
+) -> None:
+    app = create_app(
+        runtime=Runtime(Config(data_dir=tmp_path / "data")),
+        server_bind={
+            "listen_host": listen_host,
+            "listen_port": 8420,
+            "port_source": "cli",
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/health",
+            headers={"host": request_host, "origin": origin},
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("request_host", "origin"),
+    [
+        ("attacker.example:8420", "http://attacker.example:8420"),
+        ("192.168.10.25:8420", "http://192.168.10.99:8420"),
+    ],
+)
+def test_wildcard_bind_rejects_rebinding_and_cross_ip_origins(
+    tmp_path: Path,
+    request_host: str,
+    origin: str,
+) -> None:
+    app = create_app(
+        runtime=Runtime(Config(data_dir=tmp_path / "data")),
+        server_bind={
+            "listen_host": "0.0.0.0",
+            "listen_port": 8420,
+            "port_source": "cli",
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/health",
+            headers={"host": request_host, "origin": origin},
+        )
+
+    assert response.status_code == 403
+
+
 def test_rpc_rejects_oversized_body_before_dispatch(monkeypatch, tmp_path: Path) -> None:
     import server.app as server_app
 
