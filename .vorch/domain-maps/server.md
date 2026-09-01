@@ -15,7 +15,7 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 - `/ws/logs` (handoff in `logs.md`) and `/ws/terminals/{id}` (ANSI snapshot then ordered PTY events; control via `terminal.*` RPCs) are dedicated streams outside the shared bus.
 - Binary data stays outside RPC: dedicated attachment/speech/image endpoints (semantics in their maps) plus `GET /api/files/{token}` serving Assistant-referenced originals - the token is a stateless per-process HMAC capability over the canonical path, never a caller-supplied path or copied blob.
 - **`/health` identity contract:** HTTP 200 with body exactly `{"status":"ok"}` is what CLI/Desktop probes require before treating a listener as vBot. Built WebUI assets serve as SPA when present; the entry document sends no-store so persistent Desktop WebView profiles always refresh, individual static files keep ordinary delivery.
-- `POST /_vbot/control/shutdown` is the private cooperative lifecycle edge letting the local CLI trigger normal lifespan teardown; it requires the current per-process secret from `<data_dir>/runtime/server-<port>.json`. The transport-neutral `core/utils/server_control.py` owns secret comparison, atomic persistence, and exact-owner cleanup.
+- `POST /_vbot/control/shutdown` is the private cooperative lifecycle edge letting the local CLI trigger normal lifespan teardown; it requires the current per-process secret from `<data_dir>/runtime/server-<port>.json`. The transport-neutral `core/utils/server_control.py` owns secret comparison, atomic persistence, PID plus process-creation-time identity for the post-listener shutdown window, and exact-owner cleanup.
 
 ## Source routing
 
@@ -38,7 +38,7 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 - FastAPI/uvicorn/websockets/multipart are optional dependencies; construction fails clearly when absent.
 - Static serving never shadows reserved paths (`/api/*`, `/ws`, `/health`, `/_vbot/control/*`); missing `webui/dist/index.html` unmounts `/` instead of breaking startup.
-- A stale control record is not authority: PID validation against the confirmed listener, atomic startup replacement, cleanup only when PID and secret both match. Never expose the token through health/RPC/logs/payloads.
+- A stale control record is not authority: while the listener exists its PID must match, and after the listener closes both PID and process creation time must match the live process. Startup replaces the record atomically; cleanup requires PID and secret ownership. Never expose the token through health/RPC/logs/payloads.
 - Runtime stubs must provide the services the server reads directly - no silent fallback construction. Secrets, tokens, and opaque metadata never enter logs or payloads. Endpoint-specific business logic in `app.py` or dispatcher helpers is an ownership error.
 
 ## References
