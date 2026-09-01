@@ -1422,7 +1422,8 @@ textarea::placeholder {
 }
 
 .dropdown-option:hover,
-.s-dropdown-opt:hover {
+.s-dropdown-opt:hover,
+.s-dropdown-opt.active {
   color: var(--text-hi);
   background: var(--surface-3);
 }
