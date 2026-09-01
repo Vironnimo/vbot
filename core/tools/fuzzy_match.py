@@ -133,7 +133,7 @@ def replace_fuzzy(
     when the winning strategy matched more than once without ``replace_all``, or
     ``None`` when no strategy matched.
     """
-    new_lf = _normalize_newlines(new_string)
+    replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
     file_ending = _detect_line_ending(content)
 
@@ -155,7 +155,7 @@ def replace_fuzzy(
         new_content, before_spans, after_spans = _apply_replacements(
             content,
             selected,
-            new_lf,
+            replacement_text,
             reindent=reindent,
             old_string_lf=old_lf,
             file_ending=file_ending,
@@ -285,6 +285,17 @@ def _normalize_newlines(text: str) -> str:
         if ending != "\n":
             normalized = normalized.replace(ending, "\n")
     return normalized
+
+
+def _normalize_replacement_newlines(text: str) -> str:
+    """Normalize standard newlines while preserving explicit exotic separators.
+
+    Models normally author multiline replacement text with LF regardless of the
+    target file's standard newline style. Exotic separators can instead be
+    literal file content copied from read output, so collapsing those to LF would
+    silently mutate bytes outside the intended edit.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _detect_line_ending(content: str) -> str | None:
@@ -570,7 +581,7 @@ def _find_non_overlapping(haystack: str, needle: str) -> list[tuple[int, int]]:
 def _apply_replacements(
     content: str,
     matches: list[tuple[int, int]],
-    new_string_lf: str,
+    replacement_text: str,
     *,
     reindent: bool,
     old_string_lf: str,
@@ -582,9 +593,11 @@ def _apply_replacements(
     offset_shift = 0
     for start, end in sorted(matches):
         if reindent:
-            replacement_lf = _reindent_replacement(content[start:end], old_string_lf, new_string_lf)
+            replacement_lf = _reindent_replacement(
+                content[start:end], old_string_lf, replacement_text
+            )
         else:
-            replacement_lf = new_string_lf
+            replacement_lf = replacement_text
         replacement = _to_line_ending(replacement_lf, file_ending)
         after_start = start + offset_shift
         after_end = after_start + len(replacement)
@@ -608,13 +621,24 @@ def _leading_whitespace(line: str) -> str:
 
 
 def _first_meaningful_line(text: str) -> str | None:
-    for line in text.split("\n"):
+    for line in _LINE_BREAK_RE.split(text):
         if line.strip():
             return line
     return None
 
 
-def _reindent_replacement(file_region: str, old_string_lf: str, new_string_lf: str) -> str:
+def _split_lines_preserving_endings(text: str) -> list[tuple[str, str]]:
+    """Split read-visible lines without discarding their exact separators."""
+    lines: list[tuple[str, str]] = []
+    start = 0
+    for match in _LINE_BREAK_RE.finditer(text):
+        lines.append((text[start : match.start()], match.group(0)))
+        start = match.end()
+    lines.append((text[start:], ""))
+    return lines
+
+
+def _reindent_replacement(file_region: str, old_string_lf: str, replacement_text: str) -> str:
     """Shift ``new_string`` so its base indent matches the file's actual indent.
 
     A line-trimmed match can succeed when the model's indentation differs from the
@@ -622,29 +646,29 @@ def _reindent_replacement(file_region: str, old_string_lf: str, new_string_lf: s
     would then corrupt indentation, so anchor the model's base indent onto the
     file's while preserving the relative nesting the model intended.
     """
-    if not new_string_lf:
-        return new_string_lf
+    if not replacement_text:
+        return replacement_text
 
     old_first = _first_meaningful_line(old_string_lf)
     file_first = _first_meaningful_line(file_region)
     if old_first is None or file_first is None:
-        return new_string_lf
+        return replacement_text
 
     old_indent = _leading_whitespace(old_first)
     file_indent = _leading_whitespace(file_first)
     if old_indent == file_indent:
-        return new_string_lf
+        return replacement_text
 
-    out_lines: list[str] = []
-    for line in new_string_lf.split("\n"):
+    out_parts: list[str] = []
+    for line, ending in _split_lines_preserving_endings(replacement_text):
         if not line.strip():
-            out_lines.append(line)
+            out_parts.append(line + ending)
             continue
         if _leading_whitespace(line).startswith(old_indent):
-            out_lines.append(file_indent + line[len(old_indent) :])
+            out_parts.append(file_indent + line[len(old_indent) :] + ending)
         else:
-            out_lines.append(file_indent + line.lstrip(" \t"))
-    return "\n".join(out_lines)
+            out_parts.append(file_indent + line.lstrip(" \t") + ending)
+    return "".join(out_parts)
 
 
 # (name, matcher, reindent-replacement, approximate) in increasing tolerance.
