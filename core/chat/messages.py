@@ -427,7 +427,7 @@ def has_unconsumed_skill_activation(messages: Sequence[ChatMessage]) -> bool:
 
 @dataclass(frozen=True)
 class ChatMessage:
-    """Canonical message persisted to session JSONL files."""
+    """Canonical message persisted in the Session database."""
 
     id: str
     timestamp: str

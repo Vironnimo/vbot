@@ -14,14 +14,16 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
+from core.chat import ChatMessage
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
-from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
+from core.recall import CanonicalSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
@@ -33,6 +35,12 @@ from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
+
+
+def _authorize_session_store(data_dir: Path) -> None:
+    if not (data_dir / "sessions.db").is_file():
+        write_bootstrap_marker(data_dir)
+
 
 CANONICAL_BUILTIN_TOOLS = [
     "analyze_image",
@@ -194,7 +202,8 @@ def test_runtime_start_survives_corrupt_optional_configuration(tmp_path: Path) -
         encoding="utf-8",
     )
     data_dir = tmp_path / "data"
-    data_dir.mkdir()
+    data_dir.mkdir(exist_ok=True)
+    _authorize_session_store(data_dir)
     data_dir.joinpath(".env").write_bytes(b"\xff")
     config = Config(data_dir=data_dir)
     config._data["RESOURCES_PATH"] = str(resources_dir)
@@ -327,6 +336,7 @@ def test_runtime_start_logs_inventory_counts(
 def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     """Runtime warnings emitted during startup use the managed logger contract."""
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     extra_skills_dir = config.data_dir / "extra-skills"
     broken_skill_dir = extra_skills_dir / "broken"
     broken_skill_dir.mkdir(parents=True)
@@ -358,6 +368,23 @@ metadata:
 
     assert "[WARN] vbot.core - Loaded skills with " in contents
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
+
+
+def test_runtime_never_creates_automatic_session_snapshots(config: Config, monkeypatch) -> None:
+    from core.sessions import snapshots
+
+    def reject_snapshot(*_args, **_kwargs):
+        raise AssertionError("normal Runtime operation must not create a Session snapshot")
+
+    monkeypatch.setattr(snapshots, "create_snapshot", reject_snapshot)
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        runtime.chat_sessions.create("main", session_id="no-automatic-snapshot").append(
+            ChatMessage.user("normal Runtime write")
+        )
+    finally:
+        runtime.stop()
 
 
 def test_runtime_stop_runs_cleanly(tmp_path: Path):
@@ -420,18 +447,19 @@ def test_start_registers_builtin_tools_once(config: Config):
         assert len(tool.contract.schema_fingerprint) == 64
 
 
-def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:
+def test_runtime_selects_sqlite_fts_recall_backend_by_default(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
 def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "sqlite_fts"}}),
         encoding="utf-8",
@@ -443,9 +471,10 @@ def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> 
     assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
-def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> None:
+def test_runtime_unknown_recall_backend_falls_back_to_sqlite_fts(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "team_backend"}}),
         encoding="utf-8",
@@ -454,24 +483,26 @@ def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> N
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
-def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
+def test_runtime_failing_recall_backend_factory_falls_back_to_sqlite_fts(
     config: Config,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "broken_backend"}}),
         encoding="utf-8",
     )
     registry = RecallBackendRegistry()
     registry.register(
-        "jsonl_scan",
-        lambda context: JsonlSessionRecallBackend(context.sessions),
+        "canonical_scan",
+        lambda context: CanonicalSessionRecallBackend(context.sessions),
     )
+    registry.register("sqlite_fts", SqliteFtsRecallBackend)
 
     def create_broken_backend(_context: Any) -> Any:
         raise RuntimeError("broken derived index")
@@ -486,7 +517,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):
@@ -576,6 +607,7 @@ def test_runtime_resolve_environment_credential_prefers_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -597,6 +629,7 @@ def test_runtime_resolve_environment_credential_uses_data_dir_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     config.data_dir.joinpath(".env").write_text(
         "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
         encoding="utf-8",
@@ -667,6 +700,7 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
     channel_dir = config.data_dir / "channels" / "tg-assistant"
     channel_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
     channel_dir.joinpath("channel.json").write_text(
         "\n".join(
             (
@@ -1165,6 +1199,7 @@ def _write_extension_with_skill(
     """Write a package extension bundling one skill under ``<ext>/skills/<name>/``."""
     ext_dir = data_dir / "extensions" / ext_name
     ext_dir.mkdir(parents=True)
+    _authorize_session_store(data_dir)
     ext_dir.joinpath("__init__.py").write_text("", encoding="utf-8")
     _write_test_skill(ext_dir / "skills", skill_name, description)
 
@@ -1660,6 +1695,7 @@ class _ChatRuntimeStub:
         self.projects = _StubProjects()
         self.providers = _StubProviders()
         self.provider_credentials = _StubCredentials()
+        _authorize_session_store(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs

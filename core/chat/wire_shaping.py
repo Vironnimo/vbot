@@ -9,7 +9,7 @@ completing its usage counters.
 
 The canonical persisted model itself lives in :mod:`core.chat.messages`; this
 module depends on it, never the reverse. Everything here is request-only or
-response-only — Session JSONL is never written from this module.
+response-only — canonical Session history is never written from this module.
 """
 
 from __future__ import annotations
@@ -385,7 +385,7 @@ def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[Json
     becomes unusable. This post-pass synthesizes a stable failure envelope for
     every missing ``tool_call_id`` immediately after the dangling assistant
     turn, in the assistant's original tool-call order. The synthesized entries
-    exist only in the request payload — they are never written to JSONL.
+    exist only in the request payload — they are never written to Session history.
     """
     repaired: list[JsonObject] = []
     pending_tool_calls: list[JsonObject] = []
@@ -457,7 +457,7 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     place, right where the activation happened. Passive channel observations become
     separate, explicitly untrusted quoted-context user messages, never system
     reminders. A malformed skill note is dropped from the request (it stays in
-    JSONL for debugging).
+    canonical Session history for debugging).
     """
     request_messages: list[JsonObject] = []
     note_run: list[ChatMessage] = []

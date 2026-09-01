@@ -11,7 +11,7 @@ from core.sessions import SessionAddress
 from core.subagents.subagents import SubAgentBatchTracker
 from core.subagents.tracker import _entry_result_text, _entry_status, _SubAgentEntry
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 
 class RecordingTriggerService:

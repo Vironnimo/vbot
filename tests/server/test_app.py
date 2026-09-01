@@ -16,6 +16,7 @@ from core.chat import ChatLoop
 from core.runs import ChatRunManager, RunKind, RunStatus
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server.app import (
@@ -103,6 +104,7 @@ def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Pa
 async def test_statistics_warmup_builds_disposable_index_for_complete_runtime_surface(
     tmp_path: Path,
 ) -> None:
+    write_bootstrap_marker(tmp_path)
     manager = ChatSessionManager(tmp_path)
     runtime = SimpleNamespace(
         chat_sessions=manager,
@@ -155,6 +157,7 @@ def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> 
     claim_path = seed_cron._once_fire_claim_path(once.id)
     claim_path.parent.mkdir(parents=True, exist_ok=True)
     claim_path.write_text("{", encoding="utf-8")
+    write_bootstrap_marker(data_dir)
     runtime = Runtime(Config(data_dir=data_dir))
     app = create_app(runtime=runtime)
 
@@ -171,6 +174,7 @@ def test_create_app_starts_when_bootstrap_store_is_malformed(tmp_path: Path) -> 
     jobs_path = data_dir / "bootstrap" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
     jobs_path.write_text("{", encoding="utf-8")
+    write_bootstrap_marker(data_dir)
     runtime = Runtime(Config(data_dir=data_dir))
     app = create_app(runtime=runtime)
 
@@ -226,6 +230,7 @@ def test_create_app_derives_server_bind_from_environment_port(
 def test_create_app_derives_server_bind_from_settings_file(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
     (data_dir / "settings.json").write_text('{"server_port": 8500}', encoding="utf-8")
     app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
 
@@ -450,6 +455,7 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
 
 
 def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
     state = type(
@@ -479,6 +485,7 @@ def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) ->
 
 
 def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
     sessions.record_terminal_run(

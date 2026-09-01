@@ -188,7 +188,6 @@ def test_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
 
 def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
-    manager.sessions_dir("main").mkdir(parents=True, exist_ok=True)
     service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
 
     report = service.report()
@@ -1435,7 +1434,9 @@ def test_skills_window_filters_offered_and_activated(tmp_path: Path) -> None:
     # Session created (first message) before the window; an activation note fires
     # inside it. Offered filters by created_at (excluded); activated by note
     # timestamp (included) — and never-used is window-independent.
-    session = manager.create("main")
+    address = SessionAddress(project_id=None, agent_id="main", session_id="windowed")
+    manager._store.create(address, created_at=BASE.isoformat())
+    session = manager.get(address)
     session.append(ChatMessage.user("hi", timestamp=BASE))
     session.append(_skill_note("deploy", BASE + timedelta(hours=2)))
     manager.set_metadata(

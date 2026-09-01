@@ -1,14 +1,21 @@
 """Session domain public API."""
 
 from core.chat.errors import ChatSessionError
+from core.sessions.errors import (
+    FtsHealth,
+    SessionRecoveryConflictError,
+    SessionStorageError,
+    SessionStorageFormatError,
+    SessionStoreCorruptError,
+    SessionStoreSchemaMismatchError,
+    SessionStoreUnavailableError,
+)
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
-    CONTINUATION_FILE_SUFFIX,
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
-    SESSION_FILE_EXTENSION,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
     SESSION_MOVE_STRIP_META_KEYS,
@@ -17,6 +24,7 @@ from core.sessions.sessions import (
     ChatSession,
     ChatSessionManager,
     SessionAddress,
+    SessionDescriptorSource,
     SessionIdentityReferenceUpdate,
     SessionReadBatch,
     SessionReadCursor,
@@ -39,10 +47,8 @@ from core.sessions.sessions import (
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",
-    "CONTINUATION_FILE_SUFFIX",
     "FORK_SOURCE_META_KEY",
     "PROMPT_CACHE_AFFINITY_META_KEY",
-    "SESSION_FILE_EXTENSION",
     "SESSION_AUTO_TITLE_INITIALIZED_KEY",
     "SESSION_AUTO_TITLE_KEY",
     "SESSION_FORK_ALWAYS_STRIP_META_KEYS",
@@ -52,8 +58,16 @@ __all__ = [
     "SKILL_AVAILABLE_NOTE_PREFIX",
     "ChatSession",
     "ChatSessionError",
+    "FtsHealth",
+    "SessionStorageError",
+    "SessionStorageFormatError",
+    "SessionRecoveryConflictError",
+    "SessionStoreCorruptError",
+    "SessionStoreSchemaMismatchError",
+    "SessionStoreUnavailableError",
     "ChatSessionManager",
     "SessionAddress",
+    "SessionDescriptorSource",
     "current_skill_activation_contents",
     "SessionIdentityReferenceUpdate",
     "SessionReadBatch",

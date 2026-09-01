@@ -24,6 +24,7 @@
     applySessionList,
     createSessionListFilters,
     createSessionListState,
+    overlayLiveSessionActivity,
     selectSession,
     sessionDisplayName,
     visibleSessionsForSelection,
@@ -41,6 +42,9 @@
     // Roster of addressable agents ({ address, name }) the "All agents"
     // filter lists sessions for — the same set the Chat agent bars show.
     agents = [],
+    // Lean projection of Chat's live Run/activity state. It overlays the last
+    // session.list snapshot so an already-open drawer reacts immediately.
+    liveActivity = [],
     // Persisted filter state from the parent (ChatView). On first mount this
     // is null and the filters default; on remount (panel reopened) the
     // previously chosen filters are restored so toggling the panel doesn't
@@ -68,8 +72,11 @@
   let filters = $state(
     untrack(() => initialFilters) ?? createSessionListFilters(),
   );
+  let sessionsWithLiveActivity = $derived(
+    overlayLiveSessionActivity(sessionState.sessions, liveActivity, agentId),
+  );
   let visibleSessions = $derived(
-    visibleSessionsForSelection(sessionState.sessions, {
+    visibleSessionsForSelection(sessionsWithLiveActivity, {
       filters,
       selectedSessionId: currentSessionId,
     }),

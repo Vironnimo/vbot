@@ -20,6 +20,8 @@ from core.tools import (
     register_history_tool,
 )
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 def _context(session_id: str, *, agent_id: str = "agent") -> ToolContext:
     return ToolContext(
@@ -624,12 +626,17 @@ def test_missing_checkpoint_reports_only_available_range(tmp_path: Path) -> None
     assert "secret content" not in result["error"]["message"]
 
 
-def test_corrupt_session_returns_history_session_error(tmp_path: Path) -> None:
+def test_session_read_failure_returns_history_session_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
     session.append(_checkpoint())
-    with session.path.open("a", encoding="utf-8") as handle:
-        handle.write("{complete invalid json}\n")
+
+    def fail_load(self: ChatSession) -> list[ChatMessage]:
+        raise OSError("database read failed")
+
+    monkeypatch.setattr(ChatSession, "load_active", fail_load)
 
     result = _call(manager, session, {"action": "read"})
 

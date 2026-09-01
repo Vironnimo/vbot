@@ -52,6 +52,7 @@ AREA_HELP = {
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
+    "session-store": "Inspect, snapshot, verify, and recover the SQLite Session store",
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
     "prompt": "Inspect and manage System Prompt blocks",
@@ -102,6 +103,17 @@ SESSION_HELP = {
     "rename": "Set or clear a session's display title",
     "set-compaction-policy": "Set or clear a Session Policy override",
     "link-channel": "Link a session to a channel conversation for outbound replies",
+}
+SESSION_STORE_HELP = {
+    "status": "Show current SQLite Session-store health and recovery state",
+    "snapshot": "Manage verified SQLite Session snapshots",
+    "incident": "Manage durable Session-store recovery incidents",
+}
+SESSION_STORE_SNAPSHOT_HELP = {
+    "list": "List verified Session-store snapshots",
+    "create": "Create a verified Session-store snapshot through the running server",
+    "verify": "Verify one Session-store snapshot",
+    "restore": "Restore one verified Session-store snapshot",
 }
 CHANNEL_HELP = {
     "add": "Create a channel config",
@@ -259,6 +271,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
+    _add_session_store_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
     _add_prompt_parsers(subparsers)
@@ -902,6 +915,82 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<platform-conv-id>",
         help="Platform conversation id, for example a Telegram chat id",
     )
+
+
+def _add_session_store_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    session_store_parser = subparsers.add_parser(
+        "session-store",
+        help=AREA_HELP["session-store"],
+        description=AREA_HELP["session-store"],
+    )
+    commands = session_store_parser.add_subparsers(dest="command", required=True)
+
+    _add_command_parser(
+        commands,
+        "status",
+        SESSION_STORE_HELP["status"],
+        example="session-store status",
+    )
+
+    snapshot_parser = commands.add_parser(
+        "snapshot",
+        help=SESSION_STORE_HELP["snapshot"],
+        description=SESSION_STORE_HELP["snapshot"],
+    )
+    snapshot_commands = snapshot_parser.add_subparsers(dest="snapshot_command", required=True)
+    _add_command_parser(
+        snapshot_commands,
+        "list",
+        SESSION_STORE_SNAPSHOT_HELP["list"],
+        example="session-store snapshot list",
+    )
+    create_parser = _add_command_parser(
+        snapshot_commands,
+        "create",
+        SESSION_STORE_SNAPSHOT_HELP["create"],
+        example="session-store snapshot create --reason manual",
+    )
+    create_parser.add_argument(
+        "--reason",
+        choices=("manual", "rpc", "update", "recovery"),
+        default="manual",
+        help="Reason recorded in the snapshot manifest",
+    )
+    verify_parser = _add_command_parser(
+        snapshot_commands,
+        "verify",
+        SESSION_STORE_SNAPSHOT_HELP["verify"],
+        example="session-store snapshot verify <snapshot-id>",
+    )
+    verify_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
+    restore_parser = _add_command_parser(
+        snapshot_commands,
+        "restore",
+        SESSION_STORE_SNAPSHOT_HELP["restore"],
+        example="session-store snapshot restore <snapshot-id> --yes",
+    )
+    restore_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
+    restore_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm restore while the exact server target is stopped",
+    )
+
+    incident_parser = commands.add_parser(
+        "incident",
+        help=SESSION_STORE_HELP["incident"],
+        description=SESSION_STORE_HELP["incident"],
+    )
+    incident_commands = incident_parser.add_subparsers(dest="incident_command", required=True)
+    acknowledge_parser = _add_command_parser(
+        incident_commands,
+        "acknowledge",
+        "Acknowledge one durable Session-store recovery incident",
+        example="session-store incident acknowledge <incident-id>",
+    )
+    acknowledge_parser.add_argument("incident_id", metavar="<incident-id>")
 
 
 def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

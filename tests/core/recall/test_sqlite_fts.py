@@ -18,6 +18,7 @@ from core.recall import (
     SqliteFtsRecallBackend,
 )
 from core.sessions import ChatSessionManager
+from core.sessions.schema import JOURNAL_MODE_DELETE
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,6 +52,39 @@ def request(
 
 def backend(tmp_path: Path, sessions: ChatSessionManager) -> SqliteFtsRecallBackend:
     return SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+
+
+async def test_index_uses_required_rollback_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.recall import sqlite_fts
+
+    monkeypatch.setattr(sqlite_fts, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE)
+
+    sessions = ChatSessionManager(tmp_path)
+    connection = backend(tmp_path, sessions)._connect()
+    try:
+        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        connection.close()
+        sessions.close()
+
+    assert mode == JOURNAL_MODE_DELETE
+
+
+async def test_index_cleanup_includes_rollback_journal(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    recall = backend(tmp_path, sessions)
+    try:
+        rollback_journal = Path(f"{recall.index_path}-journal")
+        rollback_journal.parent.mkdir(parents=True, exist_ok=True)
+        rollback_journal.write_bytes(b"stale")
+
+        recall._delete_index_file()
+
+        assert rollback_journal.exists() is False
+    finally:
+        sessions.close()
 
 
 def passage_request(
@@ -126,7 +160,37 @@ async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) 
     data = await recall.search(request(query="release deploy"))
 
     assert data["matches"][0]["session_id"] == "search-session"
-    assert (tmp_path / "recall" / "session_index.sqlite").is_file()
+    # Canonical FTS lives inside sessions.db; disposable index is fallback.
+    if not sessions.is_fts_available():
+        assert (tmp_path / "recall" / "session_index.sqlite").is_file()
+    else:
+        # Search succeeded via canonical FTS; disposable may not be created.
+        assert data["matches"]
+
+
+async def test_passage_index_does_not_duplicate_canonical_message_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="passage-only").append(
+        ChatMessage.user("Passage projection only", timestamp=timestamp(1))
+    )
+    monkeypatch.setattr(sessions, "is_fts_available", lambda: False)
+    recall = backend(tmp_path, sessions)
+
+    await recall.search_passages(passage_request("projection"))
+
+    with sqlite3.connect(recall.index_path) as connection:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            )
+        }
+    assert "passages" in tables
+    assert "passages_fts" in tables
+    assert "messages" not in tables
+    assert "messages_fts" not in tables
 
 
 async def test_sqlite_fts_reindexes_stale_session_after_append(tmp_path: Path) -> None:
@@ -150,12 +214,15 @@ async def test_sqlite_fts_rebuilds_when_index_file_is_deleted(tmp_path: Path) ->
     recall = backend(tmp_path, sessions)
     await recall.search(request(query="disposable"))
     index_path = tmp_path / "recall" / "session_index.sqlite"
-    index_path.unlink()
+    # Canonical FTS does not use the disposable file; only delete if it exists.
+    if index_path.exists():
+        index_path.unlink()
 
     data = await recall.search(request(query="disposable"))
 
     assert data["matches"][0]["session_id"] == "rebuild-session"
-    assert index_path.is_file()
+    if not sessions.is_fts_available():
+        assert index_path.is_file()
 
 
 async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:
@@ -163,7 +230,7 @@ async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:
     session = sessions.create("coder", session_id="corrupt-session")
     session.append(ChatMessage.user("Corrupt index still searchable", timestamp=timestamp(1)))
     index_path = tmp_path / "recall" / "session_index.sqlite"
-    index_path.parent.mkdir(parents=True)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text("not sqlite", encoding="utf-8")
 
     data = await backend(tmp_path, sessions).search(request(query="corrupt searchable"))
@@ -185,7 +252,7 @@ async def test_sqlite_fts_phrase_and_any_term_modes(tmp_path: Path) -> None:
     assert [match["snippet"] for match in any_data["matches"]] == ["gamma"]
 
 
-async def test_sqlite_search_text_matches_jsonl_scanner_sources(tmp_path: Path) -> None:
+async def test_sqlite_search_text_matches_canonical_scanner_sources(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="sources-session")
     content_blocks: list[Any] = [
@@ -246,7 +313,7 @@ async def test_sqlite_fts_case_insensitive_substring(tmp_path: Path) -> None:
     assert data["matches"][0]["session_id"] == "case-session"
 
 
-async def test_sqlite_fts_short_query_falls_back_to_jsonl_substring(tmp_path: Path) -> None:
+async def test_sqlite_fts_short_query_falls_back_to_canonical_substring(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="short-session")
     session.append(ChatMessage.user("Go fast", timestamp=timestamp(1)))

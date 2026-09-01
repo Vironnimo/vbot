@@ -45,6 +45,7 @@ from cli.server_management import (
     ServerInstance,
     decode_command_output,
     has_vbot_run_context,
+    probe_health,
     restart_server,
     schedule_server_restart,
     start_server,
@@ -100,6 +101,69 @@ class _Step:
     message: str
 
 
+def _ensure_update_session_snapshot(instance: ServerInstance) -> _Step:
+    """Create the mandatory current-format Session snapshot before code changes."""
+
+    from cli.rpc_client import rpc_call
+    from core.sessions.format import read_session_store_marker
+
+    data_dir = instance.data_dir
+    database = data_dir / "sessions.db"
+    try:
+        marker = read_session_store_marker(data_dir)
+    except Exception as exc:
+        return _Step(False, f"update: Session-store marker cannot be read: {exc}")
+    if marker is None:
+        if database.exists():
+            return _Step(
+                False,
+                "update: a sessions.db exists without a current-format Session marker; "
+                "refusing to update without a verified Session snapshot",
+            )
+        return _Step(True, "")
+    if marker["state"] == "bootstrap" and not database.exists():
+        return _Step(True, "")
+    if not database.is_file():
+        return _Step(
+            False, "update: current-format Session marker exists but sessions.db is missing"
+        )
+
+    health = probe_health(instance)
+    if health.reachable:
+        if not health.is_vbot:
+            return _Step(False, "update: the target port is occupied by a non-vBot process")
+        payload = rpc_call(instance, "session_store.snapshot_create", {"reason": "update"})
+        if not payload.ok:
+            return _Step(False, f"update: pre-update Session snapshot failed: {payload.message}")
+        snapshot = payload.data.get("snapshot")
+        snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, dict) else None
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            return _Step(False, "update: pre-update Session snapshot response was incomplete")
+        return _Step(True, f"pre-update Session snapshot: {snapshot_id}")
+
+    from core.sessions.snapshots import create_snapshot
+    from core.sessions.store import SessionStore
+
+    store = None
+    try:
+        store = SessionStore(database)
+        snapshot = create_snapshot(
+            data_dir,
+            database,
+            store.backup,
+            database_id=str(marker["database_id"]),
+            reason="update",
+        )
+    except Exception as exc:
+        return _Step(False, f"update: offline Session snapshot failed: {exc}")
+    finally:
+        if store is not None:
+            store.close()
+    if snapshot is None:
+        return _Step(False, "update: offline Session snapshot was not verified")
+    return _Step(True, f"pre-update Session snapshot: {snapshot.name}")
+
+
 @dataclass(frozen=True)
 class _DirtyResolution:
     ok: bool
@@ -143,6 +207,7 @@ def run_update(
     host: str | None = None,
     port: int | None = None,
     data_dir: str | Path | None = None,
+    session_snapshot_fn: Callable[[ServerInstance], _Step] = _ensure_update_session_snapshot,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
 
@@ -200,6 +265,12 @@ def run_update(
     )
     if not desktop_guard.ok:
         return _fail(instance, desktop_guard.message)
+
+    session_snapshot = session_snapshot_fn(instance)
+    if session_snapshot.message:
+        lines.append(session_snapshot.message)
+    if not session_snapshot.ok:
+        return _fail(instance, session_snapshot.message)
 
     if inferred_state:
         try:

@@ -13,8 +13,8 @@ import asyncio
 import dataclasses
 import hashlib
 
-from core.recall.jsonl import (
-    JsonlSessionRecallBackend,
+from core.recall.canonical import (
+    CanonicalSessionRecallBackend,
     request_payload,
 )
 from core.recall.recall import (
@@ -55,7 +55,7 @@ _HYBRID_TOOL_SUMMARY = (
 )
 
 
-class HybridRecallBackend(JsonlSessionRecallBackend):
+class HybridRecallBackend(CanonicalSessionRecallBackend):
     """Recall backend that fuses FTS literal matches with vector semantic matches."""
 
     def __init__(self, context: RecallBackendContext) -> None:
@@ -165,7 +165,7 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
         )
 
     async def search(self, request: RecallRequest) -> JsonObject:
-        # ``browse`` and ``scroll`` keep the canonical JSONL behavior
+        # ``browse`` and ``scroll`` keep the canonical canonical behavior
         # (nothing to fuse). Only ``search`` is hybrid.
         summaries = await asyncio.to_thread(self.candidate_session_summaries, request)
         if request.query is None:
@@ -283,7 +283,7 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
             if session_id in literal_session_ids:
                 continue
             if "distance" not in match:
-                # Distance-less vector match = vector arm's JSONL
+                # Distance-less vector match = vector arm's canonical
                 # fallback. Treat as literal-only to avoid double-
                 # surfacing the same session from both arms' fallbacks.
                 continue

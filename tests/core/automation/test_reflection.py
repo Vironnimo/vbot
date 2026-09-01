@@ -72,6 +72,12 @@ class _FakeSessions:
     def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
         self.metadata[address.session_id] = dict(data)
 
+    def mutate_metadata(self, address: SessionAddress, mutation: Any) -> dict[str, Any]:
+        metadata = self.get_metadata(address)
+        mutation(metadata)
+        self.set_metadata(address, metadata)
+        return metadata
+
     def set_title(self, address: SessionAddress, title: str) -> str:
         self.titles.append((address.session_id, title))
         return title

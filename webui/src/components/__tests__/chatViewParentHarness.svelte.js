@@ -17,6 +17,7 @@ export function createChatViewParentHarness() {
   let selectedAgentId = $state('alpha');
   let queueInvalidation = $state(null);
   let sessionsRefreshToken = $state(0);
+  let sessionListActivity = $state([]);
   let agentsRefreshToken = $state(0);
   let pendingSessionNavigation = $state(null);
   let selectedProjectId = $state('');
@@ -51,6 +52,12 @@ export function createChatViewParentHarness() {
     },
     bumpSessionsRefreshToken() {
       sessionsRefreshToken += 1;
+    },
+    get sessionListActivity() {
+      return sessionListActivity;
+    },
+    setSessionListActivity(activity) {
+      sessionListActivity = activity;
     },
     get selectedProjectId() {
       return selectedProjectId;

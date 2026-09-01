@@ -12,7 +12,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Project Anchor
 
-**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json`, the seeded `AGENTS.md`, and per-Agent Session directories. It is the durable identity and storage root of a Project.
+**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json`, the seeded `AGENTS.md`, and Project-local workspace anchors. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
 
 **Not:** The repository at the Project's `cwd`; changing `cwd` does not move or replace the Project Anchor.
 
@@ -52,7 +52,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 - Project-owned state lives under the data directory. The repository is a read-only configuration source: scanners may read its Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies repository content.
 - A Project selects exactly one supported `source_format` (`opencode` or `claude`) for Agent and Project Skill discovery. Format detection may report multiple candidates but does not make a Project multi-format.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
-- Project Agent Session paths are anchored at `<data-dir>/projects/<project-id>/agents/<agent-id>/sessions/`. Agent and Project identifiers crossing filesystem boundaries must pass the shared path-segment validation.
+- Project Agent Sessions use `(project_id, agent_id, session_id)` addresses in `<data-dir>/sessions.db`; the Project Anchor no longer contains canonical Session files. Agent and Project identifiers still pass shared validation before entering either database addresses or filesystem anchors.
 - Without a vBot Tool override, Tool access starts from the Project Tool Whitelist and repository Agent denials remove names. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills + enabled bundled skills + enabled global skills) - disabled project skills - {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
 - Models, temperature, thinking effort, and compaction policy use the same canonical validators as global settings. Do not create Project-local validation rules or bypass the shared usable-model gate.
 
@@ -69,7 +69,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 - `normalize_cwd()` resolves an absolute real path, removes trailing separators, and preserves case. `cwd_identity_key()` additionally case-folds only on Windows; use it for duplicate detection instead of comparing display paths.
 - `ProjectStore.create()` can persist a non-existent `cwd`, while the public `project.add` RPC requires an existing directory. Preserve this separation between storage and product-boundary validation.
-- Project removal is an archive operation guarded by Cron references and an atomic `ChatRunManager.project_admission_guard` covering both Project-anchored Sessions and Identity-Agent work whose internal working Project is the target. The server holds that guard while Project-owned Terminal Sessions are terminated, rooted Identity Agents are reset, and the Project Anchor is archived, alongside the Agent-reference lock and rollback behavior. Keep this coordination at the RPC/service boundary; a raw store delete is not the complete removal workflow.
+- Project removal is an archive operation guarded by Cron references and an atomic `ChatRunManager.project_admission_guard` covering Project-scoped Sessions and Identity-Agent work whose internal working Project is the target. The server holds that guard while Project-owned Terminal Sessions are terminated, rooted Identity Agents are reset, the Project Anchor moves to its archive, and all live database Sessions in that Project become archived. ProjectStore compensates the filesystem move if Session archiving fails; keep the wider coordination at the RPC/service boundary.
 - Team membership may be cached, but resolving a member rereads its repository Agent source so configuration edits take effect without rebuilding the Team. Do not turn the membership cache into a configuration cache.
 - Address strings use the canonical `agent@project` parsing and formatting in `core/projects/address.py`; do not split or assemble them ad hoc.
 

@@ -9,12 +9,47 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from core.chat.messages import ChatMessage
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.sessions.schema import JOURNAL_MODE_DELETE
 from core.statistics import AgentDirectory, StatisticsService
+from core.statistics.index import StatisticsIndex
 from core.tools import tool_success
 
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+
+
+def test_index_uses_required_rollback_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.statistics import index as statistics_index
+
+    monkeypatch.setattr(
+        statistics_index, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE
+    )
+    index = StatisticsIndex(tmp_path)
+    index.index_path.parent.mkdir(parents=True)
+
+    connection = index._connect()
+    try:
+        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        connection.close()
+
+    assert mode == JOURNAL_MODE_DELETE
+
+
+def test_discard_removes_rollback_journal(tmp_path: Path) -> None:
+    index = StatisticsIndex(tmp_path)
+    rollback_journal = Path(f"{index.index_path}-journal")
+    rollback_journal.parent.mkdir(parents=True, exist_ok=True)
+    rollback_journal.write_bytes(b"stale")
+
+    index.discard()
+
+    assert rollback_journal.exists() is False
 
 
 @dataclass(frozen=True)
@@ -146,7 +181,7 @@ def test_cached_snapshot_reloads_when_another_service_updates_index(
     assert report.usage.totals.measured_input_tokens == 15
 
 
-def test_appended_messages_are_loaded_from_the_persisted_tail_cursor(
+def test_appended_messages_incrementally_extend_the_affected_projection(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -182,7 +217,6 @@ def test_appended_messages_are_loaded_from_the_persisted_tail_cursor(
 
     assert len(cursors) == 1
     assert cursors[0] is not None
-    assert cursors[0].message_count == 2
     assert report.overview.total_runs == 2
     assert report.usage.totals.measured_input_tokens == 15
 
@@ -228,15 +262,10 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(tmp_path: Path
             timestamp=BASE + timedelta(hours=1, seconds=1),
         ),
     ]
-    replacement_path = session.path.with_suffix(".replacement")
-    replacement_path.write_text(
-        "".join(
-            json.dumps(message.to_dict(), separators=(",", ":")) + "\n"
-            for message in replacement_messages
-        ),
-        encoding="utf-8",
-    )
-    replacement_path.replace(session.path)
+    address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
+    _manager.delete(address)
+    replacement = _manager.create("main", session_id=session.id)
+    replacement.append_many(replacement_messages)
 
     report = service.report()
 
@@ -306,4 +335,4 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
 
     assert report.overview.total_runs == 1
     with sqlite3.connect(index_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3

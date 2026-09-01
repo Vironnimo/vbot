@@ -278,8 +278,8 @@ describe('SettingsView', () => {
         settings: {
           ...settingsPayload(),
           recall: {
-            backend: 'jsonl_scan',
-            available_backends: ['jsonl_scan', 'sqlite_fts', 'vector'],
+            backend: 'canonical_scan',
+            available_backends: ['canonical_scan', 'sqlite_fts', 'vector'],
           },
         },
       }),

@@ -27,6 +27,8 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Data flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (orchestration via providers, models, tools, agents) -> external APIs. Agentic-only - no separate non-agentic streaming path.
 
+**Persistence:** Canonical Session history lives in normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). Standard external-content FTS covers searchable Messages and a second trigram index excludes Tool-role bulk; no mirrored search-text table exists. Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore and are created only by explicit operator, update, or converter workflows; normal Runtime startup and operation never copy the database. `session-recovery.json` records incidents.
+
 **Tools:** Canonical schema contracts, argument normalization/validation, concurrency policy, and authoring rules live in `tools.md`; Agent-facing definitions follow repository-root `TOOLS.md`.
 
 **Configuration:** The data directory (`~/.vbot`) owns `settings.json` (application settings) and `.env` (user-owned fallback credential snapshot; process environment takes precedence, vBot never rewrites `os.environ`). Every user-editable JSON file is validated by its owning domain before runtime consumption; public accessors configure Settings only through cataloged paths. Contracts and internals live in `settings.md` and `storage.md`; Custom Provider credentials in `providers/connections.md`.
@@ -44,8 +46,8 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
-| sessions.md | `core/sessions/` | Session persistence, metadata, JSONL storage contract |
-| recall.md | `core/recall/` | Recall backends: JSONL scan, FTS index, vector index |
+| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, offline conversion boundary, and lifecycle |
+| recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
@@ -104,6 +106,8 @@ python cli/main.py server start       # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
 This checkout carries a git-ignored marker selecting the dev data directory (`~/.vbot-dev`, port `8421`); an installed CLI outside the checkout keeps product defaults (`~/.vbot`, `8420`). Never point development commands at the installed instance. Managed worktrees use their own data dirs and ports.
+
+**Session store maintenance:** Use `python cli/main.py session-store status|snapshot|incident` for live operator-safe health and `snapshot restore` only against a proven-stopped target; use `python scripts/converters/session_sqlite.py inventory|dry-run|convert|verify|install|resume|export-jsonl` only as an explicit offline workflow on copied legacy data.
 
 **Build frontend:** `cd webui && npm ci && npm run build`
 

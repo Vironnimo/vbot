@@ -275,10 +275,10 @@ class TestRepairDanglingToolCalls:
         assert repaired[1]["name"] == "unknown"
         assert repaired[1]["tool_call_id"] == "only_call"
 
-    def test_repaired_entries_are_never_persisted_to_session_jsonl(self, tmp_path) -> None:
-        # Arrange: a session with a dangling assistant turn in JSONL, then run
-        # the build path. The synthesized entries must show up in the request
-        # payload but not in the session file the next time we load it.
+    def test_repaired_entries_are_never_persisted_to_session_history(self, tmp_path) -> None:
+        # Arrange: a Session with a dangling assistant turn, then run the build
+        # path. The synthesized entries must show up in the request payload but
+        # not in persisted Session history the next time we load it.
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -295,20 +295,22 @@ class TestRepairDanglingToolCalls:
         )
         # No tool result persisted; this is the dangling state.
 
-        jsonl_before = session.path.read_text(encoding="utf-8")
+        history_before = session.load()
+        history_revision_before = runtime.chat_sessions.history_revision(session.address)
 
         # Act: run the build path that synthesizes the missing tool result.
         request_messages = asyncio.run(
             build_chat_loop(runtime)._build_request_messages(agent, session)
         )
-        jsonl_after = session.path.read_text(encoding="utf-8")
+        history_after = session.load()
 
         # Assert: the request payload now contains a synthesized tool entry.
         tool_entries = [entry for entry in request_messages if entry.get("role") == "tool"]
         assert any(entry.get("tool_call_id") == "dangling_one" for entry in tool_entries)
-        # Assert: the JSONL file is byte-for-byte unchanged; no synthesized
-        # tool message was appended by the repair.
-        assert jsonl_after == jsonl_before
+        # Assert: persisted history is unchanged; no synthesized tool message
+        # was appended by the request-only repair.
+        assert history_after == history_before
+        assert runtime.chat_sessions.history_revision(session.address) == history_revision_before
         # And re-loading the session still shows the dangling assistant turn
         # (not a tool entry), confirming the repair is request-only.
         reloaded = session.load()

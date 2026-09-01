@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from core.runtime.runtime import Runtime
+from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
+
+
+def _authorize_session_store(data_dir: Path) -> None:
+    if not (data_dir / "sessions.db").is_file():
+        write_bootstrap_marker(data_dir)
 
 
 @pytest.fixture
@@ -143,6 +149,7 @@ def test_malformed_policy_does_not_break_startup(config: Config, tmp_path: Path)
     data_dir = tmp_path / "data"
     policy_file = data_dir / "skills" / "policy.json"
     policy_file.parent.mkdir(parents=True)
+    _authorize_session_store(data_dir)
     policy_file.write_text("{not valid json", encoding="utf-8")
 
     logging.getLogger("vbot").handlers = []

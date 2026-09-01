@@ -41,7 +41,7 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
     )
     later = ChatMessage.user("later request")
     session.append_many([original, old_answer, later])
-    raw_prefix = session.path.read_bytes()
+    history_revision_before_edit = runtime.chat_sessions.history_revision(session.address)
 
     run = await build_chat_loop(runtime).edit_run(
         "coder",
@@ -53,7 +53,7 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
 
     raw = session.load()
     active = active_session_messages(raw)
-    assert session.path.read_bytes().startswith(raw_prefix)
+    assert runtime.chat_sessions.history_revision(session.address) > history_revision_before_edit
     assert [message.role for message in raw[:3]] == ["user", "assistant", "user"]
     assert raw[3].role == "history_edit"
     assert raw[3].target_message_id == original.id
@@ -88,7 +88,8 @@ async def test_edit_run_rejects_channel_target_without_appending(tmp_path: Path)
         sender=MessageSender(id="member-one", display_name="Member One"),
     )
     session.append(channel_message)
-    before = session.path.read_bytes()
+    before = session.load()
+    history_revision_before_edit = runtime.chat_sessions.history_revision(session.address)
 
     with pytest.raises(ChatSessionError, match="plain-text"):
         await build_chat_loop(runtime).edit_run(
@@ -98,7 +99,8 @@ async def test_edit_run_rejects_channel_target_without_appending(tmp_path: Path)
             message_id=channel_message.id,
         )
 
-    assert session.path.read_bytes() == before
+    assert session.load() == before
+    assert runtime.chat_sessions.history_revision(session.address) == history_revision_before_edit
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:
@@ -367,15 +369,12 @@ async def test_project_session_is_created_and_opened_under_project_anchor(
     # Act: run a turn scoped to the project.
     await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
 
-    # Assert: the session file was created AND read under the project anchor,
-    # never under the global identity layout.
-    project_session = (
-        tmp_path / "projects" / "acme" / "agents" / "coder" / "sessions" / "session-one.jsonl"
-    )
-    identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
-    assert project_session.exists()
-    assert not identity_session.exists()
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one", "acme")).load()
+    # Assert: the Session was created in the project scope, never in identity scope.
+    project_address = session_address("coder", "session-one", "acme")
+    identity_address = session_address("coder", "session-one")
+    assert runtime.chat_sessions.exists(project_address)
+    assert not runtime.chat_sessions.exists(identity_address)
+    persisted = runtime.chat_sessions.get(project_address).load()
     assert persisted_roles_of(persisted) == ["user", "assistant"]
 
 
@@ -507,8 +506,8 @@ async def test_project_run_persists_relative_assistant_output_file_reference(
 
 @pytest.mark.asyncio
 async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path) -> None:
-    # With project_id=None the session keeps the global identity layout and the
-    # tool cwd stays the agent workspace — today's behavior, exactly unchanged.
+    # With project_id=None the Session keeps the identity scope and the tool cwd
+    # stays the agent workspace — today's behavior, exactly unchanged.
     from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -534,9 +533,9 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
 
     await build_chat_loop(runtime).send("coder", "Write a file", session_id="session-one")
 
-    identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
     workspace_file = tmp_path / "agents" / "coder" / "workspace" / "out.txt"
-    assert identity_session.exists()
+    assert runtime.chat_sessions.exists(session_address("coder", "session-one"))
+    assert not runtime.chat_sessions.exists(session_address("coder", "session-one", "acme"))
     assert workspace_file.read_text(encoding="utf-8") == "in-workspace"
 
 

@@ -31,11 +31,12 @@ from core.tools.file_state import FileReadState
 
 class TestListMentionFiles:
     def test_lists_files_relative_with_forward_slashes(self, tmp_path: Path) -> None:
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "app.py").write_text("print()", encoding="utf-8")
-        (tmp_path / "README.md").write_text("hi", encoding="utf-8")
+        file_root = tmp_path / "files"
+        (file_root / "src").mkdir(parents=True)
+        (file_root / "src" / "app.py").write_text("print()", encoding="utf-8")
+        (file_root / "README.md").write_text("hi", encoding="utf-8")
 
-        files, truncated = list_mention_files(tmp_path)
+        files, truncated = list_mention_files(file_root)
 
         assert truncated is False
         assert set(files) == {"README.md", "src/app.py"}

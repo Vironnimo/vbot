@@ -4,8 +4,8 @@ The composer's ``@`` picker lists files under the session cwd (``files.list``
 RPC). On send, every mentioned file is snapshotted once into a ``file_mention``
 content block — content inline for reasonably sized text files — and stamped as
 read in the session's read-before-write guard, so the agent can edit a mentioned
-file without a separate read tool call. The snapshot is durable in the Session
-JSONL: the model always sees the file as it was when the user sent the message,
+file without a separate read tool call. The snapshot is durable in canonical
+Session history: the model always sees the file as it was when the user sent the message,
 and the stale-guard catches a later edit when the file changed afterwards.
 """
 

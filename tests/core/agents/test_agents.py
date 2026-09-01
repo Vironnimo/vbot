@@ -21,6 +21,7 @@ from core.agents import (
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.settings import AgentDefaults
 from core.tools.availability import ToolAccess
 
@@ -42,7 +43,10 @@ def template_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def store(tmp_path: Path, template_dir: Path) -> AgentStore:
-    return AgentStore(tmp_path / "data", template_dir=template_dir)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    return AgentStore(data_dir, template_dir=template_dir)
 
 
 def test_agent_dataclass_is_frozen() -> None:
@@ -91,10 +95,10 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["current_session_id"]
     assert data["created_at"].endswith("Z")
     assert data["updated_at"] == data["created_at"]
-    assert (store.data_dir / "agents" / "coder" / "sessions").is_dir()
-    assert (
-        store.data_dir / "agents" / "coder" / "sessions" / f"{data['current_session_id']}.jsonl"
-    ).is_file()
+    assert (store.data_dir / "sessions.db").is_file()
+    assert store._session_manager().exists(
+        SessionAddress(project_id=None, agent_id="coder", session_id=data["current_session_id"])
+    )
     assert agent.current_session_id == data["current_session_id"]
     assert agent == store.get("coder")
 
@@ -116,6 +120,21 @@ def test_missing_workspace_template_does_not_block_agent_creation(
     assert store.get("repair-agent").id == agent.id
     assert not (Path(agent.workspace) / "SOUL.md").exists()
     assert str(missing_templates / "SOUL.md") in caplog.text
+
+
+def test_create_rolls_back_the_session_when_workspace_setup_fails(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(_workspace: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_seed_workspace", fail)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.create("coder")
+
+    assert store._session_manager().list("coder") == []
+    assert not (store.data_dir / "agents" / "coder").exists()
 
 
 def test_agent_roster_scan_failure_returns_empty_roster(
@@ -286,6 +305,7 @@ def test_relative_default_workspace_follows_moved_data_dir(
     Path(original.workspace, "MEMORY.md").write_text("portable memory", encoding="utf-8")
     moved_data_dir = tmp_path / "moved-data"
 
+    original_store._session_manager().close()
     shutil.move(str(original_data_dir), str(moved_data_dir))
     moved_store = AgentStore(moved_data_dir, template_dir=template_dir)
     loaded = moved_store.get("coder")
@@ -671,7 +691,12 @@ def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
     assert result.agent.created_at == created.created_at
     assert result.agent.updated_at != created.updated_at
     assert result.agent.workspace == str((new_dir / "homes" / "primary").resolve())
-    assert (new_dir / "sessions" / "kept-session.jsonl").is_file()
+    assert store._session_manager().exists(
+        SessionAddress(project_id=None, agent_id="researcher", session_id="kept-session")
+    )
+    assert not store._session_manager().exists(
+        SessionAddress(project_id=None, agent_id="coder", session_id="kept-session")
+    )
     assert (new_dir / "prompts" / "runtime.md").read_text(encoding="utf-8") == "custom prompt"
     assert (new_dir / "skills" / "private-skill" / "SKILL.md").is_file()
     persisted = json.loads((new_dir / "agent.json").read_text(encoding="utf-8"))
@@ -688,6 +713,20 @@ def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) 
     assert renamed.workspace == str(workspace.resolve())
     assert workspace.is_dir()
     assert (workspace / "SOUL.md").is_file()
+
+
+def test_restore_rename_retargets_sessions_back_to_the_original_agent(store: AgentStore) -> None:
+    created = store.create("coder", "Coder Agent")
+    result = store.rename("coder", "researcher")
+
+    store.restore_rename(result)
+
+    assert store._session_manager().exists(
+        SessionAddress(None, "coder", created.current_session_id)
+    )
+    assert not store._session_manager().exists(
+        SessionAddress(None, "researcher", created.current_session_id)
+    )
 
 
 def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
@@ -846,8 +885,7 @@ def test_update_rejects_unknown_fields(store: AgentStore) -> None:
 
 def test_update_can_set_current_session_id_to_existing_session(store: AgentStore) -> None:
     original = store.create("coder", "Coder Agent")
-    new_session = store.data_dir / "agents" / "coder" / "sessions" / "session-two.jsonl"
-    new_session.touch()
+    store._session_manager().create("coder", session_id="session-two")
 
     updated = store.update("coder", current_session_id="session-two")
 
@@ -1156,17 +1194,15 @@ def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore
     agent_path = store.data_dir / "agents" / "legacy" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     data.pop("current_session_id")
-    for session_file in (store.data_dir / "agents" / "legacy" / "sessions").glob("*.jsonl"):
-        session_file.unlink()
     agent_path.write_text(json.dumps(data), encoding="utf-8")
 
     loaded = store.get("legacy")
 
     assert loaded.current_session_id
     assert loaded.current_session_id != agent.current_session_id
-    assert (
-        store.data_dir / "agents" / "legacy" / "sessions" / f"{loaded.current_session_id}.jsonl"
-    ).is_file()
+    assert store._session_manager().exists(
+        SessionAddress(project_id=None, agent_id="legacy", session_id=loaded.current_session_id)
+    )
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert normalized_data["current_session_id"] == loaded.current_session_id
 
@@ -1217,8 +1253,7 @@ def test_agent_with_missing_workspace_directory_recreates_workspace(store: Agent
 
 def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
     agent = store.create("coder", "Coder Agent")
-    session_file = store.data_dir / "agents" / "coder" / "sessions" / "session.jsonl"
-    session_file.write_text('{"role":"user"}\n', encoding="utf-8")
+    store._session_manager().create("coder", session_id="session")
 
     archive_dir = store.delete("coder")
 
@@ -1226,7 +1261,9 @@ def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
     assert not (store.data_dir / "agents" / "coder").exists()
     assert not Path(agent.workspace).exists()
     assert (archive_dir / "agent" / "agent.json").exists()
-    assert (archive_dir / "agent" / "sessions" / "session.jsonl").exists()
+    assert not store._session_manager().exists(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session")
+    )
     # The default workspace lives inside the agent directory, so it is archived
     # within the agent tree, not as a separate ``workspace/`` sibling.
     assert (archive_dir / "agent" / "workspace" / "SOUL.md").exists()
@@ -1259,12 +1296,36 @@ def test_delete_archives_external_workspace_beside_agent(store: AgentStore, tmp_
     assert (archive_dir / "workspace" / "SOUL.md").exists()
 
 
+def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create("coder", "First")
+    previous_archive = store.delete("coder")
+    marker = previous_archive / "keep.txt"
+    marker.write_text("previous", encoding="utf-8")
+    store.create("coder", "Second")
+
+    def fail_archive(_agent_id: str) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store._session_manager(), "archive_identity_agent_sessions", fail_archive)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        store.delete("coder")
+
+    assert store.get("coder").name == "Second"
+    assert marker.read_text(encoding="utf-8") == "previous"
+
+
 def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     store: AgentStore,
 ) -> None:
     # ``archive/sessions`` and ``archive/projects`` are the session/project archive
     # roots. An agent id equal to those names must archive under the agents subtree
     # instead of replace-deleting the sibling roots wholesale.
+    for reserved_like_id in ("sessions", "projects"):
+        store.create(reserved_like_id, f"Agent {reserved_like_id}")
+
     archived_session = store.data_dir / "archive" / "sessions" / "agents" / "other" / "s1.jsonl"
     archived_session.parent.mkdir(parents=True)
     archived_session.write_text('{"role":"user"}\n', encoding="utf-8")
@@ -1273,7 +1334,6 @@ def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     archived_project.write_text("{}\n", encoding="utf-8")
 
     for reserved_like_id in ("sessions", "projects"):
-        store.create(reserved_like_id, f"Agent {reserved_like_id}")
         archive_dir = store.delete(reserved_like_id)
         assert archive_dir == store.data_dir / "archive" / "agents" / reserved_like_id
         assert (archive_dir / "agent" / "agent.json").exists()
