@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -34,6 +35,34 @@ def test_open_failure_unregisters_the_connection(tmp_path: Path, monkeypatch) ->
 
     assert runtime.live_connection_count() == 0
     assert tracked_connection_count(tmp_path / "sessions.db") == 0
+
+
+def test_safe_wal_reset_fallback_is_reported_as_info(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "safe-fallback.db"
+    connection = sqlite3.connect(database)
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 40, 1))
+    monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
+    caplog.set_level(logging.INFO, logger="vbot.sessions")
+
+    try:
+        mode = sqlite_runtime.apply_wal_with_fallback(connection, db_label="safe-fallback-test.db")
+    finally:
+        connection.close()
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.sessions" and "safe-fallback-test.db" in record.message
+    ]
+    assert mode == "delete"
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
+    assert records[0].message == (
+        "safe-fallback-test.db: using safe journal_mode=DELETE because SQLite 3.40.1 "
+        "has the WAL-reset issue"
+    )
 
 
 def test_busy_transaction_retries_as_one_idempotent_unit(tmp_path: Path) -> None:

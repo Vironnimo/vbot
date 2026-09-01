@@ -43,6 +43,7 @@ _live_connections: dict[str, int] = {}
 _tracked_factory_cache: dict[type, type] = {}
 _wal_fallback_warned: set[str] = set()
 _wal_reset_warned: set[str] = set()
+_wal_reset_info_logged: set[str] = set()
 _diagnostic_lock = threading.Lock()
 
 
@@ -266,12 +267,18 @@ def _apply_wal_size_limit(conn: sqlite3.Connection) -> None:
         conn.execute(f"PRAGMA journal_size_limit={_WAL_SIZE_LIMIT_BYTES}")
 
 
-def _log_once(bucket: set[str], label: str, message: str, *args: object) -> None:
+def _log_once(
+    bucket: set[str],
+    label: str,
+    message: str,
+    *args: object,
+    level: int = logging.WARNING,
+) -> None:
     with _diagnostic_lock:
         if label in bucket:
             return
         bucket.add(label)
-    _LOGGER.warning(message, *args)
+    _LOGGER.log(level, message, *args)
 
 
 def _apply_delete_for_wal_reset_bug(conn: sqlite3.Connection, *, db_label: str) -> str:
@@ -300,11 +307,12 @@ def _apply_delete_for_wal_reset_bug(conn: sqlite3.Connection, *, db_label: str) 
             ) from exc
         raise
     _log_once(
-        _wal_reset_warned,
+        _wal_reset_info_logged,
         db_label,
-        "%s: SQLite %s is WAL-reset vulnerable; using journal_mode=DELETE",
+        "%s: using safe journal_mode=DELETE because SQLite %s has the WAL-reset issue",
         db_label,
         sqlite3.sqlite_version,
+        level=logging.INFO,
     )
     return actual or "delete"
 
