@@ -44,6 +44,7 @@
   } from '$lib/agentForm.js';
   import { toolAccessIncludes } from '$lib/toolAccess.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import {
     buildModelSelectOptions,
     filterModelSelectOptions,
@@ -58,10 +59,6 @@
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
-  const timestampFormatter = new Intl.DateTimeFormat(activeLocaleTag(), {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
   const WILDCARD_ACCESS = '*';
   const MEMORY_SCOPES = ['agent', 'user'];
 
@@ -1259,7 +1256,11 @@
       return value;
     }
 
-    return timestampFormatter.format(new Date(parsedValue));
+    return formatDateTimeInApplicationZone(
+      new Date(parsedValue),
+      activeLocaleTag(),
+      { dateStyle: 'medium', timeStyle: 'short' },
+    );
   }
 
   function viewErrorMessage(error, fallback) {

@@ -205,7 +205,9 @@ def test_public_document_hides_flat_storage_keys() -> None:
         }
     )
 
-    assert effective["server"] == {"port": 9000, "keep_awake": False}
+    assert effective["server"]["port"] == 9000
+    assert effective["server"]["keep_awake"] is False
+    assert isinstance(effective["server"]["timezone"], str)
     assert effective["skills"] == {"directories": ["~/skills"]}
     assert effective["subagents"]["max_subagent_depth"] == 2
     assert "server_port" not in effective
@@ -259,6 +261,7 @@ def test_catalog_contains_static_and_dynamic_public_paths() -> None:
     paths = {entry["path"] for entry in catalog_payload()}
 
     assert "server.port" in paths
+    assert "server.timezone" in paths
     assert "web_search.provider" in paths
     assert "speech.transcription_audio.profile" in paths
     assert 'local_models.context_windows["<model>"]' in paths
@@ -296,3 +299,15 @@ def test_server_keep_awake_patch_maps_to_flat_raw_key() -> None:
     cleared, _ = apply_settings_patch(updated, unset_operations)
 
     assert cleared == {}
+
+
+def test_server_timezone_patch_maps_to_flat_raw_key() -> None:
+    operations = parse_patch_operations(
+        [{"op": "set", "path": "server.timezone", "value": "Europe/Berlin"}]
+    )
+
+    updated, changed = apply_settings_patch({}, operations)
+
+    assert updated == {"timezone": "Europe/Berlin"}
+    assert changed == ("server.timezone",)
+    assert build_effective_settings(updated)["server"]["timezone"] == "Europe/Berlin"

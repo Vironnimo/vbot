@@ -528,7 +528,8 @@ def test_enabling_tools_list_block_renders_tool_descriptions(
         data_root=tmp_path / "data",
         server_hostname="h",
         operating_system="o",
-        current_utc_date=lambda: "2026-05-04",
+        current_local_date=lambda: "2026-05-04",
+        timezone_name=lambda: "Europe/Berlin",
         block_store=store,
     )
     agent = _agent(workspace, allowed_tools=["read_file"])
@@ -562,7 +563,8 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
         data_root=tmp_path / "data",
         server_hostname="h",
         operating_system="o",
-        current_utc_date=lambda: "2026-05-04",
+        current_local_date=lambda: "2026-05-04",
+        timezone_name=lambda: "Europe/Berlin",
         block_store=store,
     )
     agent = _agent(workspace, allowed_tools=[])

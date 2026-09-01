@@ -13,9 +13,10 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
-from tzlocal import get_localzone, get_localzone_name
+from tzlocal import get_localzone
 
 from core.config_validation import (
     JsonConfigValidationError,
@@ -436,6 +437,7 @@ class CronService:
         *,
         agent_resolver: AgentResolver | None = None,
         sessions: ChatSessionManager | None = None,
+        tz: str | ZoneInfo | None = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._agent_resolver = agent_resolver
@@ -451,6 +453,8 @@ class CronService:
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
         self._changed_callbacks: set[Callable[[], None]] = set()
+        self._timezone = _resolve_timezone(tz)
+        self._timezone_changed = asyncio.Event()
         self._started = False
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
@@ -544,12 +548,19 @@ class CronService:
         return self._clone_job(self._jobs[job_id])
 
     def system_timezone_name(self) -> str:
-        """Return the server's canonical IANA timezone name."""
-        try:
-            return get_localzone_name()
-        except Exception as error:
-            _LOGGER.warning("Could not resolve system timezone name: %s", error)
-            return "UTC"
+        """Return the configured canonical IANA timezone name."""
+        return str(self._timezone)
+
+    def set_timezone(self, timezone_name: str) -> None:
+        """Apply a new application timezone and wake wall-clock schedules."""
+        timezone = _resolve_timezone(timezone_name)
+        if timezone == self._timezone:
+            return
+        previous_event = self._timezone_changed
+        self._timezone = timezone
+        self._timezone_changed = asyncio.Event()
+        previous_event.set()
+        self._notify_changed()
 
     def parse_schedule(
         self,
@@ -1068,9 +1079,12 @@ class CronService:
             next_fire_at = self.next_fire_at(current)
             if next_fire_at is None:
                 return
-            await _sleep_until_utc(
-                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False)
+            reached_fire_time = await _sleep_until_utc(
+                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False),
+                wake_event=self._timezone_changed,
             )
+            if not reached_fire_time:
+                continue
 
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "cron":
@@ -1614,11 +1628,7 @@ class CronService:
         return parsed
 
     def _system_timezone(self) -> tzinfo:
-        try:
-            return get_localzone()
-        except Exception as error:
-            _LOGGER.warning("Could not resolve system timezone: %s", error)
-            return UTC
+        return self._timezone
 
     def _is_missed_once_job(self, job: CronJob, reference_time_utc: datetime) -> bool:
         if job.schedule_type != "once":
@@ -1741,13 +1751,41 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-async def _sleep_until_utc(target_utc: datetime) -> None:
-    """Sleep until a UTC wall-clock instant, re-reading the clock each bounded nap."""
+async def _sleep_until_utc(
+    target_utc: datetime, *, wake_event: asyncio.Event | None = None
+) -> bool:
+    """Sleep until a UTC instant, returning false when a schedule change wakes it."""
     while True:
         remaining_seconds = (target_utc - _utc_now()).total_seconds()
         if remaining_seconds <= 0:
-            return
-        await asyncio.sleep(min(remaining_seconds, _WALL_CLOCK_RECHECK_SECONDS))
+            return True
+        nap_seconds = min(remaining_seconds, _WALL_CLOCK_RECHECK_SECONDS)
+        if wake_event is None:
+            await asyncio.sleep(nap_seconds)
+            continue
+        try:
+            await asyncio.wait_for(wake_event.wait(), timeout=nap_seconds)
+        except TimeoutError:
+            continue
+        return False
+
+
+def _resolve_timezone(value: str | ZoneInfo | None) -> ZoneInfo:
+    if isinstance(value, ZoneInfo):
+        return value
+    if isinstance(value, str):
+        try:
+            return ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise CronJobValidationError(
+                f"timezone is not a known IANA timezone: {value}"
+            ) from error
+    try:
+        local = get_localzone()
+        return local if isinstance(local, ZoneInfo) else ZoneInfo(str(local))
+    except Exception as error:
+        _LOGGER.warning("Could not resolve system timezone: %s", error)
+        return ZoneInfo("UTC")
 
 
 def _utc_now_iso() -> str:

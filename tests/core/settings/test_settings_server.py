@@ -16,6 +16,15 @@ class TestParseServerUpdate:
         result = parse_settings_update({"server": {"keep_awake": False}})
         assert result == {"server": {"keep_awake": False}}
 
+    def test_timezone_accepts_iana_name(self) -> None:
+        result = parse_settings_update({"server": {"timezone": "Europe/Berlin"}})
+        assert result == {"server": {"timezone": "Europe/Berlin"}}
+
+    @pytest.mark.parametrize("value", ["Berlin", "", 1, None])
+    def test_timezone_rejects_unknown_or_malformed_value(self, value: object) -> None:
+        with pytest.raises(SettingsValidationError):
+            parse_settings_update({"server": {"timezone": value}})
+
     def test_empty_section_is_sparse(self) -> None:
         result = parse_settings_update({"server": {}})
         assert result == {"server": {}}

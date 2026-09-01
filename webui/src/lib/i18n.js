@@ -1169,6 +1169,10 @@ export const englishCatalog = Object.freeze({
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
+  'settings.general.timezone': 'Time zone',
+  'settings.general.timezoneDescription':
+    'Used by Agents, Calendar, Cron, and every displayed date and time.',
+  'settings.general.timezoneSearch': 'Search time zones…',
   'settings.general.keepAwake': 'Keep computer awake',
   'settings.general.keepAwakeDescription':
     'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',

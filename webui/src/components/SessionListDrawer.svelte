@@ -19,6 +19,7 @@
   import { normalizeCompactionPolicy } from '$lib/compactionPolicy.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
     applySessionList,
@@ -63,11 +64,6 @@
     // session (#2).
     onSessionDeleted = () => {},
   } = $props();
-
-  const timestampFormatter = new Intl.DateTimeFormat(activeLocaleTag(), {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
 
   let sessionState = $state(createSessionListState());
   let filters = $state(
@@ -735,7 +731,11 @@
       return normalizedValue;
     }
 
-    return timestampFormatter.format(new Date(parsedValue));
+    return formatDateTimeInApplicationZone(
+      new Date(parsedValue),
+      activeLocaleTag(),
+      { dateStyle: 'medium', timeStyle: 'short' },
+    );
   };
 
   const sessionHoverDetails = (session) => {

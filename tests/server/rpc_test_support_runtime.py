@@ -414,6 +414,10 @@ class StubStorage:
                 keep_awake = settings_update["server"]["keep_awake"] is True
                 self._settings = {**self._settings, "keep_awake": keep_awake}
                 updated_sections["server"] = {"keep_awake": keep_awake}
+            if "timezone" in settings_update["server"]:
+                timezone = settings_update["server"]["timezone"]
+                self._settings = {**self._settings, "timezone": timezone}
+                updated_sections["server"]["timezone"] = timezone
         return updated_sections
 
     def load_extensions_settings(self) -> JsonObject:

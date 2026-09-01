@@ -104,10 +104,10 @@ export function formatDateTime(isoString, locale = 'en') {
   if (date === null) {
     return EM_DASH;
   }
-  return new Intl.DateTimeFormat(locale, {
+  return formatDateTimeInApplicationZone(date, locale, {
     dateStyle: 'medium',
     timeStyle: 'short',
-  }).format(date);
+  });
 }
 
 export function formatDate(isoString, locale = 'en') {
@@ -115,7 +115,9 @@ export function formatDate(isoString, locale = 'en') {
   if (date === null) {
     return EM_DASH;
   }
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date);
+  return formatDateTimeInApplicationZone(date, locale, {
+    dateStyle: 'medium',
+  });
 }
 
 export function formatHourLabel(hour) {
@@ -805,3 +807,4 @@ export function rollupSkillActivationsByAgent(skills) {
             : 0,
     );
 }
+import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';

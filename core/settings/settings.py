@@ -6,6 +6,9 @@ import math
 import re
 from collections.abc import Mapping
 from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
+
+from tzlocal import get_localzone_name
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
 from core.model_tasks.constants import (
@@ -109,6 +112,39 @@ SUBAGENT_SETTING_FIELDS = (
 
 class SettingsValidationError(ValueError):
     """Raised when a public Settings payload is malformed."""
+
+
+def validate_timezone_name(value: Any, *, label: str) -> str:
+    """Validate and normalize one IANA timezone name."""
+    if not isinstance(value, str) or not value.strip():
+        raise SettingsValidationError(f"{label} must be a non-empty IANA timezone name")
+    normalized = value.strip()
+    try:
+        ZoneInfo(normalized)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise SettingsValidationError(f"{label} is not a known IANA timezone") from error
+    return normalized
+
+
+def default_timezone_name() -> str:
+    """Return the host IANA zone used when Settings has no explicit override."""
+    try:
+        return validate_timezone_name(get_localzone_name(), label="system timezone")
+    except (SettingsValidationError, OSError):
+        return "UTC"
+
+
+def available_timezone_names() -> tuple[str, ...]:
+    """Return the runtime's deterministic IANA timezone catalog."""
+    return tuple(sorted(available_timezones()))
+
+
+def effective_timezone_name(settings: Mapping[str, Any]) -> str:
+    """Resolve the configured application timezone with the host zone as default."""
+    configured = settings.get("timezone")
+    if configured is None:
+        return default_timezone_name()
+    return validate_timezone_name(configured, label="settings.timezone")
 
 
 def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
@@ -866,7 +902,7 @@ def _parse_server_update(server: Any) -> JsonObject:
     if not isinstance(server, dict):
         raise SettingsValidationError("params.server must be an object")
 
-    unsupported_fields = sorted(set(server) - {"keep_awake"})
+    unsupported_fields = sorted(set(server) - {"keep_awake", "timezone"})
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported server settings: {', '.join(unsupported_fields)}"
@@ -879,6 +915,11 @@ def _parse_server_update(server: Any) -> JsonObject:
         if not isinstance(keep_awake, bool):
             raise SettingsValidationError("params.server.keep_awake must be a boolean")
         parsed["keep_awake"] = keep_awake
+
+    if "timezone" in server:
+        parsed["timezone"] = validate_timezone_name(
+            server["timezone"], label="params.server.timezone"
+        )
 
     return parsed
 

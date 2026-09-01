@@ -285,7 +285,7 @@ def _manager(
     loaded_extensions: Sequence[str] = (),
     server_hostname: str = "test-host",
     operating_system: str = "test-os",
-    current_utc_date: str = "2026-05-04",
+    current_local_date: str = "2026-05-04",
 ) -> SystemPromptManager:
     return SystemPromptManager(
         storage or StubStorage(),
@@ -297,7 +297,8 @@ def _manager(
         data_root=tmp_path / "data",
         server_hostname=server_hostname,
         operating_system=operating_system,
-        current_utc_date=lambda: current_utc_date,
+        current_local_date=lambda: current_local_date,
+        timezone_name=lambda: "Europe/Berlin",
         block_definitions=block_definitions,
         loaded_extensions=loaded_extensions,
     )
@@ -365,7 +366,8 @@ def _facade_manager(
         data_root=tmp_path / "data",
         server_hostname="h",
         operating_system="o",
-        current_utc_date=lambda: "2026-05-04",
+        current_local_date=lambda: "2026-05-04",
+        timezone_name=lambda: "Europe/Berlin",
         block_store=store or StubBlockStore(),
         agent_store=StubAgentStore(agents) if agents is not None else None,
     )

@@ -23,6 +23,7 @@
   import Dropdown from './Dropdown.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import { getSettings } from '$lib/api.js';
+  import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import { init, t } from '$lib/i18n.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
@@ -784,6 +785,7 @@
 
   function applySettings(nextSettings) {
     settings = nextSettings;
+    setApplicationTimeZone(nextSettings?.general?.timezone);
 
     const language = nextSettings?.appearance?.language ?? 'en';
     init(language);
@@ -791,6 +793,7 @@
 
   function commitSettings(nextSettings) {
     settings = nextSettings;
+    setApplicationTimeZone(nextSettings?.general?.timezone);
   }
 
   async function loadSettings() {

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage
@@ -325,6 +325,7 @@ def build_status_reply(
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
     temperature_status: str | None = None,
+    timezone: tzinfo | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
@@ -338,6 +339,7 @@ def build_status_reply(
             actual_thinking_effort=actual_thinking_effort,
             project_label=project_label,
             temperature_status=temperature_status,
+            timezone=timezone,
         )
     finally:
         _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
@@ -352,6 +354,7 @@ def build_status_text(
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
     temperature_status: str | None = None,
+    timezone: tzinfo | None = None,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
@@ -365,7 +368,7 @@ def build_status_text(
     session, rendered as the placeholder).
     """
     now_utc = datetime.now(UTC)
-    now_local = now_utc.astimezone()
+    now_local = now_utc.astimezone(timezone)
 
     if agent is None:
         agent_summary = STATUS_PLACEHOLDER
@@ -389,7 +392,7 @@ def build_status_text(
     context_usage = _context_usage_text(messages, context_window)
     last_request_cache = _last_request_cache_text(messages)
     session_cache = _session_cache_text(messages)
-    session_started = _session_started_text(messages, now_utc)
+    session_started = _session_started_text(messages, now_utc, timezone)
     turn_count = _turn_count_text(messages)
     app_uptime = _app_uptime_text(started_at, now_utc)
     activity_name = activity.activity if activity is not None else STATUS_PLACEHOLDER
@@ -595,7 +598,9 @@ def _cache_hit_rate_text(cache_read_tokens: int, input_tokens: int) -> str:
     return f"{hit_rate:.{_CACHE_HIT_RATE_DECIMALS}f}%"
 
 
-def _session_started_text(messages: list[ChatMessage], now_utc: datetime) -> str:
+def _session_started_text(
+    messages: list[ChatMessage], now_utc: datetime, timezone: tzinfo | None
+) -> str:
     if not messages:
         return STATUS_PLACEHOLDER
 
@@ -603,7 +608,7 @@ def _session_started_text(messages: list[ChatMessage], now_utc: datetime) -> str
     if parsed_timestamp is None:
         return STATUS_PLACEHOLDER
 
-    local_started = parsed_timestamp.astimezone()
+    local_started = parsed_timestamp.astimezone(timezone)
     age_text = _format_duration(now_utc - parsed_timestamp)
     return f"{local_started.strftime(_STATUS_TIME_FORMAT)} ({age_text} ago)"
 

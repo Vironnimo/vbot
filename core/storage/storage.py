@@ -50,6 +50,7 @@ from core.settings.normalizers import (
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
 )
+from core.settings.settings import effective_timezone_name, validate_timezone_name
 from core.storage.errors import StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
@@ -874,14 +875,14 @@ class StorageManager:
     ) -> dict[str, Any]:
         """Merge server settings into an in-memory settings mapping.
 
-        The public ``server`` section persists to the flat raw ``keep_awake``
-        key; unspecified fields keep their stored values (sparse merge).
+        The public ``server`` section persists to flat raw keys; unspecified
+        fields keep their stored values (sparse merge).
         """
 
         if not isinstance(server, Mapping):
             raise StorageError("Server settings must be a mapping")
 
-        unsupported_fields = sorted(set(server) - {"keep_awake"})
+        unsupported_fields = sorted(set(server) - {"keep_awake", "timezone"})
         if unsupported_fields:
             raise StorageError(f"Unsupported server settings: {', '.join(unsupported_fields)}")
 
@@ -891,7 +892,18 @@ class StorageManager:
                 raise StorageError("Server keep_awake setting must be a boolean")
             settings["keep_awake"] = keep_awake
 
-        return {"keep_awake": settings.get("keep_awake") is True}
+        if "timezone" in server:
+            try:
+                settings["timezone"] = validate_timezone_name(
+                    server["timezone"], label="Server timezone setting"
+                )
+            except SettingsValidationError as error:
+                raise StorageError(str(error)) from error
+
+        return {
+            "keep_awake": settings.get("keep_awake") is True,
+            "timezone": effective_timezone_name(settings),
+        }
 
     def _apply_web_search_settings(
         self,

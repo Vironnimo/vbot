@@ -87,6 +87,7 @@
   import LogsView from './components/LogsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import SkillsView from './components/skills/SkillsView.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
@@ -410,6 +411,7 @@
     try {
       const result = await getSettings();
       settings = result;
+      setApplicationTimeZone(result?.general?.timezone);
       setChatWidth(result?.appearance?.chat_width);
       setChatWorkingMode(result?.appearance?.chat_working_mode);
       const language = result?.appearance?.language;

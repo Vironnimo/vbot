@@ -29,6 +29,7 @@ from core.settings import (
     parse_settings_update,
     setting_details,
 )
+from core.settings.settings import available_timezone_names, effective_timezone_name
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS
 from server.rpc.connection_methods import custom_provider_items
@@ -385,6 +386,11 @@ async def _apply_public_settings_delta(
         reload_keep_awake = getattr(runtime, "reload_keep_awake", None)
         if callable(reload_keep_awake):
             reload_keep_awake()
+    timezone_changed = previous.get("timezone") != current.get("timezone")
+    if timezone_changed:
+        reload_timezone = getattr(runtime, "reload_timezone", None)
+        if callable(reload_timezone):
+            reload_timezone()
     return extension_layer_reloaded
 
 
@@ -811,12 +817,15 @@ def _settings_response(state: Any) -> JsonObject:
     session_titles = runtime.storage.load_session_title_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
+    raw_settings = runtime.storage.load_settings()
 
     response = {
         "general": {
             "server": server_bind,
             "data_directory": str(runtime.storage.data_dir),
-            "keep_awake": runtime.storage.load_settings().get("keep_awake") is True,
+            "keep_awake": raw_settings.get("keep_awake") is True,
+            "timezone": effective_timezone_name(raw_settings),
+            "available_timezones": list(available_timezone_names()),
         },
         "providers": {
             "items": [

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
@@ -70,6 +71,7 @@ def make_status_handler(
     projects: ProjectStore | None = None,
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
+    timezone_name_loader: Callable[[], str] | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
 
@@ -151,6 +153,9 @@ def make_status_handler(
                     agent.temperature,
                     model_details,
                 ),
+                timezone=(
+                    ZoneInfo(timezone_name_loader()) if timezone_name_loader is not None else None
+                ),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
@@ -182,6 +187,7 @@ def register_status_tool(
     projects: ProjectStore | None = None,
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
+    timezone_name_loader: Callable[[], str] | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
@@ -198,6 +204,7 @@ def register_status_tool(
             projects,
             local_context_windows_loader,
             reasoning_render_describer,
+            timezone_name_loader,
         ),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
