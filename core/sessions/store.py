@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from core.sessions.sessions import SessionAddress, SessionReadCursor
 
 _LOGGER = logging.getLogger("vbot.sessions")
+_DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 
 JsonObject = dict[str, Any]
 
@@ -389,22 +390,48 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
         if _fts_table_exists(connection) or _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
             _drop_fts(connection)
         try:
-            connection.executescript(FTS_SQL)
+            connection.executescript("BEGIN IMMEDIATE;\n" + FTS_SQL)
         except sqlite3.Error:
+            with suppress(sqlite3.Error):
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
             _drop_fts(connection)
-            connection.executescript(FTS_SQL_FALLBACK)
+            connection.executescript("BEGIN IMMEDIATE;\n" + FTS_SQL_FALLBACK)
         _set_fts_meta(connection, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
         _set_fts_meta(connection, FTS_GENERATION_KEY, uuid.uuid4().hex)
         _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, "0")
         _set_fts_meta(connection, FTS_STALE_KEY, "rebuilding")
         _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
-        connection.commit()
+        target = int(
+            connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+        )
+        _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
+        if target == 0:
+            coverage_ok, coverage_reason = _fts_coverage_ok(connection)
+            if not coverage_ok:
+                raise sqlite3.DatabaseError(
+                    coverage_reason or "empty FTS bootstrap failed its coverage check"
+                )
+            _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "")
+            connection.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
+            connection.execute("COMMIT")
+            return
+        connection.execute("COMMIT")
         _backfill_fts(connection)
         _finish_fts_rebuild(connection)
     except sqlite3.Error as exc:
-        _set_fts_meta(connection, FTS_STALE_KEY, "1")
-        _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, f"FTS unavailable: {exc}")
-        connection.commit()
+        with suppress(sqlite3.Error):
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            _set_fts_meta(connection, FTS_STALE_KEY, "1")
+            _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, f"FTS unavailable: {exc}")
+            connection.execute("COMMIT")
+        except sqlite3.Error:
+            with suppress(sqlite3.Error):
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
         _LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
 
 
@@ -1136,18 +1163,58 @@ class SessionStore:
         self, address: SessionAddress
     ) -> tuple[JsonObject, int, ChatMessage | None]:
         """Load compact descriptor inputs without reconstructing Session history."""
+        source = self.descriptor_sources((address,)).get(address)
+        if source is None:
+            raise ChatSessionError(f"session does not exist: {address.session_id}")
+        return source
+
+    def descriptor_sources(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]:
+        """Load compact descriptor inputs for many Sessions in set-oriented reads."""
+        sources: dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]] = {}
+        by_scope: dict[tuple[str, str], list[str]] = {}
+        for address in addresses:
+            by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
+                address.session_id
+            )
         with self._transaction(write=False) as connection:
-            state = self._require_live(connection, address)
-            metadata = _json_from_payload(state["metadata_json"], "session metadata")
-            first_user_row = connection.execute(
-                _message_records_sql(
-                    where="m.session_key = ? AND m.role = 'user'",
-                    order_by="ORDER BY m.seq LIMIT 1",
-                ),
-                (state["session_key"],),
-            ).fetchone()
-        first_user = None if first_user_row is None else message_from_row(first_user_row)
-        return metadata, int(state["message_count"]), first_user
+            for (project_id, agent_id), session_ids in by_scope.items():
+                for start in range(0, len(session_ids), _DESCRIPTOR_SOURCE_BATCH_SIZE):
+                    chunk = session_ids[start : start + _DESCRIPTOR_SOURCE_BATCH_SIZE]
+                    placeholders = ", ".join("?" for _ in chunk)
+                    states = connection.execute(
+                        "SELECT * FROM sessions WHERE project_id = ? AND agent_id = ? "
+                        "AND status = 'live' "
+                        f"AND session_id IN ({placeholders})",
+                        (project_id, agent_id, *chunk),
+                    ).fetchall()
+                    if not states:
+                        continue
+                    session_keys = [int(state["session_key"]) for state in states]
+                    key_placeholders = ", ".join("?" for _ in session_keys)
+                    first_user_rows = connection.execute(
+                        _message_records_sql(
+                            where=(
+                                f"m.session_key IN ({key_placeholders}) AND m.role = 'user' "
+                                "AND m.seq = (SELECT MIN(first.seq) FROM messages AS first "
+                                "WHERE first.session_key = m.session_key AND first.role = 'user')"
+                            ),
+                            order_by="ORDER BY m.session_key",
+                        ),
+                        session_keys,
+                    ).fetchall()
+                    first_users = {
+                        int(row["session_key"]): message_from_row(row) for row in first_user_rows
+                    }
+                    for state in states:
+                        address = self._address(state)
+                        sources[address] = (
+                            _json_from_payload(state["metadata_json"], "session metadata"),
+                            int(state["message_count"]),
+                            first_users.get(int(state["session_key"])),
+                        )
+        return sources
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         payload = _json_object(metadata, "session metadata")

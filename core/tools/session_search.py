@@ -38,6 +38,7 @@ from core.sessions import (
     ChatSessionError,
     ChatSessionManager,
     SessionAddress,
+    SessionDescriptorSource,
 )
 from core.tools.tools import (
     JsonObject,
@@ -73,16 +74,38 @@ SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 CHANNEL_PLATFORM_METADATA_KEY = "platform"
 _VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
+_REFLECTION_RUN_KINDS = frozenset(
+    {
+        RunKind.REFLECTION.value,
+        RunKind.MEMORY_REFLECTION.value,
+        RunKind.SKILL_REFLECTION.value,
+    }
+)
+_USER_FACING_RUN_KINDS = frozenset(
+    {
+        RunKind.USER.value,
+        RunKind.CHANNEL.value,
+        RunKind.CRON.value,
+    }
+)
+_SEARCH_INCLUDE_SUBAGENTS_DESCRIPTION = (
+    "Also search work delegated to Sub-Agents. Defaults to false."
+)
+_READ_INCLUDE_SUBAGENTS_DESCRIPTION = (
+    "Allow reading a Sub-Agent Session returned by session_search. Defaults to false; preserve "
+    "the value supplied in read_ref."
+)
 
 _DESCRIPTION_SUFFIX = (
-    "The current Session is excluded. Omit query to list recent Sessions. Returns at most "
-    "10 items with no paging; narrow with period or session_id. Search matches include "
-    "session_read references."
+    "Delegated Sub-Agent work is excluded unless include_subagents is true. Omit query to list "
+    "recent Sessions. Returns up to 10 excerpts with no paging; narrow with period or session_id. "
+    "Use a returned read_ref with session_read when exact context matters. The current Session "
+    "is unavailable."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = f"{SESSION_RECALL_LITERAL_TOOL_SUMMARY} {_DESCRIPTION_SUFFIX}"
 SESSION_READ_TOOL_DESCRIPTION = (
-    "Read conversation blocks or a Tool Result from a past Session. The current "
-    "Session is unavailable."
+    "Read exact content from a past Session returned by session_search. Pass the returned "
+    "read_ref arguments unchanged. The current conversation cannot be read with this Tool."
 )
 
 
@@ -133,6 +156,10 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
                     "across Sessions. The current Session is unavailable."
                 ),
             },
+            "include_subagents": {
+                "type": "boolean",
+                "description": _SEARCH_INCLUDE_SUBAGENTS_DESCRIPTION,
+            },
         },
         "required": [],
     }
@@ -175,6 +202,10 @@ def build_session_read_parameters() -> JsonObject:
                     "Return every conversation block in canonical order. Cannot be combined "
                     "with message_id; large Tool Results remain directly readable references."
                 ),
+            },
+            "include_subagents": {
+                "type": "boolean",
+                "description": _READ_INCLUDE_SUBAGENTS_DESCRIPTION,
             },
         },
         "required": ["session_id"],
@@ -367,6 +398,10 @@ async def _list_sessions(
 ) -> JsonObject:
     agent_id = _agent_id(arguments, context)
     summaries = await run_tool_worker(sessions.list_with_metadata, agent_id, context.project_id)
+    summaries = _visible_session_summaries(
+        summaries,
+        include_subagents=arguments.get("include_subagents") is True,
+    )
     if agent_id == context.agent_id:
         summaries = [
             summary for summary in summaries if str(summary.get("id")) != context.session_id
@@ -399,6 +434,37 @@ async def _list_sessions(
     )
 
 
+def _visible_session_summaries(
+    summaries: list[JsonObject],
+    *,
+    include_subagents: bool,
+) -> list[JsonObject]:
+    return [
+        summary
+        for summary in summaries
+        if _session_is_recall_visible(summary, include_subagents=include_subagents)
+    ]
+
+
+def _session_is_recall_visible(metadata: JsonObject, *, include_subagents: bool) -> bool:
+    run_kinds = _session_run_kinds(metadata)
+    if run_kinds is not None and _REFLECTION_RUN_KINDS.intersection(run_kinds):
+        return False
+    if _session_is_subagent(metadata, run_kinds):
+        return include_subagents
+    if run_kinds is None:
+        return True
+    return bool(_USER_FACING_RUN_KINDS.intersection(run_kinds))
+
+
+def _session_is_subagent(
+    metadata: JsonObject,
+    run_kinds: list[str] | None = None,
+) -> bool:
+    resolved_run_kinds = _session_run_kinds(metadata) if run_kinds is None else run_kinds
+    return _is_subagent_session(metadata, resolved_run_kinds) is True
+
+
 async def _read_session(
     context: ToolContext,
     arguments: JsonObject,
@@ -424,8 +490,12 @@ async def _read_session(
         raise _SessionSearchError(
             "session_not_found", f"Session not found: {session_id}"
         ) from error
-    messages = await run_tool_worker(session.load)
     metadata = await run_tool_worker(sessions.get_metadata, address)
+    include_subagents = arguments.get("include_subagents") is True
+    if not _session_is_recall_visible(metadata, include_subagents=include_subagents):
+        raise _SessionSearchError("session_not_found", f"Session not found: {session_id}")
+    is_subagent_session = _session_is_subagent(metadata)
+    messages = await run_tool_worker(session.load)
     indices = {str(message.id): index for index, message in enumerate(messages)}
     if message_id is not None and message_id not in indices:
         raise _SessionSearchError("message_not_found", f"Message not found: {message_id}")
@@ -451,6 +521,7 @@ async def _read_session(
         agent_id=agent_id,
         session_id=session_id,
         current_agent_id=context.agent_id,
+        include_subagents=is_subagent_session,
     )
     user_anchors = _user_anchor_index(messages) if message_id is None and not all_messages else None
     selection_details: JsonObject = {
@@ -516,6 +587,29 @@ async def _search_sessions(
     match_mode = "all_terms"
     raw_order = capabilities.default_order
     since, until = _parse_period(arguments.get("period"))
+    if sessions is None:
+        raise _SessionSearchError(
+            "session_search_unavailable", "Canonical Session storage is unavailable."
+        )
+    summaries = await run_tool_worker(
+        sessions.list_with_metadata,
+        agent_id,
+        context.project_id,
+    )
+    visible_summaries = _visible_session_summaries(
+        summaries,
+        include_subagents=arguments.get("include_subagents") is True,
+    )
+    visible_session_ids = {
+        str(summary["id"]) for summary in visible_summaries if isinstance(summary.get("id"), str)
+    }
+    excluded_session_ids = {
+        str(summary["id"])
+        for summary in summaries
+        if isinstance(summary.get("id"), str) and str(summary["id"]) not in visible_session_ids
+    }
+    if agent_id == context.agent_id:
+        excluded_session_ids.add(context.session_id)
     request = RecallSearchRequest(
         agent_id=agent_id,
         project_id=context.project_id,
@@ -529,24 +623,29 @@ async def _search_sessions(
         offset=0,
         limit=SESSION_SEARCH_DEFAULT_LIMIT,
         snapshot_id=None,
-        excluded_session_ids=(context.session_id,) if agent_id == context.agent_id else (),
+        excluded_session_ids=tuple(sorted(excluded_session_ids)),
     )
     if isinstance(recall_backend, SupportsRecallSearch):
         page = await _call_search_page(recall_backend, request)
-        if agent_id == context.agent_id:
-            page = _exclude_session_from_page(page, context.session_id)
+        page = _retain_visible_search_hits(page, visible_session_ids)
         read_refs, session_contexts = await run_tool_worker(
             _search_context_for_hits,
             list(page.hits),
             agent_id=agent_id,
             project_id=context.project_id,
             sessions=sessions,
+            include_subagents=arguments.get("include_subagents") is True,
         )
         return _render_search_page(
             page,
             backend_name,
             read_refs,
             session_contexts,
+        )
+    if len(visible_summaries) != len(summaries):
+        raise _SessionSearchError(
+            "session_search_unavailable",
+            "The selected Recall backend cannot enforce internal Session visibility.",
         )
     return await _legacy_search(
         context,
@@ -579,15 +678,14 @@ async def _call_search_page(backend: Any, request: RecallSearchRequest) -> Recal
     return result
 
 
-def _exclude_session_from_page(page: RecallSearchPage, session_id: str) -> RecallSearchPage:
-    hits = tuple(hit for hit in page.hits if hit.session_id != session_id)
+def _retain_visible_search_hits(
+    page: RecallSearchPage,
+    visible_session_ids: set[str],
+) -> RecallSearchPage:
+    hits = tuple(hit for hit in page.hits if hit.session_id in visible_session_ids)
     if len(hits) == len(page.hits):
         return page
-    return replace(
-        page,
-        hits=hits,
-        total_candidate_sessions=max(page.total_candidate_sessions - 1, 0),
-    )
+    return replace(page, hits=hits)
 
 
 async def _legacy_search(
@@ -780,41 +878,50 @@ def _search_context_for_hits(
     agent_id: str,
     project_id: str | None,
     sessions: ChatSessionManager | None,
+    include_subagents: bool,
 ) -> tuple[list[JsonObject], dict[str, _SearchSessionContext]]:
     loaded: dict[str, _SearchSessionContext] = {}
     refs: list[JsonObject] = []
+    addresses = {
+        hit.session_id: SessionAddress(
+            project_id=project_id,
+            agent_id=agent_id,
+            session_id=hit.session_id,
+        )
+        for hit in hits
+    }
+    try:
+        sources = {} if sessions is None else sessions.descriptor_sources(tuple(addresses.values()))
+    except Exception:
+        sources = {}
     for hit in hits:
         if hit.session_id not in loaded:
-            loaded[hit.session_id] = _load_search_hit_session_context(
-                sessions,
+            source = sources.get(addresses[hit.session_id])
+            loaded[hit.session_id] = _search_hit_session_context(
                 agent_id,
                 hit.session_id,
-                project_id,
+                source,
             )
-        refs.append(
-            {
-                "agent_id": agent_id,
-                "session_id": hit.session_id,
-                "message_id": hit.message_id,
-            }
-        )
+        read_ref: JsonObject = {
+            "agent_id": agent_id,
+            "session_id": hit.session_id,
+            "message_id": hit.message_id,
+        }
+        if (
+            include_subagents
+            and loaded[hit.session_id].descriptor.get("is_subagent_session") is True
+        ):
+            read_ref["include_subagents"] = True
+        refs.append(read_ref)
     return refs, loaded
 
 
-def _load_search_hit_session_context(
-    sessions: ChatSessionManager | None,
+def _search_hit_session_context(
     agent_id: str,
     session_id: str,
-    project_id: str | None,
+    source: SessionDescriptorSource | None,
 ) -> _SearchSessionContext:
-    if sessions is None:
-        return _SearchSessionContext(
-            descriptor=_session_descriptor(agent_id, session_id, {}, None),
-        )
-    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    try:
-        source = sessions.descriptor_source(address)
-    except Exception:
+    if source is None:
         return _SearchSessionContext(
             descriptor=_session_descriptor(agent_id, session_id, {}, None),
         )
@@ -867,6 +974,7 @@ def _project_read_items(
     agent_id: str,
     session_id: str,
     current_agent_id: str,
+    include_subagents: bool,
 ) -> list[JsonObject]:
     items: list[JsonObject] = []
     for message_index in range(first, last + 1):
@@ -879,6 +987,8 @@ def _project_read_items(
             }
             if agent_id != current_agent_id:
                 read_ref["agent_id"] = agent_id
+            if include_subagents:
+                read_ref["include_subagents"] = True
             item["read_ref"] = read_ref
         items.append(item)
     return items
@@ -1111,20 +1221,24 @@ def _session_summary_items(
     summaries: list[JsonObject],
 ) -> list[JsonObject]:
     items: list[JsonObject] = []
+    addresses = {
+        str(summary.get("id") or ""): SessionAddress(
+            project_id=project_id,
+            agent_id=agent_id,
+            session_id=str(summary.get("id") or ""),
+        )
+        for summary in summaries
+    }
+    try:
+        sources = sessions.descriptor_sources(tuple(addresses.values()))
+    except Exception:
+        sources = {}
     for summary in summaries:
         session_id = str(summary.get("id") or "")
         message_count: int | None = None
         first_user_message: Any | None = None
-        address = SessionAddress(
-            project_id=project_id,
-            agent_id=agent_id,
-            session_id=session_id,
-        )
-        try:
-            source = sessions.descriptor_source(address)
-        except Exception:
-            pass
-        else:
+        source = sources.get(addresses[session_id])
+        if source is not None:
             message_count = source.message_count
             first_user_message = source.first_user_message
         items.append(
@@ -1340,7 +1454,7 @@ def _backend_name(backend: Any) -> str:
 
 
 def _validate_session_search_fields(arguments: JsonObject) -> None:
-    allowed = {"query", "period", "agent_id", "session_id"}
+    allowed = {"query", "period", "agent_id", "session_id", "include_subagents"}
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
@@ -1358,10 +1472,19 @@ def _validate_session_search_fields(arguments: JsonObject) -> None:
                 "invalid_arguments", "period must be an ISO-8601 start/end interval"
             )
         _parse_period(arguments["period"])
+    if "include_subagents" in arguments and not isinstance(arguments["include_subagents"], bool):
+        raise _SessionSearchError("invalid_arguments", "include_subagents must be a boolean")
 
 
 def _validate_session_read_fields(arguments: JsonObject) -> None:
-    allowed = {"session_id", "message_id", "agent_id", "continuation", "all_messages"}
+    allowed = {
+        "session_id",
+        "message_id",
+        "agent_id",
+        "continuation",
+        "all_messages",
+        "include_subagents",
+    }
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
@@ -1374,6 +1497,8 @@ def _validate_session_read_fields(arguments: JsonObject) -> None:
             _required_string(arguments, key)
     if "all_messages" in arguments and not isinstance(arguments["all_messages"], bool):
         raise _SessionSearchError("invalid_arguments", "all_messages must be a boolean")
+    if "include_subagents" in arguments and not isinstance(arguments["include_subagents"], bool):
+        raise _SessionSearchError("invalid_arguments", "include_subagents must be a boolean")
     if arguments.get("all_messages") is True and "message_id" in arguments:
         raise _SessionSearchError(
             "invalid_arguments", "all_messages cannot be combined with message_id"

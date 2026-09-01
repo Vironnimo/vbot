@@ -41,6 +41,8 @@ from core.extensions import InteractionButton
 from core.runs import Run
 from core.sessions import ChatSessionManager, SessionAddress
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 class AgentStoreStub:
     def __init__(self, *, known_agent_ids: set[str] | None = None) -> None:

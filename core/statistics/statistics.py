@@ -871,7 +871,7 @@ class _Aggregator:
         """Accumulate every aggregate for one session.
 
         ``agent_id`` is the report display key (bare id, or ``agent@projekt`` for
-        a project session). ``summary`` is the session's merged sidecar metadata
+        a project Session). ``summary`` is the Session's merged canonical metadata
         (from ``list_with_metadata``), carrying ``created_at`` and any
         ``seen_skills``. All non-skills aggregates run over the in-window
         messages; the skills tally is fed the full activation notes and applies

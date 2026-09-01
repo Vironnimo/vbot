@@ -44,6 +44,8 @@ from tests.core.channels.telegram_test_support import (
     make_update,
 )
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 @pytest.mark.parametrize(
     ("chat_id", "expected_kind"),

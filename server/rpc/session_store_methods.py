@@ -43,19 +43,12 @@ async def _session_store_snapshot_create(state: Any, params: JsonObject) -> Json
             RPC_ERROR_INVALID_REQUEST,
             "params.reason must be one of manual, rpc, update, or recovery",
         )
-    runtime = getattr(state, "runtime", None)
-    capture = getattr(runtime, "_capture_session_snapshot", None)
-    if not callable(capture):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Session snapshot creation is unavailable")
+    sessions = _sessions(state)
     try:
-        snapshot = await _SESSION_STORE_WORKERS.run(capture, reason=reason)
+        snapshot = await _SESSION_STORE_WORKERS.run(sessions.create_snapshot, reason=reason)
         if snapshot is None:
             raise SessionStoreUnavailableError("Session snapshot was not created")
-        storage = getattr(runtime, "storage", None)
-        data_dir = getattr(storage, "data_dir", None)
-        if data_dir is None:
-            raise SessionStoreUnavailableError("Session-store snapshot verification is unavailable")
-        summaries = snapshot_summaries(data_dir)
+        summaries = snapshot_summaries(sessions.data_dir)
         summary = next((item for item in summaries if item["snapshot_id"] == snapshot.name), None)
         if summary is None:
             raise SessionStoreUnavailableError("Session snapshot verification is unavailable")

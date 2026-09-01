@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -44,7 +45,9 @@ def _continuation_start() -> dict[str, object]:
 
 
 @pytest.fixture
-def manager(tmp_path):
+def manager(tmp_path, current_session_store_template):
+    shutil.copy2(current_session_store_template / "session-store.json", tmp_path)
+    shutil.copy2(current_session_store_template / "sessions.db", tmp_path)
     sessions = ChatSessionManager(tmp_path)
     yield sessions
     sessions.close()

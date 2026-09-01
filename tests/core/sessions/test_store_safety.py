@@ -25,13 +25,10 @@ def test_verified_snapshot_creates_an_openable_copy(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     try:
         manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
-        created = create_snapshot(
-            tmp_path,
-            tmp_path / "sessions.db",
-            manager.backup_snapshot,
-            reason="test",
-        )
+        revisions = manager.snapshot_revisions()
+        created = manager.create_snapshot(reason="test")
         assert created is not None
+        assert manager.snapshot_checkpoint() == (created.name, revisions)
         check = SessionStore(created / "sessions.db", _offline=True)
         try:
             assert check.exists(_address("session-one"))

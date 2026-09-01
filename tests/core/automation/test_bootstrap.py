@@ -20,6 +20,8 @@ from core.chat import ChatMessage
 from core.runs import RunStatus
 from core.sessions import ChatSessionManager
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 class StubRun:
     def __init__(

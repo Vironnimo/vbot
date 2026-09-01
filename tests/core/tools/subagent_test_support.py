@@ -24,6 +24,7 @@ from core.runs import (
     RunNotFoundError,
 )
 from core.sessions import SessionAddress
+from core.sessions.format import write_bootstrap_marker
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -471,6 +472,8 @@ class FakeChatLoop:
 def make_runtime(
     tmp_path: Path, manager: FakeRunManager, settings: JsonObject | None = None
 ) -> Any:
+    if not (tmp_path / "session-store.json").exists():
+        write_bootstrap_marker(tmp_path)
     agents = FakeAgents()
     return SimpleNamespace(
         agents=agents,

@@ -647,6 +647,27 @@ class ChatSessionManager:
         """Write one consistent database copy for the snapshot engine."""
         return self._store.backup(destination, cancel_event=cancel_event)
 
+    def create_snapshot(self, *, reason: str) -> Path | None:
+        """Create one explicit verified snapshot and checkpoint its source revisions."""
+        from core.sessions.format import read_session_store_marker
+        from core.sessions.snapshots import create_snapshot
+
+        marker = read_session_store_marker(self.data_dir)
+        database_id = None if marker is None else str(marker["database_id"])
+        before = self.snapshot_revisions()
+        outcome = create_snapshot(
+            self.data_dir,
+            self._store.path,
+            self.backup_snapshot,
+            database_id=database_id,
+            reason=reason,
+        )
+        if outcome is not None:
+            after = self.snapshot_revisions()
+            if before == after:
+                self.record_snapshot_checkpoint(outcome.name, after)
+        return outcome
+
     def snapshot_revisions(self) -> tuple[int, int]:
         return self._store.snapshot_revisions()
 
@@ -738,6 +759,18 @@ class ChatSessionManager:
     def descriptor_source(self, address: SessionAddress) -> SessionDescriptorSource:
         metadata, message_count, first_user_message = self._store.descriptor_source(address)
         return SessionDescriptorSource(metadata, message_count, first_user_message)
+
+    def descriptor_sources(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, SessionDescriptorSource]:
+        return {
+            address: SessionDescriptorSource(metadata, message_count, first_user_message)
+            for address, (
+                metadata,
+                message_count,
+                first_user_message,
+            ) in self._store.descriptor_sources(addresses).items()
+        }
 
     def set_metadata(self, address: SessionAddress, data: JsonObject) -> None:
         self._store.replace_metadata(address, data)

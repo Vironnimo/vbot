@@ -23,6 +23,8 @@ from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, ChatSessionManager
 from core.utils.errors import ProviderError
 
+pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
 
 def _record(record_type: str, run_id: str = "run-one", **fields: Any) -> dict[str, Any]:
     return {

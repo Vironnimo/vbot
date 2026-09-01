@@ -44,6 +44,14 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
         assert status["result"]["state"] == "snapshot_degraded"
         assert "sessions" not in status["result"]
 
+        created = await dispatch_rpc(
+            state,
+            {"method": "session_store.snapshot_create", "params": {"reason": "manual"}},
+        )
+        assert created["ok"] is True
+        assert created["result"]["snapshot"]["reason"] == "manual"
+        assert state.event_bus.events[-1]["payload"] == {"kind": "session_store"}
+
         write_recovery_incident(
             tmp_path,
             cause="test-corruption",
@@ -67,7 +75,7 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
             },
         )
         assert acknowledged["ok"] is True
-        assert acknowledged["result"]["state"] == "snapshot_degraded"
+        assert acknowledged["result"]["state"] == "healthy"
         assert acknowledged["result"]["incident"] is None
         assert state.event_bus.events[-1]["payload"] == {"kind": "session_store"}
     finally:

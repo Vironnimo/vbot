@@ -31,6 +31,7 @@ from core.extensions import ExtensionRegistry
 from core.recall.recall import RecallBackendContext, RecallBackendRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
+from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext, ToolRegistry
 
 
@@ -132,6 +133,8 @@ def _tool_context(tool_name: str, tmp_path: Path) -> ToolContext:
 
 
 def _recall_context(tmp_path: Path) -> RecallBackendContext:
+    if not (tmp_path / "session-store.json").exists():
+        write_bootstrap_marker(tmp_path)
     return RecallBackendContext(data_dir=tmp_path, sessions=ChatSessionManager(tmp_path))
 
 

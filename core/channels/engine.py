@@ -538,7 +538,7 @@ class ChannelConversationEngine:
     def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
         route, _session = self._ensure_channel_session(conversation)
-        # Proactive (outbound-only) sessions get the same channel sidecar metadata as inbound
+        # Proactive (outbound-only) Sessions get the same channel metadata as inbound
         # ones, so a channel_send-created session is recognizable as a channel session and has
         # a last_reply_target before any inbound message arrives. No participant is recorded:
         # an outbound target has no real sender.
