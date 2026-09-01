@@ -47,8 +47,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      index policy, preventing cross-connection/options/policy vector reuse.
 # v7 → the header also pins the provider-reported model id, preventing a router
 #      alias or fallback from mixing vectors produced by different real models.
-# v9 → Session generations prevent recreated addresses from reusing stale chunks.
-_SCHEMA_VERSION = 9
+# v8 → canonical Session generations/revisions replace filesystem freshness
+#      and prevent recreated addresses from reusing stale chunks.
+_SCHEMA_VERSION = 8
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"

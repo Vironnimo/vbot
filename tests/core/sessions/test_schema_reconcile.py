@@ -11,6 +11,8 @@ from core.sessions import schema as session_schema
 from core.sessions.errors import SessionStoreCorruptError, SessionStoreSchemaMismatchError
 from core.sessions.schema import (
     APPLICATION_ID,
+    FTS_STORAGE_VERSION,
+    SCHEMA_CONVERSION_FLOOR,
     SCHEMA_SQL,
     SCHEMA_VERSION,
     declared_schema,
@@ -50,6 +52,12 @@ def _journal_mode(database) -> str:
         return str(probe.execute("PRAGMA journal_mode").fetchone()[0]).lower()
     finally:
         probe.close()
+
+
+def test_unreleased_session_store_uses_the_first_schema_generation() -> None:
+    assert SCHEMA_VERSION == 1
+    assert SCHEMA_CONVERSION_FLOOR == 1
+    assert FTS_STORAGE_VERSION == 1
 
 
 @pytest.mark.parametrize(
@@ -147,11 +155,11 @@ def test_reconcile_refuses_a_required_column_without_a_default(tmp_path) -> None
 def test_reconcile_bumps_a_lagging_user_version(tmp_path, monkeypatch) -> None:
     connection = _create_current_database(tmp_path / "sessions.db")
     try:
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
-        monkeypatch.setattr(session_schema, "SCHEMA_VERSION", SCHEMA_VERSION + 1)
+        connection.execute("PRAGMA user_version = 0")
+        monkeypatch.setattr(session_schema, "SCHEMA_VERSION", 2)
         applied = reconcile_schema(connection)
-        assert applied == [f"schema version {SCHEMA_VERSION - 1} -> {SCHEMA_VERSION + 1}"]
-        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == SCHEMA_VERSION + 1
+        assert applied == ["schema version 0 -> 2"]
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 2
     finally:
         connection.close()
 
@@ -292,26 +300,6 @@ def test_store_refuses_a_database_from_a_newer_vbot(tmp_path) -> None:
     connection.close()
     with pytest.raises(SessionStoreSchemaMismatchError):
         SessionStore(database)
-
-
-def test_store_reports_an_older_schema_separately_from_corruption(tmp_path) -> None:
-    database = tmp_path / "sessions.db"
-    connection = _create_current_database(database)
-    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
-    connection.commit()
-    connection.close()
-
-    with pytest.raises(SessionStoreSchemaMismatchError, match="offline conversion"):
-        SessionStore(database)
-
-
-def test_store_rejects_a_marker_with_an_older_schema_version(tmp_path) -> None:
-    marker = json.loads((tmp_path / "session-store.json").read_text(encoding="utf-8"))
-    marker["schema_version"] = SCHEMA_VERSION - 1
-    (tmp_path / "session-store.json").write_text(json.dumps(marker), encoding="utf-8")
-
-    with pytest.raises(SessionStoreSchemaMismatchError, match="marker schema"):
-        SessionStore(tmp_path / "sessions.db")
 
 
 def test_store_uses_rollback_journal_on_vulnerable_sqlite(tmp_path, monkeypatch) -> None:

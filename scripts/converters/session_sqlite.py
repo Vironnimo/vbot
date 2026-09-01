@@ -43,7 +43,7 @@ from scripts.converters.jsonl_sessions import (
     capture_inventory,
 )
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 1
 MANIFEST_NAME = "conversion-manifest.json"
 EXPORT_MANIFEST_NAME = "export-manifest.json"
 ALLOWED_STAGES = (

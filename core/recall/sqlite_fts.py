@@ -59,10 +59,10 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 #      same session UUID under a project vs. the global scope never collides.
 # v3 → persisted session_search results are excluded before candidate limiting.
 # v4 → a shared Passage FTS index powers Hybrid's literal retrieval arm.
-# v5 → canonical Session history revisions replace filesystem freshness.
-# v6 → Session generations prevent a recreated address from reusing stale rows.
-# v7 → the disposable index owns Passage retrieval only; message search is canonical.
-_SCHEMA_VERSION = 7
+# v5 → canonical Session generations/revisions replace filesystem freshness,
+#      and this disposable index owns Passage retrieval only while message
+#      search moves into the canonical Session store.
+_SCHEMA_VERSION = 5
 # FTS5 trigram needs at least three characters; shorter queries fall back to the canonical scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
