@@ -1,11 +1,30 @@
 """Compaction run coordination tests."""
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from core.chat import ChatMessage
 from core.compaction.run_coordination import CompactionRunCoordinator
 from core.runs import COMPACTION_COMPLETED_EVENT
+
+
+def test_coordinator_imports_no_private_chat_contracts() -> None:
+    source_path = Path(CompactionRunCoordinator.__module__.replace(".", "/") + ".py")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    private_chat_imports = [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.startswith("core.chat")
+        for alias in node.names
+        if alias.name.startswith("_")
+    ]
+
+    assert private_chat_imports == []
 
 
 def _checkpoint(*, duration_ms: int | None) -> ChatMessage:

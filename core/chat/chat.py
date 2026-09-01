@@ -261,12 +261,15 @@ TOOL_FINALIZATION_NOTE = (
 
 
 @dataclass(frozen=True)
-class _RequestState:
+class RequestState:
     messages: list[JsonObject]
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+
+
+_RequestState = RequestState
 
 
 @dataclass(frozen=True)
@@ -1026,9 +1029,10 @@ class ChatLoop:
 
     @property
     def _compaction_runs(self) -> CompactionRunCoordinator:
+        from core.chat.compaction_host import ChatCompactionHost
         from core.compaction.run_coordination import CompactionRunCoordinator  # runtime cycle
 
-        return CompactionRunCoordinator(dependencies=self._dependencies, host=self)
+        return CompactionRunCoordinator(host=ChatCompactionHost(self))
 
     @property
     def _wire_requests(self) -> WireRequestRunner:
