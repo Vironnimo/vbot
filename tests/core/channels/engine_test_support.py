@@ -388,8 +388,9 @@ async def drain(engine: ChannelConversationEngine, platform_target: int) -> None
     if queue is None:
         await asyncio.sleep(0)
         return
-    # Generous timeout: xdist load can delay the worker task noticeably.
-    await asyncio.wait_for(queue.join(), timeout=5)
+    # The suite-wide timeout remains the deadlock guard. A shorter nested timeout
+    # flakes under xdist load even though the queue is still making progress.
+    await queue.join()
 
 
 def assert_member_trigger(
