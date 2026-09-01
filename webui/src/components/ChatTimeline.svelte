@@ -289,7 +289,9 @@
 
   // The scroller's real scrollbar width (0 with overlay scrollbars), so the
   // floating composer stack can end before the scrollbar column instead of
-  // covering it.
+  // covering it. Observe the container itself because loading History can
+  // introduce a classic scrollbar without resizing the window; that shrinks
+  // the content box and must update the overlay inset immediately.
   $effect(() => {
     const container = scrollContainer;
     if (!container) {
@@ -299,8 +301,16 @@
       onScrollbarWidthChange(container.offsetWidth - container.clientWidth);
     };
     reportWidth();
+    const observer =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(reportWidth)
+        : null;
+    observer?.observe(container);
     window.addEventListener('resize', reportWidth);
-    return () => window.removeEventListener('resize', reportWidth);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', reportWidth);
+    };
   });
 
   function timelineItemSignature(item) {

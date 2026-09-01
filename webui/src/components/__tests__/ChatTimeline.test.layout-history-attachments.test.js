@@ -94,6 +94,40 @@ describe('ChatTimeline', () => {
     expect(measureColumn.querySelector('.msg.user')).toBeTruthy();
   });
 
+  it('reports a scrollbar that appears after the timeline mounts', async () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-late-scrollbar',
+    );
+    const onScrollbarWidthChange = vi.fn();
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        onScrollbarWidthChange,
+      },
+    });
+    flushSync();
+
+    const scrollContainer = document.querySelector('.messages');
+    Object.defineProperty(scrollContainer, 'offsetWidth', {
+      configurable: true,
+      get: () => 1000,
+    });
+    Object.defineProperty(scrollContainer, 'clientWidth', {
+      configurable: true,
+      get: () => 986,
+    });
+
+    notifyContentResize();
+    await tick();
+
+    expect(onScrollbarWidthChange).toHaveBeenLastCalledWith(14);
+  });
+
   it('does not show a date separator for a single-day history', () => {
     const sessionState = ensureSessionState(
       createChatState(),
