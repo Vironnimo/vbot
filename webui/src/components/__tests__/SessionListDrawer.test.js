@@ -90,7 +90,8 @@ describe('SessionListDrawer', () => {
     await waitForCondition(
       () => listSessionsMock.mock.calls.length === callsBefore + 1,
     );
-    expect(listSessionsMock).toHaveBeenLastCalledWith('alpha');
+    expect(listSessionsMock.mock.calls.at(-1)[0]).toBe('alpha');
+    expect(listSessionsMock.mock.calls.at(-1)[1]).toMatchObject({ limit: 35 });
   });
 
   it('does not reload on mount before the token ever changes', async () => {
@@ -727,16 +728,20 @@ describe('SessionListDrawer', () => {
     expect(markerLabels).toContain('Skill reflection');
   });
 
-  it('lists sessions for every roster agent when the All-agents filter is on', async () => {
-    listSessionsMock.mockImplementation(async (address) => ({
-      sessions: [
-        {
+  it('lists sessions for every roster agent in one bounded request', async () => {
+    listSessionsMock.mockImplementation(async (requested) => {
+      const addresses = Array.isArray(requested) ? requested : [requested];
+      return {
+        sessions: addresses.map((address) => ({
           id: `session-${address}`,
           title: `Session ${address}`,
           created_at: '2026-05-09T00:00:00+00:00',
-        },
-      ],
-    }));
+          agent_address: address,
+        })),
+        total_count: addresses.length,
+        next_cursor: null,
+      };
+    });
     const onSessionSelected = vi.fn();
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
@@ -754,15 +759,16 @@ describe('SessionListDrawer', () => {
     await waitForCondition(
       () => document.querySelectorAll('.session-row').length === 1,
     );
-    expect(listSessionsMock).toHaveBeenCalledWith('alpha');
+    expect(listSessionsMock.mock.calls[0][0]).toBe('alpha');
     expect(document.body.textContent).not.toContain('Beta');
 
     openFilterMenu();
     filterSwitch('All agents').click();
     flushSync();
 
-    await waitForCondition(() => listSessionsMock.mock.calls.length === 3);
-    expect(listSessionsMock).toHaveBeenCalledWith('beta');
+    await waitForCondition(() => listSessionsMock.mock.calls.length === 2);
+    expect(listSessionsMock.mock.calls[1][0]).toEqual(['alpha', 'beta']);
+    expect(listSessionsMock.mock.calls[1][1]).toMatchObject({ limit: 35 });
     await waitForCondition(
       () => document.querySelectorAll('.session-row').length === 2,
     );
@@ -778,6 +784,72 @@ describe('SessionListDrawer', () => {
       'beta',
       false,
     );
+  });
+
+  it('loads 35 sessions initially and requests 20 more with the server cursor', async () => {
+    const firstPage = Array.from({ length: 35 }, (_, index) => ({
+      id: `session-${index}`,
+      title: `Session ${index}`,
+      created_at: `2026-05-01T00:${String(index).padStart(2, '0')}:00+00:00`,
+      agent_address: 'alpha',
+    }));
+    const secondPage = Array.from({ length: 20 }, (_, index) => ({
+      id: `session-${index + 35}`,
+      title: `Session ${index + 35}`,
+      created_at: '2026-04-01T00:00:00+00:00',
+      agent_address: 'alpha',
+    }));
+    const cursor = {
+      active_sort: 2460000,
+      agent_id: 'alpha',
+      session_id: 'session-34',
+    };
+    listSessionsMock
+      .mockResolvedValueOnce({
+        sessions: firstPage,
+        total_count: 55,
+        next_cursor: cursor,
+      })
+      .mockResolvedValueOnce({
+        sessions: secondPage,
+        total_count: 55,
+        next_cursor: null,
+      });
+
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-0',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 35,
+    );
+    expect(
+      document.querySelector('.session-drawer__more-hint').textContent,
+    ).toContain('20 more sessions');
+
+    const list = document.querySelector('.session-drawer__list');
+    Object.defineProperties(list, {
+      scrollTop: { configurable: true, value: 900 },
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 1000 },
+    });
+    list.dispatchEvent(new Event('scroll'));
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 55,
+    );
+    expect(listSessionsMock.mock.calls[1][0]).toBe('alpha');
+    expect(listSessionsMock.mock.calls[1][1]).toMatchObject({
+      limit: 20,
+      cursor,
+    });
+    expect(document.querySelector('.session-drawer__more-hint')).toBeNull();
   });
 
   it('passes the row sub-agent flag so foreign sessions do not pose as sub-agent views', async () => {

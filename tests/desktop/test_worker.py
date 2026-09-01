@@ -1907,6 +1907,7 @@ def test_resolve_session_uses_agent_current_session(fake_bridge: FakeBridge) -> 
 def test_resolve_session_falls_back_to_latest_activity(fake_bridge: FakeBridge) -> None:
     from desktop.wakeword.worker import WakewordWorker
 
+    calls: list[tuple[str, dict[str, object]]] = []
     worker = WakewordWorker(
         engine=MockWakewordEngine(),
         bridge=fake_bridge,
@@ -1914,6 +1915,7 @@ def test_resolve_session_falls_back_to_latest_activity(fake_bridge: FakeBridge) 
     )
 
     def rpc_call(method: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((method, params))
         if method == "agent.get":
             return {"current_session_id": ""}
         if method == "session.list":
@@ -1928,6 +1930,20 @@ def test_resolve_session_falls_back_to_latest_activity(fake_bridge: FakeBridge) 
     worker._rpc_call = rpc_call  # type: ignore[method-assign]
 
     assert worker._resolve_session("main", "active") == "newer"
+    assert calls == [
+        ("agent.get", {"id": "main"}),
+        (
+            "session.list",
+            {
+                "agent_id": "main",
+                "limit": 1,
+                "include_subagents": True,
+                "include_memory_reflections": True,
+                "include_skill_reflections": True,
+                "include_cron": True,
+            },
+        ),
+    ]
 
 
 def test_send_transcript_uses_streaming_rpc(fake_bridge: FakeBridge) -> None:

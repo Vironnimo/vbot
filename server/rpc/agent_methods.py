@@ -21,6 +21,8 @@ from core.sessions import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
     SessionAddress,
+    SessionListCursor,
+    SessionListFilters,
 )
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
@@ -70,6 +72,7 @@ from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _ensure_model_connection_supported,
     _optional_bool,
+    _optional_positive_integer,
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
@@ -79,6 +82,9 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.agents")
 SESSION_RPC_WORKER_LIMIT = 4
+SESSION_LIST_DEFAULT_LIMIT = 100
+SESSION_LIST_MAX_LIMIT = 100
+SESSION_LIST_MAX_AGENT_BATCH = 100
 _SESSION_RPC_WORKERS = BoundedWorkerPool(
     name="session-rpc",
     max_workers=SESSION_RPC_WORKER_LIMIT,
@@ -577,61 +583,197 @@ def _resolve_post_delete_landing(
 
 
 async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id"}, "session.list")
-
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-
-    def load_sessions() -> list[JsonObject]:
-        sessions = cast(
-            list[JsonObject],
-            state.runtime.chat_sessions.list_with_metadata(agent_id, project_id),
+    _reject_unsupported(
+        params,
+        {
+            "agent_id",
+            "agent_ids",
+            "limit",
+            "cursor",
+            "include_subagents",
+            "include_memory_reflections",
+            "include_skill_reflections",
+            "include_cron",
+            "required_session",
+        },
+        "session.list",
+    )
+    if ("agent_id" in params) == ("agent_ids" in params):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "session.list requires exactly one of params.agent_id or params.agent_ids",
         )
+    requested_addresses = (
+        [_required_string(params, "agent_id")]
+        if "agent_id" in params
+        else _validate_string_list("agent_ids", params.get("agent_ids"))
+    )
+    if len(requested_addresses) > SESSION_LIST_MAX_AGENT_BATCH:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.agent_ids must contain at most {SESSION_LIST_MAX_AGENT_BATCH} addresses",
+        )
+    parsed_addresses: list[tuple[str, str, str | None]] = []
+    seen_addresses: set[str] = set()
+    for requested_address in requested_addresses:
+        agent_id, project_id = _required_agent_address({"agent_id": requested_address}, "agent_id")
+        canonical_address = format_agent_address(agent_id, project_id)
+        if canonical_address in seen_addresses:
+            continue
+        seen_addresses.add(canonical_address)
+        parsed_addresses.append((canonical_address, agent_id, project_id))
+
+    limit = (
+        _optional_positive_integer(params, "limit", max_value=SESSION_LIST_MAX_LIMIT)
+        or SESSION_LIST_DEFAULT_LIMIT
+    )
+    cursor = _session_list_cursor(params.get("cursor"))
+    required_address = _session_list_required_address(params.get("required_session"))
+    if required_address is not None:
+        required_owner = format_agent_address(
+            required_address.agent_id, required_address.project_id
+        )
+        if required_owner not in seen_addresses:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.required_session must belong to one of the listed Agent addresses",
+            )
+    filters = SessionListFilters(
+        include_subagents=_optional_bool(params, "include_subagents", default=True),
+        include_memory_reflections=_optional_bool(
+            params, "include_memory_reflections", default=True
+        ),
+        include_skill_reflections=_optional_bool(params, "include_skill_reflections", default=True),
+        include_cron=_optional_bool(params, "include_cron", default=True),
+    )
+
+    def load_sessions() -> tuple[list[JsonObject], SessionListCursor | None, int]:
+        resolver = getattr(state.runtime, "agent_resolver", None)
+        agents = getattr(state.runtime, "agents", None)
+        inherited_policies: dict[tuple[str | None, str], JsonObject] = {}
+        for _address, agent_id, project_id in parsed_addresses:
+            if resolver is not None:
+                agent = resolver.resolve_agent(project_id, agent_id)
+            elif agents is not None:
+                agent = agents.get(agent_id)
+            else:
+                agent = None
+            own_policy = getattr(agent, "compaction_policy", None)
+            inherited_policies[(project_id, agent_id)] = (
+                dict(own_policy)
+                if isinstance(own_policy, dict)
+                else (
+                    state.runtime.storage.load_compaction_settings()
+                    if getattr(state.runtime, "storage", None) is not None
+                    else normalize_compaction_settings(None)
+                )
+            )
+        page = state.runtime.chat_sessions.list_summaries_page(
+            [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses],
+            limit=limit,
+            cursor=cursor,
+            filters=filters,
+            required_address=required_address,
+        )
+        sessions = [dict(session) for session in page.sessions]
         run_manager = getattr(state.runtime, "chat_run_manager", None)
         for session in sessions:
             session_id = session.get("id")
+            session_agent_id = session.pop("agent_id", None)
+            session_project_id = session.pop("project_id", None)
+            if not isinstance(session_agent_id, str):
+                continue
+            session["agent_address"] = format_agent_address(
+                session_agent_id,
+                session_project_id if isinstance(session_project_id, str) else None,
+            )
             if isinstance(session_id, str) and run_manager is not None:
                 active = run_manager.active_run(
-                    agent_id=agent_id,
+                    agent_id=session_agent_id,
                     session_id=session_id,
-                    project_id=project_id,
+                    project_id=(
+                        session_project_id if isinstance(session_project_id, str) else None
+                    ),
                 )
                 session["has_active_run"] = active is not None
             else:
                 session["has_active_run"] = False
-        resolver = getattr(state.runtime, "agent_resolver", None)
-        agents = getattr(state.runtime, "agents", None)
-        if resolver is None and agents is None:
-            return sessions
-        if resolver is not None:
-            agent = resolver.resolve_agent(project_id, agent_id)
-        else:
-            assert agents is not None
-            agent = agents.get(agent_id)
-        own_policy = getattr(agent, "compaction_policy", None)
-        inherited_policy = (
-            dict(own_policy)
-            if isinstance(own_policy, dict)
-            else (
-                state.runtime.storage.load_compaction_settings()
-                if getattr(state.runtime, "storage", None) is not None
-                else normalize_compaction_settings(None)
-            )
-        )
-        for session in sessions:
-            override = session.get(COMPACTION_POLICY_META_KEY)
+            override = session.pop(COMPACTION_POLICY_META_KEY, None)
+            inherited_policy = inherited_policies[
+                (
+                    session_project_id if isinstance(session_project_id, str) else None,
+                    session_agent_id,
+                )
+            ]
             session["compaction_policy_override"] = (
                 dict(override) if isinstance(override, dict) else None
             )
             session["compaction_policy_effective"] = (
                 dict(override) if isinstance(override, dict) else dict(inherited_policy)
             )
-        return sessions
+        return sessions, page.next_cursor, page.total_count
 
     try:
-        sessions = await _SESSION_RPC_WORKERS.run(load_sessions)
+        sessions, next_cursor, total_count = await _SESSION_RPC_WORKERS.run(load_sessions)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"sessions": sessions}
+    return {
+        "sessions": sessions,
+        "next_cursor": _session_list_cursor_payload(next_cursor),
+        "total_count": total_count,
+    }
+
+
+def _session_list_cursor(value: Any) -> SessionListCursor | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "active_sort",
+        "agent_id",
+        "session_id",
+    }:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.cursor must be a session.list cursor object",
+        )
+    active_sort = value.get("active_sort")
+    if (
+        not isinstance(active_sort, (int, float))
+        or isinstance(active_sort, bool)
+        or not (-10_000_000.0 < float(active_sort) < 10_000_000.0)
+    ):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.cursor.active_sort is invalid")
+    agent_id, project_id = _required_agent_address(value, "agent_id")
+    session_id = _required_string(value, "session_id")
+    return SessionListCursor(
+        active_sort=float(active_sort),
+        project_id=project_id,
+        agent_id=agent_id,
+        session_id=session_id,
+    )
+
+
+def _session_list_cursor_payload(cursor: SessionListCursor | None) -> JsonObject | None:
+    if cursor is None:
+        return None
+    return {
+        "active_sort": cursor.active_sort,
+        "agent_id": format_agent_address(cursor.agent_id, cursor.project_id),
+        "session_id": cursor.session_id,
+    }
+
+
+def _session_list_required_address(value: Any) -> SessionAddress | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"agent_id", "session_id"}:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.required_session must contain agent_id and session_id",
+        )
+    agent_id, project_id = _required_agent_address(value, "agent_id")
+    session_id = _required_string(value, "session_id")
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:

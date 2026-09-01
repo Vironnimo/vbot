@@ -634,7 +634,7 @@ async def test_channel_status_returns_denied_chats() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_list_happy_path_returns_sessions_with_metadata() -> None:
+async def test_session_list_happy_path_returns_bounded_session_summaries() -> None:
     sessions = [
         {
             "id": "ch-tg-assistant-12345",
@@ -646,7 +646,13 @@ async def test_session_list_happy_path_returns_sessions_with_metadata() -> None:
         }
     ]
     chat_sessions = Mock()
-    chat_sessions.list_with_metadata.return_value = sessions
+    chat_sessions.list_summaries_page.return_value = SimpleNamespace(
+        sessions=tuple(
+            {**session, "agent_id": "assistant", "project_id": None} for session in sessions
+        ),
+        next_cursor=None,
+        total_count=1,
+    )
     state = _state(chat_sessions=chat_sessions)
 
     response = await dispatch_rpc(
@@ -659,9 +665,26 @@ async def test_session_list_happy_path_returns_sessions_with_metadata() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"sessions": sessions}}
+    assert response == {
+        "ok": True,
+        "result": {
+            "sessions": [
+                {
+                    **sessions[0],
+                    "agent_address": "assistant",
+                    "has_active_run": False,
+                    "compaction_policy_override": None,
+                    "compaction_policy_effective": {},
+                }
+            ],
+            "next_cursor": None,
+            "total_count": 1,
+        },
+    }
     # A bare agent id resolves to the identity scope (project_id=None).
-    chat_sessions.list_with_metadata.assert_called_once_with("assistant", None)
+    call = chat_sessions.list_summaries_page.call_args
+    assert call.args == ([(None, "assistant")],)
+    assert call.kwargs["limit"] == 100
 
 
 @pytest.mark.asyncio

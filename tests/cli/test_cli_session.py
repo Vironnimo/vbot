@@ -119,7 +119,17 @@ def test_session_list_posts_rpc_and_formats_rows(
     assert calls == [
         {
             "url": f"{instance.url}/api/rpc",
-            "json": {"method": "session.list", "params": {"agent_id": "assistant"}},
+            "json": {
+                "method": "session.list",
+                "params": {
+                    "agent_id": "assistant",
+                    "limit": 100,
+                    "include_subagents": True,
+                    "include_memory_reflections": True,
+                    "include_skill_reflections": True,
+                    "include_cron": True,
+                },
+            },
             "timeout": 10.0,
         }
     ]
@@ -143,6 +153,46 @@ def test_session_list_reports_empty_state(
     assert result.ok is True
     assert result.instance is instance
     assert "assistant" in result.message
+
+
+def test_session_list_follows_server_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+    cursor = {
+        "active_sort": 2460000,
+        "agent_id": "assistant",
+        "session_id": "session-one",
+    }
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        if len(calls) == 1:
+            result = {
+                "sessions": [{"id": "session-one"}],
+                "next_cursor": cursor,
+                "total_count": 2,
+            }
+        else:
+            result = {
+                "sessions": [{"id": "session-two"}],
+                "next_cursor": None,
+                "total_count": 2,
+            }
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    monkeypatch.setattr(session_management.httpx, "post", fake_post)
+
+    result = session_management.session_list(instance, "assistant")
+
+    assert result.ok is True
+    assert "id=session-one" in result.message
+    assert "id=session-two" in result.message
+    assert calls[1]["params"]["cursor"] == cursor
 
 
 def test_session_create_posts_optional_fields(
@@ -285,7 +335,17 @@ def test_run_dispatches_session_list(
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
-        assert json == {"method": "session.list", "params": {"agent_id": "assistant"}}
+        assert json == {
+            "method": "session.list",
+            "params": {
+                "agent_id": "assistant",
+                "limit": 100,
+                "include_subagents": True,
+                "include_memory_reflections": True,
+                "include_skill_reflections": True,
+                "include_cron": True,
+            },
+        }
         return httpx.Response(200, json={"ok": True, "result": {"sessions": []}})
 
     monkeypatch.setattr(session_management.httpx, "post", fake_post)

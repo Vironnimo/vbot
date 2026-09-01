@@ -18,6 +18,7 @@ describe('sessionListView helpers', () => {
       loading: false,
       error: null,
       selectedSessionId: null,
+      selectedAgentAddress: null,
     });
   });
 
@@ -207,6 +208,18 @@ describe('sessionListView helpers', () => {
     expect(selectSession(state, 'second').selectedSessionId).toBe('second');
     expect(selectSession(state, 'unknown').selectedSessionId).toBeNull();
     expect(selectSession(state, '').selectedSessionId).toBeNull();
+  });
+
+  it('keeps duplicate Session ids distinct by owning Agent address', () => {
+    const state = applySessionList(createSessionListState(), [
+      { id: 'shared', agent_address: 'alpha' },
+      { id: 'shared', agent_address: 'beta' },
+    ]);
+
+    const selected = selectSession(state, 'shared', 'beta');
+
+    expect(selected.selectedSessionId).toBe('shared');
+    expect(selected.selectedAgentAddress).toBe('beta');
   });
 
   it('derives stable display names for channel and generic sessions', () => {

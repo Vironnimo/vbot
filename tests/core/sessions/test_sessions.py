@@ -23,6 +23,7 @@ from core.sessions import (
     SESSION_RUN_KINDS_META_KEY,
     ChatSessionManager,
     SessionAddress,
+    SessionListFilters,
     active_session_messages,
     current_skill_activation_contents,
     editable_session_message_ids,
@@ -99,6 +100,219 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     assert continuation.checkpoint_id == "checkpoint-one"
     assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+
+
+def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> None:
+    address = _address("coder", "normalized-metadata")
+    manager.create(address.agent_id, session_id=address.session_id)
+    metadata = {
+        "title": "Release planning",
+        "auto_title": "Automatic title",
+        "source_channel_id": "tg-main",
+        "platform": "telegram",
+        "platform_conv_id": "chat-42",
+        "is_subagent_session": True,
+        "subagent_parent": {"agent_id": "parent", "session_id": "root"},
+        "fork_source": {"agent_id": "coder", "session_id": "source"},
+        "run_kinds": ["subagent"],
+        "compaction_policy": {"enabled": False},
+        "pinned_working_project_context": "x" * 100_000,
+    }
+
+    manager.set_metadata(address, metadata)
+
+    assert manager.get_metadata(address) == metadata
+    with sqlite3.connect(manager._store.path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM sessions WHERE agent_id = ? AND session_id = ?",
+            (address.agent_id, address.session_id),
+        ).fetchone()
+    assert row is not None
+    residual = json.loads(row["metadata_json"])
+    assert residual == {"pinned_working_project_context": "x" * 100_000}
+    assert row["title"] == "Release planning"
+    assert json.loads(row["subagent_parent_json"])["session_id"] == "root"
+    assert json.loads(row["run_kinds_json"]) == ["subagent"]
+
+
+def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manager) -> None:
+    normal_ids: list[str] = []
+    for index in range(40):
+        session_id = f"normal-{index:02d}"
+        address = _address("coder", session_id)
+        manager._store.create(address, created_at=f"2026-08-01T12:{index:02d}:00+00:00")
+        manager.set_metadata(
+            address,
+            {
+                "title": f"Normal {index}",
+                "run_kinds": ["user"],
+                "pinned_skill_catalog": "large" * 10_000,
+            },
+        )
+        normal_ids.append(session_id)
+    hidden = _address("coder", "cron-hidden")
+    manager._store.create(hidden, created_at="2026-08-01T00:00:00+00:00")
+    manager.set_metadata(hidden, {"run_kinds": ["cron"]})
+
+    first = manager.list_summaries_page(
+        [(None, "coder")],
+        limit=35,
+        filters=SessionListFilters(
+            include_subagents=False,
+            include_memory_reflections=False,
+            include_skill_reflections=False,
+            include_cron=False,
+        ),
+        required_address=hidden,
+    )
+
+    assert len(first.sessions) == 36
+    assert first.total_count == 41
+    assert first.next_cursor is not None
+    assert first.sessions[0]["id"] == "normal-39"
+    assert first.sessions[-1]["id"] == hidden.session_id
+    assert all("pinned_skill_catalog" not in summary for summary in first.sessions)
+    assert all(
+        set(summary)
+        <= {
+            "id",
+            "project_id",
+            "agent_id",
+            "created_at",
+            "last_active_at",
+            "title",
+            "run_kinds",
+            "latest_completion_run_id",
+            "has_unread_completion",
+            "unread_run_id",
+            "unread_run_status",
+            "unread_run_at",
+        }
+        for summary in first.sessions
+    )
+
+    second = manager.list_summaries_page(
+        [(None, "coder")],
+        limit=20,
+        cursor=first.next_cursor,
+        filters=SessionListFilters(
+            include_subagents=False,
+            include_memory_reflections=False,
+            include_skill_reflections=False,
+            include_cron=False,
+        ),
+        required_address=hidden,
+    )
+    paged_ids = {summary["id"] for summary in (*first.sessions, *second.sessions)}
+    assert paged_ids == {*normal_ids, hidden.session_id}
+    assert second.next_cursor is None
+
+
+def test_completion_activity_projection_reads_only_activity_columns(manager) -> None:
+    address = _address("coder", "activity-projection")
+    manager.create(address.agent_id, session_id=address.session_id)
+    manager.set_metadata(address, {"pinned_memory_files": "large" * 10_000})
+    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
+
+    rows = manager._store.list_activity_rows(None, address.agent_id)
+
+    assert set(rows[0].keys()) == {
+        "session_id",
+        "latest_completion_run_id",
+        "latest_completion_status",
+        "latest_completion_at",
+        "read_completion_run_id",
+    }
+    assert manager.list_completion_activity(address.agent_id)[0]["unread_run_id"] == "run-1"
+
+
+def test_session_list_cursor_is_stable_when_a_newer_session_is_inserted(manager) -> None:
+    for index in range(4):
+        manager._store.create(
+            _address("coder", f"existing-{index}"),
+            created_at=f"2026-08-01T00:0{index}:00+00:00",
+        )
+    first = manager.list_summaries_page([(None, "coder")], limit=2)
+    assert first.next_cursor is not None
+
+    manager._store.create(
+        _address("coder", "inserted-newer"),
+        created_at="2026-08-01T01:00:00+00:00",
+    )
+    second = manager.list_summaries_page(
+        [(None, "coder")],
+        limit=2,
+        cursor=first.next_cursor,
+    )
+
+    assert [summary["id"] for summary in first.sessions] == ["existing-3", "existing-2"]
+    assert [summary["id"] for summary in second.sessions] == ["existing-1", "existing-0"]
+
+
+def test_session_list_filters_execution_categories_in_sql(manager) -> None:
+    metadata_by_session = {
+        "ordinary": {"run_kinds": ["user"]},
+        "subagent": {"is_subagent_session": True, "run_kinds": ["subagent"]},
+        "memory": {"run_kinds": ["memory_reflection"]},
+        "skill": {"run_kinds": ["skill_reflection"]},
+        "reflection": {"run_kinds": ["reflection"]},
+        "cron": {"run_kinds": ["cron"]},
+        "mixed": {"run_kinds": ["cron", "memory_reflection"]},
+        "channel-cron": {
+            "run_kinds": ["cron"],
+            "platform": "telegram",
+            "platform_conv_id": "chat-1",
+        },
+        "unknown-kind": {"run_kinds": ["future_kind"]},
+    }
+    for index, (session_id, metadata) in enumerate(metadata_by_session.items()):
+        address = _address("coder", session_id)
+        manager._store.create(
+            address,
+            created_at=f"2026-08-01T00:0{index}:00+00:00",
+        )
+        manager.set_metadata(address, metadata)
+
+    def listed(filters: SessionListFilters) -> set[str]:
+        return {
+            summary["id"]
+            for summary in manager.list_summaries_page(
+                [(None, "coder")], limit=100, filters=filters
+            ).sessions
+        }
+
+    hidden = SessionListFilters(False, False, False, False)
+    assert listed(hidden) == {"ordinary", "channel-cron", "unknown-kind"}
+    assert listed(SessionListFilters(True, False, False, False)) == {
+        "ordinary",
+        "subagent",
+        "channel-cron",
+        "unknown-kind",
+    }
+    assert listed(SessionListFilters(False, True, False, False)) == {
+        "ordinary",
+        "memory",
+        "reflection",
+        "channel-cron",
+        "unknown-kind",
+    }
+    assert listed(SessionListFilters(False, False, True, False)) == {
+        "ordinary",
+        "skill",
+        "reflection",
+        "channel-cron",
+        "unknown-kind",
+    }
+    assert listed(SessionListFilters(False, True, False, True)) == {
+        "ordinary",
+        "memory",
+        "reflection",
+        "cron",
+        "mixed",
+        "channel-cron",
+        "unknown-kind",
+    }
 
 
 def test_continuation_events_update_one_normalized_current_state(manager) -> None:

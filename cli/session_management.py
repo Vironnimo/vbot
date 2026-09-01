@@ -14,14 +14,35 @@ from cli.server_management import CommandResult, ServerInstance
 def session_list(instance: ServerInstance, agent_id: str) -> CommandResult:
     """Return formatted session list output from `session.list` RPC."""
 
-    payload = _rpc_call(instance, "session.list", {"agent_id": agent_id})
-    if not payload.ok:
-        return payload.to_command_result()
-    sessions = payload.data.get("sessions")
-    if not isinstance(sessions, list):
-        return CommandResult(
-            ok=False, message="RPC result missing sessions list", instance=instance
-        )
+    sessions: list[object] = []
+    cursor: object = None
+    while True:
+        params: dict[str, object] = {
+            "agent_id": agent_id,
+            "limit": 100,
+            "include_subagents": True,
+            "include_memory_reflections": True,
+            "include_skill_reflections": True,
+            "include_cron": True,
+        }
+        if cursor is not None:
+            params["cursor"] = cursor
+        payload = _rpc_call(instance, "session.list", params)
+        if not payload.ok:
+            return payload.to_command_result()
+        page = payload.data.get("sessions")
+        if not isinstance(page, list):
+            return CommandResult(
+                ok=False, message="RPC result missing sessions list", instance=instance
+            )
+        sessions.extend(page)
+        cursor = payload.data.get("next_cursor")
+        if cursor is None:
+            break
+        if not isinstance(cursor, dict):
+            return CommandResult(
+                ok=False, message="RPC result missing sessions list", instance=instance
+            )
     return CommandResult(
         ok=True, message=_format_session_rows(agent_id, sessions), instance=instance
     )

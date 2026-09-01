@@ -1251,7 +1251,7 @@ export function createChatController({
     editMessage,
     handleServerEvents,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
-    listSessions: (agentAddress) => operations.listSessions(agentAddress),
+    listSessions: (...args) => operations.listSessions(...args),
     loadAgents,
     loadCommands,
     loadCurrentHistory,

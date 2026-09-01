@@ -83,6 +83,7 @@ class _FakeSessions:
             }
         ]
         self.activity_error: Exception | None = None
+        self.list_page_calls: list[dict[str, Any]] = []
         # Sidecar the source carries; ``fork`` strips the requested keys off it so
         # fork tests can assert what the fork retains. Fork tests override it.
         self.source_metadata: dict[str, Any] = {}
@@ -117,6 +118,21 @@ class _FakeSessions:
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
         return self.metadata_rows
+
+    def list_summaries_page(
+        self,
+        scopes: list[tuple[str | None, str]],
+        **kwargs: Any,
+    ) -> Any:
+        self.listed.extend((agent_id, project_id) for project_id, agent_id in scopes)
+        self.list_page_calls.append({"scopes": scopes, **kwargs})
+        rows: list[dict[str, Any]] = []
+        for project_id, agent_id in scopes:
+            rows.extend(
+                {**row, "project_id": project_id, "agent_id": agent_id}
+                for row in self.metadata_rows
+            )
+        return SimpleNamespace(sessions=tuple(rows), next_cursor=None, total_count=len(rows))
 
     def list_completion_activity(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
@@ -312,6 +328,66 @@ async def test_list_bare_agent_is_identity() -> None:
     await _list_sessions(state, {"agent_id": "builder"})
 
     assert sessions.listed == [("builder", None)]
+
+
+@pytest.mark.asyncio
+async def test_list_batches_agents_and_passes_bounded_filter_contract() -> None:
+    state, resolver, sessions = _make_state()
+    sessions.metadata_rows = [
+        {
+            "id": "s1",
+            "created_at": "2026-09-01T10:00:00+00:00",
+            "last_active_at": "2026-09-01T10:00:00+00:00",
+        }
+    ]
+
+    result = await _list_sessions(
+        state,
+        {
+            "agent_ids": ["builder", "reviewer@vbot"],
+            "limit": 35,
+            "include_subagents": False,
+            "include_memory_reflections": False,
+            "include_skill_reflections": False,
+            "include_cron": False,
+            "required_session": {"agent_id": "builder", "session_id": "s1"},
+        },
+    )
+
+    assert [session["agent_address"] for session in result["sessions"]] == [
+        "builder",
+        "reviewer@vbot",
+    ]
+    assert all("agent_id" not in session for session in result["sessions"])
+    assert all("project_id" not in session for session in result["sessions"])
+    assert result["next_cursor"] is None
+    assert result["total_count"] == 2
+    assert resolver.resolved == [(None, "builder"), ("vbot", "reviewer")]
+    call = sessions.list_page_calls[0]
+    assert call["scopes"] == [(None, "builder"), ("vbot", "reviewer")]
+    assert call["limit"] == 35
+    assert call["filters"].include_subagents is False
+    assert call["required_address"] == SessionAddress(None, "builder", "s1")
+
+
+@pytest.mark.asyncio
+async def test_list_rejects_required_session_from_an_unlisted_agent() -> None:
+    state, _resolver, sessions = _make_state()
+
+    with pytest.raises(RpcError) as exc_info:
+        await _list_sessions(
+            state,
+            {
+                "agent_id": "builder",
+                "required_session": {
+                    "agent_id": "reviewer@vbot",
+                    "session_id": "s1",
+                },
+            },
+        )
+
+    assert exc_info.value.code == "invalid_request"
+    assert sessions.list_page_calls == []
 
 
 @pytest.mark.asyncio

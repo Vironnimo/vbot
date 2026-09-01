@@ -101,6 +101,29 @@ class SessionDescriptorSource:
     first_user_message: ChatMessage | None
 
 
+@dataclass(frozen=True)
+class SessionListFilters:
+    include_subagents: bool = True
+    include_memory_reflections: bool = True
+    include_skill_reflections: bool = True
+    include_cron: bool = True
+
+
+@dataclass(frozen=True)
+class SessionListCursor:
+    active_sort: float
+    project_id: str | None
+    agent_id: str
+    session_id: str
+
+
+@dataclass(frozen=True)
+class SessionListPage:
+    sessions: tuple[JsonObject, ...]
+    next_cursor: SessionListCursor | None
+    total_count: int
+
+
 def _validate_agent_id(agent_id: str) -> None:
     if not is_valid_agent_id(agent_id):
         raise ChatSessionError(
@@ -157,6 +180,53 @@ def _decode_state_object(payload: str, name: str) -> JsonObject:
     if not isinstance(value, dict):
         raise ChatSessionError(f"invalid {name}")
     return value
+
+
+def _decode_state_json_value(payload: str, name: str, expected_type: type[Any]) -> Any:
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ChatSessionError(f"invalid {name}") from exc
+    if not isinstance(value, expected_type):
+        raise ChatSessionError(f"invalid {name}")
+    return value
+
+
+def _session_list_summary_from_state(state: Any) -> JsonObject:
+    summary: JsonObject = {
+        "id": str(state["session_id"]),
+        "project_id": str(state["project_id"]) or None,
+        "agent_id": str(state["agent_id"]),
+        "created_at": str(state["created_at"]),
+        "last_active_at": str(state["last_active_at"]),
+    }
+    for key in (
+        "title",
+        "auto_title",
+        "source_channel_id",
+        "platform",
+        "platform_conv_id",
+    ):
+        value = state[key]
+        if value is not None:
+            summary[key] = str(value)
+    if state["is_subagent_session"] is not None:
+        summary["is_subagent_session"] = bool(state["is_subagent_session"])
+    for key, column, expected_type in (
+        ("subagent_parent", "subagent_parent_json", dict),
+        (FORK_SOURCE_META_KEY, "fork_source_json", dict),
+        (SESSION_RUN_KINDS_META_KEY, "run_kinds_json", list),
+        ("compaction_policy", "compaction_policy_json", dict),
+    ):
+        payload = state[column]
+        if payload is not None:
+            summary[key] = _decode_state_json_value(
+                payload,
+                f"Session {key}",
+                expected_type,
+            )
+    summary.update(_completion_activity_from_state(state))
+    return summary
 
 
 def active_session_messages(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
@@ -917,7 +987,7 @@ class ChatSessionManager:
     ) -> builtins.list[JsonObject]:
         result: builtins.list[JsonObject] = []
         for state in self._store.list_state_rows(project_id, agent_id):
-            summary = _decode_state_object(state["metadata_json"], "Session metadata")
+            summary = self._store.metadata_from_state(state)
             summary.update(_completion_activity_from_state(state))
             summary.update(
                 id=state["session_id"],
@@ -931,6 +1001,67 @@ class ChatSessionManager:
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
         return await _run_session_io(self.list_with_metadata, agent_id, project_id)
+
+    def list_summaries_page(
+        self,
+        scopes: Sequence[tuple[str | None, str]],
+        *,
+        limit: int,
+        cursor: SessionListCursor | None = None,
+        filters: SessionListFilters | None = None,
+        required_address: SessionAddress | None = None,
+    ) -> SessionListPage:
+        """Return a bounded Session-list read model without open-ended metadata."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ChatSessionError("Session list limit must be a positive integer")
+        selected_filters = filters or SessionListFilters()
+        cursor_value = (
+            None
+            if cursor is None
+            else (
+                cursor.active_sort,
+                cursor.project_id or "",
+                cursor.agent_id,
+                cursor.session_id,
+            )
+        )
+        rows, required_row, total_count, has_more = self._store.list_summary_rows(
+            scopes,
+            limit=limit,
+            cursor=cursor_value,
+            include_subagents=selected_filters.include_subagents,
+            include_memory_reflections=selected_filters.include_memory_reflections,
+            include_skill_reflections=selected_filters.include_skill_reflections,
+            include_cron=selected_filters.include_cron,
+            required_address=required_address,
+        )
+        summaries = [_session_list_summary_from_state(row) for row in rows]
+        seen = {
+            (summary.get("project_id"), summary["agent_id"], summary["id"]) for summary in summaries
+        }
+        if required_row is not None:
+            required_summary = _session_list_summary_from_state(required_row)
+            required_key = (
+                required_summary.get("project_id"),
+                required_summary["agent_id"],
+                required_summary["id"],
+            )
+            if required_key not in seen:
+                summaries.append(required_summary)
+        next_cursor = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = SessionListCursor(
+                active_sort=float(last["active_sort"]),
+                project_id=str(last["project_id"]) or None,
+                agent_id=str(last["agent_id"]),
+                session_id=str(last["session_id"]),
+            )
+        return SessionListPage(
+            sessions=tuple(summaries),
+            next_cursor=next_cursor,
+            total_count=total_count,
+        )
 
     def session_ids_with_messages(
         self,
@@ -952,7 +1083,7 @@ class ChatSessionManager:
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
         result: builtins.list[JsonObject] = []
-        for state in self._store.list_state_rows(project_id, agent_id):
+        for state in self._store.list_activity_rows(project_id, agent_id):
             result.append({"id": state["session_id"], **_completion_activity_from_state(state)})
         return result
 
