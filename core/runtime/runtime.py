@@ -2199,7 +2199,7 @@ class Runtime:
         the live backend instance now points into dormant extension code. Rather than
         leave recall broken, rebuild the registry (which no longer contains the
         deactivated extension's backend) and re-resolve: an unknown selected name
-        falls back to the built-in default (``canonical_scan``) with a warning, exactly
+        falls back to the built-in default (``sqlite_fts``) with a warning, exactly
         as it would on the next restart. The persisted ``recall.backend`` selection
         is left untouched — re-enabling the extension (a restart) restores it.
         """

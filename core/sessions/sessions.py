@@ -94,6 +94,13 @@ class SessionReadBatch:
     cursor: SessionReadCursor
 
 
+@dataclass(frozen=True)
+class SessionDescriptorSource:
+    metadata: JsonObject
+    message_count: int
+    first_user_message: ChatMessage | None
+
+
 def _validate_agent_id(agent_id: str) -> None:
     if not is_valid_agent_id(agent_id):
         raise ChatSessionError(
@@ -728,6 +735,10 @@ class ChatSessionManager:
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await _run_session_io(self.get_metadata, address)
 
+    def descriptor_source(self, address: SessionAddress) -> SessionDescriptorSource:
+        metadata, message_count, first_user_message = self._store.descriptor_source(address)
+        return SessionDescriptorSource(metadata, message_count, first_user_message)
+
     def set_metadata(self, address: SessionAddress, data: JsonObject) -> None:
         self._store.replace_metadata(address, data)
 
@@ -902,6 +913,22 @@ class ChatSessionManager:
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
         return await _run_session_io(self.list_with_metadata, agent_id, project_id)
+
+    def session_ids_with_messages(
+        self,
+        agent_id: str,
+        project_id: str | None,
+        roles: Sequence[str],
+        since: datetime | None,
+        until: datetime | None,
+    ) -> set[str]:
+        return self._store.session_ids_with_messages(
+            project_id,
+            agent_id,
+            roles,
+            since,
+            until,
+        )
 
     def list_completion_activity(
         self, agent_id: str, project_id: str | None = None

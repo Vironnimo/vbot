@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -10,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from core.chat.messages import ChatMessage
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     compact_text,
@@ -167,26 +169,21 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             agent_id=request.agent_id,
             session_id=request.session_id,
             match_mode=request.match_mode,
-            limit=max(256, (request.offset + request.limit + 1) * 8),
+            limit=request.offset + request.limit + 1,
             roles=request.roles,
             since=None if request.since is None else request.since.isoformat(),
             until=None if request.until is None else request.until.isoformat(),
             excluded_session_ids=request.excluded_session_ids,
         )
         summaries_by_id = {str(s["id"]): s for s in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
         hits: list[tuple[float, str, str, RecallSearchHit]] = []
-        for address, message_id, timestamp, _message_json, rank in rows:
+        for address, message_id, timestamp, message_json, rank in rows:
             session_id = address.session_id
             if session_id not in summaries_by_id:
                 continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(address).load_active()
-            messages = messages_by_session[session_id]
-            idx = message_index_by_id(messages, message_id)
-            if idx is None:
+            message = _message_from_fts_payload(message_json)
+            if str(message.id) != message_id:
                 continue
-            message = messages[idx]
             if not message_matches_search_request(message, request):
                 continue
             text = message_search_text(message)
@@ -236,9 +233,9 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         query_description = (
-            "Literal terms to find. Every whitespace-separated term must occur as a "
-            "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
-            "text relevance."
+            "Literal terms to find. Every whitespace-separated term must occur. One- or "
+            "two-character terms match whole tokens; longer terms also match inside words. "
+            "Omit to list recent Sessions. Matches are ranked by text relevance."
         )
         return RecallSearchCapabilities(
             result_type="message",
@@ -262,20 +259,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             raise RecallSearchError(
                 "stale_cursor", "Session search source changed; repeat the search."
             )
-        expression = _fts_expression_search(request)
-        if expression is None:
-            if request.order == "relevance":
-                return await asyncio.to_thread(
-                    self._scan_messages_by_relevance,
-                    request,
-                    summaries,
-                    snapshot_id,
-                )
-            fallback_request = (
-                replace(request, order="newest") if request.order == "relevance" else request
-            )
-            page = await self._fallback.search_page(fallback_request)
-            return replace(page, ranking=f"substring_scan_{fallback_request.order}")
         # Integrated FTS only; otherwise canonical scan.
         if self.sessions.is_fts_available():
             try:
@@ -289,56 +272,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         )
         page = await self._fallback.search_page(fallback_request)
         return replace(page, ranking=f"substring_scan_{fallback_request.order}")
-
-    def _scan_messages_by_relevance(
-        self,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        snapshot_id: str,
-    ) -> RecallSearchPage:
-        ranked: list[tuple[float, float, str, int, RecallSearchHit]] = []
-        needles = (
-            (compact_text(request.query).casefold(),)
-            if request.match_mode == "phrase"
-            else query_terms(request.query)
-        )
-        for summary in summaries:
-            session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load_active()
-            for message_index, message in enumerate(messages):
-                if not message_matches_search_request(message, request):
-                    continue
-                text = message_search_text(message)
-                if not text_matches_search_request(text, request):
-                    continue
-                haystack = compact_text(text).casefold()
-                frequency = sum(haystack.count(needle) for needle in needles if needle)
-                score = -float(frequency)
-                parsed = parse_persisted_timestamp(str(message.timestamp))
-                recency = -(parsed.timestamp() if parsed is not None else 0.0)
-                start, end = first_match_span(text, request.query, request.match_mode)
-                hit = RecallSearchHit(
-                    result_type="message",
-                    session_id=session_id,
-                    message_id=str(message.id),
-                    role=str(message.role),
-                    timestamp=str(message.timestamp),
-                    text=text,
-                    score=score,
-                    match_start=start,
-                    match_end=end,
-                )
-                ranked.append((score, recency, session_id, message_index, hit))
-        ranked.sort(key=lambda item: item[:4])
-        page = ranked[request.offset : request.offset + request.limit]
-        return RecallSearchPage(
-            hits=tuple(item[4] for item in page),
-            result_type="message",
-            ranking="substring_scan_relevance",
-            snapshot_id=snapshot_id,
-            has_more=request.offset + len(page) < len(ranked),
-            total_candidate_sessions=len(summaries),
-        )
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""
@@ -862,3 +795,10 @@ def _fts_expression_search(request: RecallSearchRequest) -> str | None:
 
 def _quote_fts_value(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+def _message_from_fts_payload(payload: str) -> ChatMessage:
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError("canonical FTS payload must be a Message object")
+    return ChatMessage.from_dict(cast(JsonObject, data))

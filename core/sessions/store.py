@@ -1132,6 +1132,23 @@ class SessionStore:
             raise SessionStoreCorruptError(f"invalid Session metadata: {address.session_id}")
         return data
 
+    def descriptor_source(
+        self, address: SessionAddress
+    ) -> tuple[JsonObject, int, ChatMessage | None]:
+        """Load compact descriptor inputs without reconstructing Session history."""
+        with self._transaction(write=False) as connection:
+            state = self._require_live(connection, address)
+            metadata = _json_from_payload(state["metadata_json"], "session metadata")
+            first_user_row = connection.execute(
+                _message_records_sql(
+                    where="m.session_key = ? AND m.role = 'user'",
+                    order_by="ORDER BY m.seq LIMIT 1",
+                ),
+                (state["session_key"],),
+            ).fetchone()
+        first_user = None if first_user_row is None else message_from_row(first_user_row)
+        return metadata, int(state["message_count"]), first_user
+
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         payload = _json_object(metadata, "session metadata")
 
@@ -1371,6 +1388,40 @@ class SessionStore:
             ).fetchall()
         return cast(list[sqlite3.Row], rows)
 
+    def session_ids_with_messages(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        roles: Sequence[str],
+        since: datetime | None,
+        until: datetime | None,
+    ) -> set[str]:
+        """Select Sessions containing a matching Message without loading histories."""
+        role_values = tuple(dict.fromkeys(roles))
+        if not role_values:
+            return set()
+        clauses = [
+            "s.status = 'live'",
+            "s.project_id = ?",
+            "s.agent_id = ?",
+            f"m.role IN ({','.join('?' for _ in role_values)})",
+        ]
+        params: list[str] = [project_id or "", agent_id, *role_values]
+        if since is not None:
+            clauses.append("julianday(m.timestamp) >= julianday(?)")
+            params.append(since.isoformat())
+        if until is not None:
+            clauses.append("julianday(m.timestamp) <= julianday(?)")
+            params.append(until.isoformat())
+        with self._transaction(write=False) as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT s.session_id FROM sessions AS s "
+                "JOIN messages AS m ON m.session_key = s.session_key WHERE "
+                + " AND ".join(clauses),
+                params,
+            ).fetchall()
+        return {str(row["session_id"]) for row in rows}
+
     def list_history_revisions(
         self, project_id: str | None, agent_id: str
     ) -> list[tuple[SessionAddress, str, int]]:
@@ -1548,15 +1599,12 @@ class SessionStore:
         if match_mode == "phrase":
             escaped = compact.replace('"', '""')
             expression = f'"{escaped}"'
-            fts_supported = len(compact) >= 3
+            trigram_supported = len(compact) >= 3
         else:
             expression = (" OR " if match_mode == "any_term" else " AND ").join(
                 f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms
             )
-            fts_supported = bool(terms) and all(len(term) >= 3 for term in terms)
-        if not fts_supported:
-            with self._transaction(write=False) as connection:
-                return canonical_rows(connection)
+            trigram_supported = bool(terms) and all(len(term) >= 3 for term in terms)
 
         if not self.is_fts_available():
             with self._transaction(write=False) as connection:
@@ -1626,9 +1674,9 @@ class SessionStore:
                     return found
 
                 result = query_fts(FTS_TABLE)
-                if not result and not (roles is not None and "tool" in roles):
+                if not result and trigram_supported and not (roles is not None and "tool" in roles):
                     result = query_fts(FTS_TRIGRAM_TABLE)
-                if not result:
+                if not result and (roles is None or "tool" in roles):
                     result = canonical_rows(connection)
                 return result
         except sqlite3.Error as exc:
