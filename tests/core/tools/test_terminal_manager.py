@@ -24,6 +24,8 @@ from core.tools.terminal_manager import (
     TerminalStaleScreenError,
 )
 
+TEST_ACTIVITY_QUIET_SECONDS = 1.0
+
 
 class FakeTerminalAdapter:
     def __init__(self, initial_output: str | None = None) -> None:
@@ -41,10 +43,7 @@ class FakeTerminalAdapter:
         return 987_654
 
     def read(self, _size: int) -> str:
-        try:
-            value = self._output.get(timeout=0.05)
-        except queue.Empty:
-            return ""
+        value = self._output.get()
         if value is None:
             raise EOFError
         return value
@@ -117,6 +116,42 @@ class PendingTriggerService:
         self.cancellations.append((args, kwargs))
 
 
+class FakeClock:
+    """Controllable monotonic time for quiet/grace state-machine tests."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self._waiters: list[tuple[float, asyncio.Future[None]]] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        deadline = self.now + delay
+        future = asyncio.get_running_loop().create_future()
+        waiter = (deadline, future)
+        self._waiters.append(waiter)
+        try:
+            await future
+        finally:
+            if waiter in self._waiters:
+                self._waiters.remove(waiter)
+
+    @property
+    def sleeping(self) -> bool:
+        return any(not future.done() for _, future in self._waiters)
+
+    async def advance(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("Fake time cannot move backwards")
+        self.now += seconds
+        due = [future for deadline, future in self._waiters if deadline <= self.now]
+        for future in due:
+            if not future.done():
+                future.set_result(None)
+        await asyncio.sleep(0)
+
+
 @pytest_asyncio.fixture
 async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
@@ -155,12 +190,60 @@ async def spawn(
     )
 
 
-async def eventually(predicate: Any, *, attempts: int = 100) -> None:
+async def eventually(predicate: Any, *, attempts: int = 200) -> None:
     for _ in range(attempts):
         if predicate():
             return
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.005)
     raise AssertionError("condition was not reached")
+
+
+async def settle_next_activity(
+    clock: FakeClock,
+    session: Any,
+    *,
+    after_generation: int,
+    quiet_seconds: float,
+) -> None:
+    await eventually(lambda: session.activity_generation > after_generation)
+    await eventually(lambda: clock.sleeping)
+    await clock.advance(quiet_seconds)
+    await eventually(lambda: session.state == "ready")
+
+
+async def establish_delivered_baseline(
+    manager: TerminalManager,
+    factory: AdapterFactory,
+    trigger: PendingTriggerService,
+    clock: FakeClock,
+    tmp_path: Path,
+    *,
+    quiet_seconds: float,
+) -> Any:
+    session = await spawn(manager, tmp_path)
+    session.state = "working"
+    manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+    await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data="go\r",
+        text=None,
+        key=None,
+        expected_screen_revision=None,
+        origin_run_id="run-0",
+    )
+    generation = session.activity_generation
+    factory.adapters[0].emit("MENU> ")
+    await settle_next_activity(
+        clock,
+        session,
+        after_generation=generation,
+        quiet_seconds=quiet_seconds,
+    )
+    await eventually(lambda: len(trigger.submissions) == 1)
+    trigger.release.set()
+    await eventually(lambda: session.attention is not None and session.attention.delivered)
+    return session
 
 
 @pytest.mark.asyncio
@@ -239,17 +322,19 @@ async def test_manual_command_is_not_written_without_a_shell_prompt(
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
     monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    monkeypatch.setattr(terminal_module, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(terminal_module, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.01)
     factory = AdapterFactory()
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
     try:
-        await manager.spawn_for_operator(
+        result = await manager.spawn_for_operator(
             command="codex",
             arguments=[],
             cwd=tmp_path,
         )
-        await asyncio.sleep(0.5)
+        session = manager._sessions[result["terminal_id"]]
+        assert session.operator_command_task is not None
+        await eventually(lambda: session.operator_command_task.done())
         assert factory.adapters[0].writes == []
     finally:
         await manager.aclose()
@@ -273,7 +358,8 @@ async def test_manual_command_is_not_written_when_shell_ends_first(
         session = manager._sessions[result["terminal_id"]]
         factory.adapters[0].finish(1)
         await eventually(lambda: session.state == "exited")
-        await asyncio.sleep(0.2)
+        assert session.operator_command_task is not None
+        await eventually(lambda: session.operator_command_task.done())
         assert factory.adapters[0].writes == []
     finally:
         await manager.aclose()
@@ -455,105 +541,49 @@ async def test_resize_to_current_dimensions_is_a_no_op(
 
 
 @pytest.mark.asyncio
-async def test_resize_repaint_inside_grace_window_does_not_wake_the_agent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.25)
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.3)
+async def test_resize_hard_deadline_caps_repaint_suppression(tmp_path: Path) -> None:
+    """A repaint stream must not suppress Agent delivery past the hard cap."""
+    clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
         sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        # A text-less Agent start suppresses the first settle (startup screen
-        # is not work); the first agent input re-arms delivery.
-        await manager.send_input(
-            session.terminal_id,
-            owner(),
-            text="go",
-            key="enter",
-            expected_screen_revision=None,
-            origin_run_id="run-0",
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         )
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        assert session.attention is not None
-        await eventually(lambda: session.attention.delivered)
-
-        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
-        factory.adapters[0].emit("repaint after resize")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.05)
-        assert len(trigger.submissions) == 1
-
-        await asyncio.sleep(0.4)
-        factory.adapters[0].emit("real work output")
-        await eventually(lambda: len(trigger.submissions) == 2)
-        assert session.attention is not None
-        assert session.attention.kind == "output_settled"
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Repaint waves must stay suppressed even when they outlive the base grace
-    window, but a stream that keeps producing output must still wake the agent
-    once the capped deadline expires."""
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.1)
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.4)
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    manager.start()
-    try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        # A text-less Agent start suppresses the first settle (startup screen
-        # is not work); the first agent input re-arms delivery.
-        await manager.send_input(
-            session.terminal_id,
-            owner(),
-            text="go",
-            key="enter",
-            expected_screen_revision=None,
-            origin_run_id="run-0",
-        )
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        await eventually(lambda: session.attention.delivered)
-
         await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
-        # A first repaint wave lands inside the base window and extends it.
+        generation = session.activity_generation
         factory.adapters[0].emit("repaint wave 1")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.05)
-        # A second wave lands after the base window but still inside the
-        # extended grace and must remain suppressed.
-        factory.adapters[0].emit("repaint wave 2")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.05)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         assert len(trigger.submissions) == 1
 
-        # After the hard deadline expires, continued output is real work.
-        await asyncio.sleep(0.35)
+        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        generation = session.activity_generation
         factory.adapters[0].emit("work after grace cap")
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
@@ -563,48 +593,50 @@ async def test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it(
 
 @pytest.mark.asyncio
 async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Input after a resize is work, so it ends the grace: a settle following
     it must deliver immediately instead of being treated as repaint noise."""
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.25)
+    clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
         sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        # A text-less Agent start suppresses the first settle (startup screen
-        # is not work); the first agent input re-arms delivery.
-        await manager.send_input(
-            session.terminal_id,
-            owner(),
-            text="go",
-            key="enter",
-            expected_screen_revision=None,
-            origin_run_id="run-0",
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         )
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        await eventually(lambda: session.attention.delivered)
-
         await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
         await manager.send_input(
             session.terminal_id,
             owner(),
-            text="answer",
-            key="enter",
+            data="answer\r",
+            text=None,
+            key=None,
             expected_screen_revision=None,
             origin_run_id="run-c",
         )
+        assert session.resize_grace_deadline == 0.0
+        generation = session.activity_generation
         factory.adapters[0].emit("output after agent input")
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
@@ -613,78 +645,51 @@ async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
 
 
 @pytest.mark.asyncio
-async def test_unchanged_screen_settle_does_not_wake_the_agent_again(
-    tmp_path: Path,
-) -> None:
-    """A quiet boundary whose rendered screen did not change since the last
-    delivered settle (status refreshes, cursor frames, repaint echoes) must
-    not wake the agent: the screen is already known to it."""
-    trigger = PendingTriggerService()
-    factory = AdapterFactory()
-    manager = TerminalManager(
-        trigger,
-        adapter_factory=factory,
-        sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
-    )
-    manager.start()
-    try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        await eventually(lambda: session.attention.delivered)
-
-        factory.adapters[0].emit("MENU> ")
-        await eventually(lambda: len(trigger.submissions) == 2)
-        assert session.attention is not None
-        assert session.attention.kind == "output_settled"
-
-        # The identical screen settles again (a status refresh rewrites the
-        # same line): state becomes ready, but no new delivery is created.
-        factory.adapters[0].emit("\rMENU> ")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.1)
-        assert len(trigger.submissions) == 2
-    finally:
-        await manager.aclose()
-
-
-@pytest.mark.asyncio
-async def test_screen_change_after_repeated_settle_still_delivers(
+async def test_unchanged_screen_stays_silent_until_content_changes(
     tmp_path: Path,
 ) -> None:
     """Suppression only covers an unchanged screen: once the screen actually
     changes, the next quiet boundary wakes the agent again."""
+    clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
         sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        await eventually(lambda: session.attention.delivered)
-
-        factory.adapters[0].emit("MENU> ")
-        await eventually(lambda: len(trigger.submissions) == 2)
-        # Repeated identical refresh bytes stay silent...
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> ")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.05)
-        assert len(trigger.submissions) == 2
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        assert len(trigger.submissions) == 1
 
-        # ...until the screen content actually changes.
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> \nsecond option")
-        await eventually(lambda: len(trigger.submissions) == 3)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
     finally:
@@ -698,42 +703,60 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
     """A text-less Agent start stays silent until the first explicit input:
     the startup screen (banner, prompt, TUI boot) is observed by the starting
     Agent and must not wake the session."""
+    clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
         sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     manager.start()
     try:
         session = await spawn(manager, tmp_path)
         session.state = "working"
 
+        generation = session.activity_generation
         factory.adapters[0].emit("TUI banner")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.1)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         assert trigger.submissions == []
         assert session.attention is None or not session.attention.delivered
 
-        # A later status refresh writes the identical startup screen again:
-        # it must stay silent too, not wake with the already-known screen.
+        generation = session.activity_generation
         factory.adapters[0].emit("\rTUI banner")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.1)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         assert trigger.submissions == []
 
-        # Real agent input re-arms delivery; the next screen change wakes.
         await manager.send_input(
             session.terminal_id,
             owner(),
-            text="go",
-            key="enter",
+            data="go\r",
+            text=None,
+            key=None,
             expected_screen_revision=None,
             origin_run_id="run-0",
         )
+        generation = session.activity_generation
         factory.adapters[0].emit("output after input")
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         await eventually(lambda: len(trigger.submissions) == 1)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
@@ -743,72 +766,81 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
 
 @pytest.mark.asyncio
 async def test_resize_repaint_is_swallowed_until_stable_then_uses_new_baseline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """After a real resize the TUI repaints in several waves. Settles stay
     suppressed until the repainted screen is stable across two boundaries;
     that stable screen becomes the new baseline — identical refreshes stay
     silent, a changed screen delivers."""
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.05)
-    # The repaint waves must land inside the grace deadline while the real
-    # output afterwards lands outside it, so the deadline does not swallow
-    # the final delivery (the deadline cap itself is covered by
-    # test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it).
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 2.0)
+    clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
         sweep_interval_seconds=3600,
-        activity_quiet_seconds=0.03,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path)
-        session.state = "working"
-        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-        # A text-less Agent start suppresses the first settle (startup screen
-        # is not work); the first agent input re-arms delivery.
-        await manager.send_input(
-            session.terminal_id,
-            owner(),
-            text="go",
-            key="enter",
-            expected_screen_revision=None,
-            origin_run_id="run-0",
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         )
-        factory.adapters[0].emit("MENU> ")
-        await eventually(lambda: len(trigger.submissions) == 1)
-        trigger.release.set()
-        await eventually(lambda: session.attention.delivered)
 
-        # Repaint wave 1 differs from wave 2; wave 3 repeats wave 2, so the
-        # screen is stable and the gate closes silently. All waves land
-        # inside the 2s grace deadline.
         await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
-        await asyncio.sleep(0.15)
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> ")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.15)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.15)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.15)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         assert len(trigger.submissions) == 1
 
-        # An identical refresh against the repaint baseline stays silent.
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status")
-        await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.15)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
         assert len(trigger.submissions) == 1
 
-        # Let the grace deadline expire, then real content delivers again.
-        await asyncio.sleep(2.0)
+        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status\nnew work output line")
-        await eventually(lambda: len(trigger.submissions) == 2, attempts=500)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
     finally:
