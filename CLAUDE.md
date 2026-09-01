@@ -22,6 +22,10 @@ Between the last two, disclose whenever you actively picked among options with n
 
 **Options format — every decision that goes to the user uses it, always.** Present 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), each in product language; mark a clear recommendation with a one-line why, and add a one-line concrete example only when the difference isn't self-evident — so a single letter (or "go with your recommendation") settles it. Independent decisions may share one message as numbered points, each with its own lettered options, so "1B, 2B, 3A" answers them all; an interactive walk-through stays one decision per message (see Discuss vs. Act).
 
+## Agent-facing text
+
+Runtime Agent-facing text must be self-contained for a fresh Agent that has not read project documentation. Mention only concepts the Agent can observe or act on, explain the available behavior and the next valid action, and never name hidden implementation categories merely to explain exclusions.
+
 ## Discuss vs. Act
 When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
 
