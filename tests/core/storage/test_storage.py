@@ -606,10 +606,10 @@ def test_load_subagent_settings_reads_custom_values(tmp_path: Path) -> None:
     }
 
 
-def test_load_recall_settings_defaults_to_canonical_scan(tmp_path: Path) -> None:
+def test_load_recall_settings_defaults_to_sqlite_fts(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
-    assert storage.load_recall_settings() == {"backend": "canonical_scan"}
+    assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 
 
 def test_session_title_settings_default_disabled_and_replace_as_complete_section(
@@ -834,7 +834,7 @@ def test_load_recall_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage.ensure_directories()
     storage.settings_path.write_text('{"recall": []}', encoding="utf-8")
 
-    assert storage.load_recall_settings() == {"backend": "canonical_scan"}
+    assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 
 
 def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) -> None:

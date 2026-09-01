@@ -94,7 +94,6 @@ class _SessionSearchError(ValueError):
 
 @dataclass(frozen=True)
 class _SearchSessionContext:
-    messages: list[Any] | None
     descriptor: JsonObject
 
 
@@ -374,17 +373,17 @@ async def _list_sessions(
         ]
     since, until = _parse_period(arguments.get("period"))
     if since is not None or until is not None:
-        summaries, period_messages = await run_tool_worker(
-            _filter_session_summaries_by_period,
-            sessions,
+        matching_ids = await run_tool_worker(
+            sessions.session_ids_with_messages,
             agent_id,
             context.project_id,
-            summaries,
+            SESSION_RECALL_DEFAULT_ROLES,
             since,
             until,
         )
-    else:
-        period_messages = {}
+        summaries = [
+            summary for summary in summaries if str(summary.get("id") or "") in matching_ids
+        ]
     summaries.sort(key=lambda item: str(item.get("last_active_at") or ""), reverse=True)
     selected_summaries = summaries[:SESSION_SEARCH_DEFAULT_LIMIT]
     page = await run_tool_worker(
@@ -393,7 +392,6 @@ async def _list_sessions(
         agent_id,
         context.project_id,
         selected_summaries,
-        period_messages,
     )
     return _render_list_page(
         page,
@@ -811,19 +809,24 @@ def _load_search_hit_session_context(
 ) -> _SearchSessionContext:
     if sessions is None:
         return _SearchSessionContext(
-            messages=None,
             descriptor=_session_descriptor(agent_id, session_id, {}, None),
         )
     address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
     try:
-        messages = sessions.get(address).load()
-        metadata = sessions.get_metadata(address)
+        source = sessions.descriptor_source(address)
     except Exception:
-        messages = None
-        metadata = {}
+        return _SearchSessionContext(
+            descriptor=_session_descriptor(agent_id, session_id, {}, None),
+        )
     return _SearchSessionContext(
-        messages=messages,
-        descriptor=_session_descriptor(agent_id, session_id, metadata, messages),
+        descriptor=_session_descriptor(
+            agent_id,
+            session_id,
+            source.metadata,
+            None,
+            message_count=source.message_count,
+            first_user_message=source.first_user_message,
+        ),
     )
 
 
@@ -1106,38 +1109,53 @@ def _session_summary_items(
     agent_id: str,
     project_id: str | None,
     summaries: list[JsonObject],
-    period_messages: dict[str, list[Any]],
 ) -> list[JsonObject]:
     items: list[JsonObject] = []
     for summary in summaries:
         session_id = str(summary.get("id") or "")
-        messages = period_messages.get(session_id)
-        if session_id not in period_messages:
-            messages = _load_session_messages(sessions, agent_id, session_id, project_id)
-        items.append(_session_summary(agent_id, summary, messages))
+        message_count: int | None = None
+        first_user_message: Any | None = None
+        address = SessionAddress(
+            project_id=project_id,
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        try:
+            source = sessions.descriptor_source(address)
+        except Exception:
+            pass
+        else:
+            message_count = source.message_count
+            first_user_message = source.first_user_message
+        items.append(
+            _session_summary(
+                agent_id,
+                summary,
+                None,
+                message_count=message_count,
+                first_user_message=first_user_message,
+            )
+        )
     return items
-
-
-def _load_session_messages(
-    sessions: ChatSessionManager,
-    agent_id: str,
-    session_id: str,
-    project_id: str | None,
-) -> list[Any] | None:
-    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    try:
-        return sessions.get(address).load()
-    except Exception:
-        return None
 
 
 def _session_summary(
     agent_id: str,
     summary: JsonObject,
     messages: list[Any] | None,
+    *,
+    message_count: int | None = None,
+    first_user_message: Any | None = None,
 ) -> JsonObject:
     session_id = str(summary.get("id") or "")
-    item = _session_descriptor(agent_id, session_id, summary, messages)
+    item = _session_descriptor(
+        agent_id,
+        session_id,
+        summary,
+        messages,
+        message_count=message_count,
+        first_user_message=first_user_message,
+    )
     item.update(
         {
             "created_at": summary.get("created_at"),
@@ -1152,7 +1170,16 @@ def _session_descriptor(
     session_id: str,
     metadata: JsonObject,
     messages: list[Any] | None,
+    *,
+    message_count: int | None = None,
+    first_user_message: Any | None = None,
 ) -> JsonObject:
+    if messages is not None:
+        message_count = len(messages)
+        first_user_message = next(
+            (message for message in messages if str(message.role) == "user"),
+            None,
+        )
     run_kinds = _session_run_kinds(metadata)
     return {
         "agent_id": agent_id,
@@ -1169,8 +1196,8 @@ def _session_descriptor(
             SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS,
         ),
         "fork_source": _fork_source(metadata.get(FORK_SOURCE_META_KEY)),
-        "message_count": len(messages) if messages is not None else None,
-        "first_user_excerpt": _first_user_excerpt(messages),
+        "message_count": message_count,
+        "first_user_excerpt": _user_message_excerpt(first_user_message),
     }
 
 
@@ -1241,21 +1268,17 @@ def _descriptor_text(value: Any, max_chars: int) -> str | None:
     return normalized[:max_chars]
 
 
-def _first_user_excerpt(messages: list[Any] | None) -> JsonObject | None:
-    if messages is None:
+def _user_message_excerpt(message: Any | None) -> JsonObject | None:
+    if message is None:
         return None
-    for message in messages:
-        if str(message.role) != "user":
-            continue
-        text = compact_text(message_search_text(message))
-        if not text:
-            return None
-        end = min(len(text), SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS)
-        return {
-            "text": text[:end],
-            "trailing_truncated": end < len(text),
-        }
-    return None
+    text = compact_text(message_search_text(message))
+    if not text:
+        return None
+    end = min(len(text), SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS)
+    return {
+        "text": text[:end],
+        "trailing_truncated": end < len(text),
+    }
 
 
 def _message_ref(message: Any) -> JsonObject:
@@ -1272,15 +1295,15 @@ def _session_details(
     metadata: JsonObject,
     messages: list[Any],
 ) -> JsonObject:
-    return {
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "metadata": metadata,
-        "message_count": len(messages),
-        "role_counts": dict(Counter(str(message.role) for message in messages)),
-        "first_message": _message_ref(messages[0]) if messages else None,
-        "last_message": _message_ref(messages[-1]) if messages else None,
-    }
+    details = _session_descriptor(agent_id, session_id, metadata, messages)
+    details.update(
+        {
+            "role_counts": dict(Counter(str(message.role) for message in messages)),
+            "first_message": _message_ref(messages[0]) if messages else None,
+            "last_message": _message_ref(messages[-1]) if messages else None,
+        }
+    )
+    return details
 
 
 def _search_capabilities(backend: Any) -> RecallSearchCapabilities:
@@ -1355,65 +1378,6 @@ def _validate_session_read_fields(arguments: JsonObject) -> None:
         raise _SessionSearchError(
             "invalid_arguments", "all_messages cannot be combined with message_id"
         )
-
-
-def _filter_session_summaries_by_period(
-    sessions: ChatSessionManager,
-    agent_id: str,
-    project_id: str | None,
-    summaries: list[JsonObject],
-    since: datetime | None,
-    until: datetime | None,
-) -> tuple[
-    list[JsonObject],
-    dict[str, list[Any]],
-]:
-    selected: list[JsonObject] = []
-    loaded: dict[str, list[Any]] = {}
-    for summary in summaries:
-        session_id = str(summary.get("id") or "")
-        if not session_id:
-            continue
-        try:
-            address = SessionAddress(
-                project_id=project_id, agent_id=agent_id, session_id=session_id
-            )
-            messages = sessions.get(address).load()
-        except Exception:
-            continue
-        matching = [
-            message
-            for message in messages
-            if str(message.role) in SESSION_RECALL_DEFAULT_ROLES
-            and _timestamp_in_period(message.timestamp, since, until)
-        ]
-        if not matching:
-            continue
-        selected.append(summary)
-        loaded[session_id] = messages
-    return selected, loaded
-
-
-def _timestamp_in_period(
-    value: Any,
-    since: datetime | None,
-    until: datetime | None,
-) -> bool:
-    timestamp = _timestamp_utc(value)
-    if timestamp is None:
-        return False
-    return (since is None or timestamp >= since) and (until is None or timestamp <= until)
-
-
-def _timestamp_utc(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-    try:
-        return _parse_datetime(value, "Message timestamp", end_of_day=False)
-    except _SessionSearchError:
-        return None
 
 
 def _with_formatted_bytes(data: JsonObject) -> JsonObject:

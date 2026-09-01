@@ -320,9 +320,9 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
             "conversations. The current Session is excluded. Omit query to list recent Sessions. "
             "Returns at most 10 items with no paging; narrow with period or session_id. Search "
             "matches include session_read references.",
-            "Literal terms to find. Every whitespace-separated term must occur as a "
-            "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
-            "text relevance.",
+            "Literal terms to find. Every whitespace-separated term must occur. One- or "
+            "two-character terms match whole tokens; longer terms also match inside words. "
+            "Omit to list recent Sessions. Matches are ranked by text relevance.",
         ),
         "vector": (
             "Find persisted Sessions and semantically related passages from past "
@@ -387,7 +387,10 @@ async def test_search_rejects_retired_and_advanced_fields(
     failure(result, "invalid_arguments")
 
 
-async def test_list_supports_period_filter(tmp_path: Path) -> None:
+async def test_list_supports_period_filter_without_loading_histories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     weekend = sessions.create("coder", session_id="weekend")
     weekday = sessions.create("coder", session_id="weekday")
@@ -401,6 +404,11 @@ async def test_list_supports_period_filter(tmp_path: Path) -> None:
     weekend.append(weekend_answer)
     weekday.append(ChatMessage.user("Monday discussion", timestamp=timestamp(4)))
     backend = CanonicalSessionRecallBackend(sessions)
+
+    def fail_history_load(_session: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("period filtering must not load complete Session history")
+
+    monkeypatch.setattr(ChatSession, "load", fail_history_load)
 
     period = success(
         await session_search_handler(
@@ -795,6 +803,39 @@ async def test_read_selects_latest_or_anchored_conversation_block_and_exact_tool
     assert latest["session"]["last_message"]["message_id"] == second_answer.id
 
 
+async def test_read_projects_large_internal_metadata_to_a_bounded_descriptor(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="large-internal-metadata")
+    message = ChatMessage.user("small history", timestamp=timestamp(1))
+    session.append(message)
+    sessions.set_metadata(
+        session.address,
+        {
+            "auto_title": "Useful title",
+            "run_kinds": ["chat"],
+            "pinned_working_project_context": {"content": "x" * 70_000},
+            "pinned_skill_catalog": {"content": "y" * 20_000},
+        },
+    )
+
+    result = await session_read_handler(
+        make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
+        {"session_id": "large-internal-metadata"},
+        sessions,
+    )
+    data = success(result)
+
+    assert data["items"] == [{"message_index": 0, "message": message.to_dict()}]
+    assert data["session"]["title"] == "Useful title"
+    assert data["session"]["message_count"] == 1
+    assert "metadata" not in data["session"]
+    assert len(json.dumps(result, separators=(",", ":")).encode()) <= (
+        SESSION_SEARCH_RESULT_MAX_BYTES
+    )
+
+
 async def test_read_all_messages_returns_every_block_without_anchor_index(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="all-blocks")
@@ -1087,6 +1128,46 @@ async def test_fts_search_keeps_backend_relevance(tmp_path: Path) -> None:
     assert data["backend"] == "sqlite_fts"
     assert data["ranking"] == "bm25"
     assert [item["session_id"] for item in data["items"]] == ["dense", "sparse"]
+
+
+async def test_fts_tool_search_does_not_reconstruct_complete_session_histories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="indexed")
+    message = ChatMessage.user("indexed needle", timestamp=timestamp(1))
+    session.append(message)
+    backend = SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+
+    def fail_history_load(_session: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("FTS Tool search must not load complete Session history")
+
+    monkeypatch.setattr(ChatSession, "load", fail_history_load)
+    monkeypatch.setattr(ChatSession, "load_active", fail_history_load)
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "needle"},
+            backend,
+        )
+    )
+
+    assert [item["message_id"] for item in data["items"]] == [message.id]
+    assert data["sessions"][0]["message_count"] == 1
+    assert data["sessions"][0]["first_user_excerpt"] == {
+        "text": "indexed needle",
+        "trailing_truncated": False,
+    }
+    missing = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "absent"},
+            backend,
+        )
+    )
+    assert missing["items"] == []
 
 
 @pytest.mark.parametrize("tool_name", ["session_search", "session_read"])

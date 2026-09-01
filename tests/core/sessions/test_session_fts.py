@@ -172,10 +172,50 @@ def test_fts_search_preserves_same_message_id_in_distinct_sessions(tmp_path: Pat
 def test_fts_and_canonical_search_apply_explicit_result_bounds(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="bounded")
-    session.append_many([ChatMessage.user(f"bounded needle {index}") for index in range(20)])
+    session.append_many([ChatMessage.user(f"bounded ne needle {index}") for index in range(20)])
     try:
         assert len(sessions.fts_search("needle", project_id=None, agent_id="agent", limit=7)) == 7
         assert len(sessions.fts_search("ne", project_id=None, agent_id="agent", limit=7)) == 7
+    finally:
+        sessions.close()
+
+
+def test_short_fts_terms_match_tokens_without_substring_scanning(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="short-terms")
+    exact = ChatMessage.user("AI project")
+    substring_only = ChatMessage.user("main project")
+    session.append_many([exact, substring_only])
+    try:
+        hits = sessions.fts_search("ai", project_id=None, agent_id="agent")
+        assert [hit[1] for hit in hits] == [exact.id]
+    finally:
+        sessions.close()
+
+
+def test_healthy_fts_null_result_does_not_fall_back_to_canonical_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.sessions import store as store_module
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("agent", session_id="no-match").append(ChatMessage.user("present text"))
+
+    def fail_decode(_row: sqlite3.Row) -> ChatMessage:
+        raise AssertionError("healthy FTS null results must not scan canonical rows")
+
+    monkeypatch.setattr(store_module, "message_from_row", fail_decode)
+    try:
+        assert (
+            sessions.fts_search(
+                "absent",
+                project_id=None,
+                agent_id="agent",
+                roles=("user", "assistant", "error", "compaction_checkpoint"),
+            )
+            == []
+        )
     finally:
         sessions.close()
 

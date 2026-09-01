@@ -520,13 +520,13 @@ def test_start_registers_builtin_tools_once(config: Config):
         assert len(tool.contract.schema_fingerprint) == 64
 
 
-def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:
+def test_runtime_selects_sqlite_fts_recall_backend_by_default(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
 def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
@@ -544,7 +544,7 @@ def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> 
     assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
-def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> None:
+def test_runtime_unknown_recall_backend_falls_back_to_sqlite_fts(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     config.data_dir.mkdir(parents=True, exist_ok=True)
     write_bootstrap_marker(config.data_dir)
@@ -556,10 +556,10 @@ def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> N
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
-def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
+def test_runtime_failing_recall_backend_factory_falls_back_to_sqlite_fts(
     config: Config,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -575,6 +575,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
         "canonical_scan",
         lambda context: CanonicalSessionRecallBackend(context.sessions),
     )
+    registry.register("sqlite_fts", SqliteFtsRecallBackend)
 
     def create_broken_backend(_context: Any) -> Any:
         raise RuntimeError("broken derived index")
@@ -589,7 +590,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):
