@@ -935,6 +935,7 @@ def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_worktree_registration_state", lambda _path: True)
     monkeypatch.setattr(
         module,
         "_list_uncommitted_paths",
@@ -985,6 +986,7 @@ def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monk
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_worktree_registration_state", lambda _path: True)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
     first_result = module.cmd_delete(argparse.Namespace(name=name, force=False))
@@ -1002,6 +1004,59 @@ def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monk
         ["git", "worktree", "remove", str(worktree_path)],
         ["git", "branch", "-d", name],
     ]
+
+
+def test_cmd_delete_non_force_fails_closed_for_localized_remove_error(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "localized-error"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+    protected = worktree_path / "important.txt"
+    protected.write_text("keep", encoding="utf-8")
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, "Fehler: Arbeitsverzeichnis enthalt nicht gespeicherte Anderungen"
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_worktree_registration_state", lambda _path: True)
+    monkeypatch.setattr(module, "_terminate_worktree_processes", pytest.fail)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
+
+    assert result == 1
+    assert protected.read_text(encoding="utf-8") == "keep"
+    assert "Fehler:" in capsys.readouterr().out
+
+
+def test_cmd_delete_non_force_finishes_only_after_verified_deregistration(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "deregistered"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+    (worktree_path / "leftover.txt").write_text("x", encoding="utf-8")
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, "could not delete locked files"
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_worktree_registration_state", lambda _path: False)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
+
+    assert result == 0
+    assert not worktree_path.exists()
 
 
 def _git(repo: Path, *arguments: str) -> None:
