@@ -42,7 +42,7 @@ jobs:
       - name: Install backend development dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run backend quality gate
-        run: python scripts/quality.py
+        run: python scripts/quality.py --check
 
   frontend:
     runs-on: ubuntu-latest
@@ -60,7 +60,7 @@ jobs:
         working-directory: webui
         run: npm ci
       - name: Run frontend quality gate
-        run: python scripts/quality-frontend.py
+        run: python scripts/quality-frontend.py --check
 
   e2e:
     uses: ./.github/workflows/e2e.yml
