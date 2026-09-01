@@ -171,8 +171,11 @@ fi
 read_settings_port() {
     "$PYTHON" - "$1" <<'PYEOF'
 import json
+import os
 import sys
+import time
 from pathlib import Path
+from uuid import uuid4
 
 path = Path(sys.argv[1])
 if not path.exists():
@@ -209,21 +212,50 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 port = int(sys.argv[2])
+lock_path = path.with_name(f".{path.name}.setup.lock")
+deadline = time.monotonic() + 10.0
+while True:
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(lock_fd)
+        break
+    except FileExistsError:
+        if time.monotonic() >= deadline:
+            print("settings.json is busy; another setup may be updating it", file=sys.stderr)
+            sys.exit(2)
+        time.sleep(0.05)
+temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
 try:
-    settings = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-if not isinstance(settings, dict):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-keys = ("server_port", "SERVER_PORT", "port", "PORT")
-key = next((k for k in keys if k in settings), "server_port")
-if settings.get(key) == port:
-    sys.exit(0)
-settings[key] = port
-path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
-print(key)
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("invalid settings.json", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(settings, dict):
+        print("invalid settings.json", file=sys.stderr)
+        sys.exit(2)
+    keys = ("server_port", "SERVER_PORT", "port", "PORT")
+    key = next((k for k in keys if k in settings), "server_port")
+    if settings.get(key) == port:
+        sys.exit(0)
+    settings[key] = port
+    mode = path.stat().st_mode & 0o777
+    with temp_path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(settings, indent=4, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp_path, mode)
+    os.replace(temp_path, path)
+    if os.name == "posix":
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    print(key)
+finally:
+    temp_path.unlink(missing_ok=True)
+    lock_path.unlink(missing_ok=True)
 PYEOF
 }
 

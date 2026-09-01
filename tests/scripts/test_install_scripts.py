@@ -259,6 +259,18 @@ def test_existing_settings_do_not_receive_fresh_install_agent_defaults(
 
 
 @pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
+def test_existing_settings_port_update_is_locked_and_atomic(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "os.O_CREAT | os.O_EXCL | os.O_WRONLY" in script
+    assert "handle.flush()" in script
+    assert "os.fsync(handle.fileno())" in script
+    assert "os.replace(temp_path, path)" in script
+    assert "temp_path.unlink(missing_ok=True)" in script
+    assert "lock_path.unlink(missing_ok=True)" in script
+
+
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
 def test_server_install_manifest_records_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
