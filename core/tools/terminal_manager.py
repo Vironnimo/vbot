@@ -9,7 +9,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -302,6 +302,8 @@ class TerminalManager:
         finished_session_ttl: timedelta = TERMINAL_FINISHED_TTL,
         sweep_interval_seconds: float = TERMINAL_SWEEP_INTERVAL_SECONDS,
         activity_quiet_seconds: float = TERMINAL_ACTIVITY_QUIET_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
@@ -323,6 +325,8 @@ class TerminalManager:
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
         self._activity_quiet_seconds = activity_quiet_seconds
+        self._monotonic = monotonic
+        self._sleep = sleep
         self._sessions: dict[str, TerminalSession] = {}
         self._changed_callbacks: list[TerminalChangedCallback] = []
         self._sweeper_task: asyncio.Task[None] | None = None
@@ -1165,7 +1169,7 @@ class TerminalManager:
                 }
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
-            now = time.monotonic()
+            now = self._monotonic()
             session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
             # A new explicit resize restarts the hard deadline; the rolling
             # extension happens on repaint output inside the base window.
@@ -1337,7 +1341,7 @@ class TerminalManager:
                         state_changed = session.state != "working"
                         session.state = "working"
                         notify = session.attachment is not None and session.settled_delivery_enabled
-                        now = time.monotonic()
+                        now = self._monotonic()
                         if notify and now < session.resize_grace_deadline:
                             # Output inside the post-resize grace is repaint
                             # noise, not work, so it must not wake the agent.
@@ -1395,7 +1399,7 @@ class TerminalManager:
 
     async def _settle_after_quiet(self, session: TerminalSession, generation: int) -> None:
         try:
-            await asyncio.sleep(self._activity_quiet_seconds)
+            await self._sleep(self._activity_quiet_seconds)
             async with session.lock:
                 if (
                     generation != session.activity_generation
@@ -1437,7 +1441,7 @@ class TerminalManager:
                     # that stable screen becomes the new already-seen
                     # baseline. The grace deadline bounds this gate; input
                     # clears it (send_input/send_operator_input).
-                    if time.monotonic() >= session.resize_grace_deadline:
+                    if self._monotonic() >= session.resize_grace_deadline:
                         # The gate must not outlive the repaint window: after
                         # the deadline, settles deliver normally again.
                         session.resize_pending_settle = False
