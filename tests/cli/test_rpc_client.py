@@ -9,17 +9,17 @@ import httpx
 import pytest
 
 from cli import rpc_client
-from cli.server_management import ServerInstance
+from cli.server_management import ServerInstance, build_server_base_url
 from core.utils.logging import resolve_daily_log_path
 
 
-def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
+def make_instance(tmp_path: Path, *, host: str = "127.0.0.1", port: int = 8420) -> ServerInstance:
     data_dir = tmp_path / "data"
     return ServerInstance(
-        host="127.0.0.1",
+        host=host,
         port=port,
         data_dir=data_dir,
-        url=f"http://127.0.0.1:{port}",
+        url=build_server_base_url(host, port),
         log_path=resolve_daily_log_path(data_dir),
     )
 
@@ -30,7 +30,8 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
     ) -> httpx.Response:
-        del url, json
+        captured["url"] = url
+        del json
         captured["timeout"] = timeout
         captured["trust_env"] = trust_env
         return httpx.Response(200, json={"ok": True, "result": {}})
@@ -59,6 +60,14 @@ def test_rpc_call_ignores_environment_proxies(
     rpc_client.rpc_call(make_instance(tmp_path), "provider.set_key", {"value": "sk-secret"})
 
     assert captured["trust_env"] is False
+
+
+def test_rpc_call_uses_ipv6_safe_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _capture_request(monkeypatch)
+
+    rpc_client.rpc_call(make_instance(tmp_path, host="::1"), "settings.get_raw", {})
+
+    assert captured["url"] == "http://[::1]:8420/api/rpc"
 
 
 @pytest.mark.parametrize(

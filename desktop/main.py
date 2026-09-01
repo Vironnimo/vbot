@@ -87,7 +87,7 @@ class HttpResponse(Protocol):
 class HttpGet(Protocol):
     """Synchronous HTTP GET callable used by Desktop probing."""
 
-    def __call__(self, url: str, *, timeout: float) -> HttpResponse:
+    def __call__(self, url: str, *, timeout: float, trust_env: bool) -> HttpResponse:
         """Fetch a URL with a bounded timeout."""
 
 
@@ -283,7 +283,7 @@ def probe_target(
 
     health_url = f"{target.url.rstrip('/')}/health"
     try:
-        health_response = get(health_url, timeout=timeout)
+        health_response = get(health_url, timeout=timeout, trust_env=False)
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_SERVER_UNREACHABLE, target=target)
 
@@ -291,7 +291,7 @@ def probe_target(
         return DesktopProbeResult(status=PROBE_NOT_VBOT_SERVER, target=target)
 
     try:
-        webui_response = get(target.url, timeout=timeout)
+        webui_response = get(target.url, timeout=timeout, trust_env=False)
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
 

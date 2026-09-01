@@ -161,8 +161,11 @@ def fake_get_for(
     responses: dict[str, FakeResponse | httpx.RequestError],
 ) -> desktop_main.HttpGet:
     class FakeGet:
-        def __call__(self, url: str, *, timeout: float) -> desktop_main.HttpResponse:
+        def __call__(
+            self, url: str, *, timeout: float, trust_env: bool
+        ) -> desktop_main.HttpResponse:
             assert timeout == desktop_main.PROBE_TIMEOUT_SECONDS
+            assert trust_env is False
             response = responses[url]
             if isinstance(response, httpx.RequestError):
                 raise response
@@ -391,7 +394,8 @@ def test_probe_target_has_no_retry_loop() -> None:
     target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
     requested_urls: list[str] = []
 
-    def record_get(url: str, *, timeout: float) -> FakeResponse:
+    def record_get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
+        assert trust_env is False
         requested_urls.append(url)
         if url.endswith("/health"):
             return FakeResponse(200, {"status": "ok"})

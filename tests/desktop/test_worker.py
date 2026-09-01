@@ -1353,10 +1353,10 @@ def test_speech_to_text_readiness_uses_server_task_model_status(
         def json() -> dict[str, object]:
             return {"ok": True, "result": result}
 
-    calls: list[tuple[str, dict[str, object], float]] = []
+    calls: list[tuple[str, dict[str, object], float, bool]] = []
 
-    def post(url: str, *, json: dict[str, object], timeout: float) -> Any:
-        calls.append((url, json, timeout))
+    def post(url: str, *, json: dict[str, object], timeout: float, trust_env: bool) -> Any:
+        calls.append((url, json, timeout, trust_env))
         return Response()
 
     assert ready_speech_to_text("http://pi.lan:8420/", post=post) == expected
@@ -1365,6 +1365,7 @@ def test_speech_to_text_readiness_uses_server_task_model_status(
         "method": "task_model.status",
         "params": {"task_type": "speech_to_text"},
     }
+    assert calls[0][3] is False
 
 
 def test_worker_stop_during_target_validation_never_opens_engine(
@@ -1978,6 +1979,39 @@ def test_send_transcript_uses_streaming_rpc(fake_bridge: FakeBridge) -> None:
             },
         )
     ]
+
+
+def test_worker_http_calls_ignore_environment_proxies(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"ok": True, "result": {"id": "main"}, "text": "hello"}
+
+    def post(_url: str, **kwargs: object) -> FakeResponse:
+        calls.append(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(worker_module.httpx, "post", post)
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    assert worker._transcribe(b"audio") == "hello"
+    assert worker._rpc_call("agent.get", {"id": "main"}) == {"id": "main"}
+    assert len(calls) == 2
+    assert all(call["trust_env"] is False for call in calls)
 
 
 def test_rpc_call_returns_empty_for_rpc_error(
