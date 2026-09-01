@@ -227,7 +227,10 @@ describe('ChatView', () => {
 
     // session.list and chat.history for the project agent use the FULL
     // address (trap 2).
-    expect(listSessionsMock).toHaveBeenCalledWith('builder@vbot');
+    expect(listSessionsMock).toHaveBeenCalledWith(
+      'builder@vbot',
+      expect.objectContaining({ limit: 1, includeSubagents: false }),
+    );
     expect(rpcMock).toHaveBeenCalledWith('chat.history', {
       agent_id: 'builder@vbot',
       session_id: 'builder-session',
@@ -428,7 +431,10 @@ describe('ChatView', () => {
     // Session/history resolution used the restored agent's full address. The
     // background activity refresh may list every team member, but it must not
     // navigate to Builder's history.
-    expect(listSessionsMock).toHaveBeenCalledWith('reviewer@vbot');
+    expect(listSessionsMock).toHaveBeenCalledWith(
+      'reviewer@vbot',
+      expect.objectContaining({ limit: 1, includeSubagents: false }),
+    );
     expect(rpcMock).not.toHaveBeenCalledWith(
       'chat.history',
       expect.objectContaining({ agent_id: 'builder@vbot' }),
@@ -536,7 +542,10 @@ describe('ChatView', () => {
           ?.textContent?.includes('Builder'),
       100,
     );
-    expect(listSessionsMock).toHaveBeenCalledWith('builder@vbot');
+    expect(listSessionsMock).toHaveBeenCalledWith(
+      'builder@vbot',
+      expect.objectContaining({ limit: 1, includeSubagents: false }),
+    );
   });
 
   it('jumps to the default on a genuine project switch and reports it up for persistence', async () => {

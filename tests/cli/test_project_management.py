@@ -791,7 +791,19 @@ def test_session_list_forwards_project_qualified_address(
 
     # Assert
     assert result.ok is True
-    assert calls == [{"method": "session.list", "params": {"agent_id": "orchestrator@vbot"}}]
+    assert calls == [
+        {
+            "method": "session.list",
+            "params": {
+                "agent_id": "orchestrator@vbot",
+                "limit": 100,
+                "include_subagents": True,
+                "include_memory_reflections": True,
+                "include_skill_reflections": True,
+                "include_cron": True,
+            },
+        }
+    ]
 
 
 def test_session_list_bare_agent_unchanged(
@@ -814,7 +826,19 @@ def test_session_list_bare_agent_unchanged(
     session_management.session_list(instance, "assistant")
 
     # Assert
-    assert calls == [{"method": "session.list", "params": {"agent_id": "assistant"}}]
+    assert calls == [
+        {
+            "method": "session.list",
+            "params": {
+                "agent_id": "assistant",
+                "limit": 100,
+                "include_subagents": True,
+                "include_memory_reflections": True,
+                "include_skill_reflections": True,
+                "include_cron": True,
+            },
+        }
+    ]
 
 
 def test_run_forwards_cron_create_project_address(

@@ -120,6 +120,72 @@ def test_reconcile_heals_a_missing_column_and_table_and_keeps_rows(tmp_path) -> 
         connection.close()
 
 
+def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:
+    projection_columns = {
+        "title",
+        "auto_title",
+        "source_channel_id",
+        "platform",
+        "platform_conv_id",
+        "is_subagent_session",
+        "subagent_parent_json",
+        "fork_source_json",
+        "run_kinds_json",
+        "compaction_policy_json",
+    }
+    old_schema = "\n".join(
+        line
+        for line in SCHEMA_SQL.splitlines()
+        if not any(line.startswith(f"  {column} ") for column in projection_columns)
+    )
+    database = tmp_path / "sessions.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(old_schema)
+    connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    marker = json.loads((tmp_path / "session-store.json").read_text(encoding="utf-8"))
+    connection.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('database_id', ?)",
+        (marker["database_id"],),
+    )
+    connection.execute(
+        "INSERT INTO sessions "
+        "(generation_id, project_id, agent_id, session_id, created_at, metadata_json) "
+        "VALUES (?, '', 'agent', 'session', '2026-08-30T00:00:00Z', ?)",
+        (
+            "generation-1",
+            json.dumps(
+                {
+                    "title": "Existing title",
+                    "run_kinds": ["user"],
+                    "pinned_skill_catalog": "large context",
+                }
+            ),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = SessionStore(database)
+    try:
+        metadata = store.metadata(SessionAddress(None, "agent", "session"))
+    finally:
+        store.close()
+
+    assert metadata == {
+        "title": "Existing title",
+        "run_kinds": ["user"],
+        "pinned_skill_catalog": "large context",
+    }
+    with sqlite3.connect(database) as verification:
+        title, run_kinds, residual = verification.execute(
+            "SELECT title, run_kinds_json, metadata_json FROM sessions"
+        ).fetchone()
+    assert title == "Existing title"
+    assert json.loads(run_kinds) == ["user"]
+    assert json.loads(residual) == {"pinned_skill_catalog": "large context"}
+
+
 def test_reconcile_preserves_the_complete_additive_column_contract(tmp_path) -> None:
     connection = _create_current_database(tmp_path / "sessions.db")
     try:

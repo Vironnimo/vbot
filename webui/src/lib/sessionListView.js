@@ -27,16 +27,24 @@ export function createSessionListState() {
     loading: false,
     error: null,
     selectedSessionId: null,
+    selectedAgentAddress: null,
   };
 }
 
 export function applySessionList(state, sessions) {
   const normalizedSessions = normalizeSessions(sessions);
   const currentSelectedSessionId = asOptionalText(state?.selectedSessionId);
+  const currentSelectedAgentAddress = asOptionalText(
+    state?.selectedAgentAddress,
+  );
   const selectedSessionId =
     currentSelectedSessionId !== null &&
     normalizedSessions.some(
-      (session) => session.id === currentSelectedSessionId,
+      (session) =>
+        session.id === currentSelectedSessionId &&
+        (currentSelectedAgentAddress === null ||
+          session.agent_address === null ||
+          session.agent_address === currentSelectedAgentAddress),
     )
       ? currentSelectedSessionId
       : null;
@@ -47,7 +55,28 @@ export function applySessionList(state, sessions) {
     loading: false,
     error: null,
     selectedSessionId,
+    selectedAgentAddress:
+      selectedSessionId === null ? null : currentSelectedAgentAddress,
   };
+}
+
+export function appendSessionList(state, sessions) {
+  const combined = [
+    ...(Array.isArray(state?.sessions) ? state.sessions : []),
+    ...(Array.isArray(sessions) ? sessions : []),
+  ];
+  const unique = new Map();
+  for (const session of combined) {
+    const normalized = normalizeSession(session);
+    if (normalized === null) {
+      continue;
+    }
+    unique.set(
+      `${normalized.agent_address ?? ''}::${normalized.id}`,
+      normalized,
+    );
+  }
+  return applySessionList(state, [...unique.values()]);
 }
 
 export function overlayLiveSessionActivity(
@@ -91,18 +120,27 @@ export function overlayLiveSessionActivity(
   });
 }
 
-export function selectSession(state, sessionId) {
+export function selectSession(state, sessionId, agentAddress = null) {
   const normalizedSessionId = asOptionalText(sessionId);
+  const normalizedAgentAddress = asOptionalText(agentAddress);
   const sessions = Array.isArray(state?.sessions) ? state.sessions : [];
   const selectedSessionId =
     normalizedSessionId !== null &&
-    sessions.some((session) => session.id === normalizedSessionId)
+    sessions.some(
+      (session) =>
+        session.id === normalizedSessionId &&
+        (normalizedAgentAddress === null ||
+          session.agent_address === null ||
+          session.agent_address === normalizedAgentAddress),
+    )
       ? normalizedSessionId
       : null;
 
   return {
     ...(isPlainObject(state) ? state : {}),
     selectedSessionId,
+    selectedAgentAddress:
+      selectedSessionId === null ? null : normalizedAgentAddress,
   };
 }
 

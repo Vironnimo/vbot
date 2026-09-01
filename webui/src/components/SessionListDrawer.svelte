@@ -22,6 +22,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import {
     applySessionList,
+    appendSessionList,
     createSessionListFilters,
     createSessionListState,
     overlayLiveSessionActivity,
@@ -81,9 +82,14 @@
       selectedSessionId: currentSessionId,
     }),
   );
-  let displayLimit = $state(SESSION_INITIAL_DISPLAY_LIMIT);
-  let displayedSessions = $derived(visibleSessions.slice(0, displayLimit));
-  let hasMoreToDisplay = $derived(visibleSessions.length > displayLimit);
+  let displayedSessions = $derived(visibleSessions);
+  let nextCursor = $state(null);
+  let totalSessionCount = $state(0);
+  let loadingMore = $state(false);
+  let hasMoreToDisplay = $derived(nextCursor !== null);
+  let remainingSessionCount = $derived(
+    Math.max(totalSessionCount - visibleSessions.length, 0),
+  );
   let activeFilterCount = $derived(
     Number(filters.allAgents) +
       Number(filters.subagents) +
@@ -183,6 +189,10 @@
       filters.allAgents
         ? rosterAgents.map((entry) => entry.address).join('|')
         : '',
+      Number(filters.subagents),
+      Number(filters.memoryReflections),
+      Number(filters.skillReflections),
+      Number(filters.cron),
     ].join('||'),
   );
 
@@ -209,18 +219,27 @@
     }
 
     const hasCurrentSession = sessionState.sessions.some(
-      (session) => session.id === normalizedCurrentSessionId,
+      (session) =>
+        session.id === normalizedCurrentSessionId &&
+        session.agent_address === asText(agentId),
     );
 
     if (!hasCurrentSession) {
       return;
     }
 
-    if (sessionState.selectedSessionId === normalizedCurrentSessionId) {
+    if (
+      sessionState.selectedSessionId === normalizedCurrentSessionId &&
+      sessionState.selectedAgentAddress === asText(agentId)
+    ) {
       return;
     }
 
-    sessionState = selectSession(sessionState, normalizedCurrentSessionId);
+    sessionState = selectSession(
+      sessionState,
+      normalizedCurrentSessionId,
+      asText(agentId),
+    );
   });
 
   // Reload the list when another window creates/switches a session
@@ -245,6 +264,9 @@
     }
 
     const requestVersion = ++loadVersion;
+    nextCursor = null;
+    totalSessionCount = 0;
+    loadingMore = false;
     sessionState = {
       ...sessionState,
       loading: true,
@@ -252,15 +274,24 @@
     };
 
     try {
-      const rawSessions = await loadRawSessions(targetAgentId);
+      const result = await loadRawSessions(
+        targetAgentId,
+        SESSION_INITIAL_DISPLAY_LIMIT,
+      );
       if (requestVersion !== loadVersion) {
         return;
       }
 
-      sessionState = applySessionList(sessionState, rawSessions);
+      sessionState = applySessionList(sessionState, result.sessions);
+      nextCursor = result.nextCursor;
+      totalSessionCount = result.totalCount;
       const normalizedCurrentSessionId = asText(currentSessionId);
       if (normalizedCurrentSessionId) {
-        sessionState = selectSession(sessionState, normalizedCurrentSessionId);
+        sessionState = selectSession(
+          sessionState,
+          normalizedCurrentSessionId,
+          asText(agentId),
+        );
       }
     } catch (error) {
       if (requestVersion !== loadVersion) {
@@ -275,49 +306,93 @@
     }
   };
 
-  // One session.list call for the selected agent, or one per roster address
-  // when the All-agents filter is on. Each merged row is tagged with its
-  // owning address and display name so rows stay attributable and actions
-  // address the right agent.
-  const loadRawSessions = async (targetAgentId) => {
-    if (!filters.allAgents || rosterAgents.length === 0) {
-      const result = await listSessions(targetAgentId);
-      return result?.sessions ?? [];
-    }
-
-    const results = await Promise.allSettled(
-      rosterAgents.map((entry) => listSessions(entry.address)),
-    );
-    const merged = [];
-    let firstError = null;
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
-        const entry = rosterAgents[index];
-        for (const session of result.value?.sessions ?? []) {
-          merged.push({
-            ...session,
-            agent_address: entry.address,
-            agent_name: entry.name,
-          });
-        }
-      } else if (firstError === null) {
-        firstError = result.reason;
-      }
+  // The server applies filtering, global ordering, and keyset pagination in
+  // SQLite for either one owner or the complete roster. The browser keeps only
+  // the pages the user has actually reached.
+  const loadRawSessions = async (targetAgentId, limit, cursor = null) => {
+    const listedAgents =
+      filters.allAgents && rosterAgents.length > 0
+        ? [
+            ...new Set([
+              targetAgentId,
+              ...rosterAgents.map((entry) => entry.address),
+            ]),
+          ]
+        : targetAgentId;
+    const requiredSessionId = asText(currentSessionId);
+    const result = await listSessions(listedAgents, {
+      limit,
+      cursor,
+      includeSubagents: filters.subagents,
+      includeMemoryReflections: filters.memoryReflections,
+      includeSkillReflections: filters.skillReflections,
+      includeCron: filters.cron,
+      requiredSession: requiredSessionId
+        ? { agentId: asText(agentId), sessionId: requiredSessionId }
+        : null,
     });
-    if (merged.length === 0 && firstError !== null) {
-      throw firstError;
+    const namesByAddress = new Map(
+      rosterAgents.map((entry) => [entry.address, entry.name]),
+    );
+    const sessions = (result?.sessions ?? []).map((session) => {
+      const owner = asText(session?.agent_address) || targetAgentId;
+      return {
+        ...session,
+        agent_address: owner,
+        agent_name: filters.allAgents
+          ? namesByAddress.get(owner) || owner
+          : null,
+      };
+    });
+    return {
+      sessions,
+      nextCursor: result?.next_cursor ?? null,
+      totalCount: Number.isSafeInteger(result?.total_count)
+        ? result.total_count
+        : sessions.length,
+    };
+  };
+
+  const loadMoreSessions = async () => {
+    const targetAgentId = asText(agentId);
+    const cursor = nextCursor;
+    if (!targetAgentId || cursor === null || loadingMore) {
+      return;
     }
-    return merged;
+    const requestVersion = loadVersion;
+    loadingMore = true;
+    try {
+      const result = await loadRawSessions(
+        targetAgentId,
+        SESSION_DISPLAY_INCREMENT,
+        cursor,
+      );
+      if (requestVersion !== loadVersion || cursor !== nextCursor) {
+        return;
+      }
+      sessionState = appendSessionList(sessionState, result.sessions);
+      nextCursor = result.nextCursor;
+      totalSessionCount = result.totalCount;
+    } catch (error) {
+      if (requestVersion === loadVersion) {
+        sessionState = { ...sessionState, error: error.message };
+      }
+    } finally {
+      if (requestVersion === loadVersion) {
+        loadingMore = false;
+      }
+    }
   };
 
   const handleSelectSession = (session) => {
-    sessionState = selectSession(sessionState, session.id);
+    const owner = session.agent_address || asText(agentId);
+    sessionState = selectSession(sessionState, session.id, owner);
     // The row's real sub-agent flag decides the footer banner in ChatView:
     // a foreign agent's ordinary session is a normal override view, not a
     // sub-agent session.
     onSessionSelected?.(
       session.id,
-      session.agent_address || asText(agentId),
+      owner,
       session.is_subagent_session === true,
     );
   };
@@ -373,13 +448,13 @@
     onFiltersChange(filters);
   };
 
-  const toggleMenu = async (sessionId, triggerElement) => {
-    if (openMenuSessionId === sessionId) {
+  const toggleMenu = async (sessionKey, triggerElement) => {
+    if (openMenuSessionId === sessionKey) {
       closeMenu();
       return;
     }
 
-    openMenuSessionId = sessionId;
+    openMenuSessionId = sessionKey;
     menuTriggerElement = triggerElement;
     menuStyle = 'visibility: hidden;';
     await tick();
@@ -631,26 +706,18 @@
     };
   });
 
-  // Reset the display limit when the filtered session list changes — agent
-  // switch, filter toggle, reload, or new/deleted session — so the user starts
-  // from the top of the fresh list.
-  $effect(() => {
-    visibleSessions;
-    displayLimit = SESSION_INITIAL_DISPLAY_LIMIT;
-  });
-
   const handleListScroll = (event) => {
-    if (!hasMoreToDisplay) {
+    if (!hasMoreToDisplay || loadingMore) {
       return;
     }
     const el = event.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
-      displayLimit = Math.min(
-        displayLimit + SESSION_DISPLAY_INCREMENT,
-        visibleSessions.length,
-      );
+      loadMoreSessions();
     }
   };
+
+  const sessionRowKey = (session) =>
+    `${session.agent_address || asText(agentId)}::${session.id}`;
 
   const autofocusRename = (node) => {
     node.focus();
@@ -841,12 +908,13 @@
     />
   {:else}
     <ul class="session-drawer__list" onscroll={handleListScroll}>
-      {#each displayedSessions as session (session.id)}
+      {#each displayedSessions as session (sessionRowKey(session))}
         <li
           class="session-row"
-          class:session-row--editing={editingSessionId === session.id}
+          class:session-row--editing={editingSessionId === session.id &&
+            editingAgentAddress === (session.agent_address || asText(agentId))}
         >
-          {#if editingSessionId === session.id}
+          {#if editingSessionId === session.id && editingAgentAddress === (session.agent_address || asText(agentId))}
             <div class="session-row__edit">
               <input
                 class="session-row__edit-input"
@@ -870,7 +938,9 @@
             <button
               type="button"
               class:session-row__select--active={sessionState.selectedSessionId ===
-                session.id}
+                session.id &&
+                sessionState.selectedAgentAddress ===
+                  (session.agent_address || asText(agentId))}
               class="session-row__select"
               onclick={() => handleSelectSession(session)}
               use:tooltip={sessionHoverDetails(session)}
@@ -1131,11 +1201,12 @@
                 type="button"
                 class="session-row__menu-trigger"
                 class:session-row__menu-trigger--open={openMenuSessionId ===
-                  session.id}
+                  sessionRowKey(session)}
                 aria-label={t('sessions.actions', 'Session actions')}
                 aria-haspopup="menu"
-                aria-expanded={openMenuSessionId === session.id}
-                onclick={(event) => toggleMenu(session.id, event.currentTarget)}
+                aria-expanded={openMenuSessionId === sessionRowKey(session)}
+                onclick={(event) =>
+                  toggleMenu(sessionRowKey(session), event.currentTarget)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
                   <circle cx="8" cy="3" r="1.4" />
@@ -1143,7 +1214,7 @@
                   <circle cx="8" cy="13" r="1.4" />
                 </svg>
               </button>
-              {#if openMenuSessionId === session.id}
+              {#if openMenuSessionId === sessionRowKey(session)}
                 <div
                   bind:this={menuElement}
                   use:portal
@@ -1187,7 +1258,7 @@
     {#if hasMoreToDisplay}
       <p class="session-drawer__more-hint">
         {t('sessions.moreHint', '{count} more sessions — scroll to load', {
-          count: visibleSessions.length - displayLimit,
+          count: remainingSessionCount,
         })}
       </p>
     {/if}

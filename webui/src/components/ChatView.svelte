@@ -339,7 +339,13 @@
       return;
     }
     try {
-      const listed = await chatController.listSessions(childAddress);
+      const listed = await chatController.listSessions(childAddress, {
+        limit: 1,
+        requiredSession: {
+          agentId: childAddress,
+          sessionId: childSessionId,
+        },
+      });
       // A newer navigation may have superseded this child view mid-flight.
       if (displayedSessionKey() !== displayKey) {
         return;
@@ -374,8 +380,16 @@
         );
       } else {
         try {
-          const parentListed =
-            await chatController.listSessions(parentAgentAddress);
+          const parentListed = await chatController.listSessions(
+            parentAgentAddress,
+            {
+              limit: 1,
+              requiredSession: {
+                agentId: parentAgentAddress,
+                sessionId: parentSessionId,
+              },
+            },
+          );
           if (displayedSessionKey() !== displayKey) {
             return;
           }
@@ -1099,7 +1113,13 @@
         projectAgentSessions[agentAddress] ??
         '';
       if (!sessionId) {
-        const listed = await chatController.listSessions(agentAddress);
+        const listed = await chatController.listSessions(agentAddress, {
+          limit: 1,
+          includeSubagents: false,
+          includeMemoryReflections: false,
+          includeSkillReflections: false,
+          includeCron: false,
+        });
         // A newer project/agent selection may have superseded this one.
         if (currentProjectAgentAddress() !== agentAddress) {
           return;

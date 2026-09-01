@@ -1342,14 +1342,49 @@ export function removeProject(
   );
 }
 
-export function listSessions(agentId, options = {}) {
-  requireNonEmptyString(
-    agentId,
-    'Agent id must be a non-empty string',
-    'session.list',
-  );
-
-  return rpc('session.list', { agent_id: agentId }, options);
+export function listSessions(agentIds, query = {}, options = {}) {
+  const addresses = Array.isArray(agentIds) ? agentIds : [agentIds];
+  if (
+    addresses.some(
+      (agentId) => typeof agentId !== 'string' || agentId.trim().length === 0,
+    )
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent ids must be non-empty strings',
+      { method: 'session.list' },
+    );
+  }
+  const params = Array.isArray(agentIds)
+    ? { agent_ids: addresses }
+    : { agent_id: agentIds };
+  if (Number.isSafeInteger(query.limit) && query.limit > 0) {
+    params.limit = query.limit;
+  }
+  if (query.cursor && typeof query.cursor === 'object') {
+    params.cursor = query.cursor;
+  }
+  for (const [queryKey, rpcKey] of [
+    ['includeSubagents', 'include_subagents'],
+    ['includeMemoryReflections', 'include_memory_reflections'],
+    ['includeSkillReflections', 'include_skill_reflections'],
+    ['includeCron', 'include_cron'],
+  ]) {
+    if (typeof query[queryKey] === 'boolean') {
+      params[rpcKey] = query[queryKey];
+    }
+  }
+  if (
+    query.requiredSession &&
+    typeof query.requiredSession.agentId === 'string' &&
+    typeof query.requiredSession.sessionId === 'string'
+  ) {
+    params.required_session = {
+      agent_id: query.requiredSession.agentId,
+      session_id: query.requiredSession.sessionId,
+    };
+  }
+  return rpc('session.list', params, options);
 }
 
 export function listSessionActivity(agentIds, options = {}) {

@@ -387,7 +387,10 @@ describe('ChatView', () => {
     );
     // The drawer lists the PROJECT agent's sessions through the full address,
     // not the bare team-member id (which would hit the wrong world).
-    expect(listSessionsMock).toHaveBeenCalledWith('builder@vbot');
+    expect(listSessionsMock).toHaveBeenCalledWith(
+      'builder@vbot',
+      expect.objectContaining({ limit: 1, includeSubagents: false }),
+    );
 
     const oldRow = Array.from(
       document.querySelectorAll('.session-row__select'),

@@ -71,6 +71,150 @@ _DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 
 JsonObject = dict[str, Any]
 
+_SESSION_METADATA_PROJECTION_VERSION_KEY = "session_metadata_projection_version"
+_SESSION_METADATA_PROJECTION_VERSION = "1"
+_SESSION_METADATA_SCALAR_COLUMNS = (
+    ("title", "title"),
+    ("auto_title", "auto_title"),
+    ("source_channel_id", "source_channel_id"),
+    ("platform", "platform"),
+    ("platform_conv_id", "platform_conv_id"),
+)
+_SESSION_METADATA_JSON_COLUMNS = (
+    ("subagent_parent", "subagent_parent_json", dict),
+    ("fork_source", "fork_source_json", dict),
+    ("run_kinds", "run_kinds_json", list),
+    ("compaction_policy", "compaction_policy_json", dict),
+)
+_SESSION_METADATA_PROJECTION_COLUMNS = (
+    "title",
+    "auto_title",
+    "source_channel_id",
+    "platform",
+    "platform_conv_id",
+    "is_subagent_session",
+    "subagent_parent_json",
+    "fork_source_json",
+    "run_kinds_json",
+    "compaction_policy_json",
+)
+_SESSION_LIST_COLUMNS = """
+    project_id,
+    agent_id,
+    session_id,
+    created_at,
+    COALESCE(last_message_at, created_at) AS last_active_at,
+    COALESCE(julianday(COALESCE(last_message_at, created_at)), 0.0) AS active_sort,
+    title,
+    auto_title,
+    source_channel_id,
+    platform,
+    platform_conv_id,
+    is_subagent_session,
+    subagent_parent_json,
+    fork_source_json,
+    run_kinds_json,
+    compaction_policy_json,
+    latest_completion_run_id,
+    latest_completion_status,
+    latest_completion_at,
+    read_completion_run_id
+"""
+_SESSION_LIST_BACKGROUND_KINDS = (
+    "cron",
+    "reflection",
+    "memory_reflection",
+    "skill_reflection",
+)
+
+
+def _session_metadata_storage(metadata: JsonObject) -> tuple[str, tuple[Any, ...]]:
+    """Separate indexed/listable metadata from the open-ended metadata object."""
+    residual = dict(metadata)
+    columns: dict[str, Any] = dict.fromkeys(_SESSION_METADATA_PROJECTION_COLUMNS)
+    for key, column in _SESSION_METADATA_SCALAR_COLUMNS:
+        value = residual.get(key)
+        if isinstance(value, str):
+            columns[column] = value
+            residual.pop(key)
+    subagent_flag = residual.get("is_subagent_session")
+    if isinstance(subagent_flag, bool):
+        columns["is_subagent_session"] = int(subagent_flag)
+        residual.pop("is_subagent_session")
+    for key, column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
+        value = residual.get(key)
+        if isinstance(value, expected_type):
+            columns[column] = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            residual.pop(key)
+    return _json_object(residual, "session metadata"), tuple(
+        columns[column] for column in _SESSION_METADATA_PROJECTION_COLUMNS
+    )
+
+
+def _session_metadata_from_state(state: Any) -> JsonObject:
+    metadata = _json_from_payload(state["metadata_json"], "session metadata")
+    for key, column in _SESSION_METADATA_SCALAR_COLUMNS:
+        value = state[column]
+        if value is not None:
+            metadata[key] = str(value)
+    subagent_flag = state["is_subagent_session"]
+    if subagent_flag is not None:
+        metadata["is_subagent_session"] = bool(subagent_flag)
+    for key, column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
+        payload = state[column]
+        if payload is None:
+            continue
+        value = _json_value_from_payload(payload, f"Session {key}", expected_type)
+        metadata[key] = value
+    return metadata
+
+
+def _session_list_visibility_sql(
+    *,
+    include_subagents: bool,
+    include_memory_reflections: bool,
+    include_skill_reflections: bool,
+    include_cron: bool,
+) -> tuple[str, list[Any]]:
+    is_subagent = "(COALESCE(is_subagent_session, 0) = 1 OR subagent_parent_json IS NOT NULL)"
+    is_channel = (
+        "(NULLIF(TRIM(platform), '') IS NOT NULL "
+        "AND NULLIF(TRIM(platform_conv_id), '') IS NOT NULL)"
+    )
+    background_placeholders = ", ".join("?" for _ in _SESSION_LIST_BACKGROUND_KINDS)
+    is_background = (
+        f"(NOT {is_channel} AND run_kinds_json IS NOT NULL "
+        "AND json_array_length(run_kinds_json) > 0 "
+        "AND NOT EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS kind "
+        f"WHERE kind.type <> 'text' OR kind.value NOT IN ({background_placeholders})))"
+    )
+    kind_enabled = (
+        "((kind.value = 'cron' AND ? = 1) "
+        "OR (kind.value = 'memory_reflection' AND ? = 1) "
+        "OR (kind.value = 'skill_reflection' AND ? = 1) "
+        "OR (kind.value = 'reflection' AND (? = 1 OR ? = 1)))"
+    )
+    visible = (
+        f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "
+        f"(NOT {is_background} OR NOT EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS kind "
+        f"WHERE NOT {kind_enabled}))))"
+    )
+    params: list[Any] = [
+        int(include_subagents),
+        *_SESSION_LIST_BACKGROUND_KINDS,
+        int(include_cron),
+        int(include_memory_reflections),
+        int(include_skill_reflections),
+        int(include_memory_reflections),
+        int(include_skill_reflections),
+    ]
+    return visible, params
+
+
 _MESSAGE_INSERT = """
     INSERT INTO messages (
         session_key, seq, message_id, role, timestamp, content,
@@ -709,8 +853,49 @@ class SessionStore:
                 self.path,
                 "; ".join(applied),
             )
+        self._reconcile_session_metadata_projection(connection)
         _ensure_fts_schema(connection)
         self._verify_connection(connection, self.path)
+
+    def _reconcile_session_metadata_projection(self, connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT value FROM store_meta WHERE key = ?",
+            (_SESSION_METADATA_PROJECTION_VERSION_KEY,),
+        ).fetchone()
+        if row is not None and str(row[0]) == _SESSION_METADATA_PROJECTION_VERSION:
+            return
+        rows = connection.execute(
+            "SELECT session_key, metadata_json FROM sessions ORDER BY session_key"
+        ).fetchall()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for state in rows:
+                metadata = _json_from_payload(state["metadata_json"], "session metadata")
+                residual_payload, projection = _session_metadata_storage(metadata)
+                connection.execute(
+                    "UPDATE sessions SET metadata_json = ?, "
+                    + ", ".join(f"{column} = ?" for column in _SESSION_METADATA_PROJECTION_COLUMNS)
+                    + " WHERE session_key = ?",
+                    (residual_payload, *projection, state["session_key"]),
+                )
+            connection.execute(
+                "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                (
+                    _SESSION_METADATA_PROJECTION_VERSION_KEY,
+                    _SESSION_METADATA_PROJECTION_VERSION,
+                ),
+            )
+            connection.execute("COMMIT")
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        if rows:
+            _LOGGER.info(
+                "Reconciled normalized Session metadata projections at %s (sessions=%s)",
+                self.path,
+                len(rows),
+            )
 
     @staticmethod
     def _verify_connection(connection: sqlite3.Connection, path: Path) -> None:
@@ -983,6 +1168,7 @@ class SessionStore:
         ):
             raise ChatSessionError("offline generation id is invalid")
         metadata_payload = _json_object(metadata, "session metadata")
+        residual_metadata_payload, metadata_projection = _session_metadata_storage(metadata)
         activity_payload = _json_object(activity, "session activity")
         for message in messages:
             _message_base_row(message)
@@ -994,8 +1180,11 @@ class SessionStore:
                 cursor = connection.execute(
                     "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, status, "
                     "created_at, last_message_at, archived_at, message_count, last_message_id, "
-                    "history_revision, state_revision, metadata_json, activity_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "history_revision, state_revision, metadata_json, "
+                    + ", ".join(_SESSION_METADATA_PROJECTION_COLUMNS)
+                    + ", activity_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    + ", ".join("?" for _ in _SESSION_METADATA_PROJECTION_COLUMNS)
+                    + ", ?)",
                     (
                         generation_id,
                         *self._scope(address),
@@ -1012,7 +1201,8 @@ class SessionStore:
                         or metadata_payload != "{}"
                         or activity_payload != "{}"
                         else 0,
-                        metadata_payload,
+                        residual_metadata_payload,
+                        *metadata_projection,
                         activity_payload,
                     ),
                 )
@@ -1089,15 +1279,7 @@ class SessionStore:
         return cast(sqlite3.Row, row)
 
     def metadata(self, address: SessionAddress) -> JsonObject:
-        try:
-            data = json.loads(self.state(address)["metadata_json"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise SessionStoreCorruptError(
-                f"invalid Session metadata: {address.session_id}"
-            ) from exc
-        if not isinstance(data, dict):
-            raise SessionStoreCorruptError(f"invalid Session metadata: {address.session_id}")
-        return data
+        return _session_metadata_from_state(self.state(address))
 
     def descriptor_source(
         self, address: SessionAddress
@@ -1150,20 +1332,23 @@ class SessionStore:
                     for state in states:
                         address = self._address(state)
                         sources[address] = (
-                            _json_from_payload(state["metadata_json"], "session metadata"),
+                            _session_metadata_from_state(state),
                             int(state["message_count"]),
                             first_users.get(int(state["session_key"])),
                         )
         return sources
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
-        payload = _json_object(metadata, "session metadata")
+        _json_object(metadata, "session metadata")
+        payload, projection = _session_metadata_storage(metadata)
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, address)
             connection.execute(
-                "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
-                (payload, state["session_key"]),
+                "UPDATE sessions SET metadata_json = ?, "
+                + ", ".join(f"{column} = ?" for column in _SESSION_METADATA_PROJECTION_COLUMNS)
+                + ", state_revision = state_revision + 1 WHERE session_key = ?",
+                (payload, *projection, state["session_key"]),
             )
 
         self._execute_write(_fn)
@@ -1177,13 +1362,16 @@ class SessionStore:
         def _fn(connection: sqlite3.Connection) -> None:
             nonlocal result
             state = self._require_live(connection, address)
-            previous = _json_from_payload(state["metadata_json"], "session metadata")
+            previous = _session_metadata_from_state(state)
             updated = deepcopy(previous)
             mutation(updated)
-            payload = _json_object(updated, "session metadata")
+            _json_object(updated, "session metadata")
+            payload, projection = _session_metadata_storage(updated)
             connection.execute(
-                "UPDATE sessions SET metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
-                (payload, state["session_key"]),
+                "UPDATE sessions SET metadata_json = ?, "
+                + ", ".join(f"{column} = ?" for column in _SESSION_METADATA_PROJECTION_COLUMNS)
+                + ", state_revision = state_revision + 1 WHERE session_key = ?",
+                (payload, *projection, state["session_key"]),
             )
             result = (previous, updated)
 
@@ -1391,6 +1579,91 @@ class SessionStore:
         with self._transaction(write=False) as connection:
             rows = connection.execute(
                 "SELECT * FROM sessions WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
+                (project_id or "", agent_id),
+            ).fetchall()
+        return cast(list[sqlite3.Row], rows)
+
+    @staticmethod
+    def metadata_from_state(state: Any) -> JsonObject:
+        return _session_metadata_from_state(state)
+
+    def list_summary_rows(
+        self,
+        scopes: Sequence[tuple[str | None, str]],
+        *,
+        limit: int,
+        cursor: tuple[float, str, str, str] | None,
+        include_subagents: bool,
+        include_memory_reflections: bool,
+        include_skill_reflections: bool,
+        include_cron: bool,
+        required_address: SessionAddress | None,
+    ) -> tuple[list[sqlite3.Row], sqlite3.Row | None, int, bool]:
+        """Read one bounded, globally ordered Session-list page from normalized columns."""
+        normalized_scopes = tuple(
+            dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in scopes)
+        )
+        if not normalized_scopes:
+            return [], None, 0, False
+        scope_sql = (
+            "("
+            + " OR ".join("(project_id = ? AND agent_id = ?)" for _scope in normalized_scopes)
+            + ")"
+        )
+        scope_params = [value for scope in normalized_scopes for value in scope]
+        visibility_sql, visibility_params = _session_list_visibility_sql(
+            include_subagents=include_subagents,
+            include_memory_reflections=include_memory_reflections,
+            include_skill_reflections=include_skill_reflections,
+            include_cron=include_cron,
+        )
+        base_where = f"status = 'live' AND {scope_sql}"
+        page_where = ""
+        page_params: list[Any] = []
+        if cursor is not None:
+            active_sort, project_id, agent_id, session_id = cursor
+            page_where = (
+                "WHERE active_sort < ? OR (active_sort = ? AND "
+                "(project_id, agent_id, session_id) > (?, ?, ?))"
+            )
+            page_params.extend((active_sort, active_sort, project_id, agent_id, session_id))
+        with self._transaction(write=False) as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM sessions WHERE {base_where} AND {visibility_sql}",
+                    (*scope_params, *visibility_params),
+                ).fetchone()[0]
+            )
+            fetched = connection.execute(
+                f"WITH candidates AS (SELECT {_SESSION_LIST_COLUMNS} FROM sessions "
+                f"WHERE {base_where} AND {visibility_sql}) "
+                f"SELECT * FROM candidates {page_where} "
+                "ORDER BY active_sort DESC, project_id, agent_id, session_id LIMIT ?",
+                (*scope_params, *visibility_params, *page_params, limit + 1),
+            ).fetchall()
+            has_more = len(fetched) > limit
+            rows = fetched[:limit]
+            required_row: sqlite3.Row | None = None
+            if required_address is not None:
+                required_scope = self._scope(required_address)
+                if (required_scope[0], required_scope[1]) in normalized_scopes:
+                    required_row = connection.execute(
+                        f"SELECT {_SESSION_LIST_COLUMNS}, "
+                        f"CASE WHEN {visibility_sql} THEN 1 ELSE 0 END AS list_visible "
+                        "FROM sessions WHERE status = 'live' AND project_id = ? "
+                        "AND agent_id = ? AND session_id = ?",
+                        (*visibility_params, *required_scope),
+                    ).fetchone()
+        if required_row is not None and not bool(required_row["list_visible"]):
+            total += 1
+        return cast(list[sqlite3.Row], rows), required_row, total, has_more
+
+    def list_activity_rows(self, project_id: str | None, agent_id: str) -> list[sqlite3.Row]:
+        with self._transaction(write=False) as connection:
+            rows = connection.execute(
+                "SELECT session_id, latest_completion_run_id, latest_completion_status, "
+                "latest_completion_at, read_completion_run_id FROM sessions "
+                "WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
                 (project_id or "", agent_id),
             ).fetchall()
         return cast(list[sqlite3.Row], rows)
@@ -1722,12 +1995,15 @@ class SessionStore:
             ).fetchone()
             if collision is not None:
                 raise ChatSessionError(f"destination session already exists: {target.session_id}")
-            metadata = _json_from_payload(state["metadata_json"], "session metadata")
+            metadata = _session_metadata_from_state(state)
             prepare_metadata(metadata, int(state["message_count"]))
-            payload = _json_object(metadata, "session metadata")
+            _json_object(metadata, "session metadata")
+            payload, projection = _session_metadata_storage(metadata)
             connection.execute(
-                "UPDATE sessions SET project_id = ?, agent_id = ?, session_id = ?, metadata_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
-                (*self._scope(target), payload, state["session_key"]),
+                "UPDATE sessions SET project_id = ?, agent_id = ?, session_id = ?, metadata_json = ?, "
+                + ", ".join(f"{column} = ?" for column in _SESSION_METADATA_PROJECTION_COLUMNS)
+                + ", state_revision = state_revision + 1 WHERE session_key = ?",
+                (*self._scope(target), payload, *projection, state["session_key"]),
             )
 
         self._execute_write(_fn)
@@ -1742,12 +2018,17 @@ class SessionStore:
 
         def _fn(connection: sqlite3.Connection) -> None:
             state = self._require_live(connection, source)
-            metadata = _json_from_payload(state["metadata_json"], "session metadata")
+            metadata = _session_metadata_from_state(state)
             prepare_metadata(metadata, int(state["message_count"]))
-            payload = _json_object(metadata, "session metadata")
+            _json_object(metadata, "session metadata")
+            payload, projection = _session_metadata_storage(metadata)
             try:
                 target_row = connection.execute(
-                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at, last_message_at, message_count, last_message_id, history_revision, state_revision, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at, last_message_at, message_count, last_message_id, history_revision, state_revision, metadata_json, "
+                    + ", ".join(_SESSION_METADATA_PROJECTION_COLUMNS)
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, "
+                    + ", ".join("?" for _ in _SESSION_METADATA_PROJECTION_COLUMNS)
+                    + ")",
                     (
                         uuid.uuid4().hex,
                         *self._scope(target),
@@ -1757,6 +2038,7 @@ class SessionStore:
                         state["last_message_id"],
                         state["history_revision"],
                         payload,
+                        *projection,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -1894,6 +2176,16 @@ def _json_from_payload(value: str, name: str) -> JsonObject:
     except json.JSONDecodeError as exc:
         raise SessionStoreCorruptError(f"invalid {name}") from exc
     if not isinstance(decoded, dict):
+        raise SessionStoreCorruptError(f"invalid {name}")
+    return decoded
+
+
+def _json_value_from_payload(value: str, name: str, expected_type: type[Any]) -> Any:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise SessionStoreCorruptError(f"invalid {name}") from exc
+    if not isinstance(decoded, expected_type):
         raise SessionStoreCorruptError(f"invalid {name}")
     return decoded
 

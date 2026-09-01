@@ -960,8 +960,18 @@ class WakewordWorker:
         return session_id if isinstance(session_id, str) else ""
 
     def _list_sessions(self, agent_id: str) -> list[dict[str, Any]]:
-        """List sessions for an agent via the session.list RPC."""
-        sessions = self._rpc_call("session.list", {"agent_id": agent_id}).get("sessions", [])
+        """Return the newest session summary for an agent via session.list."""
+        sessions = self._rpc_call(
+            "session.list",
+            {
+                "agent_id": agent_id,
+                "limit": 1,
+                "include_subagents": True,
+                "include_memory_reflections": True,
+                "include_skill_reflections": True,
+                "include_cron": True,
+            },
+        ).get("sessions", [])
         return sessions if isinstance(sessions, list) else []
 
     def _create_session(self, agent_id: str) -> str:

@@ -31,6 +31,7 @@ import {
   listProjects,
   listAgentMemories,
   listSessionActivity,
+  listSessions,
   removeProject,
   removeAgentMemory,
   deleteSession,
@@ -827,6 +828,50 @@ describe('renameSession()', () => {
         method: 'session.rename',
       }),
     );
+  });
+});
+
+describe('listSessions()', () => {
+  it('posts one bounded multi-Agent page with filters and a cursor', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { sessions: [], next_cursor: null, total_count: 0 },
+      }),
+    );
+    const cursor = {
+      active_sort: 2460000,
+      agent_id: 'alpha',
+      session_id: 'session-35',
+    };
+
+    await listSessions(
+      ['alpha', 'builder@vbot'],
+      {
+        limit: 20,
+        cursor,
+        includeSubagents: false,
+        includeMemoryReflections: false,
+        includeSkillReflections: true,
+        includeCron: false,
+        requiredSession: { agentId: 'alpha', sessionId: 'session-1' },
+      },
+      { fetch: fetchFunction },
+    );
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.list',
+      params: {
+        agent_ids: ['alpha', 'builder@vbot'],
+        limit: 20,
+        cursor,
+        include_subagents: false,
+        include_memory_reflections: false,
+        include_skill_reflections: true,
+        include_cron: false,
+        required_session: { agent_id: 'alpha', session_id: 'session-1' },
+      },
+    });
   });
 });
 
