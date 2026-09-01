@@ -279,7 +279,9 @@ def _user_cancelled_failure_message(
 ) -> str:
     """User-abort message extended by how long the command ran before the abort."""
     try:
-        tracked = process_manager.get_process(process_id, context.agent_id)
+        tracked = process_manager.get_process(
+            process_id, context.agent_id, project_id=context.project_id
+        )
     except ProcessNotFoundError:
         return USER_CANCELLED_FAILURE_MESSAGE
     elapsed_seconds = (datetime.now(UTC) - tracked.started_at).total_seconds()
@@ -400,6 +402,7 @@ async def bash_handler(
             context.run_id,
             context.agent_id,
             argv,
+            project_id=context.project_id,
             env=env,
             cwd=workdir,
         )
@@ -427,6 +430,7 @@ async def bash_handler(
                 context.run_id,
                 context.agent_id,
                 argv,
+                project_id=context.project_id,
                 env=env,
                 cwd=workdir,
             )
@@ -438,10 +442,7 @@ async def bash_handler(
     _register_user_cancel_callback(process_manager, context, process_id)
 
     timeout_task, timeout_state = _schedule_timeout(
-        process_manager,
-        process_id,
-        context.agent_id,
-        parsed.get("timeout"),
+        process_manager, context, process_id, parsed.get("timeout")
     )
 
     if mode == "background":
@@ -478,7 +479,7 @@ async def bash_handler(
     if context.is_cancelled() or context.was_cancelled_by_user():
         if timeout_task is not None:
             timeout_task.cancel()
-        await process_manager.kill(process_id, context.agent_id)
+        await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
         if context.was_cancelled_by_user():
             return tool_failure(
                 USER_CANCELLED_FAILURE_CODE,
@@ -492,7 +493,7 @@ async def bash_handler(
         if _background_blocked_at_depth(context):
             if timeout_task is not None:
                 timeout_task.cancel()
-            await process_manager.kill(process_id, context.agent_id)
+            await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
             suffix = await _failure_output_suffix(process_manager, context, process_id)
             if background_after_seconds is None:
                 raise RuntimeError("only auto mode may reach the Sub-Agent handoff boundary")
@@ -604,12 +605,15 @@ async def _watch_background_process(
     project_id: str | None = None,
 ) -> None:
     try:
-        tracked = process_manager.get_process(process_id, agent_id)
+        tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
         wait_task = tracked.wait_task
         if wait_task is not None:
             await wait_task
         else:
-            while process_manager.get_process(process_id, agent_id).status == "running":
+            while (
+                process_manager.get_process(process_id, agent_id, project_id=project_id).status
+                == "running"
+            ):
                 await asyncio.sleep(FOREGROUND_POLL_INTERVAL_SECONDS)
     except ProcessNotFoundError as error:
         _LOGGER.warning(
@@ -621,8 +625,8 @@ async def _watch_background_process(
         return
 
     try:
-        log_result = await process_manager.log(process_id, agent_id)
-        tracked = process_manager.get_process(process_id, agent_id)
+        log_result = await process_manager.log(process_id, agent_id, project_id=project_id)
+        tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
     except ProcessNotFoundError as error:
         _LOGGER.warning(
             "Bash completion watcher skipped trigger for agent=%s process=%s: %s",
@@ -711,6 +715,7 @@ def _maybe_spawn_completion_watcher(
             process_id,
             context.agent_id,
             task,
+            project_id=context.project_id,
         )
     except Exception:
         task.cancel()
@@ -739,9 +744,11 @@ def _register_user_cancel_callback(
 
     def cancel_callback() -> None:
         kill_coro = (
-            process_manager.cancel_for_user(process_id, context.agent_id)
+            process_manager.cancel_for_user(
+                process_id, context.agent_id, project_id=context.project_id
+            )
             if context.was_cancelled_by_user()
-            else process_manager.kill(process_id, context.agent_id)
+            else process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
         )
         try:
             loop = asyncio.get_running_loop()
@@ -1029,8 +1036,8 @@ def _parse_null_env(output: str) -> dict[str, str]:
 
 def _schedule_timeout(
     process_manager: ProcessManager,
+    context: ToolContext,
     process_id: str,
-    agent_id: str,
     timeout: float | None,
 ) -> tuple[asyncio.Task[None] | None, dict[str, bool]]:
     state = {"timed_out": False}
@@ -1040,7 +1047,7 @@ def _schedule_timeout(
     async def kill_after_timeout() -> None:
         await asyncio.sleep(timeout)
         state["timed_out"] = True
-        await process_manager.kill(process_id, agent_id)
+        await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
 
     return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{process_id}"), state
 
@@ -1059,7 +1066,9 @@ def _timed_out_process_killed(
     that terminal status — not the timer flag alone — stops a race at the
     deadline from masking a successful run as a timeout.
     """
-    tracked = process_manager.get_process(process_id, context.agent_id)
+    tracked = process_manager.get_process(
+        process_id, context.agent_id, project_id=context.project_id
+    )
     return tracked.status == "killed"
 
 
@@ -1079,7 +1088,9 @@ async def _run_foreground_phase(
     )
 
     while True:
-        poll_result = await process_manager.poll(process_id, context.agent_id, timeout_ms=0)
+        poll_result = await process_manager.poll(
+            process_id, context.agent_id, timeout_ms=0, project_id=context.project_id
+        )
         await _emit_output_chunks(context, process_id, poll_result)
 
         if poll_result["status"] != "running":
@@ -1092,7 +1103,7 @@ async def _run_foreground_phase(
             )
 
         if context.is_cancelled():
-            await process_manager.kill(process_id, context.agent_id)
+            await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
             return await _completion_result(
                 process_manager,
                 context,
@@ -1153,8 +1164,10 @@ async def _background_result(
     mode: str,
     handoff_after: float | None,
 ) -> JsonObject:
-    process_manager.mark_backgrounded(process_id, context.agent_id)
-    tracked = process_manager.get_process(process_id, context.agent_id)
+    process_manager.mark_backgrounded(process_id, context.agent_id, project_id=context.project_id)
+    tracked = process_manager.get_process(
+        process_id, context.agent_id, project_id=context.project_id
+    )
     output = await _combined_output(process_manager, context, process_id)
     fields = _shape_output_fields(tracked, output)
     if tracked.log_file is not None:
@@ -1274,7 +1287,9 @@ async def _completion_result(
     mode: str,
     command: str,
 ) -> JsonObject:
-    tracked = process_manager.get_process(process_id, context.agent_id)
+    tracked = process_manager.get_process(
+        process_id, context.agent_id, project_id=context.project_id
+    )
     output = await _combined_output(process_manager, context, process_id)
     result: JsonObject = {
         "status": "completed",
@@ -1343,7 +1358,9 @@ async def _failure_output_suffix(
     of diagnostics the process printed is lost to the model.
     """
     output = await _combined_output(process_manager, context, process_id)
-    tracked = process_manager.get_process(process_id, context.agent_id)
+    tracked = process_manager.get_process(
+        process_id, context.agent_id, project_id=context.project_id
+    )
 
     parts: list[str] = []
     if output:
@@ -1374,7 +1391,13 @@ async def _combined_output(
     context: ToolContext,
     process_id: str,
 ) -> str:
-    log_result = await process_manager.log(process_id, context.agent_id, offset=0, limit=None)
+    log_result = await process_manager.log(
+        process_id,
+        context.agent_id,
+        offset=0,
+        limit=None,
+        project_id=context.project_id,
+    )
     output = log_result.get("output", "")
     return output if isinstance(output, str) else ""
 

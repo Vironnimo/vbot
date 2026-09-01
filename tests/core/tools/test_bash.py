@@ -1023,9 +1023,11 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
 
     original_kill = manager.kill
 
-    async def tracking_kill(process_id: str, agent_id: str) -> None:
+    async def tracking_kill(
+        process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> None:
         kill_calls.append((process_id, agent_id))
-        await original_kill(process_id, agent_id)
+        await original_kill(process_id, agent_id, project_id=project_id)
 
     monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
     monkeypatch.setattr(manager, "kill", tracking_kill)
@@ -2235,10 +2237,12 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 
     original_cancel_for_user = manager.cancel_for_user
 
-    async def tracking_cancel_for_user(process_id: str, agent_id: str) -> Any:
+    async def tracking_cancel_for_user(
+        process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> Any:
         cancel_calls.append((process_id, agent_id))
         try:
-            return await original_cancel_for_user(process_id, agent_id)
+            return await original_cancel_for_user(process_id, agent_id, project_id=project_id)
         finally:
             kill_event.set()
 
@@ -2487,7 +2491,9 @@ async def test_user_cancel_kill_failure_is_logged(
     """
     kill_failed = asyncio.Event()
 
-    async def failing_cancel_for_user(process_id: str, agent_id: str) -> None:
+    async def failing_cancel_for_user(
+        process_id: str, agent_id: str, *, project_id: str | None = None
+    ) -> None:
         kill_failed.set()
         raise RuntimeError("kill exploded")
 

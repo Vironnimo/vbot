@@ -27,12 +27,12 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 ## Invariants & conventions
 
 - The server is an edge, not a second business layer: validate/map, call the owning domain, coordinate cross-domain mutations only where the public operation requires it, publish invalidation after success.
-- The browser-origin guard runs before routing on HTTP and WebSocket: a supplied Origin must exactly match scheme/host/effective port; foreign/opaque/malformed/duplicate origins fail closed; origin-less requests (CLI, Desktop wakeword worker) stay valid. Never replace this with CORS response headers - they do not stop CORS-simple requests.
+- The browser-origin guard runs before routing on HTTP and WebSocket: a supplied Origin must match a concrete configured bind address and port, never a request Host header; foreign/opaque/malformed/duplicate origins fail closed, and wildcard binds reject browser Origin requests. Origin-less requests (CLI, Desktop wakeword worker) stay valid. Never replace this with CORS response headers - they do not stop CORS-simple requests.
 - Clients command through RPC/HTTP, never `/ws`; `/ws` must not bridge SSE-only deltas. Public payloads recursively strip `reasoning_meta`, `output_files`, and internal data through one shared projector (signing `/api/files/` URLs when delivery is available); ordinary history filters notes while visible errors/checkpoints/summaries/dividers follow the Chat history contract.
 - Handlers projecting history/prompts/catalogs/statistics use named bounded pools, never the Event Loop or default executor - long projections cannot stall SSE/WebSocket delivery.
 - Session creation is explicit at this boundary; busy sends delegate to the shared Queue rather than accessor-local state. Replay buffers are bounded and process-local - durable recovery uses Session history.
 - Assistant file URLs are process-local capabilities regenerated from canonical History after restart: every request revalidates and reads the original path (later edits serve immediately, deletion/tampering 404s) - reference semantics, deliberately not snapshots.
-- Multipart endpoints enforce limits before spool writes and cover bodyless requests with a total-body bound; MIME validates before core services run.
+- Multipart endpoints enforce limits before spool writes and cover bodyless requests with a total-body bound; JSON RPC and speech-synthesis bodies are also read incrementally against their shared limit before JSON materialization; MIME validates before core services run.
 
 ## Constraints & Gotchas
 

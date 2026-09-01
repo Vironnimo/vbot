@@ -117,6 +117,26 @@ async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None
 
 
 @pytest.mark.asyncio
+async def test_process_access_requires_matching_project_scope(manager: ProcessManager) -> None:
+    process_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        project_id="project-a",
+        env=None,
+        cwd=None,
+    )
+
+    with pytest.raises(ProcessNotFoundError):
+        manager.get_process(process_id, AGENT_A)
+    with pytest.raises(ProcessNotFoundError):
+        manager.get_process(process_id, AGENT_A, project_id="project-b")
+
+    assert manager.get_process(process_id, AGENT_A, project_id="project-a").process_id == process_id
+    await manager.kill(process_id, AGENT_A, project_id="project-a")
+
+
+@pytest.mark.asyncio
 async def test_output_is_stripped_of_ansi_escape_sequences(manager: ProcessManager) -> None:
     # A model must never see raw escape codes — it copies them into file writes.
     # The colored/title markers are removed while the visible text survives, in

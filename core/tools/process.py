@@ -148,12 +148,16 @@ async def _handle_status(
             {
                 "processes": [
                     _process_summary(tracked)
-                    for tracked in process_manager.list_processes(context.agent_id)
+                    for tracked in process_manager.list_processes(
+                        context.agent_id, project_id=context.project_id
+                    )
                 ]
             }
         )
 
-    snapshot = await process_manager.snapshot(process_id, context.agent_id)
+    snapshot = await process_manager.snapshot(
+        process_id, context.agent_id, project_id=context.project_id
+    )
     if snapshot["status"] != "running":
         _acknowledge_completion_after_persistence(process_manager, context, process_id)
     return tool_success(_status_snapshot_data(snapshot))
@@ -179,6 +183,7 @@ async def _handle_input(
         text,
         newline=newline,
         eof=eof,
+        project_id=context.project_id,
     )
     return tool_success(
         {
@@ -196,8 +201,10 @@ async def _handle_kill(
     arguments: JsonObject,
 ) -> JsonObject:
     process_id = required_string(arguments.get("process_id"), field_name="process_id")
-    await process_manager.kill(process_id, context.agent_id)
-    snapshot = await process_manager.snapshot(process_id, context.agent_id)
+    await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
+    snapshot = await process_manager.snapshot(
+        process_id, context.agent_id, project_id=context.project_id
+    )
     _acknowledge_completion_after_persistence(process_manager, context, process_id)
     return tool_success({"process_id": process_id, "status": snapshot["status"]})
 
@@ -245,7 +252,9 @@ def _acknowledge_completion_after_persistence(
 ) -> None:
     """Suppress automatic delivery only after this manual terminal result is durable."""
     context.after_result_persisted(
-        lambda: process_manager.acknowledge_completion(process_id, context.agent_id)
+        lambda: process_manager.acknowledge_completion(
+            process_id, context.agent_id, project_id=context.project_id
+        )
     )
 
 

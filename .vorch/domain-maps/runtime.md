@@ -10,7 +10,7 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 ## Bootstrap
 
-`start()` is idempotent and runs dependency-ordered phases. Ordering constraints worth knowing before touching bootstrap:
+`start()` is idempotent and runs dependency-ordered phases. Any exception after startup work begins synchronously stops every started lifecycle service, temporary-file sweeper, tracked process/terminal manager, Session store, and logging before clearing references and reraising. Ordering constraints worth knowing before touching bootstrap:
 
 1. **Storage & settings** - logger + `StorageManager` + settings load. Invalid Settings never abort startup: malformed JSON or root shape falls back to defaults, schema-invalid keys omit individually while siblings stay live, the source file never rewrites, and mutations stay strict so they cannot overwrite invalid data. Data-dir creation failure is fatal.
 2. **Attachments & credentials** - AttachmentStore plus the `.env` fallback snapshot read without mutating `os.environ`.

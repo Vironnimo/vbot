@@ -27,6 +27,7 @@ from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
+from core.storage.temp_files import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.tools import ToolAccess
 from core.tools.file_state import FileReadState
@@ -882,6 +883,36 @@ async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) 
     assert process_manager._sweeper_task is None
     assert terminal_manager._sweeper_task is None
     assert temporary_files._sweeper_task is None
+
+
+def test_runtime_failed_start_stops_started_resources(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    stopped: list[str] = []
+    original_temporary_stop = TemporaryFileManager.stop
+    original_process_stop = ProcessManager.stop
+
+    def stop_temporary_files(manager: TemporaryFileManager) -> None:
+        stopped.append("temporary_files")
+        original_temporary_stop(manager)
+
+    def stop_processes(manager: ProcessManager) -> None:
+        stopped.append("process_manager")
+        original_process_stop(manager)
+
+    def fail_terminal_start(_runtime: Runtime) -> None:
+        raise RuntimeError("terminal startup failed")
+
+    monkeypatch.setattr(TemporaryFileManager, "stop", stop_temporary_files)
+    monkeypatch.setattr(ProcessManager, "stop", stop_processes)
+    monkeypatch.setattr(Runtime, "_start_terminal_manager", fail_terminal_start)
+
+    with pytest.raises(RuntimeError, match="terminal startup failed"):
+        Runtime(config).start()
+
+    assert "process_manager" in stopped
+    assert "temporary_files" in stopped
 
 
 @pytest.mark.asyncio

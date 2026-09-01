@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -436,3 +437,23 @@ async def test_cross_agent_process_access_returns_not_found(
         "Process not found",
         retryable=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_same_agent_process_access_returns_not_found_across_project_scopes(
+    manager: ProcessManager, tmp_path: Path
+) -> None:
+    process_id = await manager.spawn(
+        RUN_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        project_id="project-a",
+        env=None,
+        cwd=None,
+    )
+    context = replace(make_context(tmp_path, agent_id=AGENT_A), project_id="project-b")
+
+    result = await call_process(manager, context, {"action": "status", "process_id": process_id})
+    await manager.kill(process_id, AGENT_A, project_id="project-a")
+
+    assert result == tool_failure("process_not_found", "Process not found", retryable=False)

@@ -817,13 +817,7 @@ class Runtime:
             self._start_provider_usage_service()
             self.logger.info("Runtime started")
         except Exception:
-            # Reverse-order cleanup of Session resources created in this attempt.
-            if self._chat_sessions is not None:
-                with suppress(Exception):
-                    self._chat_sessions.close()
-                self._chat_sessions = None
-            self._agents = None
-            self._projects = None
+            self._cleanup_failed_startup()
             raise
 
     async def fire_extension_startup(self) -> None:
@@ -912,6 +906,33 @@ class Runtime:
     def _log_shutdown(self) -> None:
         if self.logger is not None:
             self.logger.info("Runtime stopped")
+
+    def _cleanup_failed_startup(self) -> None:
+        """Release every started resource after a failed synchronous bootstrap."""
+        cleanup_actions = (
+            (self._extensions, "fire_shutdown_blocking"),
+            (self._channel_service, "stop"),
+            (self._cron_service, "stop"),
+            (self._bootstrap_service, "stop"),
+            (self._provider_usage, "stop"),
+            (self._process_manager, "stop"),
+            (self._terminal_manager, "stop"),
+            (self._keep_awake, "close"),
+        )
+        for service, method_name in cleanup_actions:
+            if service is None:
+                continue
+            method = getattr(service, method_name)
+            with suppress(Exception):
+                method()
+        if self._storage is not None:
+            with suppress(Exception):
+                self._storage.temporary_files.stop()
+        if self._chat_sessions is not None:
+            with suppress(Exception):
+                self._chat_sessions.close()
+        self._clear_service_references()
+        self._log_manager.close()
 
     def _clear_service_references(self) -> None:
         self._provider_runtime = None
