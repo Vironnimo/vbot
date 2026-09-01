@@ -556,7 +556,12 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
             ]
         },
     }
-    assert settings_response.json() == {
+    settings_payload = settings_response.json()
+    timezone = settings_payload["result"]["general"].pop("timezone")
+    available_timezones = settings_payload["result"]["general"].pop("available_timezones")
+    assert timezone in available_timezones
+    assert "Europe/Berlin" in available_timezones
+    assert settings_payload == {
         "ok": True,
         "result": {
             "general": {

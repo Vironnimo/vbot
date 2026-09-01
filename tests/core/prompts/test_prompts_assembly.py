@@ -79,7 +79,9 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "openai/gpt-5.2" in prompt
     assert model_path(workspace) in prompt
     assert "high" in prompt
-    assert "2026-05-04" in prompt
+    assert "Current local date: `2026-05-04`" in prompt
+    assert "15:30:00" not in prompt
+    assert "Europe/Berlin" in prompt
     # The opt-in Tool-description list ships disabled.
     assert "Read a workspace file" not in prompt
     assert "shell" not in prompt

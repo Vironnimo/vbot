@@ -7,6 +7,9 @@ export function createSettingsPayload(overrides = {}) {
         port_source: 'settings.server_port',
       },
       data_directory: 'C:/Users/test/.vbot',
+      keep_awake: false,
+      timezone: 'UTC',
+      available_timezones: ['America/New_York', 'Europe/Berlin', 'UTC'],
     },
     providers: {
       items: [

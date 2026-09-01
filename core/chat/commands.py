@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
+from zoneinfo import ZoneInfo
 
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.errors import CompactionUnavailableError
@@ -36,6 +37,7 @@ from core.runs import (
     RunNotFoundError,
 )
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS, SessionAddress
+from core.settings.settings import effective_timezone_name
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.availability import memory_tool_enabled
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
@@ -1503,6 +1505,7 @@ class CommandDispatcher:
                 agent.temperature if agent is not None else None,
                 model_details,
             ),
+            timezone=self._status_timezone(),
         )
         return CommandOutcome(
             command="status",
@@ -1599,6 +1602,15 @@ class CommandDispatcher:
         except Exception:
             _LOGGER.warning("Failed to load local-model context windows", exc_info=True)
             return {}
+
+    def _status_timezone(self) -> ZoneInfo | None:
+        if self._storage is None:
+            return None
+        try:
+            return ZoneInfo(effective_timezone_name(self._storage.load_settings()))
+        except (AttributeError, OSError, ValueError):
+            _LOGGER.warning("Failed to load application timezone", exc_info=True)
+            return None
 
 
 def _has_exception_name(error: BaseException, expected_name: str) -> bool:

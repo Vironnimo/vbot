@@ -139,3 +139,16 @@ def test_validate_settings_data_rejects_non_boolean_keep_awake() -> None:
     assert len(errors) == 1
     assert errors[0].path == "$.keep_awake"
     assert errors[0].message == "must be a boolean"
+
+
+def test_validate_settings_data_accepts_iana_timezone() -> None:
+    assert validate_settings_data({"timezone": "Europe/Berlin"}) == []
+
+
+def test_validate_settings_data_rejects_unknown_timezone() -> None:
+    diagnostics = validate_settings_data({"timezone": "Berlin"})
+    errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
+
+    assert len(errors) == 1
+    assert errors[0].path == "$.timezone"
+    assert errors[0].message == "is not a known IANA timezone"

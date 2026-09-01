@@ -31,6 +31,7 @@ def make_service(
     *,
     agent_resolver: Any = None,
     sessions: Any = None,
+    tz: str | ZoneInfo | None = None,
 ) -> tuple[CronService, SimpleNamespace]:
     trigger_service = SimpleNamespace(trigger_run=AsyncMock())
     service = CronService(
@@ -38,6 +39,7 @@ def make_service(
         tmp_path,
         agent_resolver=agent_resolver,
         sessions=sessions,
+        tz=tz,
     )
     return service, trigger_service
 
@@ -409,10 +411,8 @@ def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:
 
 def test_once_timestamp_is_normalized_from_server_timezone_to_explicit_utc(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    monkeypatch.setattr(cron_module, "get_localzone", lambda: ZoneInfo("Europe/Berlin"))
+    service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
 
     created = service.create_job(
         agent_id="agent-one",
@@ -425,12 +425,8 @@ def test_once_timestamp_is_normalized_from_server_timezone_to_explicit_utc(
     assert service.next_fire_at(created) == "2026-07-18T14:00:00+00:00"
 
 
-def test_system_timezone_uses_iana_zone_with_dst_rules(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service, _trigger_service = make_service(tmp_path)
-    monkeypatch.setattr(cron_module, "get_localzone", lambda: ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(cron_module, "get_localzone_name", lambda: "Europe/Berlin")
+def test_system_timezone_uses_iana_zone_with_dst_rules(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
 
     created = service.create_job(
         agent_id="agent-one",
@@ -441,6 +437,24 @@ def test_system_timezone_uses_iana_zone_with_dst_rules(
 
     assert service.system_timezone_name() == "Europe/Berlin"
     assert created.run_at == "2026-12-18T15:00:00+00:00"
+
+
+def test_timezone_change_reprojects_wall_clock_cron(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path, tz="UTC")
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Morning run",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    reference = datetime(2026, 1, 1, 8, 30, tzinfo=UTC)
+
+    assert service.next_fire_at(job, reference_time=reference) == "2026-01-01T09:00:00+00:00"
+
+    service.set_timezone("Europe/Berlin")
+
+    assert service.system_timezone_name() == "Europe/Berlin"
+    assert service.next_fire_at(job, reference_time=reference) == "2026-01-02T08:00:00+00:00"
 
 
 def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:

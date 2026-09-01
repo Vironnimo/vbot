@@ -55,3 +55,26 @@ async def test_runtime_without_the_seam_still_saves(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert state.runtime.storage.load_settings()["keep_awake"] is False
+
+
+@pytest.mark.asyncio
+async def test_server_update_applies_timezone_live(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    reload_calls: list[str] = []
+
+    def reload_timezone() -> None:
+        reload_calls.append(state.runtime.storage.load_settings()["timezone"])
+
+    state.runtime.reload_timezone = reload_timezone
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"server": {"timezone": "America/New_York"}},
+        },
+    )
+
+    assert result["ok"] is True
+    assert reload_calls == ["America/New_York"]
+    assert result["result"]["general"]["timezone"] == "America/New_York"

@@ -88,6 +88,7 @@ from core.settings.paths import (
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
     DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
 )
+from core.settings.settings import effective_timezone_name
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
@@ -392,6 +393,7 @@ class Runtime:
         self.logger.info("Runtime startup initiated")
         self._storage.temporary_files.start()
         settings = self._storage.load_settings()
+        timezone_name = effective_timezone_name(settings)
         attachment_max_size_bytes = self._positive_size_setting(
             settings,
             key="attachment_max_size_bytes",
@@ -758,9 +760,10 @@ class Runtime:
                 self._storage.data_dir,
                 agent_resolver=self._agent_resolver,
                 sessions=self._chat_sessions,
+                tz=timezone_name,
             )
             self._start_cron_service()
-            self._calendar_service = CalendarService(self._storage.data_dir)
+            self._calendar_service = CalendarService(self._storage.data_dir, tz=timezone_name)
             register_cron_tool(self._tools, self._cron_service)
             register_calendar_tool(self._tools, self._calendar_service)
             register_bash_tool(
@@ -791,6 +794,7 @@ class Runtime:
                 self._projects,
                 self.local_context_windows,
                 self.describe_reasoning_render,
+                self.timezone_name,
             )
             # Built-ins are all registered now; apply extension tools last so a
             # collision with any built-in name is skipped (built-in wins), right
@@ -810,6 +814,7 @@ class Runtime:
                 loaded_extensions=self._loaded_extension_names(),
                 block_store=self._resolve_prompt_block_store(),
                 agent_store=cast(PromptAgentStore, self._agents),
+                timezone_name=self.timezone_name,
             )
 
             self._log_startup_inventory()
@@ -1387,6 +1392,21 @@ class Runtime:
             return
         settings = self._storage.load_settings()
         self._keep_awake.set_enabled(settings.get("keep_awake") is True)
+
+    def timezone_name(self) -> str:
+        """Return the effective persisted application timezone."""
+        if self._storage is None:
+            return "UTC"
+        return effective_timezone_name(self._storage.load_settings())
+
+    def reload_timezone(self) -> None:
+        """Apply the persisted timezone to all live wall-clock services."""
+        self._ensure_started()
+        timezone_name = self.timezone_name()
+        if self._cron_service is not None:
+            self._cron_service.set_timezone(timezone_name)
+        if self._calendar_service is not None:
+            self._calendar_service.set_timezone(timezone_name)
 
     def reload_recall_backend(self) -> None:
         """Reload Session Recall tools from the current persisted backend setting.

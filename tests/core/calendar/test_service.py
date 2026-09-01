@@ -69,6 +69,15 @@ class TestCreateEvent:
         with pytest.raises(CalendarValidationError, match="IANA"):
             CalendarService(tmp_path, tz="Mars/Olympus")
 
+    def test_timezone_change_applies_to_future_local_events(self, tmp_path: Path) -> None:
+        service = CalendarService(tmp_path, tz="UTC")
+
+        service.set_timezone("Europe/Berlin")
+        event = service.create_event(title="Local", start="2026-01-15T09:00:00")
+
+        assert service.system_timezone_name() == "Europe/Berlin"
+        assert event.start_utc == "2026-01-15T08:00:00+00:00"
+
     def test_rejects_exdates_on_single_event(self, service: CalendarService) -> None:
         with pytest.raises(CalendarValidationError, match="exdates"):
             service.create_event(

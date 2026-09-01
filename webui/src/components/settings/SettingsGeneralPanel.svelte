@@ -5,9 +5,11 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import SearchableDropdown from '../SearchableDropdown.svelte';
   import { listClients, updateSettings } from '$lib/api.js';
   import { resolveClientConnectionId } from '$lib/clientIdentity.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import {
     buildClientPresenceRows,
     formatServerHost,
@@ -30,7 +32,37 @@
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
   let keepAwakeValue = $derived(settings?.general?.keep_awake === true);
+  let timezoneValue = $derived(settings?.general?.timezone ?? 'UTC');
+  let timezoneOptions = $derived(
+    (settings?.general?.available_timezones ?? []).map((timezone) => ({
+      value: timezone,
+      label: timezone,
+    })),
+  );
   let savingKeepAwake = $state(false);
+  let savingTimezone = $state(false);
+
+  async function handleTimezoneChange(next) {
+    if (savingTimezone || next === timezoneValue) {
+      return;
+    }
+    savingTimezone = true;
+    onError('');
+    try {
+      const nextSettings = await updateSettings({ server: { timezone: next } });
+      onCommit(nextSettings);
+      onToast({
+        title: t('settings.general.timezone', 'Time zone'),
+        variant: 'success',
+      });
+    } catch (error) {
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
+    } finally {
+      savingTimezone = false;
+    }
+  }
 
   async function handleKeepAwakeChange(next) {
     if (savingKeepAwake || next === keepAwakeValue) {
@@ -115,10 +147,10 @@
     if (Number.isNaN(date.getTime())) {
       return '';
     }
-    return new Intl.DateTimeFormat(activeLocaleTag(), {
+    return formatDateTimeInApplicationZone(date, activeLocaleTag(), {
       dateStyle: 'medium',
       timeStyle: 'short',
-    }).format(date);
+    });
   }
 
   function clientDetail(row) {
@@ -171,6 +203,34 @@
   </div>
   <div class="s-row-control s-row-control--input">
     <TextField readonly value={dataDirectoryValue} />
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.general.timezone', 'Time zone')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.general.timezoneDescription',
+        'Used by Agents, Calendar, Cron, and every displayed date and time.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control s-row-control--input">
+    <SearchableDropdown
+      id="settings-general-timezone"
+      value={timezoneValue}
+      options={timezoneOptions}
+      disabled={savingTimezone}
+      ariaLabel={t('settings.general.timezone', 'Time zone')}
+      searchPlaceholder={t(
+        'settings.general.timezoneSearch',
+        'Search time zones…',
+      )}
+      onValueChange={handleTimezoneChange}
+    />
   </div>
 </div>
 

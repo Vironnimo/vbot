@@ -1,5 +1,6 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import { tooltip } from '$lib/tooltip.js';
 
   let { traces = [], selectedTraceId = '', onSelect = () => {} } = $props();
@@ -55,7 +56,10 @@
       if (Number.isNaN(date.getTime())) {
         return timestamp;
       }
-      return date.toLocaleString(activeLocaleTag());
+      return formatDateTimeInApplicationZone(date, activeLocaleTag(), {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+      });
     } catch {
       return timestamp;
     }

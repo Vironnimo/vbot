@@ -62,6 +62,8 @@ from core.settings.settings import (
     OPENROUTER_ROUTING_MODES,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    default_timezone_name,
+    effective_timezone_name,
 )
 from core.settings.validation import PORT_SETTING_KEYS, validate_settings_data
 from core.utils.errors import StorageError
@@ -218,6 +220,13 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "boolean",
         "Prevent automatic system sleep while the server runs.",
         default=False,
+    ),
+    _static(
+        "server.timezone",
+        "string",
+        "IANA timezone used by Agents, schedules, calendars, and Accessors.",
+        default=default_timezone_name(),
+        non_empty=True,
     ),
     _static(
         "appearance.language",
@@ -671,6 +680,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         "server": {
             "port": port,
             "keep_awake": raw_settings.get("keep_awake") is True,
+            "timezone": effective_timezone_name(raw_settings),
         },
         "appearance": appearance,
         "skills": {
@@ -1058,6 +1068,8 @@ def _raw_path(public_path: tuple[str, ...]) -> tuple[str, ...]:
         return ("server_port",)
     if public_path == ("server", "keep_awake"):
         return ("keep_awake",)
+    if public_path == ("server", "timezone"):
+        return ("timezone",)
     prefix_mappings = {
         ("skills", "directories"): ("skill_directories",),
         ("extensions", "directories"): ("extension_directories",),

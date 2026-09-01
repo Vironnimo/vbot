@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
@@ -425,7 +426,8 @@ class SystemPromptManager:
         memory_provider: MemoryPromptProvider | None = None,
         server_hostname: str | None = None,
         operating_system: str | None = None,
-        current_utc_date: Callable[[], str] | None = None,
+        current_local_date: Callable[[], str] | None = None,
+        timezone_name: Callable[[], str] | None = None,
         loaded_extensions: Collection[str] = (),
         block_definitions: Sequence[BlockDefinition] = (),
         block_store: BlockStore | None = None,
@@ -447,7 +449,8 @@ class SystemPromptManager:
         self._data_root = Path(data_root)
         self._server_hostname = server_hostname
         self._operating_system = operating_system
-        self._current_utc_date = current_utc_date or _current_utc_date
+        self._timezone_name = timezone_name or (lambda: "UTC")
+        self._current_local_date = current_local_date
         # The set of loaded extension names, gate 2's input for ``extension:<name>``
         # owners (D5/D6). The runtime rebuilds and injects it on every extension
         # (re)load. Held as a frozenset for cheap membership checks.
@@ -1340,8 +1343,14 @@ class SystemPromptManager:
             "{vbot_root}": model_path(self._vbot_root.resolve()),
             "{data_root}": model_path(self._data_root.resolve()),
             "{thinking_effort}": thinking_effort,
-            "{current_utc_date}": self._current_utc_date(),
+            "{current_local_date}": self._resolve_current_local_date(),
+            "{timezone}": self._timezone_name(),
         }
+
+    def _resolve_current_local_date(self) -> str:
+        if self._current_local_date is not None:
+            return self._current_local_date()
+        return _current_local_date(self._timezone_name())
 
     def _resolve_scope_layout(self, scope_key: str) -> Sequence[LayoutEntry]:
         """Return the active scope's saved layout, or the bundled default if none.
@@ -1804,8 +1813,8 @@ def _require_scope_agent_id(scope: PromptScope) -> str:
     return scope.agent_id
 
 
-def _current_utc_date() -> str:
-    return datetime.now(UTC).date().isoformat()
+def _current_local_date(timezone_name: str) -> str:
+    return datetime.now(UTC).astimezone(ZoneInfo(timezone_name)).date().isoformat()
 
 
 def _listing_data_placeholder(_context: BlockRenderContext) -> str:

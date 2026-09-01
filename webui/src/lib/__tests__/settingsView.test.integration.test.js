@@ -571,6 +571,35 @@ describe('SettingsView', () => {
     ).toBe('fr');
     expect(saveButton.disabled).toBe(false);
   });
+
+  it('persists the application timezone from General settings', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.update': () =>
+          createSettingsPayload({ general: { timezone: 'Europe/Berlin' } }),
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
+    openSection('Server info', 'general');
+
+    document
+      .getElementById('settings-general-timezone')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    const berlinOption = Array.from(
+      document.body.querySelectorAll('.searchable-dropdown__option'),
+    ).find((option) => option.textContent.trim() === 'Europe/Berlin');
+    berlinOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    await waitForCondition(() => settingsUpdateCalls().length === 1);
+    expect(settingsUpdateCalls()).toEqual([
+      ['settings.update', { server: { timezone: 'Europe/Berlin' } }],
+    ]);
+  });
 });
 
 let activeSection = null;

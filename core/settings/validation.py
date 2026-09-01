@@ -57,6 +57,7 @@ from core.settings.settings import (
     parse_openrouter_routing,
     validate_temperature,
     validate_thinking_effort,
+    validate_timezone_name,
 )
 from core.utils.errors import StorageError
 
@@ -86,6 +87,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "speech",
         "speech_upload_max_size_bytes",
         "subagent_timeout_minutes",
+        "timezone",
         "web_search",
     }
 )
@@ -236,6 +238,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
 
     _warn_unknown_keys(diagnostics, "$", data, KNOWN_RAW_SETTINGS_KEYS, "settings key")
     _validate_port_settings(diagnostics, data)
+    _validate_timezone(diagnostics, data.get("timezone"))
     _validate_appearance(diagnostics, data.get("appearance"))
     _validate_directory_list(diagnostics, "$.skill_directories", data.get("skill_directories"))
     _validate_directory_list(
@@ -385,6 +388,15 @@ def _validate_port(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> 
         return
     if port < 1 or port > 65535:
         _error(diagnostics, path, "must be between 1 and 65535")
+
+
+def _validate_timezone(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    try:
+        validate_timezone_name(value, label="timezone")
+    except SettingsValidationError as exc:
+        _error(diagnostics, "$.timezone", str(exc).removeprefix("timezone "))
 
 
 def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:

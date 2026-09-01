@@ -79,7 +79,7 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 
 **Logging:** Structured logging through `LogManager` (`core/utils/logging`) with per-module `vbot.<domain>` loggers under `<data_dir>/logs/`; the standalone Desktop process attaches the same format without importing core logging. No `print()`, no `logging.basicConfig()`. A material control-plane mutation emits one `INFO` event after the state change (operation, stable target ids, changed fields); never log credentials, token values, Provider Account ids, Prompt/Skill/Cron content, or external conversation ids. Reads, polls, appearance changes, acknowledgements, routine traffic, and effective no-ops stay silent; operational failures and health transitions use `WARNING`/`ERROR`.
 
-**Time:** Persisted timestamps in UTC with explicit offset (ISO 8601). UI renders in user timezone. No implicit `datetime.now()`.
+**Time:** Persisted timestamps in UTC with explicit offset (ISO 8601). The optional IANA `timezone` setting defaults to the server host zone and is the single source for Agent context, wall-clock Calendar/Cron behavior, and UI rendering; never derive user-visible time implicitly from the browser or host after Settings resolution. No implicit `datetime.now()`.
 
 **No legacy compatibility in app code - ever.** We are in development; schemas and config formats can and will break. The app reads the current format and nothing else. No auto-migrations, no fallback keys, no "if old_field then..." branches in application code. If a format changes, the old version is simply invalid. Manual conversion scripts go in `scripts/converters/` - standalone tools run explicitly by the user, never hooked into app startup or storage layers.
 

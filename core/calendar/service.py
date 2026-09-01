@@ -267,8 +267,16 @@ class CalendarService:
         return unsubscribe
 
     def system_timezone_name(self) -> str:
-        """Return the calendar's canonical IANA timezone name (the server zone)."""
+        """Return the calendar's configured canonical IANA timezone name."""
         return str(self._timezone)
+
+    def set_timezone(self, timezone_name: str) -> None:
+        """Apply a new application timezone to future local-time operations."""
+        timezone = _resolve_zone(timezone_name)
+        if timezone == self._timezone:
+            return
+        self._timezone = timezone
+        self._notify_changed()
 
     def create_event(
         self,

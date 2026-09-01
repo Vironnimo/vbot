@@ -38,6 +38,10 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
 
     assert response["ok"] is True, response
+    timezone = response["result"]["general"].pop("timezone")
+    available_timezones = response["result"]["general"].pop("available_timezones")
+    assert timezone in available_timezones
+    assert "Europe/Berlin" in available_timezones
     assert response["result"] == {
         "general": {
             "server": {

@@ -3,4 +3,5 @@
 - Operating system: `{operating_system}`
 - Model: `{model}`
 - Configured thinking effort: `{thinking_effort}`
-- Current date (UTC): `{current_utc_date}`
+- Current local date: `{current_local_date}`
+- Time zone: `{timezone}`
