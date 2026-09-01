@@ -24,6 +24,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 - Every browser resource has an owner and cleanup path (EventSource/WebSocket/timers/observers/media/object URLs/listeners/bridge subscriptions).
 - Invalidation refreshes backing data without yanking active drafts/pickers/modals/forms - controllers defer visible swaps to safe boundaries. Agents invalidations carrying an old->new mapping apply before reconciliation (otherwise rename silently falls back to first roster entry); `memories` invalidation refetches only while its disclosure is open.
 - Locales format dates/numbers; editable decimal settings stay text while edited so comma decimals normalize deliberately at payload boundary.
+- `index.html` paints the canonical `Bg` (`#221A12`) inline before the Svelte bundle loads; keep it aligned with `--bg`, `.vorch/DESIGN.md`, and the Desktop pywebview background so no white document/native layer appears between paints.
 - Shared feedback stays shared (`ToastStack`, hint components, existing lib modules) - extend the owning controller instead of growing views into alternate controllers. Frontend behavior changes bring focused Vitest coverage; visual decisions follow `.vorch/DESIGN.md`.
 
 ## Constraints & gotchas

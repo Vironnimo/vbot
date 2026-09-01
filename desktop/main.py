@@ -45,6 +45,7 @@ logger = logging.getLogger("vbot.desktop")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 WINDOW_TITLE = "vBot"
+APP_BACKGROUND_COLOR = "#221A12"
 DEFAULT_ICON_FILE_NAME = "icon.png"
 WINDOWS_ICON_FILE_NAME = "icon.ico"
 WEBVIEW_STORAGE_DIR_NAME = "webview"
@@ -365,6 +366,7 @@ def launch_desktop(
     window = webview.create_window(
         WINDOW_TITLE,
         html=initial_html,
+        background_color=APP_BACKGROUND_COLOR,
         text_select=True,
         js_api=bridge,
         width=window_layout.width,
