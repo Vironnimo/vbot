@@ -13,6 +13,7 @@ import {
   monthGridDays,
   navigateAnchor,
   sortDayEntries,
+  todayKey,
   weekStartKey,
   windowForView,
 } from '../calendarView.js';
@@ -39,6 +40,17 @@ beforeEach(() => {
 });
 
 describe('day key helpers', () => {
+  it('zero-pads single-digit days in the current day key', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-01T12:00:00Z'));
+      expect(todayKey()).toBe('2026-09-01');
+      expect(monthGridDays(todayKey())).toHaveLength(42);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('adds days across month boundaries', () => {
     expect(addDaysToKey('2026-08-31', 1)).toBe('2026-09-01');
     expect(addDaysToKey('2026-09-01', -1)).toBe('2026-08-31');
@@ -337,8 +349,3 @@ describe('controller', () => {
     expect(updateCalendarEvent).not.toHaveBeenCalled();
   });
 });
-
-function todayKey() {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
-}
