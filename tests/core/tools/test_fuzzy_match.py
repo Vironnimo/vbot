@@ -127,7 +127,15 @@ def test_line_trimmed_does_not_match_genuinely_different_text() -> None:
     # Same shape, different content — must not fuzzily replace the wrong block.
     content = "def f():\n    a = 1\n    b = 2\n"
 
-    assert replace_fuzzy(content, "  a = 9\n  b = 9", "x", replace_all=False) is None
+    assert (
+        replace_fuzzy(
+            content,
+            "release production artifacts\nnotify every customer",
+            "x",
+            replace_all=False,
+        )
+        is None
+    )
 
 
 def test_whitespace_normalized_matches_internal_space_and_tab_runs() -> None:
@@ -233,3 +241,77 @@ def test_exact_wins_over_looser_strategies() -> None:
     assert isinstance(result, FuzzyReplacement)
     assert result.strategy == "exact"
     assert result.new_content == "  value = 2\n"
+
+
+def test_context_aware_matches_unique_single_line_word_drift() -> None:
+    content = (
+        '    "Continue work that does not depend on the result, or finish the current Run '
+        'now. Do not "\n'
+    )
+    old_string = (
+        '    "Continue work that does not depend on the result, or finish your current Run '
+        'now. Do not "'
+    )
+
+    result = replace_fuzzy(content, old_string, '    "Wait for the result."', replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "context_aware"
+    assert result.new_content == '    "Wait for the result."\n'
+
+
+def test_context_aware_preserves_crlf_while_tolerating_word_drift() -> None:
+    content = 'message = "finish the current Run now"\r\nnext = True\r\n'
+
+    result = replace_fuzzy(
+        content,
+        'message = "finish your current Run now"',
+        'message = "wait now"',
+        replace_all=False,
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "context_aware"
+    assert result.new_content == 'message = "wait now"\r\nnext = True\r\n'
+
+
+def test_block_anchor_matches_unique_multiline_middle_drift() -> None:
+    content = "start\nalpha\nthe current Run\nomega\nend\n"
+    old_string = "start\nalpha\nyour current Run\nomega\nend"
+
+    result = replace_fuzzy(content, old_string, "start\nreplacement\nend", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "block_anchor"
+    assert result.new_content == "start\nreplacement\nend\n"
+
+
+def test_context_aware_keeps_approximate_ambiguity() -> None:
+    content = (
+        "Continue work, or finish the current Run now. Do not poll.\n"
+        "Continue work, or finish a current Run now. Do not poll.\n"
+    )
+
+    result = replace_fuzzy(
+        content,
+        "Continue work, or finish your current Run now. Do not poll.",
+        "Wait for the result.",
+        replace_all=False,
+    )
+
+    assert isinstance(result, AmbiguousFuzzyMatch)
+    assert result.occurrences == 2
+    assert result.line_numbers == [1, 2]
+
+
+def test_replace_all_does_not_use_approximate_strategies() -> None:
+    content = 'message = "finish the current Run now"\n'
+
+    result = replace_fuzzy(
+        content,
+        'message = "finish your current Run now"',
+        'message = "wait now"',
+        replace_all=True,
+    )
+
+    assert result is None

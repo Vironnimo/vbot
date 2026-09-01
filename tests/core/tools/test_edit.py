@@ -321,7 +321,7 @@ def test_edit_no_match_returns_bounded_raw_candidates_without_writing(tmp_path: 
         make_context(workspace),
         {
             "path": "module.py",
-            "old_string": "def deploy():\n    timeout = 20\n    retries = 5",
+            "old_string": ("def deploy():\n    completely unrelated declaration\n    retries = 5"),
             "new_string": "def deploy():\n    timeout = 60\n    retries = 5",
         },
     )
@@ -330,8 +330,63 @@ def test_edit_no_match_returns_bounded_raw_candidates_without_writing(tmp_path: 
     assert "Closest raw candidates" in error["message"]
     assert "Candidate 1 (starting line 4; raw text):" in error["message"]
     assert "def deploy():\n    timeout = 30\n    retries = 5" in error["message"]
+    assert "First difference from old_string at line 2, column 5 (file line 5):" in error["message"]
+    assert "old_string: 'completely unrelated declaration'" in error["message"]
+    assert "file: 'timeout = 30'" in error["message"]
     assert "4|" not in error["message"]
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_edit_tolerates_the_word_difference_from_reproduced_failure(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "subagent.py"
+    original = (
+        '    "Continue work that does not depend on the result, or finish the current Run '
+        'now. Do not "\n'
+    )
+    target.write_text(original, encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "subagent.py",
+            "old_string": (
+                '    "Continue work that does not depend on the result, or finish your current '
+                'Run now. Do not "'
+            ),
+            "new_string": "replacement",
+        },
+    )
+
+    data = assert_success_envelope(result)
+    assert data["replacements"] == 1
+    assert target.read_text(encoding="utf-8") == "replacement\n"
+
+
+def test_edit_no_match_reports_file_end_as_first_difference(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "old_string": "alpha\nbeta extra",
+            "new_string": "replacement",
+        },
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "First difference from old_string at line 2, column 5 (file line 2):" in error["message"]
+    assert "old_string: ' extra'" in error["message"]
+    assert "file: '<end of text>'" not in error["message"]
+    assert "file: <end of text>" in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
 def test_edit_no_match_omits_weak_candidates(tmp_path: Path) -> None:
@@ -358,7 +413,11 @@ def test_edit_no_match_candidates_use_recovered_gutterfree_pattern(tmp_path: Pat
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "1| alpha = 1\n2| beta", "new_string": "x"},
+        {
+            "path": "notes.txt",
+            "old_string": "1| alpha = 1234567890\n2| beta",
+            "new_string": "x",
+        },
     )
 
     error = assert_failure_envelope(result, "text_not_found")
@@ -560,7 +619,11 @@ def test_edit_per_line_gutter_diagnostic_uses_stripped_pattern(tmp_path: Path) -
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "1| alpha = 1", "new_string": "alpha = 9"},
+        {
+            "path": "notes.txt",
+            "old_string": "1| alpha = 1234567890",
+            "new_string": "alpha = 9",
+        },
     )
 
     error = assert_failure_envelope(result, "text_not_found")
@@ -1712,7 +1775,7 @@ def test_multi_edit_does_not_infer_already_applied_without_shared_context(
     assert_failure_envelope(result, "text_not_found")
 
 
-def test_multi_edit_does_not_infer_ambiguous_already_applied_match(tmp_path: Path) -> None:
+def test_multi_edit_keeps_ambiguous_approximate_match_safe(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("value = 2\nvalue = 2\n", encoding="utf-8")
@@ -1730,7 +1793,7 @@ def test_multi_edit_does_not_infer_ambiguous_already_applied_match(tmp_path: Pat
         },
     )
 
-    assert_failure_envelope(result, "text_not_found")
+    assert_failure_envelope(result, "ambiguous_match")
 
 
 def test_multi_edit_does_not_infer_already_applied_deletion(tmp_path: Path) -> None:

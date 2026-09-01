@@ -22,13 +22,15 @@ terminal — it does not fall through to a looser strategy):
    corrupts indentation.
 4. ``whitespace_normalized`` — collapse horizontal space/tab runs while preserving
    line boundaries. The replacement is re-indented like a line-trimmed match.
+5. ``block_anchor`` — require exact first/last lines around a sufficiently similar
+   multiline middle.
+6. ``context_aware`` — require every aligned non-blank line to be at least 80%
+   similar, including both boundary anchors.
 
 All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
-endings and the exact original characters are always preserved. Deliberately
-excluded: similarity / anchor matching (replacing text that is merely *similar*).
-For a destructive operation, failing so the model retries with a better target is
-safer than silently editing the wrong block.
+endings and the exact original characters are always preserved. Similarity strategies
+remain uniqueness-gated and are never used for ``replace_all``.
 """
 
 from __future__ import annotations
@@ -47,6 +49,10 @@ _CANDIDATE_MIN_SIMILARITY = 0.60
 _CANDIDATE_RESULT_LIMIT = 3
 _CANDIDATE_OUTPUT_MAX_LINES = 8
 _CANDIDATE_OUTPUT_MAX_CHARS = 1_200
+_BLOCK_ANCHOR_MIN_LINES = 3
+_BLOCK_ANCHOR_UNIQUE_THRESHOLD = 0.50
+_BLOCK_ANCHOR_MULTIPLE_THRESHOLD = 0.70
+_CONTEXT_AWARE_SIMILARITY_THRESHOLD = 0.80
 
 # Visually-equivalent characters models emit in place of their ASCII forms, keyed
 # by code point so the source stays pure ASCII and the entries are unambiguous.
@@ -131,7 +137,9 @@ def replace_fuzzy(
     old_lf = _normalize_newlines(old_string)
     file_ending = _detect_line_ending(content)
 
-    for name, matcher, reindent in _STRATEGIES:
+    for name, matcher, reindent, approximate in _STRATEGIES:
+        if replace_all and approximate:
+            continue
         matches = matcher(content, old_string)
         if not matches:
             continue
@@ -445,6 +453,106 @@ def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, 
     return matches
 
 
+def _normalized_lines_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]], list[int]]:
+    normalized, spans = _normalize_with_spans(text)
+    lines = normalized.split("\n")
+    offsets: list[int] = []
+    cursor = 0
+    for line in lines:
+        offsets.append(cursor)
+        cursor += len(line) + 1
+    return lines, spans, offsets
+
+
+def _line_window_span(
+    lines: list[str],
+    offsets: list[int],
+    spans: list[tuple[int, int]],
+    start_line: int,
+    line_count: int,
+) -> tuple[int, int] | None:
+    normalized_start = offsets[start_line]
+    last_line = start_line + line_count - 1
+    normalized_end = offsets[last_line] + len(lines[last_line])
+    if normalized_start >= len(spans) or normalized_end <= normalized_start:
+        return None
+    return spans[normalized_start][0], spans[normalized_end - 1][1]
+
+
+def _match_block_anchor(content: str, pattern: str) -> list[tuple[int, int]]:
+    """Match exact multiline anchors around a sufficiently similar middle."""
+    content_lines, spans, offsets = _normalized_lines_with_offsets(content)
+    pattern_lines = _normalize_text(pattern).split("\n")
+    line_count = len(pattern_lines)
+    if line_count < _BLOCK_ANCHOR_MIN_LINES or line_count > len(content_lines):
+        return []
+
+    first = pattern_lines[0].strip()
+    last = pattern_lines[-1].strip()
+    if not first or not last:
+        return []
+
+    potential_starts = [
+        index
+        for index in range(len(content_lines) - line_count + 1)
+        if content_lines[index].strip() == first
+        and content_lines[index + line_count - 1].strip() == last
+    ]
+    threshold = (
+        _BLOCK_ANCHOR_UNIQUE_THRESHOLD
+        if len(potential_starts) == 1
+        else _BLOCK_ANCHOR_MULTIPLE_THRESHOLD
+    )
+    pattern_middle = "\n".join(pattern_lines[1:-1])
+    matches: list[tuple[int, int]] = []
+    for start_line in potential_starts:
+        content_middle = "\n".join(content_lines[start_line + 1 : start_line + line_count - 1])
+        if SequenceMatcher(None, pattern_middle, content_middle).ratio() < threshold:
+            continue
+        span = _line_window_span(content_lines, offsets, spans, start_line, line_count)
+        if span is not None:
+            matches.append(span)
+    return matches
+
+
+def _match_context_aware(content: str, pattern: str) -> list[tuple[int, int]]:
+    """Match only blocks whose aligned meaningful lines are strongly similar."""
+    content_lines, spans, offsets = _normalized_lines_with_offsets(content)
+    pattern_lines = _normalize_text(pattern).split("\n")
+    line_count = len(pattern_lines)
+    if not pattern_lines or line_count > len(content_lines):
+        return []
+
+    first = pattern_lines[0].strip()
+    last = pattern_lines[-1].strip()
+    if not first or not last:
+        return []
+
+    def similarity(left: str, right: str) -> float:
+        if left == right:
+            return 1.0
+        return SequenceMatcher(None, left, right).ratio()
+
+    matches: list[tuple[int, int]] = []
+    for start_line in range(len(content_lines) - line_count + 1):
+        block = content_lines[start_line : start_line + line_count]
+        if similarity(first, block[0].strip()) < _CONTEXT_AWARE_SIMILARITY_THRESHOLD:
+            continue
+        if similarity(last, block[-1].strip()) < _CONTEXT_AWARE_SIMILARITY_THRESHOLD:
+            continue
+        if any(
+            pattern_line.strip()
+            and similarity(pattern_line.strip(), content_line.strip())
+            < _CONTEXT_AWARE_SIMILARITY_THRESHOLD
+            for pattern_line, content_line in zip(pattern_lines, block, strict=True)
+        ):
+            continue
+        span = _line_window_span(content_lines, offsets, spans, start_line, line_count)
+        if span is not None:
+            matches.append(span)
+    return matches
+
+
 def _find_non_overlapping(haystack: str, needle: str) -> list[tuple[int, int]]:
     if not needle:
         return []
@@ -539,14 +647,17 @@ def _reindent_replacement(file_region: str, old_string_lf: str, new_string_lf: s
     return "\n".join(out_lines)
 
 
-# (name, matcher, reindent-replacement) in increasing tolerance. Only the
-# line-level strategy needs re-indentation; the character-level ones match the
-# file's real whitespace already.
+# (name, matcher, reindent-replacement, approximate) in increasing tolerance.
+# Approximate strategies are intentionally unavailable to replace_all: one
+# unique fuzzy target is useful, while mass-replacing merely similar regions is
+# not a safe interpretation of the caller's intent.
 _STRATEGIES = (
-    ("exact", _match_exact, False),
-    ("normalized", _match_normalized, False),
-    ("line_trimmed", _match_line_trimmed, True),
-    ("whitespace_normalized", _match_whitespace_normalized, True),
+    ("exact", _match_exact, False, False),
+    ("normalized", _match_normalized, False, False),
+    ("line_trimmed", _match_line_trimmed, True, False),
+    ("whitespace_normalized", _match_whitespace_normalized, True, False),
+    ("block_anchor", _match_block_anchor, True, True),
+    ("context_aware", _match_context_aware, True, True),
 )
 
 
