@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP_CSS = readFileSync(join(SRC_DIR, 'styles', 'app.css'), 'utf8');
+const INDEX_HTML = readFileSync(join(SRC_DIR, '..', 'index.html'), 'utf8');
 const SYSTEM_PROMPT_SOURCE = readFileSync(
   join(SRC_DIR, 'components', 'SystemPromptView.svelte'),
   'utf8',
@@ -87,6 +88,12 @@ function findRawClassViolations(
 const ANY_ELEMENT = '[a-z][\\w-]*';
 
 describe('UI primitive guard', () => {
+  it('paints the app background before the Svelte bundle loads', () => {
+    expect(INDEX_HTML).toMatch(
+      /html,\s*body\s*\{\s*background:\s*#221a12;\s*\}/,
+    );
+  });
+
   it('keeps secondary-list content equally inset on every edge', () => {
     expect(APP_CSS).toMatch(/\.secondary-list\s*\{\s*padding:\s*12px;/);
   });

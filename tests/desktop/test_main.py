@@ -450,6 +450,7 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
     # the same bridge object is its single js_api for both screen and WebUI.
     assert "url" not in kwargs
     assert 'id="connect-form"' in kwargs["html"]
+    assert kwargs["background_color"] == desktop_main.APP_BACKGROUND_COLOR
     assert kwargs["text_select"] is True
     assert kwargs["js_api"] is not None
     assert kwargs["width"] == 1280
