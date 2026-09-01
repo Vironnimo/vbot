@@ -1293,6 +1293,8 @@ def test_worker_start_fails_fast_without_target_agent(fake_bridge: FakeBridge) -
 
     worker.start()
     _wait_for_state(fake_bridge, "error")
+    assert worker._thread is not None
+    worker._thread.join()
 
     # No engine loaded, no microphone opened: the misconfiguration surfaces the
     # moment listening is enabled, not on the first wake word.

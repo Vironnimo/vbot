@@ -105,12 +105,13 @@ async def test_dispatch_write_offloads_sync_file_io(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    handler_started = threading.Event()
+    handler_started = asyncio.Event()
     release_handler = threading.Event()
     original_replace = os.replace
+    loop = asyncio.get_running_loop()
 
     def blocking_replace(source: Path, target: Path) -> None:
-        handler_started.set()
+        loop.call_soon_threadsafe(handler_started.set)
         release_handler.wait(timeout=1)
         original_replace(source, target)
 
@@ -124,13 +125,7 @@ async def test_dispatch_write_offloads_sync_file_io(
         )
     )
 
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 0.5
-    while not handler_started.is_set() and loop.time() < deadline:
-        await asyncio.sleep(0.001)
-
-    assert handler_started.is_set() is True
-    await asyncio.sleep(0)
+    await handler_started.wait()
     assert dispatch_task.done() is False
 
     ticked: list[str] = []
