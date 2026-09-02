@@ -98,12 +98,12 @@
     })).filter((group) => group.items.length > 0),
   );
 
-  const statusDotClass = $derived(
+  const statusIconClass = $derived(
     connectionStatus === CONNECTION_STATUS_CONNECTED
-      ? 'pulse-dot'
+      ? 'conn-icon--connected'
       : connectionStatus === CONNECTION_STATUS_DISCONNECTED
-        ? 'pulse-dot pulse-dot--disconnected'
-        : 'pulse-dot pulse-dot--placeholder',
+        ? 'conn-icon--disconnected'
+        : 'conn-icon--placeholder',
   );
 
   const statusLabel = $derived(
@@ -126,7 +126,7 @@
   // every view, not just the Chat tab.  Only shown when the Desktop accessor
   // advertises wakeword capability.
   const micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
-  const micDotClass = $derived(computeMicDotClass(wakewordStatus));
+  const micIconClass = $derived(computeMicIconClass(wakewordStatus));
   const micTooltip = $derived(computeMicTooltip(wakewordStatus));
   const micStatusLabel = $derived(computeMicStatusLabel(wakewordStatus));
   const micRecording = $derived(wakewordStatus?.state === 'recording');
@@ -139,35 +139,35 @@
     }
   };
 
-  function computeMicDotClass(status) {
+  function computeMicIconClass(status) {
     if (status?.state === 'error') {
-      return 'mic-dot--error';
+      return 'mic-icon--error';
     }
     if (!status?.enabled) {
-      return 'mic-dot--off';
+      return 'mic-icon--off';
     }
     switch (status.state) {
       case 'starting':
-        return 'mic-dot--processing';
+        return 'mic-icon--processing';
       case 'listening':
       case 'wakeword_detected':
-        return 'mic-dot--listening';
+        return 'mic-icon--listening';
       case 'recording':
-        return 'mic-dot--recording';
+        return 'mic-icon--recording';
       case 'transcribing':
       case 'sending':
-        return 'mic-dot--processing';
+        return 'mic-icon--processing';
       case 'sent':
-        return 'mic-dot--listening';
+        return 'mic-icon--listening';
       case 'cancelled':
       case 'no_speech':
       case 'transcription_failed':
       case 'microphone_disconnected':
-        return 'mic-dot--warning';
+        return 'mic-icon--warning';
       case 'error':
-        return 'mic-dot--error';
+        return 'mic-icon--error';
       default:
-        return 'mic-dot--off';
+        return 'mic-icon--off';
     }
   }
 
@@ -788,26 +788,37 @@
     <div class="sidebar-footer app-shell__footer">
       {#if micVisible}
         <div class="sidebar-footer__row">
-          <span
-            class="mic-dot {micDotClass} {micRecording
-              ? 'mic-dot--clickable'
-              : ''}"
-            aria-hidden="true"
-            onclick={handleMicIndicatorClick}
-          ></span>
           <button
             type="button"
-            class="sidebar-footer__link"
+            class="sidebar-footer__mic"
             use:tooltip={micTooltip}
             aria-label={micTooltip}
             onclick={handleMicIndicatorClick}
           >
-            {micStatusLabel}
+            <svg
+              class="mic-icon {micIconClass}"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <rect x="6" y="2" width="4" height="7.5" rx="2" />
+              <path d="M3.5 9.5a4.5 4.5 0 0 0 9 0" />
+              <path d="M8 14v1.5" />
+            </svg>
+            <span class="sidebar-footer__label">{micStatusLabel}</span>
           </button>
         </div>
       {/if}
       <div class="sidebar-footer__row" aria-label={statusAriaLabel}>
-        <div class={statusDotClass} aria-hidden="true"></div>
+        <svg
+          class="conn-icon {statusIconClass}"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+          use:tooltip={sidebarCollapsed ? statusLabel : ''}
+        >
+          <path d="M5 1.5v3.5M11 1.5v3.5" />
+          <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />
+          <path d="M8 10.5V14" />
+        </svg>
         <span class="footer-text">
           {statusLabel}
         </span>
@@ -941,7 +952,10 @@
 </div>
 
 <style>
-  .sidebar-footer__link {
+  .sidebar-footer__mic {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 0;
     border: none;
     background: none;
@@ -953,51 +967,45 @@
     transition: color 0.15s;
   }
 
-  .sidebar-footer__link:hover {
+  .sidebar-footer__mic:hover .sidebar-footer__label {
     color: var(--text-hi);
   }
 
-  .sidebar-footer__link:focus-visible {
+  .sidebar-footer__mic:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
   }
 
-  .mic-dot {
-    display: block;
-    width: 8px;
-    height: 8px;
+  .mic-icon {
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
-    border-radius: 50%;
   }
 
-  .mic-dot--off {
-    background: var(--text-lo);
+  .mic-icon--off {
+    color: var(--text-lo);
   }
 
-  .mic-dot--listening {
+  .mic-icon--listening {
     animation: mic-pulse 1.6s ease-in-out infinite;
-    background: var(--green);
+    color: var(--green);
   }
 
-  .mic-dot--recording {
-    background: var(--amber);
+  .mic-icon--recording {
+    color: var(--amber);
   }
 
-  .mic-dot--processing {
+  .mic-icon--processing {
     animation: mic-spin 1s linear infinite;
-    background: var(--accent);
+    color: var(--accent);
   }
 
-  .mic-dot--warning {
-    background: var(--amber);
+  .mic-icon--warning {
+    color: var(--amber);
   }
 
-  .mic-dot--error {
-    background: var(--red);
-  }
-
-  .mic-dot--clickable {
-    cursor: pointer;
+  .mic-icon--error {
+    color: var(--red);
   }
 
   @keyframes mic-pulse {
@@ -1029,8 +1037,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .mic-dot--listening,
-    .mic-dot--processing {
+    .mic-icon--listening,
+    .mic-icon--processing {
       animation: none;
     }
   }

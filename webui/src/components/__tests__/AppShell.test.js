@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { CONNECTION_STATUS_CONNECTED } from '../../lib/connectionState.js';
 
 const desktopBridge = vi.hoisted(() => ({
   getDesktopClipboardText: vi.fn(),
@@ -346,24 +347,26 @@ describe('AppShell wakeword mic indicator', () => {
     flushSync();
   }
 
-  it('stops the recording when the label is clicked during recording', () => {
+  it('stops the recording when the mic indicator is clicked during recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
     mountMicIndicator({ state: 'recording', onStop, onNavigate });
 
-    document.querySelector('.sidebar-footer__link').click();
+    document.querySelector('.sidebar-footer__mic').click();
     flushSync();
 
     expect(onStop).toHaveBeenCalledOnce();
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
-  it('stops the recording when the dot is clicked during recording', () => {
+  it('stops the recording when the mic icon is clicked during recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
     mountMicIndicator({ state: 'recording', onStop, onNavigate });
 
-    document.querySelector('.mic-dot').click();
+    document
+      .querySelector('.mic-icon')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
     expect(onStop).toHaveBeenCalledOnce();
@@ -375,10 +378,104 @@ describe('AppShell wakeword mic indicator', () => {
     const onNavigate = vi.fn();
     mountMicIndicator({ state: 'listening', onStop, onNavigate });
 
-    document.querySelector('.sidebar-footer__link').click();
+    document.querySelector('.sidebar-footer__mic').click();
     flushSync();
 
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('shows the mic tooltip on the indicator when collapsed', async () => {
+    mountMicIndicator({
+      state: 'listening',
+      onStop: vi.fn(),
+      onNavigate: vi.fn(),
+    });
+
+    document.querySelector('.app-shell__sidebar-toggle').click();
+    flushSync();
+
+    document
+      .querySelector('.sidebar-footer__mic')
+      .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
+
+    await vi.waitFor(() =>
+      expect(
+        document
+          .querySelector('#app-tooltip')
+          .classList.contains('app-tooltip--visible'),
+      ).toBe(true),
+    );
+    expect(document.querySelector('#app-tooltip').textContent).toBe(
+      'Listening for wakeword',
+    );
+  });
+});
+
+describe('AppShell sidebar status icons', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+    init('en');
+    mountedComponent = null;
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('renders the connection status as an icon with the matching state class', () => {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        items: [],
+        connectionStatus: CONNECTION_STATUS_CONNECTED,
+      },
+    });
+    flushSync();
+
+    const icon = document.querySelector('.conn-icon');
+    expect(icon).toBeTruthy();
+    expect(icon.classList.contains('conn-icon--connected')).toBe(true);
+    expect(document.querySelector('.footer-text').textContent).toBe(
+      'Connected',
+    );
+  });
+
+  it('shows the connection status tooltip on the icon when collapsed', async () => {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        items: [],
+        connectionStatus: CONNECTION_STATUS_CONNECTED,
+      },
+    });
+    flushSync();
+
+    document.querySelector('.app-shell__sidebar-toggle').click();
+    flushSync();
+
+    document
+      .querySelector('.conn-icon')
+      .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
+
+    await vi.waitFor(() =>
+      expect(
+        document
+          .querySelector('#app-tooltip')
+          .classList.contains('app-tooltip--visible'),
+      ).toBe(true),
+    );
+    expect(document.querySelector('#app-tooltip').textContent).toBe(
+      'Connected',
+    );
   });
 });
