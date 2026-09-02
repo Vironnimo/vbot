@@ -31,57 +31,66 @@ export function connect(state, handlers = {}) {
 
   const afterSequence = state.lastSequence;
   const resumeEpoch = state.epoch;
-  const connection = subscribeServerEvents(
-    {
-      onOpen: () => {
-        state.status = CONNECTION_STATUS_CONNECTED;
-        state._reconnectAttempt = 0;
-        handlers.onStatusChange?.();
-        _armHeartbeatWatchdog(state);
-      },
-      onClose: () => {
-        _clearHeartbeatWatchdog(state);
-        _cleanup(state);
-        state.status = CONNECTION_STATUS_DISCONNECTED;
-        handlers.onStatusChange?.();
-        _scheduleReconnect(state, handlers);
-      },
-      onEvent: (event) => {
-        if (event.type === 'heartbeat') {
+  let connection;
+  try {
+    connection = subscribeServerEvents(
+      {
+        onOpen: () => {
+          state.status = CONNECTION_STATUS_CONNECTED;
+          state._reconnectAttempt = 0;
+          handlers.onStatusChange?.();
           _armHeartbeatWatchdog(state);
-          return;
-        }
-        _armHeartbeatWatchdog(state);
-        if (event.type === 'connection_ready') {
-          const nextEpoch = event.epoch ?? '';
-          const isReplayResume = event.replay_status
-            ? event.replay_status === CONNECTION_REPLAY_STATUS_RESUMED
-            : afterSequence > 0 &&
-              typeof nextEpoch === 'string' &&
-              nextEpoch.length > 0 &&
-              nextEpoch === resumeEpoch;
-          state.epoch = nextEpoch;
-          if (!isReplayResume) {
-            state.lastSequence = Number.isFinite(event.last_sequence)
-              ? event.last_sequence
-              : 0;
+        },
+        onClose: () => {
+          _clearHeartbeatWatchdog(state);
+          _cleanup(state);
+          state.status = CONNECTION_STATUS_DISCONNECTED;
+          handlers.onStatusChange?.();
+          _scheduleReconnect(state, handlers);
+        },
+        onEvent: (event) => {
+          if (event.type === 'heartbeat') {
+            _armHeartbeatWatchdog(state);
+            return;
+          }
+          _armHeartbeatWatchdog(state);
+          if (event.type === 'connection_ready') {
+            const nextEpoch = event.epoch ?? '';
+            const isReplayResume = event.replay_status
+              ? event.replay_status === CONNECTION_REPLAY_STATUS_RESUMED
+              : afterSequence > 0 &&
+                typeof nextEpoch === 'string' &&
+                nextEpoch.length > 0 &&
+                nextEpoch === resumeEpoch;
+            state.epoch = nextEpoch;
+            if (!isReplayResume) {
+              state.lastSequence = Number.isFinite(event.last_sequence)
+                ? event.last_sequence
+                : 0;
+            }
+            handlers.onEvent?.(event);
+            return;
+          }
+          if (event.sequence > state.lastSequence) {
+            state.lastSequence = event.sequence;
           }
           handlers.onEvent?.(event);
-          return;
-        }
-        if (event.sequence > state.lastSequence) {
-          state.lastSequence = event.sequence;
-        }
-        handlers.onEvent?.(event);
+        },
       },
-    },
-    {
-      WebSocket: handlers._WebSocket,
-      baseUrl: handlers._baseUrl,
-      afterSequence,
-      epoch: state.epoch,
-    },
-  );
+      {
+        WebSocket: handlers._WebSocket,
+        baseUrl: handlers._baseUrl,
+        afterSequence,
+        epoch: state.epoch,
+      },
+    );
+  } catch (error) {
+    state.status = CONNECTION_STATUS_DISCONNECTED;
+    handlers.onStatusChange?.();
+    handlers.onError?.(error);
+    _scheduleReconnect(state, handlers);
+    return;
+  }
 
   state._connection = connection;
   _armHeartbeatWatchdog(state);

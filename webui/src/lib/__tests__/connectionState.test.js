@@ -86,6 +86,36 @@ describe('connect()', () => {
     expect(onStatusChange).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps reconnecting when the WebSocket constructor throws', () => {
+    let attempts = 0;
+    const onError = vi.fn();
+
+    class ThrowOnceWebSocket extends MockWebSocket {
+      constructor(url) {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('constructor failed');
+        }
+        super(url);
+      }
+    }
+
+    connect(state, {
+      _WebSocket: ThrowOnceWebSocket,
+      _baseUrl: 'http://localhost:8420/',
+      onError,
+    });
+
+    expect(state.status).toBe(CONNECTION_STATUS_DISCONNECTED);
+    expect(state._reconnectTimer).not.toBeNull();
+    expect(onError).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(2000);
+
+    expect(attempts).toBe(2);
+    expect(state._connection).not.toBeNull();
+  });
+
   it('resets reconnect attempt counter on open', () => {
     state._reconnectAttempt = 3;
     connect(state, {
