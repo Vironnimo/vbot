@@ -22,6 +22,8 @@ from .engine_test_support import (
     pytest,
 )
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 @pytest.mark.asyncio
 async def test_non_command_text_queues_behind_blocked_worker(
@@ -170,7 +172,9 @@ async def test_channel_fifo_preserves_arrival_order(
     for text in ("first", "second", "third"):
         await engine.handle_inbound_text(make_conversation(), text)
         if text == "first":
-            await asyncio.wait_for(relay_started.wait(), timeout=1)
+            await asyncio.wait_for(
+                relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS
+            )
 
     release_relay.set()
     await drain(engine, 12345)

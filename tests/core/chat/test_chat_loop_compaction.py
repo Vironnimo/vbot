@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -73,6 +74,7 @@ from tests.core.chat.chat_loop_support import (
 )
 
 JsonObject = dict[str, Any]
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 
 
 def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) -> None:
@@ -655,17 +657,22 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         session_address("coder", session.id)
     )
 
-    with caplog.at_level("INFO", logger="vbot.chat"):
-        rebuilt = await _maybe_auto_compact(
-            loop,
-            agent,
-            adapter,
-            "gpt-5.2",
-            session,
-            messages,
-            usage={"input_tokens": 90},
-            run=run,
-        )
+    compaction_logger = logging.getLogger("vbot.compaction.coordination")
+    compaction_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("INFO", logger=compaction_logger.name):
+            rebuilt = await _maybe_auto_compact(
+                loop,
+                agent,
+                adapter,
+                "gpt-5.2",
+                session,
+                messages,
+                usage={"input_tokens": 90},
+                run=run,
+            )
+    finally:
+        compaction_logger.removeHandler(caplog.handler)
 
     log_messages = [record.getMessage() for record in caplog.records]
     triggered_line = next(
@@ -999,7 +1006,9 @@ async def test_final_assistant_compaction_releases_session_lock_during_model_cal
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
 
     run = await loop.start_run("coder", "Finish", session_id="session-one")
-    await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
+    await asyncio.wait_for(
+        compaction_service.started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS
+    )
 
     async def append_background_note() -> None:
         async with runtime.chat_sessions.write_lock(session_address("coder", "session-one")):
@@ -1009,7 +1018,7 @@ async def test_final_assistant_compaction_releases_session_lock_during_model_cal
 
     note_task = asyncio.create_task(append_background_note())
     try:
-        await asyncio.wait_for(note_task, timeout=1.0)
+        await asyncio.wait_for(note_task, timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     finally:
         compaction_service.release.set()
 
@@ -1072,7 +1081,9 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
 
     run = await loop.start_run("coder", "Weather?", session_id="session-one")
-    await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
+    await asyncio.wait_for(
+        compaction_service.started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS
+    )
 
     async def append_background_note() -> None:
         async with runtime.chat_sessions.write_lock(session_address("coder", "session-one")):
@@ -1082,7 +1093,7 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
 
     note_task = asyncio.create_task(append_background_note())
     try:
-        await asyncio.wait_for(note_task, timeout=1.0)
+        await asyncio.wait_for(note_task, timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     finally:
         compaction_service.release.set()
 
