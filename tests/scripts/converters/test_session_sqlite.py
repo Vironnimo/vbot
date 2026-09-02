@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import MAINTENANCE_GUARD_FILE_NAME
 from core.sessions.store import SessionStore
@@ -200,6 +201,68 @@ def test_capture_skips_one_malformed_session_without_losing_valid_sessions(
             "reason": f"invalid legacy message record: {malformed}:1",
         },
     )
+
+
+def test_capture_skips_message_validation_errors_without_losing_valid_sessions(
+    tmp_path: Path,
+) -> None:
+    valid = tmp_path / "agents" / "coder" / "sessions" / "valid.jsonl"
+    invalid = tmp_path / "agents" / "coder" / "sessions" / "invalid.jsonl"
+    _write_transcript(valid, "keep me")
+    invalid.parent.mkdir(parents=True, exist_ok=True)
+    invalid.write_text(
+        json.dumps(
+            {
+                "id": "invalid-message",
+                "role": "user",
+                "timestamp": "2026-09-02T12:00:00Z",
+                "content": [{"type": "unknown", "text": "broken"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    capture = capture_inventory(tmp_path)
+
+    assert [session.address.session_id for session in capture.sessions] == ["valid"]
+    assert capture.skipped_sessions == (
+        {
+            "relative_path": "agents/coder/sessions/invalid.jsonl",
+            "reason": f"invalid legacy Session message: {invalid}",
+        },
+    )
+
+
+def test_converter_preserves_legacy_file_mention_blocks(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    work = tmp_path / "work"
+    transcript = source / "agents" / "coder" / "sessions" / "mention.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    message = ChatMessage.user(
+        [
+            TextBlock(type="text", text="Review this file"),
+            FileMentionBlock(
+                type="file_mention",
+                path="src/app.py",
+                status="inlined",
+                text="print('hello')",
+                size_bytes=14,
+            ),
+        ]
+    )
+    transcript.write_text(json.dumps(message.to_dict()) + "\n", encoding="utf-8")
+
+    assert session_sqlite.main(["convert", "--source", str(source), "--work-dir", str(work)]) == 0
+    manifest = json.loads((work / session_sqlite.MANIFEST_NAME).read_text(encoding="utf-8"))
+    store = SessionStore(work / manifest["staged_db"], _offline=True)
+    sessions = ChatSessionManager(source, store=store)
+    try:
+        loaded = sessions.get(SessionAddress(None, "coder", "mention")).load()
+    finally:
+        store.close()
+
+    assert loaded == [message]
 
 
 def test_convert_is_deterministic_and_preserves_sources(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from core.chat.errors import ChatMessageValidationError
 from core.chat.messages import ChatMessage
 from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id, is_valid_project_id
@@ -378,7 +379,7 @@ def _parse_messages(
             raise ValueError(f"legacy Session message must be an object: {artifact.path}")
         try:
             messages.append(ChatMessage.from_dict(value))
-        except (TypeError, ValueError) as exc:
+        except (ChatMessageValidationError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid legacy Session message: {artifact.path}") from exc
     return messages, tails
 
