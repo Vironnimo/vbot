@@ -913,7 +913,11 @@ class WakewordWorker:
             try:
                 response = httpx.post(url, files=files, timeout=_HTTP_TIMEOUT, trust_env=False)
                 if response.status_code == 200:
-                    result = response.json()
+                    try:
+                        result = response.json()
+                    except ValueError:
+                        logger.warning("Speech transcription returned invalid JSON")
+                        return None
                     if not isinstance(result, dict):
                         return None
                     transcript = result.get("text") or result.get("transcript", "")
@@ -1007,7 +1011,11 @@ class WakewordWorker:
             try:
                 response = httpx.post(url, json=payload, timeout=_RPC_TIMEOUT, trust_env=False)
                 if response.status_code == 200:
-                    rpc_response = response.json()
+                    try:
+                        rpc_response = response.json()
+                    except ValueError:
+                        logger.warning("RPC %s returned invalid JSON", method)
+                        return {}
                     if not isinstance(rpc_response, dict):
                         logger.warning("RPC %s returned a non-object response", method)
                         return {}

@@ -49,17 +49,31 @@ def test_memory_service_stores_entries_as_bare_bullets(tmp_path: Path) -> None:
 
 
 def test_memory_service_reads_hand_written_bullets_as_entries(tmp_path: Path) -> None:
-    # Entries are just "- " bullet lines; there is no origin tracking, so a bullet
-    # typed into the file by hand is a real entry, indistinguishable from a tool-added
-    # one. A non-bullet line is not an entry and is ignored.
+    # Entries are "- " bullet lines with optional indentation; there is no origin
+    # tracking, so a bullet typed into the file by hand is a real entry,
+    # indistinguishable from a tool-added one. A non-bullet line is ignored.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "MEMORY.md").write_text("- sonne ist toll\nloose prose\n", encoding="utf-8")
+    memory_file = workspace / "MEMORY.md"
+    memory_file.write_text(
+        "- sonne ist toll\n  - eingerueckt bleibt\n\t- tab bleibt\nloose prose\n",
+        encoding="utf-8",
+    )
     service = MemoryService()
 
     entries = service.list_entries(workspace, "agent")
 
-    assert [entry.content for entry in entries] == ["sonne ist toll"]
+    assert [entry.content for entry in entries] == [
+        "sonne ist toll",
+        "eingerueckt bleibt",
+        "tab bleibt",
+    ]
+
+    service.add_entry(workspace, "agent", "neu")
+
+    assert memory_file.read_text(encoding="utf-8") == (
+        "- sonne ist toll\n- eingerueckt bleibt\n- tab bleibt\n- neu\n"
+    )
 
 
 def test_memory_service_creates_missing_agent_memory_file(tmp_path: Path) -> None:

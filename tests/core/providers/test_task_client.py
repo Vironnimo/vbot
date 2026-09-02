@@ -22,10 +22,39 @@ from core.providers.task_client import (
     ProviderTaskClient,
     TaskRequestRetryPolicy,
     classify_task_response,
+    merge_extra_options,
 )
 
 _PROVIDER_BASE_URL = "https://provider.example/api/v1"
 _CONNECTION_BASE_URL = "https://connection.example/api/v1"
+
+
+def test_extra_options_add_fields_without_overriding_authored_payload() -> None:
+    payload = {"model": "safe-model", "prompt": "keep me"}
+
+    merge_extra_options(
+        payload,
+        {"extra_options": {"future_option": 3, "empty": ""}},
+    )
+
+    assert payload == {
+        "model": "safe-model",
+        "prompt": "keep me",
+        "future_option": 3,
+    }
+
+
+def test_extra_options_collision_is_rejected_without_partial_mutation() -> None:
+    payload = {"model": "safe-model", "prompt": "keep me"}
+
+    with pytest.raises(ProviderError, match="model") as exc_info:
+        merge_extra_options(
+            payload,
+            {"extra_options": {"future_option": 3, "model": "redirected-model"}},
+        )
+
+    assert exc_info.value.retryable is False
+    assert payload == {"model": "safe-model", "prompt": "keep me"}
 
 
 # ---------------------------------------------------------------------------

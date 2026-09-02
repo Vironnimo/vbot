@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
-from core.providers.errors import ProviderOutcomeUnknownError
+from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -199,11 +199,20 @@ def test_multipart_extra_options_stringifies_values() -> None:
     }
 
 
+def test_multipart_extra_options_rejects_authored_field_collision() -> None:
+    from core.model_tasks.speech_providers import _multipart_extra_options
+
+    with pytest.raises(ProviderError, match="model"):
+        _multipart_extra_options(
+            {"extra_options": {"model": "redirected-model"}},
+            protected_fields={"model"},
+        )
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_openrouter_transcribe_merges_extra_options() -> None:
-    """The OpenRouter STT JSON payload carries extra_options keys at the
-    top level (extra wins over authored keys)."""
+    """The OpenRouter STT JSON payload adds non-conflicting extra fields."""
 
     route = respx.post("https://openrouter.ai/api/v1/audio/transcriptions").mock(
         return_value=httpx.Response(200, json={"text": "hello"})
@@ -214,13 +223,26 @@ async def test_openrouter_transcribe_merges_extra_options() -> None:
         b"audio-bytes",
         filename="clip.webm",
         media_type="audio/webm",
-        options={"temperature": 0.2, "extra_options": {"temperature": 0.9, "beam": 4}},
+        options={"temperature": 0.2, "extra_options": {"beam": 4}},
     )
 
     payload = json.loads(route.calls[0].request.content)
-    assert payload["temperature"] == 0.9
+    assert payload["temperature"] == 0.2
     assert payload["beam"] == 4
     assert "extra_options" not in payload
+
+
+@pytest.mark.asyncio
+async def test_openrouter_transcribe_rejects_extra_options_model_override() -> None:
+    client = _openrouter_client("openai/gpt-4o-transcribe")
+
+    with pytest.raises(ProviderError, match="model"):
+        await client.transcribe(
+            b"audio-bytes",
+            filename="clip.webm",
+            media_type="audio/webm",
+            options={"extra_options": {"model": "redirected-model"}},
+        )
 
 
 @pytest.mark.asyncio

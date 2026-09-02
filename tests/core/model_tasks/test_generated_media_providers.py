@@ -12,6 +12,7 @@ import respx
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_providers import ProviderMusicClient, _music_payload
 from core.model_tasks.video_providers import ProviderVideoClient, _video_payload
+from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -41,6 +42,16 @@ def test_video_payload_routes_native_options_and_frame_images() -> None:
             "frame_type": "first_frame",
         }
     ]
+
+
+def test_video_payload_rejects_extra_options_model_override() -> None:
+    with pytest.raises(ProviderError, match="model"):
+        _video_payload(
+            "safe/video-model",
+            "A river at dawn",
+            options={"extra_options": {"model": "redirected/video-model"}},
+            frame_images=(),
+        )
 
 
 @pytest.mark.asyncio
@@ -97,6 +108,16 @@ def test_music_payload_uses_audio_modalities_and_reference_images() -> None:
     content = payload["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "Dreamy synthwave"}
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_music_payload_rejects_extra_options_model_override() -> None:
+    with pytest.raises(ProviderError, match="model"):
+        _music_payload(
+            "safe/music-model",
+            "Dreamy synthwave",
+            options={"extra_options": {"model": "redirected/music-model"}},
+            input_images=(),
+        )
 
 
 @pytest.mark.asyncio

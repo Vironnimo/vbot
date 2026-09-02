@@ -16,6 +16,7 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _resolve_fallback_chain,
 )
+from core.utils.errors import ConfigError
 
 
 def _runtime_with_models_get(get: Any) -> Any:
@@ -270,6 +271,30 @@ class TestResolveFallbackChain:
         # The ghost binding is unusable and the primary-equal entry is deduped;
         # only the resolvable, distinct candidate survives.
         assert chain == [("openai/codex-auto-review", "openai", "openai:subscription")]
+
+    def test_unknown_pinned_connection_is_skipped_and_rest_resolve(self) -> None:
+        runtime = _runtime_for_connection(
+            provider_connections=["api-key", "subscription"],
+            usable={"openai:subscription"},
+        )
+
+        def is_usable(_provider_id: str, connection_id: str) -> bool:
+            if connection_id == "openai:missing":
+                raise ConfigError("Unknown connection: openai:missing")
+            return connection_id == "openai:subscription"
+
+        runtime.provider_credentials.is_usable = is_usable
+        agent = _agent(
+            "openai/gpt-5.2::api-key",
+            fallback_models=[
+                "openai/dead::missing",
+                "openai/working::subscription",
+            ],
+        )
+
+        assert _resolve_fallback_chain(runtime, agent) == [
+            ("openai/working::subscription", "openai", "openai:subscription")
+        ]
 
     def test_returns_empty_when_no_allowed_connection_is_usable(self) -> None:
         runtime = _runtime_for_connection(

@@ -14,7 +14,7 @@ The domain **owns its two workspace files**: `USER.md` (user profile/preferences
 
 ## Storage contract
 
-- Files hold **only** `- ` bullet entries, one per line - no preamble, no headings, no freeform zone. Non-bullet lines are not entries: invisible in prompts, dropped on next mutation. The whole file is tool-managed.
+- Files hold **only** `- ` bullet entries, one per line - no preamble, no headings, no freeform zone. Reads accept leading indentation before the bullet so hand-edited entries survive; the next mutation normalizes them back to unindented bullets. Non-bullet lines are not entries: invisible in prompts, dropped on next mutation. The whole file is tool-managed.
 - Entry ids are 1-based positional positions re-derived on read, not stable keys - removal shifts higher ids down. The tool returns the full list after every mutation so the model re-reads ids before the next operation.
 - Content normalizes to single-line whitespace capped at 2,000 chars/entry; a leading-dash entry round-trips because the `- ` prefix strips exactly once (no escaping).
 - Per-scope budgets bound prompt injection: MEMORY.md 4,000 chars, USER.md 3,000. A growing mutation past budget rejects with `MemoryError`; shrinking changes always pass so the model can dig out. Duplicate adds return the existing entry without rejection.

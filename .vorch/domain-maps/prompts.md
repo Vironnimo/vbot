@@ -29,7 +29,7 @@ Domain-specific vocabulary for System Prompt assembly. These are all prompt-doma
 **Not:** The Block Owner (see above).
 
 ### Producer
-**Definition:** A function registered under a marker name rendering a `{generated:NAME}` placeholder at build time - the auto-lists `tool_list` / `skill_catalog` / `channel_list` and `memory_files`. Unknown markers render empty with a warning; empty results leave no residue.
+**Definition:** A function registered under a marker name rendering a `{generated:NAME}` placeholder at build time - the auto-lists `tool_list` / `skill_catalog` / `channel_list` and `memory_files`. Unknown markers and raising Producers render empty with a warning; empty results leave no residue, and one Producer cannot fail the System Prompt or Run.
 **Not:** A dynamic block - a producer fills one marker inside an editable block; a dynamic block's entire body is a render function (a deliberate cache break).
 
 ## Data Model

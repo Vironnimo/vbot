@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.chat.errors import ChatError
+from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -238,7 +239,7 @@ def _resolve_fallback_candidate(
             usable = dependencies.provider_credentials.is_usable(
                 fallback_provider_id, pinned_connection_id
             )
-        except (ChatError, KeyError):
+        except (ChatError, ConfigError, KeyError):
             usable = False
         if not usable:
             return None

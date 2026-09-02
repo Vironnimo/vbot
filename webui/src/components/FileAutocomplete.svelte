@@ -60,7 +60,7 @@
   }
 
   export function selectActive() {
-    const file = matchingFiles[activeIndex] ?? matchingFiles[0];
+    const file = matchingFiles[activeIndex];
 
     if (file) {
       onSelect(file);
