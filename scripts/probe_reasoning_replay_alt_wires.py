@@ -110,6 +110,7 @@ async def _send_native_real(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None,
+    effort: str,
     max_tokens: int,
 ) -> dict[str, Any]:
     """One streaming /api/chat (NDJSON) request; returns measured facts."""
@@ -120,6 +121,7 @@ async def _send_native_real(
         "messages": messages,
         "stream": True,
         "options": {"num_predict": max_tokens},
+        "think": _native_think_value(effort),
     }
     if tools:
         body["tools"] = tools
@@ -175,6 +177,16 @@ async def _send_native_real(
     }
 
 
+def _native_think_value(effort: str) -> bool | str:
+    """Render the explicit native ``think`` value used by the probe."""
+    normalized = effort.strip().lower()
+    if normalized in {"none", "off", "false"}:
+        return False
+    if normalized in {"on", "true"}:
+        return True
+    return normalized
+
+
 async def _send_anthropic(
     base_url: str,
     api_key: str,
@@ -220,6 +232,7 @@ async def _send_anthropic(
     content_parts: list[str] = []
     thinking_parts: list[str] = []
     tool_use_blocks: list[dict[str, Any]] = []
+    tool_use_by_index: dict[int, dict[str, Any]] = {}
     input_tokens: int | None = None
     error_text = ""
 
@@ -256,16 +269,24 @@ async def _send_anthropic(
                         content_parts.append(delta["text"])
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
                         thinking_parts.append(delta["thinking"])
+                    elif delta.get("type") == "input_json_delta":
+                        index = event.get("index")
+                        block = tool_use_by_index.get(index) if isinstance(index, int) else None
+                        if block is not None:
+                            block["_input_json"] += delta.get("partial_json") or ""
                 elif event.get("type") == "content_block_start":
                     block = event.get("content_block") or {}
                     if block.get("type") == "tool_use":
-                        tool_use_blocks.append(
-                            {
-                                "id": block.get("id", "toolu_0"),
-                                "name": block.get("name", ""),
-                                "input": block.get("input", {}),
-                            }
-                        )
+                        tool_use = {
+                            "id": block.get("id", "toolu_0"),
+                            "name": block.get("name", ""),
+                            "input": block.get("input", {}),
+                            "_input_json": "",
+                        }
+                        tool_use_blocks.append(tool_use)
+                        index = event.get("index")
+                        if isinstance(index, int):
+                            tool_use_by_index[index] = tool_use
                 elif event.get("type") == "message_delta":
                     usage = event.get("usage") or {}
                     if usage.get("input_tokens") is not None:
@@ -276,6 +297,13 @@ async def _send_anthropic(
             "no usage.input_tokens in stream"
             + (f"; parse issue: {error_text}" if error_text else "")
         )
+    for block in tool_use_blocks:
+        partial_json = block.pop("_input_json")
+        if partial_json:
+            try:
+                block["input"] = json.loads(partial_json)
+            except json.JSONDecodeError:
+                block["input"] = {}
     return {
         "content": "".join(content_parts),
         "reasoning": "".join(thinking_parts),
@@ -315,9 +343,19 @@ def _assistant_variant(
 
 
 def _thinking_use_blocks(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert native-wire tool_calls into Anthropic tool_use blocks."""
+    """Convert native/OpenAI or Anthropic Tool Calls to tool_use blocks."""
     blocks: list[dict[str, Any]] = []
     for call in tool_calls:
+        if "name" in call:
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": call.get("id", "toolu_0"),
+                    "name": call.get("name", "get_weather"),
+                    "input": call.get("input") or {},
+                }
+            )
+            continue
         function = call.get("function") or {}
         try:
             arguments = json.loads(function.get("arguments") or "{}")
@@ -340,13 +378,14 @@ async def _measure_shape(
     model: str,
     *,
     wire: str,
+    effort: str,
     max_tokens: int,
     in_run: bool,
     auth: str = "x-api-key",
 ) -> dict[str, Any]:
     """Measure one shape (in-run or cross-run) for one model on one wire."""
     send = _send_anthropic if wire == "anthropic" else _send_native_real
-    send_kwargs = {"auth": auth} if wire == "anthropic" else {}
+    send_kwargs = {"auth": auth} if wire == "anthropic" else {"effort": effort}
     if in_run:
         turn1 = await send(
             base_url,
@@ -449,16 +488,21 @@ async def _probe_model(
     model: str,
     *,
     wire: str,
+    effort: str,
     max_tokens: int,
     auth: str = "x-api-key",
 ) -> dict[str, Any]:
     """Full measurement for one model on one wire."""
-    print(f"\n=== {model} (wire={wire}, max_tokens={max_tokens}) ===")
+    print(
+        f"\n=== {model} (wire={wire}, effort={effort}, max_tokens={max_tokens}) ===",
+        flush=True,
+    )
     in_run = await _measure_shape(
         base_url,
         api_key,
         model,
         wire=wire,
+        effort=effort,
         max_tokens=max_tokens,
         in_run=True,
         auth=auth,
@@ -468,19 +512,24 @@ async def _probe_model(
         api_key,
         model,
         wire=wire,
+        effort=effort,
         max_tokens=max_tokens,
         in_run=False,
         auth=auth,
     )
-    print(f"     in_run:    {in_run}")
-    print(f"     cross_run: {cross_run}")
+    print(f"     in_run:    {in_run}", flush=True)
+    print(f"     cross_run: {cross_run}", flush=True)
     return {"model": model, "wire": wire, "in_run": in_run, "cross_run": cross_run}
 
 
 async def _run(args: argparse.Namespace) -> int:
     api_key = _load_api_key(args.api_key_env, args.data_dir)
-    print(f"api key length: {len(api_key)}")
-    print(f"endpoint: {args.base_url.rstrip('/')}/{args.wire} | streaming")
+    endpoint = "/v1/messages" if args.wire == "anthropic" else "/api/chat"
+    print(f"api key length: {len(api_key)}", flush=True)
+    print(
+        f"endpoint: {args.base_url.rstrip('/')}{endpoint} | effort: {args.effort} | streaming",
+        flush=True,
+    )
     models = args.models.split(",") if args.models else [args.model]
     summaries = []
     for model in models:
@@ -494,6 +543,7 @@ async def _run(args: argparse.Namespace) -> int:
                     api_key,
                     model,
                     wire=args.wire,
+                    effort=args.effort,
                     max_tokens=args.max_tokens,
                     auth=args.auth,
                 )
@@ -524,6 +574,8 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", help="Exact wire model id (or use --models).")
     parser.add_argument("--models", help="Comma-separated model ids for a sweep.")
@@ -532,6 +584,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=("native", "anthropic"),
         default="anthropic",
         help="Wire to probe: native /api/chat or Anthropic /v1/messages.",
+    )
+    parser.add_argument(
+        "--effort",
+        default=DEFAULT_EFFORT,
+        help="Native /api/chat think value (true/false or an effort level).",
     )
     parser.add_argument(
         "--auth",

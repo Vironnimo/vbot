@@ -26,6 +26,10 @@ Scenarios:
   Provider-reported input-token deltas are the transport verdict; behavioral
   recall is printed only as a diagnostic because a Model may deliberately
   ignore or refuse to reveal text from its prior Reasoning.
+- ``cross_turn_tools``: the same cross-Run history check while the follow-up
+  request carries Tool definitions. This is a distinct transport shape for
+  Providers such as DeepSeek, whose contract accepts historical Reasoning only
+  when the current request includes ``tools``.
 - ``instruction``: the probe plants a behavioral rule ("when the user writes
   'now!', reply 'hello world'") into the reasoning carrier itself, then the
   follow-up turn sends 'now!' and checks compliance.
@@ -254,6 +258,7 @@ async def _run_exact_probe(
     scenario: str,
     repeats: int,
     policy: str | None,
+    effort: str,
 ) -> None:
     # Determine the wire carrier field the adapter's model profile uses.
     try:
@@ -271,13 +276,20 @@ async def _run_exact_probe(
     for index in range(1, repeats + 1):
         print(f"\n--- round {index} ---")
         if scenario == "tool_loop":
-            await _run_tool_loop_round(adapter, model_id, carrier_field, policy)
+            await _run_tool_loop_round(adapter, model_id, carrier_field, policy, effort)
         elif scenario == "instruction":
-            await _run_instruction_round(adapter, model_id, carrier_field, policy)
+            await _run_instruction_round(adapter, model_id, carrier_field, policy, effort)
         elif scenario == "responses_roundtrip":
             await _run_responses_roundtrip_round(adapter, model_id)
         else:
-            await _run_cross_turn_round(adapter, model_id, carrier_field, policy)
+            await _run_cross_turn_round(
+                adapter,
+                model_id,
+                carrier_field,
+                policy,
+                effort,
+                tools_enabled=scenario == "cross_turn_tools",
+            )
 
 
 def _responses_output_items(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -482,6 +494,9 @@ async def _run_cross_turn_round(
     model_id: str,
     carrier_field: str,
     policy: str,
+    effort: str,
+    *,
+    tools_enabled: bool = False,
 ) -> None:
     secret = _make_secret()
     print(f"  planted secret: {secret}")
@@ -494,7 +509,13 @@ async def _run_cross_turn_round(
         ]
         wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
+        result = await _run_turn(
+            adapter,
+            model_id,
+            wire_messages,
+            tools=[TOOL_DEFINITION] if tools_enabled else None,
+            effort=effort,
+        )
         hit = secret in result.content or secret in result.reasoning
         print(
             f"  {label}: carrier_on_wire={carrier_on_wire} | "
@@ -530,6 +551,7 @@ async def _run_tool_loop_round(
     model_id: str,
     carrier_field: str,
     policy: str,
+    effort: str,
 ) -> None:
     secret = _make_secret()
     print(f"  planted secret: {secret}")
@@ -539,6 +561,7 @@ async def _run_tool_loop_round(
         model_id,
         [{"role": "user", "content": TURN1_TOOL_PROMPT}],
         tools=[TOOL_DEFINITION],
+        effort=effort,
     )
     if not turn1.tool_calls:
         print(f"  turn1 invalid: no tool call (reasoning_len={len(turn1.reasoning)})")
@@ -595,7 +618,13 @@ async def _run_tool_loop_round(
         label: str,
     ) -> bool:
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
+        result = await _run_turn(
+            adapter,
+            model_id,
+            wire_messages,
+            tools=[TOOL_DEFINITION],
+            effort=effort,
+        )
         hit = secret in result.content or secret in result.reasoning
         print(
             f"  {label}: carrier_on_wire={carrier_on_wire} | "
@@ -652,12 +681,14 @@ async def _run_instruction_round(
     model_id: str,
     carrier_field: str,
     policy: str,
+    effort: str,
 ) -> None:
     turn1 = await _run_turn(
         adapter,
         model_id,
         [{"role": "user", "content": INSTRUCTION_PROMPT}],
         tools=None,
+        effort=effort,
     )
     print(f"  turn1: content={turn1.content[:40]!r} reasoning_len={len(turn1.reasoning)}")
 
@@ -669,7 +700,13 @@ async def _run_instruction_round(
         ]
         wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
+        result = await _run_turn(
+            adapter,
+            model_id,
+            wire_messages,
+            tools=None,
+            effort=effort,
+        )
         rule_hit = INSTRUCTION_RESPONSE in result.content
         print(
             f"  {label}: carrier_on_wire={carrier_on_wire} | "
@@ -722,12 +759,20 @@ def _build_adapter(provider_id: str, model_id: str, api_key: str) -> Any:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default="ollama-cloud")
     parser.add_argument("--model", default="deepseek-v4-flash:0731")
     parser.add_argument(
         "--scenario",
-        choices=("tool_loop", "cross_turn", "instruction", "responses_roundtrip"),
+        choices=(
+            "tool_loop",
+            "cross_turn",
+            "cross_turn_tools",
+            "instruction",
+            "responses_roundtrip",
+        ),
         default="cross_turn",
     )
     parser.add_argument("--repeats", type=int, default=3)
@@ -748,7 +793,16 @@ def main(argv: list[str] | None = None) -> int:
 
     adapter = _build_adapter(args.provider, args.model, api_key)
     policy: str | None = None if args.policy == "auto" else args.policy
-    asyncio.run(_run_exact_probe(adapter, args.model, args.scenario, args.repeats, policy))
+    asyncio.run(
+        _run_exact_probe(
+            adapter,
+            args.model,
+            args.scenario,
+            args.repeats,
+            policy,
+            args.effort,
+        )
+    )
     return 0
 
 

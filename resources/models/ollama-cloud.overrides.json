@@ -6,7 +6,17 @@
             "max_output_tokens": 65536,
             "recommended_temperature": 1.0,
             "recommended_top_p": 0.95,
-            "reasoning_replay": "current_run",
+            "capabilities": {
+                "reasoning": {
+                    "control": "levels",
+                    "levels": [
+                        "low",
+                        "high",
+                        "max"
+                    ],
+                    "supported": true
+                }
+            },
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -17,7 +27,18 @@
             }
         },
         "deepseek-v4-pro:0813": {
-            "reasoning_replay": "current_run",
+            "max_output_tokens": 65536,
+            "capabilities": {
+                "reasoning": {
+                    "control": "levels",
+                    "levels": [
+                        "low",
+                        "high",
+                        "max"
+                    ],
+                    "supported": true
+                }
+            },
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -146,6 +167,11 @@
             }
         },
         "minimax-m2.7": {
+            "capabilities": {
+                "reasoning": {
+                    "supported": true
+                }
+            },
             "reasoning_replay": "none",
             "metadata": {
                 "ollama": {
@@ -157,6 +183,11 @@
             }
         },
         "minimax-m3": {
+            "capabilities": {
+                "reasoning": {
+                    "supported": true
+                }
+            },
             "reasoning_replay": "none",
             "metadata": {
                 "ollama": {

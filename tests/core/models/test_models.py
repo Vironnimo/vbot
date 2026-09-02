@@ -1701,12 +1701,16 @@ class TestModelRegistryRealResources:
         assert all(model.metadata.get("ollama", {}).get("remote") is True for model in models)
         assert all(model.metadata.get("ollama", {}).get("local") is not True for model in models)
 
-    def test_ollama_cloud_deepseek_output_override_is_effective(self):
+    def test_ollama_cloud_deepseek_profiles_are_effective(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
 
-        deepseek = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
+        for model_id in ("deepseek-v4-flash:0731", "deepseek-v4-pro:0813"):
+            deepseek = registry.get("ollama-cloud", model_id)
 
-        assert deepseek.max_output_tokens == 65_536
+            assert deepseek.max_output_tokens == 65_536
+            assert deepseek.capabilities.reasoning.supported is True
+            assert deepseek.capabilities.reasoning.control == "levels"
+            assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
 
     @pytest.mark.parametrize(
         ("provider_id", "model_id", "reasoning_field", "provider_replay", "model_replay"),
@@ -1798,13 +1802,17 @@ class TestModelRegistryRealResources:
         Streaming token accounting (billed-input deltas in vBot's real request
         shapes, visible-content control per variant) on /v1/chat/completions:
 
-        - full_history (inherited default): GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-flash, Kimi
-          K3 - the ``reasoning`` carrier is accepted and billed in both scopes
+        - full_history (inherited default): DeepSeek V4 Flash/Pro, GLM-5.1,
+          GLM-5.2, GLM-5.3, GLM-5.3-flash, and Kimi K3. The ``reasoning``
+          carrier is accepted and billed in both scopes
           (glm-5.3-flash re-measured 2026-09-02: ``reasoning`` is billed in-run
           +53 and cross-run +254 with matching controls; ``reasoning_content``
           is stripped in both scopes with zero deltas and positive controls).
-        - current_run: DeepSeek V4 Flash/Pro and Kimi K2.6/K2.7-code - in-run
-          replayed reasoning is billed, cross-run replay is stripped.
+          DeepSeek cross-Run replay is conditional: a Tool-free follow-up
+          ignores history, while a follow-up carrying Tools bills the complete
+          history (+110 Flash, +102 Pro), matching DeepSeek's contract.
+        - current_run: Kimi K2.6/K2.7-code - in-run replayed reasoning is
+          billed, cross-run replay is stripped.
         - none: Gemma 4, GPT-OSS, MiniMax M2.7/M3, Nemotron 3, Qwen 3.5 - the
           carrier is stripped in both scopes (zero delta, positive control).
 
@@ -1821,12 +1829,8 @@ class TestModelRegistryRealResources:
         assert registry.get("ollama-cloud", "glm-5.3").reasoning_replay is None
         assert registry.get("ollama-cloud", "glm-5.3-flash").reasoning_replay is None
         assert registry.get("ollama-cloud", "kimi-k3").reasoning_replay is None
-        assert (
-            registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "current_run"
-        )
-        assert (
-            registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay == "current_run"
-        )
+        assert registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay is None
+        assert registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay is None
         assert registry.get("ollama-cloud", "kimi-k2.6").reasoning_replay == "current_run"
         assert registry.get("ollama-cloud", "kimi-k2.7-code").reasoning_replay == "current_run"
         assert registry.get("ollama-cloud", "gemma4:31b").reasoning_replay == "none"
@@ -1838,6 +1842,17 @@ class TestModelRegistryRealResources:
         assert registry.get("ollama-cloud", "nemotron-3-super").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "nemotron-3-ultra").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "qwen3.5:397b").reasoning_replay == "none"
+
+    def test_ollama_cloud_minimax_reasoning_has_no_false_control(self):
+        """Ollama Cloud ignores both documented off-control wire shapes."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        for model_id in ("minimax-m2.7", "minimax-m3"):
+            reasoning = registry.get("ollama-cloud", model_id).capabilities.reasoning
+            assert reasoning.supported is True
+            assert reasoning.control is None
+            assert reasoning.levels == ()
 
     def test_ollama_cloud_reasoning_response_fields(self):
         """Every measured Ollama Cloud model emits ``reasoning`` as carrier.
