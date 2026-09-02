@@ -223309,9 +223309,9 @@
         "deepseek/deepseek-v4-flash": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.017108,
-            "input": 0.08554,
-            "output": 0.17108
+            "cache_read": 0.016492,
+            "input": 0.08246,
+            "output": 0.16492
           },
           "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
           "family": "deepseek-flash",
