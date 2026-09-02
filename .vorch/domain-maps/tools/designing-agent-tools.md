@@ -135,17 +135,18 @@ Example:
 - Do not add public arguments solely to improve UI labels or conceal sensitive values. Use `ToolDisplay.summary_builder` and `hidden_argument_keys`.
 - A result should not expose internal filesystem paths, provenance, or implementation state unless the Agent needs that value for the next in-scope operation.
 
-## Changing or Migrating an Existing Tool
+## Writing the Texts
 
-1. Inventory every accepted public shape, action, required field, default, handler branch, display summary, result field, permission rule, and persisted or UI consumer.
-2. Classify the capability with the decision order above. Do not mechanically replace every `operation` with `action`: remove the discriminator entirely when the variants only choose a target or repeat a single-purpose Tool name.
-3. Define the smallest canonical open flat schema. For multiple behaviors, require `action` and publish one shared optional-property superset. Preserve behavior and established domain field names unless a name itself causes ambiguity.
-4. Update the handler to consume the flat object directly and to reject action-inapplicable fields before side effects. Remove public normalizers that reconstruct the retired envelope.
-5. Reject retired nested, operation-key, alias, and stringified shapes. Do not run old and new Agent-facing contracts in parallel.
-6. Preserve historical presentation separately when needed: the WebUI may continue reading old persisted arguments, but current dispatch accepts only the new contract.
-7. Recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs.
-8. Pass the current production definition directly to Luna through `scripts/probe_provider_tool_call.py` and compare exact arguments for every action or mode, meaningful explicit value, and default-selecting omission. Separately test missing conditional requirements, forbidden action fields, unknown fields, retired shapes, stable success data, and expected failures through the handler.
-9. Update the owning Tool map, this design map when the convention changes, and any prompt or user-facing documentation that teaches the call shape.
+The model-facing texts decide whether a Tool gets chosen and called correctly; the handler behind them is secondary. Three surfaces share one craft: the description selects the Tool, the parameter descriptions steer the call, the result and error texts steer the loop.
+
+- Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. The general rules and the mandatory review workflow live in `AGENTS.md` (Agent-facing text review).
+- Judge every sentence by one test: can the Agent learn this from the Tool's own failure or result message? If yes, cut it - error-time information belongs in the error text, not in the description. Truncation hints with "use offset", read-before-write guards, and similar-file suggestions are result-text material.
+- Cut what the Agent cannot act on: silent behavior with no decision value, non-actionable qualifiers, and duplication. A rule lives once, at its usage site - in the parameter description when it binds to that parameter, in the main description when it binds to the operation; a parameter description duplicating the main description shrinks to a minimal role label.
+- Keep in the pre-call texts what only they can teach: capabilities the Agent needs before the first call (accepted file types, output row shape, sort order, omit-defaults), deviations from standard semantics (case-insensitivity, exclusion syntax), behavior invisible in results, silent-hang warnings where bad input blocks forever without an error, and deliberate steering sentences planted to guide Agent behavior.
+- Structure a parameter description role-first: lead with the parameter's role, then accepted values, then the omit-rule as its own short sentence.
+- The result steers the loop; the System Prompt only orients. Name the state and the sanctioned next action together - a bare `status: "running"` invites polling. Every prohibition carries its sanctioned alternative in the same breath, and every observable state implies exactly one next action.
+- Error wording names the lifecycle state, never a wrong cause: "already delivered" informs; "not owned" reads as a permission problem and invites retries.
+- Prefer the shortest plain sentence naming the subject, the event, and the recipient; name concrete Agent actions, not abstract concepts. The glossary does not reach the Model - project context loads only for Agents working in that project, so do not rely on glossary terms in model-facing texts.
 
 ## Retired Shapes
 
@@ -153,8 +154,10 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 
 ## Change and Verification Discipline
 
-- Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change and every previously verified Tool remains verified.
-- Keep the repository releaseable after every Tool change. Do not leave unrelated Tools partially converted.
+- Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change, and every other Tool's verified behavior stays intact.
+- Keep the repository releaseable after every Tool change.
+- Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
+- After the change, recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs, and update the owning Tool map plus any documentation that teaches the call shape.
 - Before moving to the next Tool, run its focused local tests and complete the Luna call matrix, and pass its current production definition directly to Luna through `scripts/probe_provider_tool_call.py`. A live installation round-trip is not required for model-facing schema verification.
 - The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, and representative invalid calls that the handler must reject safely.
 - A Tool change is verified only when every matrix call produces a satisfactory Tool Call and runtime result. Documentation or schema inspection alone is not verification.
