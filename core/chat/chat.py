@@ -3021,6 +3021,20 @@ class ChatLoop:
         except (KeyError, AttributeError):
             return None
 
+        model_context_window = model_entry.context_window
+        try:
+            _resolved_provider_id, connection_id = _resolve_agent_connection(
+                self._dependencies, agent
+            )
+            local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
+            context_window_for = getattr(model_entry, "context_window_for", None)
+            if callable(context_window_for):
+                model_context_window = context_window_for(local_connection_id)
+        except (AttributeError, ChatError, ConfigError, KeyError):
+            # Status/build callers can be partially wired. Preserve the existing
+            # Model-wide fallback when the active Connection cannot be resolved.
+            pass
+
         try:
             local_context_windows = self._dependencies.get_local_context_windows()
         except (AttributeError, KeyError):
@@ -3030,7 +3044,7 @@ class ChatLoop:
             local_context_windows = {}
 
         return resolve_effective_context_window(
-            model_entry.context_window,
+            model_context_window,
             self._lookup_provider_config(provider_id),
             model_metadata=model_entry.metadata,
             model_key=f"{provider_id}/{resolved_model_id}",

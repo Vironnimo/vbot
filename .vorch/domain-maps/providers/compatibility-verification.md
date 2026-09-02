@@ -157,7 +157,7 @@ Put each fact in its durable owner:
 - Adapter code for wire serialization, normalization, routing, fidelity, and Provider mechanics.
 - Bundled Provider config for stable Connection-wide defaults and endpoint/auth facts.
 - Provider/Model override files for verified durable facts omitted or misstated by generated feeds, including per-Model Reasoning Replay and gateway limits.
-- Generated Model catalogs only through their refresh pipeline; never hand-edit them.
+- Generated Model catalogs only through their refresh pipeline; never hand-edit them. After compatibility changes, refresh the complete tracked Model DB by default: the refresh already selects only usable Providers and Connections, and the resulting files must form one coherent snapshot. Use a Provider-scoped refresh only for an explicitly scoped diagnostic, never as the final catalog refresh for a completed compatibility change.
 - Focused unit tests for exact request fields, response carriers, policy precedence, normalization, and limits.
 - Provider-specific reference for dated Provider/Model observations, endpoint decisions, exceptions, and remaining unknowns.
 - This reference for the generic verification method; never copy the whole workflow into one Provider's reference.

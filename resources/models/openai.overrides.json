@@ -3,13 +3,71 @@
   "models": {
     "gpt-5.6": {
       "canonical": "openai/gpt-5.6-sol",
-      "connections": ["api-key", "subscription"],
+      "connections": ["api-key"],
       "metadata": {
         "openai": {
           "wire_policies": {
             "api-key": {
               "protocol": "responses",
               "reasoning_context": "all_turns"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.2": {
+      "connections": ["api-key"],
+      "capabilities": {
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ]
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.4": {
+      "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000,
+        "subscription": 272000
+      },
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses"
+            },
+            "subscription": {
+              "protocol": "responses"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.4-mini": {
+      "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 400000,
+        "subscription": 272000
+      },
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses"
             },
             "subscription": {
               "protocol": "responses"
@@ -20,6 +78,10 @@
     },
     "gpt-5.5": {
       "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000,
+        "subscription": 272000
+      },
       "metadata": {
         "openai": {
           "wire_policies": {
@@ -35,6 +97,10 @@
     },
     "gpt-5.6-luna": {
       "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000,
+        "subscription": 272000
+      },
       "metadata": {
         "openai": {
           "wire_policies": {
@@ -51,6 +117,10 @@
     },
     "gpt-5.6-sol": {
       "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000,
+        "subscription": 272000
+      },
       "metadata": {
         "openai": {
           "wire_policies": {
@@ -67,6 +137,10 @@
     },
     "gpt-5.6-terra": {
       "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000,
+        "subscription": 272000
+      },
       "metadata": {
         "openai": {
           "wire_policies": {

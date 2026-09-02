@@ -79,6 +79,30 @@ class TestModelToData:
 
         assert data["context_window"] is None
 
+    def test_model_to_data_serializes_connection_context_windows(self) -> None:
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="shared-wire-model",
+            name="Shared Wire Model",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=272_000,
+            max_output_tokens=128_000,
+            connection_context_windows={"api-key": 1_050_000, "subscription": 272_000},
+        )
+
+        data = _model_to_data(model)
+
+        assert data["connection_context_windows"] == {
+            "api-key": 1_050_000,
+            "subscription": 272_000,
+        }
+
 
 class TestTypedReasoningSerialization:
     """The discovery serializer + validator round-trip the typed reasoning

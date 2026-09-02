@@ -847,10 +847,14 @@ class StubProviderCredentials:
 class StubModelEntry:
     context_window: int | None
     connections: tuple[str, ...] = ()
+    connection_context_windows: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     capabilities: Any = field(default_factory=lambda: SimpleNamespace(input_modalities=()))
     recommended_temperature: float | None = None
     recommended_top_p: float | None = None
+
+    def context_window_for(self, connection_id: str) -> int | None:
+        return self.connection_context_windows.get(connection_id, self.context_window)
 
 
 class StubModels:
@@ -861,13 +865,16 @@ class StubModels:
         input_modalities: dict[tuple[str, str], tuple[str, ...]] | None = None,
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
         recommended_top_ps: dict[tuple[str, str], float] | None = None,
+        connection_context_windows: dict[tuple[str, str], dict[str, int]] | None = None,
     ) -> None:
         modality_map = input_modalities or {}
         temp_map = recommended_temperatures or {}
         top_p_map = recommended_top_ps or {}
+        connection_window_map = connection_context_windows or {}
         self._entries = {
             (provider_id, model_id): StubModelEntry(
                 context_window=context_window,
+                connection_context_windows=connection_window_map.get((provider_id, model_id), {}),
                 capabilities=SimpleNamespace(
                     input_modalities=modality_map.get((provider_id, model_id), ())
                 ),

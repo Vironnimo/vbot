@@ -109,13 +109,23 @@ class XAIAdapter(OpenAIAdapter):
 
     def _responses_policy_for_model(self, model_id: str) -> XAIResponsesPolicy:
         base_policy = super()._responses_policy_for_model(model_id)
+        supported_request_parameters = XAI_RESPONSES_REQUEST_PARAMETERS
+        model = self._model_lookup(model_id) if self._model_lookup is not None else None
+        if model is not None and model.capabilities.supported_parameters:
+            advertised_parameters = frozenset(model.capabilities.supported_parameters)
+            supported_request_parameters = frozenset(
+                parameter
+                for parameter in XAI_RESPONSES_REQUEST_PARAMETERS
+                if parameter in advertised_parameters
+                or (parameter == "max_tokens" and "max_output_tokens" in advertised_parameters)
+            )
         return XAIResponsesPolicy(
             allowed_reasoning_efforts=base_policy.allowed_reasoning_efforts,
             supports_tools=base_policy.supports_tools,
             supports_parallel_tool_calls=base_policy.supports_parallel_tool_calls,
             supports_structured_outputs=base_policy.supports_structured_outputs,
             supports_streaming=base_policy.supports_streaming,
-            supported_request_parameters=XAI_RESPONSES_REQUEST_PARAMETERS,
+            supported_request_parameters=supported_request_parameters,
         )
 
     def _build_responses_payload(
@@ -127,20 +137,24 @@ class XAIAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = dict(kwargs)
-        self._apply_model_output_limit(
-            request_kwargs,
-            model_id,
-            messages,
-            estimated_input_tokens=self.estimate_request_input_tokens(
+        policy = self._responses_policy_for_model(model_id)
+        if policy.supports_request_parameter("max_tokens") or policy.supports_request_parameter(
+            "max_output_tokens"
+        ):
+            self._apply_model_output_limit(
+                request_kwargs,
+                model_id,
                 messages,
-                model_id=model_id,
-                tools=request_kwargs.get("tools"),
-            ),
-        )
+                estimated_input_tokens=self.estimate_request_input_tokens(
+                    messages,
+                    model_id=model_id,
+                    tools=request_kwargs.get("tools"),
+                ),
+            )
         payload = build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
+            policy=policy,
             stream=stream,
             **request_kwargs,
         )

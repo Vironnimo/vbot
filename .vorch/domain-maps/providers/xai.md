@@ -15,10 +15,11 @@ This supplementary map covers xAI-specific Connection, OAuth, catalog, and Respo
 
 ## Responses policy
 
-- Every xAI Connection uses `/responses`, `store: false`, canonical Tool rendering, and shared SSE/response normalization. Reasoning Models request `reasoning.encrypted_content`, and their complete opaque response items replay across same-Model turns.
+- Every xAI Connection uses `/responses`, `store: false`, canonical Tool rendering where the Model supports client Tools, and shared SSE/response normalization. Reasoning Models request `reasoning.encrypted_content`, and their complete opaque response items replay across same-Model turns and later Runs under the Provider's `full_history` policy.
 - `prompt_cache_key` is derived from the cache-affinity id, not the Session id when a shared prefix exists. Only `service_tier: default|priority` is forwarded; arbitrary tier strings are dropped.
 - The wire accepts only `image/jpeg` and `image/png` attachments. PDF, GIF, WebP, audio, and video must be rejected before request serialization.
-- Reasoning controls are Model-scoped: Grok 4.5 supports `low|medium|high` and maps vBot `none` to `low`; Grok 4.3 supports `none|low|medium|high`; Grok 4.20 Multi-Agent supports `low|medium|high|xhigh`; Grok Build and the fixed Grok 4.20 reasoning variant reason without accepting an effort control; the Grok 4.20 non-reasoning variant suppresses all reasoning controls and replay.
+- Reasoning controls are Model-scoped: Grok 4.6 supports `low|medium|high|xhigh`; Grok 4.5 supports `low|medium|high` and maps vBot `none` to `low`; Grok 4.3 supports `none|low|medium|high`; Grok 4.20 Multi-Agent supports `low|medium|high|xhigh`; Grok Build and the fixed Grok 4.20 reasoning variant reason without accepting an effort control; the Grok 4.20 non-reasoning variant suppresses all reasoning controls and replay.
+- Grok 4.20 Multi-Agent does not support client-side/custom function Tools or output-token limit fields. Its Model profile advertises `tools: false`, and the Adapter filters both Tool definitions and `max_tokens`/`max_output_tokens` instead of sending a request the endpoint rejects. This restriction does not disable xAI built-in/server Tools or remote MCP at the upstream API; those are not vBot client Tool definitions.
 
 ## OAuth edge cases
 
@@ -28,4 +29,4 @@ This supplementary map covers xAI-specific Connection, OAuth, catalog, and Respo
 
 ## Verification
 
-`tests/core/providers/test_xai.py` covers routing, reasoning ladders, encrypted replay, cache/tier fields, media, and auth headers. Shared OAuth regressions live in `test_auth_flow.py` and `test_token_getter.py`; Runtime/config/catalog wiring lives in `test_runtime_providers.py` and discovery tests. Live credentials are not available, so inference entitlements, endpoint response drift, and actual refresh-token rotation remain live-verification items.
+`tests/core/providers/test_xai.py` covers routing, reasoning ladders, encrypted replay, cache/tier fields, per-Model request filtering, media, and auth headers. Shared OAuth regressions live in `test_auth_flow.py` and `test_token_getter.py`; Runtime/config/catalog wiring lives in `test_runtime_providers.py` and discovery tests. Live exact Adapter/history probes through the OAuth subscription Connection on 2026-09-02 verified later-Run and Tool-loop opaque replay for Grok 4.6, Grok 4.5, Grok 4.3, Grok Build 0.1, and the fixed Grok 4.20 reasoning variant; verified no encrypted Reasoning for the non-reasoning variant; and verified full-history opaque replay plus local filtering of unsupported client Tools and output limits for Grok 4.20 Multi-Agent. The API-key Connection remains documentation- and local-contract-verified rather than live-verified because no usable development key is present; actual refresh-token rotation also remains a live-verification item.

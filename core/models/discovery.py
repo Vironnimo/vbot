@@ -795,6 +795,8 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
             data["family"] = model.family
         if model.connections:
             data["connections"] = list(model.connections)
+        if model.connection_context_windows:
+            data["connection_context_windows"] = dict(model.connection_context_windows)
         metadata = _plain_data(model.metadata)
         if metadata:
             data["metadata"] = metadata

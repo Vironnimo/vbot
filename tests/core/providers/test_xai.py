@@ -26,13 +26,15 @@ def _model(
     *,
     reasoning: bool,
     levels: tuple[str, ...] = (),
+    tools: bool = True,
+    supported_parameters: tuple[str, ...] | None = None,
 ) -> Model:
     return Model(
         model_id=model_id,
         name=model_id,
         capabilities=Capabilities(
             vision=True,
-            tools=True,
+            tools=tools,
             json_mode=True,
             reasoning=ReasoningCapabilities(
                 supported=reasoning,
@@ -42,15 +44,19 @@ def _model(
             input_modalities=("text", "image"),
             output_modalities=("text",),
             supported_parameters=(
-                "max_output_tokens",
-                "parallel_tool_calls",
-                "prompt_cache_key",
-                "reasoning_effort",
-                "response_format",
-                "service_tier",
-                "temperature",
-                "tools",
-                "top_p",
+                supported_parameters
+                if supported_parameters is not None
+                else (
+                    "max_output_tokens",
+                    "parallel_tool_calls",
+                    "prompt_cache_key",
+                    "reasoning_effort",
+                    "response_format",
+                    "service_tier",
+                    "temperature",
+                    "tools",
+                    "top_p",
+                )
             ),
         ),
         context_window=500000,
@@ -83,6 +89,15 @@ def models() -> dict[str, Model]:
             "grok-4.20-multi-agent-0309",
             reasoning=True,
             levels=("low", "medium", "high", "xhigh"),
+            tools=False,
+            supported_parameters=(
+                "prompt_cache_key",
+                "reasoning_effort",
+                "response_format",
+                "service_tier",
+                "temperature",
+                "top_p",
+            ),
         ),
     }
 
@@ -204,9 +219,12 @@ def test_multi_agent_preserves_xhigh_effort(xai_adapter: XAIAdapter) -> None:
         SAMPLE_MESSAGES,
         model_id="grok-4.20-multi-agent-0309",
         thinking_effort="xhigh",
+        tools=[{"type": "function", "function": {"name": "lookup"}}],
     )
 
     assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
+    assert "tools" not in payload
+    assert "max_output_tokens" not in payload
 
 
 def test_output_limit_budgets_against_wire_items_not_persisted_meta(
