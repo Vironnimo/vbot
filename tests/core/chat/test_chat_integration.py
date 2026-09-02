@@ -341,13 +341,16 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_response_is_one_iteration(
+async def test_reasoning_only_response_requests_visible_continuation(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = FakeAdapter(
-        {"content": None, "reasoning": "Only thinking this time.", "tool_calls": None}
+        [
+            {"content": None, "reasoning": "Only thinking this time.", "tool_calls": None},
+            {"content": "Visible answer.", "reasoning": None, "tool_calls": None},
+        ]
     )
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
@@ -370,11 +373,14 @@ async def test_reasoning_only_response_is_one_iteration(
 
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
-        assert len(adapter.requests) == 1
+        assert len(adapter.requests) == 2
         assert messages[1].reasoning == "Only thinking this time."
         assert messages[1].content is None
-        assert run.iteration_count == 1
-        assert messages[-1].iteration_count == 1
+        assert messages[1].interrupted is True
+        assistant_messages = [message for message in messages if message.role == "assistant"]
+        assert assistant_messages[-1].content == "Visible answer."
+        assert run.iteration_count == 2
+        assert messages[-1].iteration_count == 2
     finally:
         runtime.stop()
 

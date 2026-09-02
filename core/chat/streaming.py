@@ -415,6 +415,7 @@ class StreamingAccumulator:
     def __init__(self) -> None:
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
+        self._last_text_delta_type: str | None = None
         self._reasoning_meta: JsonObject | None = None
         self._reasoning_started_perf: float | None = None
         self._reasoning_ended_perf: float | None = None
@@ -444,6 +445,11 @@ class StreamingAccumulator:
     def partial_content(self) -> str | None:
         """Return accumulated visible content so far, or None if empty."""
         return _joined_or_none(self._content_parts)
+
+    @property
+    def ends_with_reasoning(self) -> bool:
+        """Whether readable Reasoning was the stream's final text phase."""
+        return self._last_text_delta_type == "reasoning_delta"
 
     @property
     def reasoning_timing(self) -> JsonObject | None:
@@ -533,6 +539,7 @@ class StreamingAccumulator:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
+        self._last_text_delta_type = "content_delta"
         self._content_parts.append(text)
         return StreamingVisibleDelta(
             event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -543,6 +550,7 @@ class StreamingAccumulator:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
+        self._last_text_delta_type = "reasoning_delta"
         self._record_reasoning_activity()
         self._reasoning_parts.append(text)
         return StreamingVisibleDelta(
