@@ -149,7 +149,7 @@ Example:
 
 ## Retired Shapes
 
-The shared `operation_envelope_schema` and `extract_tool_operation` compatibility helpers were removed after the final nested Tool migrated. Do not reintroduce them or accept `request.operation`; preserve any required rendering of historical persisted calls in the WebUI without widening current dispatch.
+The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema`, and `discriminated_union_schema` compatibility helpers were removed after the final nested Tool migrated - the latter two built the forbidden oneOf closed-branch action shapes. Do not reintroduce them or accept `request.operation`; preserve any required rendering of historical persisted calls in the WebUI without widening current dispatch.
 
 ## Change and Verification Discipline
 

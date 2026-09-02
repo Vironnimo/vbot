@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -24,77 +23,6 @@ _MIN_FLOAT_DECIMAL_EXPONENT = -324
 
 class ToolContractError(ValueError):
     """A Tool definition or invocation violates its canonical contract."""
-
-
-def discriminated_union_schema(
-    discriminator: str,
-    variants: Mapping[str, JsonObject],
-    *,
-    description: str,
-    discriminator_description: str,
-) -> JsonObject:
-    """Build a flat union whose discriminator selects one closed argument object."""
-    if not isinstance(discriminator, str) or not discriminator:
-        raise ToolContractError("Discriminated union property must be a non-empty string")
-    if not variants:
-        raise ToolContractError("Discriminated union requires at least one variant")
-
-    branches: list[JsonObject] = []
-    for variant, raw_branch in variants.items():
-        if not isinstance(variant, str) or not variant:
-            raise ToolContractError("Discriminated union variant names must be non-empty strings")
-        if not isinstance(raw_branch, dict) or raw_branch.get("type") != "object":
-            raise ToolContractError(f"Discriminated union branch {variant!r} must have type object")
-
-        branch = copy.deepcopy(raw_branch)
-        properties = branch.get("properties")
-        if not isinstance(properties, dict):
-            raise ToolContractError(
-                f"Discriminated union branch {variant!r} properties must be an object"
-            )
-        if discriminator in properties:
-            raise ToolContractError(
-                f"Discriminated union branch {variant!r} must not declare "
-                f"the {discriminator} property"
-            )
-        required = branch.get("required", [])
-        if not isinstance(required, list):
-            raise ToolContractError(
-                f"Discriminated union branch {variant!r} required must be an array"
-            )
-
-        branch["properties"] = {
-            discriminator: {
-                "type": "string",
-                "enum": [variant],
-                "description": discriminator_description,
-            },
-            **properties,
-        }
-        branch["required"] = [discriminator, *required]
-        branch["additionalProperties"] = False
-        branches.append(branch)
-
-    return {
-        "type": "object",
-        "description": description,
-        "oneOf": branches,
-    }
-
-
-def action_schema(
-    actions: Mapping[str, JsonObject],
-    *,
-    description: str,
-    action_description: str = "Action to perform.",
-) -> JsonObject:
-    """Build a flat union whose action selects one closed argument object."""
-    return discriminated_union_schema(
-        "action",
-        actions,
-        description=description,
-        discriminator_description=action_description,
-    )
 
 
 @dataclass(frozen=True)
@@ -828,6 +756,5 @@ def _format_path(path: Any) -> str:
 __all__ = [
     "ToolContract",
     "ToolContractError",
-    "action_schema",
     "compile_tool_contract",
 ]
