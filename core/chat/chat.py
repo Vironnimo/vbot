@@ -1934,9 +1934,25 @@ class ChatLoop:
                 _LOGGER.warning(
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
-            await session.append_async(run_summary)
-            await context.session_snapshot.refresh(session)
-            if run.contributes_to_agent_activity:
+            run_summary_persisted = False
+            try:
+                await session.append_async(run_summary)
+                run_summary_persisted = True
+            except Exception:
+                # The model/tool outcome is already established. A failed
+                # terminal annotation must not replace it or prevent the
+                # Continuation journal from being finalized below.
+                _LOGGER.warning("Failed to persist run summary for run %s", run.id, exc_info=True)
+            if run_summary_persisted:
+                try:
+                    await context.session_snapshot.refresh(session)
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to refresh Session snapshot after run %s summary",
+                        run.id,
+                        exc_info=True,
+                    )
+            if run.contributes_to_agent_activity and run_summary_persisted:
                 try:
                     await _CHAT_TRANSFORM_WORKERS.run(
                         self._dependencies.sessions.record_terminal_run,
@@ -1953,23 +1969,30 @@ class ChatLoop:
                         "Failed to record unread completion for run %s", run.id, exc_info=True
                     )
             if context.continuation_tracker is not None:
-                if (
-                    outcome == "success"
-                    and completed_assistant is not None
-                    and not completed_assistant.interrupted
-                ):
-                    await context.continuation_tracker.resolve()
-                else:
-                    if outcome == "cancelled":
-                        cause: ContinuationCause = (
-                            "user" if run.cancel_reason == "user" else "internal"
-                        )
+                try:
+                    if (
+                        outcome == "success"
+                        and completed_assistant is not None
+                        and not completed_assistant.interrupted
+                    ):
+                        await context.continuation_tracker.resolve()
                     else:
-                        cause = (
-                            context.continuation_tracker.interruption_cause
-                            or normalize_interruption_cause(run_error)
-                        )
-                    await context.continuation_tracker.interrupt(cause)
+                        if outcome == "cancelled":
+                            cause: ContinuationCause = (
+                                "user" if run.cancel_reason == "user" else "internal"
+                            )
+                        else:
+                            cause = (
+                                context.continuation_tracker.interruption_cause
+                                or normalize_interruption_cause(run_error)
+                            )
+                        await context.continuation_tracker.interrupt(cause)
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to finalize Continuation state for run %s",
+                        run.id,
+                        exc_info=True,
+                    )
             # Session usage totals ride every terminal event so accessors can
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
