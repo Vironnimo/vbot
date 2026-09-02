@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
@@ -34,6 +35,27 @@ def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
         assert health.state == "healthy"
         assert health.target_high_water == 0
         assert health.completed_high_water == 0
+    finally:
+        sessions.close()
+
+
+def test_search_availability_uses_lifecycle_markers_without_coverage_scans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.sessions import store as store_module
+
+    sessions = ChatSessionManager(tmp_path)
+    message = ChatMessage.user("marker backed search")
+    sessions.create("agent", session_id="search").append(message)
+
+    def fail_coverage(*_args, **_kwargs):
+        raise AssertionError("ordinary search availability must not scan canonical coverage")
+
+    monkeypatch.setattr(store_module, "_fts_coverage_ok", fail_coverage)
+    try:
+        assert sessions.is_fts_available()
+        hits = sessions.fts_search("marker", project_id=None, agent_id="agent", session_id="search")
+        assert [hit[1] for hit in hits] == [message.id]
     finally:
         sessions.close()
 
@@ -285,14 +307,29 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
         )
         == []
     )
+    forked = asyncio.run(sessions.fork(session.address, target_agent_id="reviewer"))
+    assert [message.content for message in forked.load_active()] == ["replacement text"]
+    assert [
+        hit[1]
+        for hit in sessions.fts_search(
+            "replacement",
+            project_id=None,
+            agent_id="reviewer",
+            session_id=forked.address.session_id,
+        )
+    ] == [forked.load_active()[0].id]
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        assert connection.execute("SELECT active FROM messages ORDER BY seq").fetchall() == [
+        assert connection.execute(
+            "SELECT message.active FROM messages AS message "
+            "JOIN sessions AS session ON session.session_key = message.session_key "
+            "WHERE session.agent_id = 'agent' ORDER BY message.seq"
+        ).fetchall() == [
             (0,),
             (0,),
             (0,),
             (1,),
         ]
-        assert connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 2
     sessions.close()
 
 

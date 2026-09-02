@@ -74,7 +74,7 @@ _DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 JsonObject = dict[str, Any]
 
 _SESSION_METADATA_PROJECTION_VERSION_KEY = "session_metadata_projection_version"
-_SESSION_METADATA_PROJECTION_VERSION = "1"
+_SESSION_METADATA_PROJECTION_VERSION = "2"
 _SESSION_METADATA_SCALAR_COLUMNS = (
     ("title", "title"),
     ("auto_title", "auto_title"),
@@ -99,6 +99,7 @@ _SESSION_METADATA_PROJECTION_COLUMNS = (
     "fork_source_json",
     "run_kinds_json",
     "compaction_policy_json",
+    "list_visibility_mask",
 )
 _SESSION_LIST_COLUMNS = """
     project_id,
@@ -106,7 +107,7 @@ _SESSION_LIST_COLUMNS = """
     session_id,
     created_at,
     COALESCE(last_message_at, created_at) AS last_active_at,
-    COALESCE(julianday(COALESCE(last_message_at, created_at)), 0.0) AS active_sort,
+    active_sort,
     title,
     auto_title,
     source_channel_id,
@@ -146,12 +147,68 @@ _RECALL_REFLECTION_RUN_KINDS = (
 _RECALL_USER_FACING_RUN_KINDS = ("user", "channel", "cron")
 _RECALL_PERIOD_ROLES = ("user", "assistant", "error", "compaction_checkpoint")
 _SUMMARY_METADATA_COLUMNS = {"seen_skills": "$.seen_skills"}
+_LIST_VISIBILITY_SUBAGENT_SESSION = 1 << 0
+_LIST_VISIBILITY_BACKGROUND = 1 << 1
+_LIST_VISIBILITY_CRON = 1 << 2
+_LIST_VISIBILITY_MEMORY_REFLECTION = 1 << 3
+_LIST_VISIBILITY_SKILL_REFLECTION = 1 << 4
+_LIST_VISIBILITY_REFLECTION = 1 << 5
+_LIST_VISIBILITY_VALID_RUN_KINDS = 1 << 6
+_LIST_VISIBILITY_USER_FACING = 1 << 7
+_LIST_VISIBILITY_SUBAGENT_RUN_KIND = 1 << 8
+_LIST_VISIBILITY_SUBAGENT_PARENT = 1 << 9
+
+
+def _session_list_visibility_mask(metadata: JsonObject) -> int:
+    mask = 0
+    if metadata.get("is_subagent_session") is True:
+        mask |= _LIST_VISIBILITY_SUBAGENT_SESSION
+    if isinstance(metadata.get("subagent_parent"), dict):
+        mask |= _LIST_VISIBILITY_SUBAGENT_PARENT
+
+    run_kinds = metadata.get("run_kinds")
+    valid_run_kinds = (
+        isinstance(run_kinds, list)
+        and bool(run_kinds)
+        and all(isinstance(kind, str) and kind in _RECALL_VALID_RUN_KINDS for kind in run_kinds)
+    )
+    if not valid_run_kinds:
+        return mask
+    mask |= _LIST_VISIBILITY_VALID_RUN_KINDS
+    kinds = set(cast(list[str], run_kinds))
+    if kinds & set(_RECALL_REFLECTION_RUN_KINDS):
+        mask |= _LIST_VISIBILITY_REFLECTION
+    if kinds & set(_RECALL_USER_FACING_RUN_KINDS):
+        mask |= _LIST_VISIBILITY_USER_FACING
+    if "cron" in kinds:
+        mask |= _LIST_VISIBILITY_CRON
+    if "memory_reflection" in kinds:
+        mask |= _LIST_VISIBILITY_MEMORY_REFLECTION
+    if "skill_reflection" in kinds:
+        mask |= _LIST_VISIBILITY_SKILL_REFLECTION
+    if "reflection" in kinds:
+        mask |= _LIST_VISIBILITY_REFLECTION
+    if "subagent" in kinds:
+        mask |= _LIST_VISIBILITY_SUBAGENT_RUN_KIND
+
+    platform = metadata.get("platform")
+    platform_conversation = metadata.get("platform_conv_id")
+    is_channel = (
+        isinstance(platform, str)
+        and bool(platform.strip())
+        and isinstance(platform_conversation, str)
+        and bool(platform_conversation.strip())
+    )
+    if not is_channel and kinds <= set(_SESSION_LIST_BACKGROUND_KINDS):
+        mask |= _LIST_VISIBILITY_BACKGROUND
+    return mask
 
 
 def _session_metadata_storage(metadata: JsonObject) -> tuple[str, tuple[Any, ...]]:
     """Separate indexed/listable metadata from the open-ended metadata object."""
     residual = dict(metadata)
     columns: dict[str, Any] = dict.fromkeys(_SESSION_METADATA_PROJECTION_COLUMNS)
+    columns["list_visibility_mask"] = _session_list_visibility_mask(metadata)
     for key, column in _SESSION_METADATA_SCALAR_COLUMNS:
         value = residual.get(key)
         if isinstance(value, str):
@@ -206,32 +263,23 @@ def _session_list_visibility_sql(
     include_skill_reflections: bool,
     include_cron: bool,
 ) -> tuple[str, list[Any]]:
-    is_subagent = "(COALESCE(is_subagent_session, 0) = 1 OR subagent_parent_json IS NOT NULL)"
-    is_channel = (
-        "(NULLIF(TRIM(platform), '') IS NOT NULL "
-        "AND NULLIF(TRIM(platform_conv_id), '') IS NOT NULL)"
+    is_subagent = (
+        "((list_visibility_mask & "
+        f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
     )
-    background_placeholders = ", ".join("?" for _ in _SESSION_LIST_BACKGROUND_KINDS)
-    is_background = (
-        f"(NOT {is_channel} AND run_kinds_json IS NOT NULL "
-        "AND json_array_length(run_kinds_json) > 0 "
-        "AND NOT EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS kind "
-        f"WHERE kind.type <> 'text' OR kind.value NOT IN ({background_placeholders})))"
-    )
-    kind_enabled = (
-        "((kind.value = 'cron' AND ? = 1) "
-        "OR (kind.value = 'memory_reflection' AND ? = 1) "
-        "OR (kind.value = 'skill_reflection' AND ? = 1) "
-        "OR (kind.value = 'reflection' AND (? = 1 OR ? = 1)))"
+    is_background = f"((list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0)"
+    background_enabled = (
+        f"((list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 OR ? = 1) "
+        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_MEMORY_REFLECTION}) = 0 OR ? = 1) "
+        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_SKILL_REFLECTION}) = 0 OR ? = 1) "
+        f"AND ((list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
         f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "
-        f"(NOT {is_background} OR NOT EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS kind "
-        f"WHERE NOT {kind_enabled}))))"
+        f"(NOT {is_background} OR ({background_enabled}))))"
     )
     params: list[Any] = [
         int(include_subagents),
-        *_SESSION_LIST_BACKGROUND_KINDS,
         int(include_cron),
         int(include_memory_reflections),
         int(include_skill_reflections),
@@ -755,8 +803,9 @@ def _fts_coverage_ok(
 
 
 def _fts_health_from_connection(
-    connection: sqlite3.Connection, *, verify_internal_index: bool = True
+    connection: sqlite3.Connection, *, verify_coverage: bool
 ) -> FtsHealth:
+    """Read FTS lifecycle state, optionally proving canonical row coverage."""
     if not _fts_table_exists(connection) or not _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         return FtsHealth(state="unavailable", reason="FTS tables are missing")
     storage_version = _fts_meta(connection, FTS_STORAGE_VERSION_KEY)
@@ -790,9 +839,10 @@ def _fts_health_from_connection(
             target_high_water=target_value,
             completed_high_water=completed_value,
         )
-    coverage_ok, coverage_reason = _fts_coverage_ok(
-        connection, verify_internal_index=verify_internal_index
-    )
+    coverage_ok = True
+    coverage_reason = None
+    if verify_coverage:
+        coverage_ok, coverage_reason = _fts_coverage_ok(connection, verify_internal_index=False)
     if stale is not None or completed_value != target_value or not coverage_ok:
         rebuilding = stale == "rebuilding" or completed_value != target_value
         return FtsHealth(
@@ -818,7 +868,7 @@ def _fts_rebuild_boundary(stage: str, high_water: int) -> None:
 def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
     """Create or repair the derived FTS projection without weakening canonical storage."""
     try:
-        health = _fts_health_from_connection(connection, verify_internal_index=False)
+        health = _fts_health_from_connection(connection, verify_coverage=True)
         if health.available:
             return
         if (
@@ -1012,6 +1062,11 @@ def _insert_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
     """Project one fully written normalized Message into disposable FTS."""
     if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
         return
+    state = connection.execute(
+        "SELECT role, searchable, active FROM messages WHERE message_key = ?", (message_key,)
+    ).fetchone()
+    if state is None or not bool(state["searchable"]) or not bool(state["active"]):
+        return
     connection.execute(
         """
         INSERT INTO messages_fts(
@@ -1023,10 +1078,7 @@ def _insert_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
         """,
         (message_key,),
     )
-    role = connection.execute(
-        "SELECT role FROM messages WHERE message_key = ?", (message_key,)
-    ).fetchone()
-    if role is not None and role[0] != "tool" and _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
+    if state["role"] != "tool" and _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         connection.execute(
             """
             INSERT INTO messages_fts_trigram(
@@ -1037,6 +1089,40 @@ def _insert_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
             WHERE message_key = ?
             """,
             (message_key,),
+        )
+
+
+def _insert_fts_session(connection: sqlite3.Connection, session_key: int) -> None:
+    """Project one already-normalized Session into both external-content indexes."""
+    if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
+        return
+    connection.execute(
+        """
+        INSERT INTO messages_fts(
+            rowid, content, content_search, reasoning, name, error_kind, tool_calls
+        )
+        SELECT source.message_key, source.content, source.content_search, source.reasoning,
+               source.name, source.error_kind, source.tool_calls
+        FROM messages_fts_source AS source
+        JOIN messages AS message ON message.message_key = source.message_key
+        WHERE message.session_key = ? AND message.searchable = 1 AND message.active = 1
+        """,
+        (session_key,),
+    )
+    if _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
+        connection.execute(
+            """
+            INSERT INTO messages_fts_trigram(
+                rowid, content, content_search, name, error_kind, tool_calls
+            )
+            SELECT source.message_key, source.content, source.content_search, source.name,
+                   source.error_kind, source.tool_calls
+            FROM messages_fts_trigram_source AS source
+            JOIN messages AS message ON message.message_key = source.message_key
+            WHERE message.session_key = ? AND message.searchable = 1 AND message.active = 1
+              AND message.role <> 'tool'
+            """,
+            (session_key,),
         )
 
 
@@ -1067,6 +1153,165 @@ def _delete_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
             """,
             (message_key,),
         )
+
+
+def _copy_message_relation(
+    connection: sqlite3.Connection,
+    *,
+    table: str,
+    columns: Sequence[str],
+    source_session_key: int,
+    target_session_key: int,
+) -> None:
+    column_list = ", ".join(columns)
+    selected_columns = ", ".join(f"child.{column}" for column in columns)
+    connection.execute(
+        f"INSERT INTO {table} (message_key, {column_list}) "
+        f"SELECT target.message_key, {selected_columns} FROM {table} AS child "
+        "JOIN messages AS source ON source.message_key = child.message_key "
+        "JOIN messages AS target ON target.session_key = ? AND target.seq = source.seq "
+        "WHERE source.session_key = ?",
+        (target_session_key, source_session_key),
+    )
+
+
+def _copy_session_messages(
+    connection: sqlite3.Connection,
+    *,
+    source_session_key: int,
+    target_session_key: int,
+) -> None:
+    """Copy one canonical normalized Message graph without Python reconstruction."""
+    connection.execute(
+        """
+        INSERT INTO messages (
+            session_key, seq, message_id, role, timestamp, content, content_blocks_json,
+            content_search, model, active, searchable
+        )
+        SELECT ?, seq, message_id, role, timestamp, content, content_blocks_json,
+               content_search, model, active, searchable
+        FROM messages
+        WHERE session_key = ?
+        ORDER BY seq
+        """,
+        (target_session_key, source_session_key),
+    )
+    relations = (
+        (
+            "assistant_messages",
+            (
+                "reasoning",
+                "reasoning_meta_json",
+                "reasoning_scope",
+                "reasoning_started_at",
+                "reasoning_completed_at",
+                "reasoning_duration_ms",
+                "reasoning_timing_extra_json",
+                "phase",
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_tokens",
+                "usage_estimated",
+                "input_tokens_estimated",
+                "output_tokens_estimated",
+                "usage_present",
+                "usage_extra_json",
+                "tool_calls_present",
+                "interrupted",
+                "interruption_cause",
+            ),
+        ),
+        (
+            "tool_calls",
+            (
+                "ordinal",
+                "tool_call_id",
+                "name",
+                "arguments_json",
+                "rejection_code",
+                "rejection_message",
+                "rejection_fingerprint",
+                "argument_sequence_index",
+                "argument_sequence_length",
+            ),
+        ),
+        (
+            "assistant_output_files",
+            ("ordinal", "path", "line_index", "start_index", "end_index"),
+        ),
+        ("user_message_senders", ("sender_id", "display_name", "role")),
+        ("error_messages", ("error_kind",)),
+        (
+            "compaction_checkpoints",
+            (
+                "tail_boundary_id",
+                "projection_json",
+                "policy",
+                "strategy",
+                "compacted_token_count",
+                "context_tokens_before",
+                "context_tokens_after",
+                "compaction_duration_ms",
+                "usage_present",
+                "usage_extra_json",
+            ),
+        ),
+        (
+            "run_summaries",
+            (
+                "run_id",
+                "work_id",
+                "status",
+                "started_at",
+                "completed_at",
+                "duration_ms",
+                "timing_extra_json",
+                "iteration_count",
+                "changed_files",
+                "lines_added",
+                "lines_removed",
+                "change_stats_extra_json",
+            ),
+        ),
+        ("run_change_paths", ("ordinal", "path")),
+        ("history_edits", ("target_message_id",)),
+    )
+    for table, columns in relations:
+        _copy_message_relation(
+            connection,
+            table=table,
+            columns=columns,
+            source_session_key=source_session_key,
+            target_session_key=target_session_key,
+        )
+
+    connection.execute(
+        """
+        INSERT INTO tool_messages (
+            message_key, tool_call_key, tool_call_id, name, result_content,
+            started_at, completed_at, duration_ms, timing_extra_json, display_json
+        )
+        SELECT target.message_key, target_call.tool_call_key, child.tool_call_id, child.name,
+               child.result_content, child.started_at, child.completed_at, child.duration_ms,
+               child.timing_extra_json, child.display_json
+        FROM tool_messages AS child
+        JOIN messages AS source ON source.message_key = child.message_key
+        JOIN messages AS target ON target.session_key = ? AND target.seq = source.seq
+        LEFT JOIN tool_calls AS source_call ON source_call.tool_call_key = child.tool_call_key
+        LEFT JOIN messages AS source_call_message
+          ON source_call_message.message_key = source_call.message_key
+        LEFT JOIN messages AS target_call_message
+          ON target_call_message.session_key = ? AND target_call_message.seq = source_call_message.seq
+        LEFT JOIN tool_calls AS target_call
+          ON target_call.message_key = target_call_message.message_key
+         AND target_call.ordinal = source_call.ordinal
+        WHERE source.session_key = ?
+        """,
+        (target_session_key, target_session_key, source_session_key),
+    )
+    _insert_fts_session(connection, target_session_key)
 
 
 # Application-level patience is budgeted in seconds; SQLite's own busy handler is
@@ -1166,16 +1411,16 @@ class SessionStore:
         ).fetchone()
         if row is not None and str(row[0]) == _SESSION_METADATA_PROJECTION_VERSION:
             return
-        rows = connection.execute(
-            "SELECT session_key, metadata_json FROM sessions ORDER BY session_key"
-        ).fetchall()
+        rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
         connection.execute("BEGIN IMMEDIATE")
         try:
             for state in rows:
-                metadata = _json_from_payload(state["metadata_json"], "session metadata")
+                metadata = _session_metadata_from_state(state)
                 residual_payload, projection = _session_metadata_storage(metadata)
                 connection.execute(
-                    "UPDATE sessions SET metadata_json = ?, "
+                    "UPDATE sessions SET active_sort = "
+                    "COALESCE(julianday(COALESCE(last_message_at, created_at)), 0.0), "
+                    "metadata_json = ?, "
                     + ", ".join(f"{column} = ?" for column in _SESSION_METADATA_PROJECTION_COLUMNS)
                     + " WHERE session_key = ?",
                     (residual_payload, *projection, state["session_key"]),
@@ -1434,8 +1679,10 @@ class SessionStore:
         def _fn(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (uuid.uuid4().hex, *self._scope(address), timestamp),
+                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, "
+                    "created_at, active_sort) VALUES (?, ?, ?, ?, ?, "
+                    "COALESCE(julianday(?), 0.0))",
+                    (uuid.uuid4().hex, *self._scope(address), timestamp, timestamp),
                 )
             except sqlite3.IntegrityError as exc:
                 raise ChatSessionError(f"session already exists: {address.session_id}") from exc
@@ -1481,10 +1728,10 @@ class SessionStore:
             try:
                 cursor = connection.execute(
                     "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, status, "
-                    "created_at, last_message_at, archived_at, message_count, last_message_id, "
+                    "created_at, last_message_at, active_sort, archived_at, message_count, last_message_id, "
                     "history_revision, state_revision, metadata_json, "
                     + ", ".join(_SESSION_METADATA_PROJECTION_COLUMNS)
-                    + ", activity_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    + ", activity_json) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(julianday(?), 0.0), ?, ?, ?, ?, ?, ?, "
                     + ", ".join("?" for _ in _SESSION_METADATA_PROJECTION_COLUMNS)
                     + ", ?)",
                     (
@@ -1493,6 +1740,7 @@ class SessionStore:
                         "archived" if archived else "live",
                         created_at,
                         messages[-1].timestamp if messages else None,
+                        messages[-1].timestamp if messages else created_at,
                         created_at if archived else None,
                         len(messages),
                         messages[-1].id if messages else None,
@@ -1741,8 +1989,17 @@ class SessionStore:
                 _insert_message(connection, session_key, next_seq + index, message)
             last_message = messages[-1]
             connection.execute(
-                "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, last_message_id = ?, history_revision = history_revision + 1, state_revision = state_revision + 1 WHERE session_key = ?",
-                (len(messages), last_message.timestamp, last_message.id, session_key),
+                "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, "
+                "active_sort = COALESCE(julianday(?), 0.0), last_message_id = ?, "
+                "history_revision = history_revision + 1, state_revision = state_revision + 1 "
+                "WHERE session_key = ?",
+                (
+                    len(messages),
+                    last_message.timestamp,
+                    last_message.timestamp,
+                    last_message.id,
+                    session_key,
+                ),
             )
             _mark_fts_write(connection)
 
@@ -1770,6 +2027,35 @@ class SessionStore:
                 (state["session_key"],),
             ).fetchall()
         return [message_from_row(row) for row in rows]
+
+    def active_user_message_count(self, address: SessionAddress, *, limit: int) -> int:
+        """Count at most ``limit`` active User Messages without loading their content."""
+        if limit <= 0:
+            raise ChatSessionError("user Message count limit must be positive")
+        with self._transaction(write=False) as connection:
+            state = self._require_live(connection, address)
+            row = connection.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM messages WHERE session_key = ? "
+                "AND active = 1 AND role = 'user' LIMIT ?)",
+                (state["session_key"], limit),
+            ).fetchone()
+        assert row is not None
+        return int(row[0])
+
+    def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
+        """Load the newest Note matching one canonical content prefix."""
+        if not content_prefix:
+            raise ChatSessionError("note prefix must be non-empty")
+        with self._transaction(write=False) as connection:
+            state = self._require_live(connection, address)
+            row = connection.execute(
+                _message_records_sql(
+                    where=("m.session_key = ? AND m.role = 'note' AND substr(m.content, 1, ?) = ?"),
+                    order_by="ORDER BY m.seq DESC LIMIT 1",
+                ),
+                (state["session_key"], len(content_prefix), content_prefix),
+            ).fetchone()
+        return None if row is None else message_from_row(row)
 
     def chat_history_snapshot(
         self,
@@ -2327,27 +2613,13 @@ class SessionStore:
             not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0
         ):
             raise ChatSessionError("Recall Session limit must be a positive integer")
-        valid_placeholders = ", ".join("?" for _ in _RECALL_VALID_RUN_KINDS)
-        reflection_placeholders = ", ".join("?" for _ in _RECALL_REFLECTION_RUN_KINDS)
-        user_facing_placeholders = ", ".join("?" for _ in _RECALL_USER_FACING_RUN_KINDS)
-        valid_kinds = (
-            "(run_kinds_json IS NOT NULL AND json_array_length(run_kinds_json) > 0 "
-            "AND NOT EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS valid_kind "
-            f"WHERE valid_kind.type <> 'text' OR valid_kind.value NOT IN ({valid_placeholders})))"
-        )
-        reflection = (
-            f"({valid_kinds} AND EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS "
-            f"reflection_kind WHERE reflection_kind.value IN ({reflection_placeholders})))"
-        )
+        valid_kinds = f"((list_visibility_mask & {_LIST_VISIBILITY_VALID_RUN_KINDS}) != 0)"
+        reflection = f"((list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) != 0)"
         subagent = (
-            f"(({valid_kinds} AND EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS "
-            "subagent_kind WHERE subagent_kind.value = 'subagent')) "
-            "OR COALESCE(is_subagent_session, 0) = 1)"
+            "((list_visibility_mask & "
+            f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_RUN_KIND}) != 0)"
         )
-        user_facing = (
-            f"EXISTS (SELECT 1 FROM json_each(run_kinds_json) AS user_kind "
-            f"WHERE user_kind.value IN ({user_facing_placeholders}))"
-        )
+        user_facing = f"((list_visibility_mask & {_LIST_VISIBILITY_USER_FACING}) != 0)"
         where = [
             "status = 'live'",
             "project_id = ?",
@@ -2355,17 +2627,10 @@ class SessionStore:
             f"NOT {reflection}",
             f"(({subagent} AND ? = 1) OR (NOT {subagent} AND (NOT {valid_kinds} OR {user_facing})))",
         ]
-        repeated_valid_params = list(_RECALL_VALID_RUN_KINDS)
         params: list[Any] = [
             project_id or "",
             agent_id,
-            *repeated_valid_params,
-            *_RECALL_REFLECTION_RUN_KINDS,
-            *repeated_valid_params,
             int(include_subagents),
-            *repeated_valid_params,
-            *repeated_valid_params,
-            *_RECALL_USER_FACING_RUN_KINDS,
         ]
         if excluded_session_id is not None:
             where.append("session_id <> ?")
@@ -2571,26 +2836,18 @@ class SessionStore:
         return versions
 
     def fts_health(self) -> FtsHealth:
-        """Return integrated FTS state without a whole-index startup/status scan."""
+        """Return operator-facing FTS state with explicit canonical coverage checks."""
         try:
-
-            def verify(connection: sqlite3.Connection) -> FtsHealth:
-                return _fts_health_from_connection(connection, verify_internal_index=False)
-
-            return cast(
-                FtsHealth,
-                self._runtime.execute_write(verify, patience_s=ACTIVITY_WRITE_PATIENCE_S),
-            )
+            with self._transaction(write=False) as connection:
+                return _fts_health_from_connection(connection, verify_coverage=True)
         except Exception as exc:
             return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
 
     def is_fts_available(self) -> bool:
-        """Return the cheap live availability state; startup/status perform full integrity."""
+        """Return cheap marker-backed availability; rebuild verification owns coverage scans."""
         try:
             with self._transaction(write=False) as connection:
-                return _fts_health_from_connection(
-                    connection, verify_internal_index=False
-                ).available
+                return _fts_health_from_connection(connection, verify_coverage=False).available
         except Exception:
             return False
 
@@ -2839,9 +3096,11 @@ class SessionStore:
             payload, projection = _session_metadata_storage(metadata)
             try:
                 target_row = connection.execute(
-                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at, last_message_at, message_count, last_message_id, history_revision, state_revision, metadata_json, "
+                    "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, "
+                    "created_at, last_message_at, active_sort, message_count, last_message_id, "
+                    "history_revision, state_revision, metadata_json, "
                     + ", ".join(_SESSION_METADATA_PROJECTION_COLUMNS)
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, "
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, "
                     + ", ".join("?" for _ in _SESSION_METADATA_PROJECTION_COLUMNS)
                     + ")",
                     (
@@ -2849,6 +3108,7 @@ class SessionStore:
                         *self._scope(target),
                         state["created_at"],
                         state["last_message_at"],
+                        state["active_sort"],
                         state["message_count"],
                         state["last_message_id"],
                         state["history_revision"],
@@ -2863,17 +3123,11 @@ class SessionStore:
             target_session_key = target_row.lastrowid
             if target_session_key is None:
                 raise SessionStoreCorruptError("SQLite did not return a forked Session key")
-            source_rows = connection.execute(
-                _message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
-                (state["session_key"],),
-            ).fetchall()
-            for row in source_rows:
-                _insert_message(
-                    connection,
-                    int(target_session_key),
-                    int(row["seq"]),
-                    message_from_row(row),
-                )
+            _copy_session_messages(
+                connection,
+                source_session_key=int(state["session_key"]),
+                target_session_key=int(target_session_key),
+            )
             _mark_fts_write(connection)
 
         self._execute_write(_fn)

@@ -627,7 +627,9 @@ class _CompletionChatLoop:
         )
 
 
-async def test_idle_completion_relays_through_latest_channel_surface(tmp_path: Path) -> None:
+async def test_idle_completion_relays_through_latest_channel_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="session-one")
@@ -637,6 +639,11 @@ async def test_idle_completion_relays_through_latest_channel_surface(tmp_path: P
         channel_id="tg-main",
     )
     session.add_note(surface.to_note_content())
+    monkeypatch.setattr(
+        ChatSession,
+        "load_async",
+        AsyncMock(side_effect=AssertionError("completion delivery must read only the latest note")),
+    )
     completion_loop = _CompletionChatLoop(run_manager)
     trigger_service = TriggerService(
         cast(Any, completion_loop),

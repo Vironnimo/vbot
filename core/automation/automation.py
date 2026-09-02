@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
-from core.chat.messages import reply_surface_from_note
+from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, reply_surface_from_note
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -326,7 +326,7 @@ class _CompletionDeliveryCoordinator:
             return None
         try:
             session = await self._sessions.get_async(address)
-            messages = await session.load_async()
+            message = await session.latest_note_async(REPLY_SURFACE_NOTE_PREFIX)
         except Exception:
             _LOGGER.warning(
                 "Cannot recover completion reply surface (agent=%s session=%s)",
@@ -335,11 +335,7 @@ class _CompletionDeliveryCoordinator:
                 exc_info=True,
             )
             return None
-        for message in reversed(messages):
-            surface = reply_surface_from_note(message)
-            if surface is not None:
-                return surface
-        return None
+        return None if message is None else reply_surface_from_note(message)
 
     @staticmethod
     def _move_idle_notices_to_run(bucket: _CompletionBucket, run: Run) -> None:

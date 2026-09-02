@@ -11,8 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+import core.sessions.store as session_store_module
 from core.chat import ChatMessage, ChatSessionError
-from core.chat.content_blocks import TextBlock
+from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.chat.continuation import fold_continuation_records
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
@@ -404,10 +405,21 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     )
 
 
-def test_role_specific_relational_message_storage_round_trips(manager, tmp_path) -> None:
+def test_role_specific_relational_message_storage_round_trips(
+    manager, tmp_path, monkeypatch
+) -> None:
     session = manager.create("coder", session_id="normalized")
     user = ChatMessage.user(
-        [TextBlock(type="text", text="inspect the normalized store")],
+        [
+            TextBlock(type="text", text="inspect the normalized store"),
+            FileMentionBlock(
+                type="file_mention",
+                path="core/example.py",
+                status="inlined",
+                text="VALUE = 1",
+                size_bytes=9,
+            ),
+        ],
         sender=MessageSender(id="human-one", display_name="Ada", role="admin"),
     )
     assistant = ChatMessage.assistant(
@@ -518,6 +530,81 @@ def test_role_specific_relational_message_storage_round_trips(manager, tmp_path)
             None,
             "[]",
         )
+
+    original_message_from_row = session_store_module.message_from_row
+
+    def fail_message_reconstruction(_row):
+        raise AssertionError("Fork must copy normalized rows without reconstructing Messages")
+
+    monkeypatch.setattr(session_store_module, "message_from_row", fail_message_reconstruction)
+    forked = asyncio.run(manager.fork(session.address, target_agent_id="reviewer"))
+    monkeypatch.setattr(session_store_module, "message_from_row", original_message_from_row)
+
+    assert forked.load() == [user, assistant, tool, run_summary]
+    fork_hits = manager.fts_search(
+        "normalized",
+        project_id=forked.address.project_id,
+        agent_id=forked.address.agent_id,
+        session_id=forked.address.session_id,
+    )
+    assert [hit[1] for hit in fork_hits] == [user.id]
+
+
+def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> None:
+    manager.create("coder", session_id="one", project_id=None)
+    manager.create("reviewer", session_id="two", project_id="project")
+
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        scoped_plan = " ".join(
+            str(row[3])
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN SELECT session_id FROM sessions "
+                "WHERE status = 'live' AND project_id = ? AND agent_id = ? "
+                "ORDER BY active_sort DESC, session_id LIMIT 20",
+                ("", "coder"),
+            )
+        )
+        global_plan = " ".join(
+            str(row[3])
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN WITH candidates AS ("
+                "SELECT session_id, active_sort, project_id, agent_id FROM sessions "
+                "WHERE status = 'live' AND ((project_id = ? AND agent_id = ?) "
+                "OR (project_id = ? AND agent_id = ?)) "
+                "AND (list_visibility_mask & ?) = 0) "
+                "SELECT * FROM candidates ORDER BY active_sort DESC, project_id, agent_id, "
+                "session_id LIMIT 20",
+                (
+                    "",
+                    "coder",
+                    "project",
+                    "reviewer",
+                    session_store_module._LIST_VISIBILITY_BACKGROUND,
+                ),
+            )
+        )
+        count_plan = " ".join(
+            str(row[3])
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM sessions "
+                "WHERE status = 'live' AND ((project_id = ? AND agent_id = ?) "
+                "OR (project_id = ? AND agent_id = ?)) "
+                "AND (list_visibility_mask & ?) = 0",
+                (
+                    "",
+                    "coder",
+                    "project",
+                    "reviewer",
+                    session_store_module._LIST_VISIBILITY_BACKGROUND,
+                ),
+            )
+        )
+
+    assert "sessions_live_scope_order" in scoped_plan
+    assert "USE TEMP B-TREE" not in scoped_plan
+    assert "sessions_live_global_order" in global_plan
+    assert "USE TEMP B-TREE" not in global_plan
+    assert "COVERING INDEX sessions_live_scope_visibility" in count_plan
 
 
 def test_move_updates_the_composite_address_without_losing_history(manager) -> None:

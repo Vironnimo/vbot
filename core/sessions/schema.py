@@ -58,6 +58,7 @@ CREATE TABLE sessions (
   status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'archived')),
   created_at TEXT NOT NULL,
   last_message_at TEXT,
+  active_sort REAL NOT NULL DEFAULT 0.0,
   archived_at TEXT,
   message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
   last_message_id TEXT,
@@ -74,6 +75,7 @@ CREATE TABLE sessions (
   fork_source_json TEXT CHECK (fork_source_json IS NULL OR (json_valid(fork_source_json) AND json_type(fork_source_json) = 'object')),
   run_kinds_json TEXT CHECK (run_kinds_json IS NULL OR (json_valid(run_kinds_json) AND json_type(run_kinds_json) = 'array')),
   compaction_policy_json TEXT CHECK (compaction_policy_json IS NULL OR (json_valid(compaction_policy_json) AND json_type(compaction_policy_json) = 'object')),
+  list_visibility_mask INTEGER NOT NULL DEFAULT 0 CHECK (list_visibility_mask >= 0),
   activity_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(activity_json) AND json_type(activity_json) = 'object'),
   latest_completion_run_id TEXT GENERATED ALWAYS AS (json_extract(activity_json, '$.latest_completion.run_id')) STORED,
   latest_completion_status TEXT GENERATED ALWAYS AS (json_extract(activity_json, '$.latest_completion.status')) STORED,
@@ -87,7 +89,15 @@ CREATE UNIQUE INDEX sessions_one_live_address
   WHERE status = 'live';
 
 CREATE INDEX sessions_live_scope_order
-  ON sessions (project_id, agent_id, last_message_at DESC, session_id)
+  ON sessions (project_id, agent_id, active_sort DESC, session_id)
+  WHERE status = 'live';
+
+CREATE INDEX sessions_live_global_order
+  ON sessions (active_sort DESC, project_id, agent_id, session_id)
+  WHERE status = 'live';
+
+CREATE INDEX sessions_live_scope_visibility
+  ON sessions (project_id, agent_id, list_visibility_mask)
   WHERE status = 'live';
 
 CREATE TABLE messages (
@@ -118,6 +128,9 @@ CREATE INDEX messages_by_message_id
 CREATE INDEX messages_active_by_session
   ON messages (session_key, seq)
   WHERE active = 1;
+
+CREATE INDEX messages_by_session_role_sequence
+  ON messages (session_key, role, seq DESC);
 
 CREATE TABLE assistant_messages (
   message_key INTEGER PRIMARY KEY,

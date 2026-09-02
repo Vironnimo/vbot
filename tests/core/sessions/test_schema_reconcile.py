@@ -132,11 +132,33 @@ def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:
         "fork_source_json",
         "run_kinds_json",
         "compaction_policy_json",
+        "list_visibility_mask",
+        "active_sort",
     }
     old_schema = "\n".join(
         line
         for line in SCHEMA_SQL.splitlines()
         if not any(line.startswith(f"  {column} ") for column in projection_columns)
+    )
+    old_schema = old_schema.replace(
+        "CREATE INDEX sessions_live_scope_order\n"
+        "  ON sessions (project_id, agent_id, active_sort DESC, session_id)\n"
+        "  WHERE status = 'live';\n",
+        "CREATE INDEX sessions_live_scope_order\n"
+        "  ON sessions (project_id, agent_id, last_message_at DESC, session_id)\n"
+        "  WHERE status = 'live';\n",
+    )
+    old_schema = old_schema.replace(
+        "CREATE INDEX sessions_live_global_order\n"
+        "  ON sessions (active_sort DESC, project_id, agent_id, session_id)\n"
+        "  WHERE status = 'live';\n\n",
+        "",
+    )
+    old_schema = old_schema.replace(
+        "CREATE INDEX sessions_live_scope_visibility\n"
+        "  ON sessions (project_id, agent_id, list_visibility_mask)\n"
+        "  WHERE status = 'live';\n",
+        "",
     )
     database = tmp_path / "sessions.db"
     connection = sqlite3.connect(database)
@@ -178,11 +200,61 @@ def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:
         "pinned_skill_catalog": "large context",
     }
     with sqlite3.connect(database) as verification:
-        title, run_kinds, residual = verification.execute(
-            "SELECT title, run_kinds_json, metadata_json FROM sessions"
+        title, run_kinds, visibility_mask, active_sort, residual = verification.execute(
+            "SELECT title, run_kinds_json, list_visibility_mask, active_sort, metadata_json "
+            "FROM sessions"
         ).fetchone()
     assert title == "Existing title"
     assert json.loads(run_kinds) == ["user"]
+    assert visibility_mask > 0
+    assert active_sort > 0
+    assert json.loads(residual) == {"pinned_skill_catalog": "large context"}
+    with sqlite3.connect(database) as verification:
+        scope_order_columns = [
+            row[2] for row in verification.execute("PRAGMA index_info(sessions_live_scope_order)")
+        ]
+    assert scope_order_columns == ["project_id", "agent_id", "active_sort", "session_id"]
+
+
+def test_projection_upgrade_preserves_already_normalized_metadata(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    connection = _create_current_database(database)
+    connection.execute(
+        "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at, "
+        "title, run_kinds_json, metadata_json) VALUES (?, '', 'agent', 'session', ?, ?, ?, ?)",
+        (
+            "generation-1",
+            "2026-08-30T00:00:00Z",
+            "Existing title",
+            '["user"]',
+            '{"pinned_skill_catalog":"large context"}',
+        ),
+    )
+    connection.execute(
+        "INSERT INTO store_meta (key, value) VALUES (?, ?)",
+        ("session_metadata_projection_version", "1"),
+    )
+    connection.commit()
+    connection.close()
+
+    store = SessionStore(database)
+    try:
+        metadata = store.metadata(SessionAddress(None, "agent", "session"))
+    finally:
+        store.close()
+
+    assert metadata == {
+        "title": "Existing title",
+        "run_kinds": ["user"],
+        "pinned_skill_catalog": "large context",
+    }
+    with sqlite3.connect(database) as verification:
+        title, run_kinds, visibility_mask, residual = verification.execute(
+            "SELECT title, run_kinds_json, list_visibility_mask, metadata_json FROM sessions"
+        ).fetchone()
+    assert title == "Existing title"
+    assert json.loads(run_kinds) == ["user"]
+    assert visibility_mask > 0
     assert json.loads(residual) == {"pinned_skill_catalog": "large context"}
 
 
