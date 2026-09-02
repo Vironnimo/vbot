@@ -401,8 +401,9 @@ export function setSkillDisabled(name, disabled, options = {}) {
   );
   if (typeof disabled !== 'boolean') {
     throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
       'Disabled flag must be a boolean',
-      'skill.set_disabled',
+      { method: 'skill.set_disabled' },
     );
   }
   return rpc('skill.set_disabled', { name, disabled }, options);
@@ -426,7 +427,11 @@ export function shareSkill(
     'skill.share',
   );
   if (typeof shared !== 'boolean') {
-    throw new ApiClientError('Shared flag must be a boolean', 'skill.share');
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Shared flag must be a boolean',
+      { method: 'skill.share' },
+    );
   }
   return rpc(
     'skill.share',

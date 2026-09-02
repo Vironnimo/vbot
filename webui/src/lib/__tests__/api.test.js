@@ -61,6 +61,8 @@ import {
   subscribeTerminalEvents,
   sendTerminalInput,
   resizeTerminal,
+  setSkillDisabled,
+  shareSkill,
   killTerminal,
   updateQueueItem,
   updateTaskModelSettings,
@@ -84,6 +86,25 @@ describe('createRpcEnvelope()', () => {
     );
     expect(() => createRpcEnvelope('agent.list', [])).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+  });
+});
+
+describe('Skill mutation validation', () => {
+  it('reports the public validation message and method for boolean flags', () => {
+    expect(() => setSkillDisabled('review', 'yes')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        message: 'Disabled flag must be a boolean',
+        method: 'skill.set_disabled',
+      }),
+    );
+    expect(() => shareSkill('review', 'yes')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        message: 'Shared flag must be a boolean',
+        method: 'skill.share',
+      }),
     );
   });
 });

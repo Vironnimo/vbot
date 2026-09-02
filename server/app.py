@@ -675,8 +675,8 @@ def create_app(
         if manager is None:
             await websocket.close(code=1011, reason="Interactive terminals are unavailable")
             return
-        stream = manager.watch_for_operator(terminal_id)
         try:
+            stream = manager.watch_for_operator(terminal_id)
             async with aclosing(stream) as events:
                 await _stream_websocket_events(websocket, events)
         except TerminalNotFoundError as exc:

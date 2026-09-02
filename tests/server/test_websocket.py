@@ -19,6 +19,7 @@ from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
 )
+from core.tools.terminal_manager import TerminalNotFoundError
 from server.app import _parse_after_sequence, create_app
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from server.rpc.event_bridge import (
@@ -135,6 +136,28 @@ class StubTerminalWebsocketManager:
             "sequence": 4,
             "terminal": {"terminal_id": terminal_id, "state": "exited"},
         }
+
+
+class MissingTerminalWebsocketManager(StubTerminalWebsocketManager):
+    def watch_for_operator(self, terminal_id: str) -> AsyncIterator[dict[str, Any]]:
+        raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+
+
+def test_terminal_websocket_closes_cleanly_when_subscription_setup_fails(
+    tmp_path: Path,
+) -> None:
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    runtime.terminal_manager = cast(Any, MissingTerminalWebsocketManager())
+    app = create_app(runtime=cast(Any, runtime))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/terminals/missing") as websocket,
+        pytest.raises(WebSocketDisconnect) as exc_info,
+    ):
+        websocket.receive_json()
+
+    assert exc_info.value.code == 1008
 
 
 def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_path: Path) -> None:
