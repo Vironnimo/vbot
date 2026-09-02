@@ -232,7 +232,7 @@ GLM_CLOUD_MODEL = Model(
     reasoning_replay="full_history",
 )
 
-DEEPSEEK_CLOUD_CURRENT_RUN_MODEL = Model(
+DEEPSEEK_CLOUD_FULL_HISTORY_MODEL = Model(
     model_id="deepseek-v4-flash:0731",
     name="DeepSeek V4 Flash",
     capabilities=Capabilities(
@@ -242,16 +242,15 @@ DEEPSEEK_CLOUD_CURRENT_RUN_MODEL = Model(
         reasoning=ReasoningCapabilities(
             supported=True,
             control=REASONING_CONTROL_LEVELS,
-            levels=("high", "max"),
+            levels=("low", "high", "max"),
         ),
     ),
     context_window=1_048_576,
-    max_output_tokens=65536,
+    max_output_tokens=65_536,
     metadata={
         "ollama": {"remote": True},
-        "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning"},
     },
-    reasoning_replay="current_run",
 )
 
 KIMI_CLOUD_MODEL = Model(
@@ -324,7 +323,7 @@ _MODELS = {
     "deepseek-v4-flash": DEEPSEEK_CLOUD_MODEL,
     "minimax-m3": MINIMAX_M3_FULL_HISTORY_MODEL,
     "glm-5.2": GLM_CLOUD_MODEL,
-    "deepseek-v4-flash:0731": DEEPSEEK_CLOUD_CURRENT_RUN_MODEL,
+    "deepseek-v4-flash:0731": DEEPSEEK_CLOUD_FULL_HISTORY_MODEL,
     "kimi-k2.6": KIMI_CLOUD_MODEL,
     "minimax-m2.7": MINIMAX_M2_7_CLOUD_MODEL,
 }
@@ -667,30 +666,29 @@ class TestOllamaCloudChatWire:
 
         assert cloud_adapter.reasoning_replay_policy("minimax-m2.7") == "none"
 
-    def test_deepseek_cloud_reasoning_replay_is_current_run(
+    def test_deepseek_cloud_reasoning_replay_is_full_history(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        """DeepSeek V4 Cloud Models replay reasoning only within the current run.
+        """DeepSeek V4 Cloud replays all Reasoning when Tools are present.
 
-        Live-verified 2026-08-26 via streaming token accounting: the /v1 wire
-        accepts and bills in-run replayed reasoning under the ``reasoning``
-        carrier, while cross-run replay is stripped on every field.
+        Live-verified 2026-09-02 via streaming token accounting: Ollama Cloud
+        bills cross-Run ``reasoning`` when the current request carries Tools,
+        matching DeepSeek's contract. Tool-free requests ignore it upstream.
         """
 
-        assert cloud_adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "current_run"
+        assert cloud_adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "full_history"
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_deepseek_cloud_replays_reasoning_as_reasoning_content(
+    async def test_deepseek_cloud_replays_reasoning_as_reasoning(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        """DeepSeek's thinking-mode contract requires reasoning_content on replay.
+        """Ollama Cloud translates DeepSeek replay to ``reasoning``.
 
-        The mocked response carries ``reasoning``, so the response scan would
-        pick that field — the Model's ``reasoning_content`` profile override
-        must win over the scanned field.
+        The upstream DeepSeek field is ``reasoning_content``; live Ollama Cloud
+        responses and accepted historical input use ``reasoning`` instead.
         """
 
         route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
@@ -712,7 +710,7 @@ class TestOllamaCloudChatWire:
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
-        assert assistant_message["reasoning_content"] == "The user requested exactly OK."
+        assert assistant_message["reasoning"] == "The user requested exactly OK."
         await cloud_adapter.aclose()
 
     @respx.mock

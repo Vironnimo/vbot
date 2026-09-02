@@ -18,6 +18,11 @@ replay by billed-input deltas in vBot's real request shapes):
 - ``cross_run`` (``full_history`` scope): a plain history turn carrying the
   reasoning carrier, exactly what a new Run sends.
 
+With ``--include-cross-run-tools``, a third shape repeats ``cross_run`` while
+including the Tool definitions on both requests. Some Provider contracts make
+historical Reasoning conditional on the current request carrying ``tools``;
+this case must not be inferred from a tool-free cross-Run probe.
+
 Each shape runs three variants with identical history except the assistant
 turn: WITH the reasoning carrier, WITHOUT it, and the reasoning text in
 VISIBLE content (accounting control - a positive visible delta proves the
@@ -123,6 +128,7 @@ async def _send_stream(
     tools: list[dict[str, Any]] | None,
     effort: str,
     max_tokens: int,
+    extra_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One streaming /v1/chat/completions request; returns measured facts."""
     if httpx is None:
@@ -137,6 +143,8 @@ async def _send_stream(
     }
     if tools:
         body["tools"] = tools
+    if extra_request:
+        body.update(extra_request)
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -241,6 +249,7 @@ async def _send_stream_raw(
     tools: list[dict[str, Any]] | None,
     effort: str,
     max_tokens: int,
+    extra_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One streaming /v1/chat/completions request; returns the aggregated
     assistant delta fields plus usage, for wire-shape inspection."""
@@ -256,6 +265,8 @@ async def _send_stream_raw(
     }
     if tools:
         body["tools"] = tools
+    if extra_request:
+        body.update(extra_request)
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -322,6 +333,7 @@ async def _inspect_model(
     *,
     effort: str,
     max_tokens: int,
+    extra_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a real tool-call turn and report every assistant delta field."""
     print(f"\n=== INSPECT {model} (effort={effort}, max_tokens={max_tokens}) ===")
@@ -333,6 +345,7 @@ async def _inspect_model(
         tools=[TOOL_DEFINITION],
         effort=effort,
         max_tokens=max_tokens,
+        extra_request=extra_request,
     )
     fields = result["fields"]
     print(f"  input={result['prompt_tokens']}")
@@ -350,7 +363,9 @@ async def _measure_shape(
     max_tokens: int,
     carrier: str,
     in_run: bool,
+    cross_run_tools: bool = False,
     turn1: dict[str, Any] | None = None,
+    extra_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Measure one shape (in-run or cross-run) for one model.
 
@@ -367,6 +382,7 @@ async def _measure_shape(
                 tools=[TOOL_DEFINITION],
                 effort=effort,
                 max_tokens=max_tokens,
+                extra_request=extra_request,
             )
         if not turn1["tool_calls"]:
             return {
@@ -378,14 +394,16 @@ async def _measure_shape(
         history = [{"role": "user", "content": TURN1_TOOL_PROMPT}]
         base_content = ""
     else:
+        request_tools = [TOOL_DEFINITION] if cross_run_tools else None
         turn1 = await _send_stream(
             base_url,
             api_key,
             model,
             [{"role": "user", "content": TURN1_PLAIN_PROMPT}],
-            tools=None,
+            tools=request_tools,
             effort=effort,
             max_tokens=max_tokens,
+            extra_request=extra_request,
         )
         tool_calls = None
         history = [{"role": "user", "content": TURN1_PLAIN_PROMPT}]
@@ -423,9 +441,10 @@ async def _measure_shape(
             api_key,
             model,
             messages,
-            tools=[TOOL_DEFINITION] if in_run else None,
+            tools=[TOOL_DEFINITION] if in_run or cross_run_tools else None,
             effort=effort,
             max_tokens=max_tokens,
+            extra_request=extra_request,
         )
         results[mode] = (result["prompt_tokens"], result["cached_tokens"])
 
@@ -458,6 +477,8 @@ async def _probe_model(
     effort: str,
     max_tokens: int,
     carrier_override: str,
+    include_cross_run_tools: bool,
+    extra_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full measurement for one model: carrier detection + both shapes."""
     print(f"\n=== {model} (effort={effort}, max_tokens={max_tokens}) ===")
@@ -471,6 +492,7 @@ async def _probe_model(
         tools=[TOOL_DEFINITION],
         effort=effort,
         max_tokens=max_tokens,
+        extra_request=extra_request,
     )
     emitted = detect["carrier_field"]
     print(
@@ -500,6 +522,7 @@ async def _probe_model(
             carrier=carrier,
             in_run=True,
             turn1=detect,
+            extra_request=extra_request,
         )
         cross_run = await _measure_shape(
             base_url,
@@ -509,15 +532,36 @@ async def _probe_model(
             max_tokens=max_tokens,
             carrier=carrier,
             in_run=False,
+            extra_request=extra_request,
         )
-        summary["carriers"][carrier] = {"in_run": in_run, "cross_run": cross_run}
+        shapes = {"in_run": in_run, "cross_run": cross_run}
+        if include_cross_run_tools:
+            shapes["cross_run_tools"] = await _measure_shape(
+                base_url,
+                api_key,
+                model,
+                effort=effort,
+                max_tokens=max_tokens,
+                carrier=carrier,
+                in_run=False,
+                cross_run_tools=True,
+                extra_request=extra_request,
+            )
+        summary["carriers"][carrier] = shapes
         print(f"     in_run:    {in_run}")
         print(f"     cross_run: {cross_run}")
+        if include_cross_run_tools:
+            print(f"     cross_run_tools: {shapes['cross_run_tools']}")
     return summary
 
 
 async def _run(args: argparse.Namespace) -> int:
     api_key = _load_api_key(args.api_key_env, args.data_dir)
+    thinking_type = args.thinking_type or ("enabled" if args.thinking_keep else None)
+    thinking = {"type": thinking_type} if thinking_type else None
+    if thinking is not None and args.thinking_keep:
+        thinking["keep"] = args.thinking_keep
+    extra_request = {"thinking": thinking} if thinking is not None else None
     print(f"api key length: {len(api_key)}")
     print(
         f"endpoint: {args.base_url.rstrip('/')}/v1/chat/completions | "
@@ -536,6 +580,7 @@ async def _run(args: argparse.Namespace) -> int:
                     model,
                     effort=args.effort,
                     max_tokens=args.max_tokens,
+                    extra_request=extra_request,
                 )
             except Exception as exc:  # noqa: BLE001 - sweep must continue
                 print(f"  ERROR: {exc}")
@@ -554,6 +599,8 @@ async def _run(args: argparse.Namespace) -> int:
                     effort=args.effort,
                     max_tokens=args.max_tokens,
                     carrier_override=args.carrier,
+                    include_cross_run_tools=args.include_cross_run_tools,
+                    extra_request=extra_request,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - sweep must continue
@@ -602,14 +649,47 @@ async def _run(args: argparse.Namespace) -> int:
                     f"delta={cross_run['delta_with']:+d} "
                     f"(visible {cross_run['delta_visible']:+d}{cached})"
                 )
+            cross_run_tools = shapes.get("cross_run_tools")
+            if isinstance(cross_run_tools, dict):
+                if "error" in cross_run_tools:
+                    print(
+                        f"{summary['model']} [{carrier}] cross_run_tools: "
+                        f"{cross_run_tools.get('error')} "
+                        f"(input={cross_run_tools.get('turn1_input')})"
+                    )
+                else:
+                    print(
+                        f"{summary['model']} [{carrier}] cross_run_tools: "
+                        f"with={cross_run_tools['with']} "
+                        f"without={cross_run_tools['without']} "
+                        f"delta={cross_run_tools['delta_with']:+d} "
+                        f"(visible {cross_run_tools['delta_visible']:+d})"
+                    )
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", help="Exact wire model id (or use --models).")
     parser.add_argument("--models", help="Comma-separated model ids for a sweep.")
     parser.add_argument("--carrier", default="", help="Force the replay carrier field.")
+    parser.add_argument(
+        "--include-cross-run-tools",
+        action="store_true",
+        help="Also measure a cross-Run history request with Tools enabled on both turns.",
+    )
+    parser.add_argument(
+        "--thinking-keep",
+        choices=("all",),
+        help="Also send thinking={type: enabled, keep: VALUE} on every request.",
+    )
+    parser.add_argument(
+        "--thinking-type",
+        choices=("enabled", "adaptive", "disabled"),
+        help="Also send thinking={type: VALUE} on every request.",
+    )
     parser.add_argument(
         "--inspect",
         action="store_true",
