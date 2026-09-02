@@ -23,6 +23,9 @@ Scenarios:
   Reports both the wire-shaping fact (does the reasoning carrier reach the
   wire?) and the recall result (can the model use it?).
 - ``cross_turn``: plain two-turn continuation, same policy shaping.
+  Provider-reported input-token deltas are the transport verdict; behavioral
+  recall is printed only as a diagnostic because a Model may deliberately
+  ignore or refuse to reveal text from its prior Reasoning.
 - ``instruction``: the probe plants a behavioral rule ("when the user writes
   'now!', reply 'hello world'") into the reasoning carrier itself, then the
   follow-up turn sends 'now!' and checks compliance.
@@ -34,8 +37,9 @@ Scenarios:
 ``--policy`` selects the replay policy applied by the shaping (default:
 the model's effective policy from the overrides).
 
-The probe prints measurements only: secrets, carrier lengths, per-case
-recall flags. It never prints API keys, full prompts, or full responses.
+The probe prints measurements only: secrets, carrier lengths, input-token
+deltas, and per-case recall flags. It never prints API keys, full prompts, or
+full responses.
 
 Examples:
     python scripts/probe_reasoning_replay_exact.py --provider ollama-cloud \\
@@ -107,6 +111,7 @@ class TurnResult:
     content: str
     reasoning: str
     tool_calls: list[dict[str, Any]]
+    input_tokens: int | None
 
 
 def _load_api_key(env_name: str, data_dir: Path) -> str:
@@ -146,10 +151,13 @@ def _extract_openai_message(message: dict[str, Any]) -> TurnResult:
         if isinstance(value, str) and value:
             reasoning = value
             break
+    usage = message.get("usage")
+    input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
     return TurnResult(
         content=message.get("content") or "",
         reasoning=reasoning,
         tool_calls=message.get("tool_calls") or [],
+        input_tokens=input_tokens if isinstance(input_tokens, int) else None,
     )
 
 
@@ -478,7 +486,7 @@ async def _run_cross_turn_round(
     secret = _make_secret()
     print(f"  planted secret: {secret}")
 
-    async def run_shaped(assistant_msg: ChatMessage, label: str) -> bool:
+    async def run_shaped(assistant_msg: ChatMessage, label: str) -> tuple[bool, int | None]:
         session = [
             ChatMessage.user(TURN1_PLAIN_PROMPT),
             assistant_msg,
@@ -493,20 +501,28 @@ async def _run_cross_turn_round(
             f"answer={result.content[:45]!r} | "
             f"secret_in_answer={secret in result.content} | "
             f"secret_in_reasoning2={secret in result.reasoning} | "
-            f"reasoning2_len={len(result.reasoning)}"
+            f"reasoning2_len={len(result.reasoning)} | input={result.input_tokens}"
         )
-        return hit
+        return hit, result.input_tokens
 
-    hit_a = await run_shaped(
+    hit_a, input_a = await run_shaped(
         ChatMessage.assistant(model=model_id, content="", reasoning=_secret_reasoning(secret)),
         "carrier in history",
     )
-    hit_b = await run_shaped(ChatMessage.assistant(model=model_id, content=""), "no carrier      ")
-    hit_c = await run_shaped(
+    hit_b, input_b = await run_shaped(
+        ChatMessage.assistant(model=model_id, content=""), "no carrier      "
+    )
+    hit_c, input_c = await run_shaped(
         ChatMessage.assistant(model=model_id, content=f"I recorded the secret {secret}."),
         "visible control ",
     )
-    print(f"  verdict: with={hit_a} without={hit_b} control={hit_c}")
+    carrier_delta = input_a - input_b if input_a is not None and input_b is not None else None
+    visible_delta = input_c - input_b if input_c is not None and input_b is not None else None
+    print(f"  transport token deltas: carrier={carrier_delta} visible_control={visible_delta}")
+    print(
+        "  behavioral recall only (not transport verdict): "
+        f"with={hit_a} without={hit_b} control={hit_c}"
+    )
 
 
 async def _run_tool_loop_round(
@@ -625,7 +641,8 @@ async def _run_tool_loop_round(
         "C visible control   ",
     )
     print(
-        f"  verdict: A_persisted=(with={hit_a}, without={hit_a2}) "
+        f"  behavioral recall only (not transport verdict): "
+        f"A_persisted=(with={hit_a}, without={hit_a2}) "
         f"B_live=(with={hit_b}, without={hit_b2}) control={hit_c}"
     )
 
@@ -674,7 +691,10 @@ async def _run_instruction_round(
         ),
         "visible control ",
     )
-    print(f"  verdict: with={rule_a} without={rule_b} control={rule_c}")
+    print(
+        "  behavioral recall only (not transport verdict): "
+        f"with={rule_a} without={rule_b} control={rule_c}"
+    )
 
 
 def _build_adapter(provider_id: str, model_id: str, api_key: str) -> Any:

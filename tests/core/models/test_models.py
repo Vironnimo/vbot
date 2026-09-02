@@ -1793,15 +1793,16 @@ class TestModelRegistryRealResources:
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
 
     def test_ollama_cloud_reasoning_replay_policies(self):
-        """Ollama Cloud replay pins, live-verified 2026-08-26.
+        """Ollama Cloud replay pins, live-verified through 2026-09-02.
 
         Streaming token accounting (billed-input deltas in vBot's real request
         shapes, visible-content control per variant) on /v1/chat/completions:
 
         - full_history (inherited default): GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-flash, Kimi
           K3 - the ``reasoning`` carrier is accepted and billed in both scopes
-          (glm-5.3-flash measured 2026-08-26 after the catalog refresh: in-run
-          +132, cross-run +332, controls match).
+          (glm-5.3-flash re-measured 2026-09-02: ``reasoning`` is billed in-run
+          +53 and cross-run +254 with matching controls; ``reasoning_content``
+          is stripped in both scopes with zero deltas and positive controls).
         - current_run: DeepSeek V4 Flash/Pro and Kimi K2.6/K2.7-code - in-run
           replayed reasoning is billed, cross-run replay is stripped.
         - none: Gemma 4, GPT-OSS, MiniMax M2.7/M3, Nemotron 3, Qwen 3.5 - the
@@ -1841,11 +1842,12 @@ class TestModelRegistryRealResources:
     def test_ollama_cloud_reasoning_response_fields(self):
         """Every measured Ollama Cloud model emits ``reasoning`` as carrier.
 
-        Live-verified 2026-08-26: all probed models stream their reasoning
-        under ``message.reasoning``. The previous ``reasoning_content``
-        profiles (GLM-5.1, Kimi) and the ``reasoning_details`` profile
-        (Qwen 3.5) were wrong - that field is stripped even in-run on this
-        wire, so the corrected profile is what makes replay work at all.
+        Live-verified through 2026-09-02: all probed models stream their
+        reasoning under ``message.reasoning``. The previous
+        ``reasoning_content`` profiles (GLM-5.1, GLM-5.3-Flash, Kimi) and the
+        ``reasoning_details`` profile (Qwen 3.5) were wrong - those fields are
+        stripped even in-run on this wire, so the corrected profile is what
+        makes replay work at all.
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
@@ -1857,6 +1859,7 @@ class TestModelRegistryRealResources:
             "glm-5.1",
             "glm-5.2",
             "glm-5.3",
+            "glm-5.3-flash",
             "gpt-oss:120b",
             "gpt-oss:20b",
             "kimi-k2.6",

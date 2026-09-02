@@ -472,7 +472,7 @@ async def _probe_model(
         effort=effort,
         max_tokens=max_tokens,
     )
-    emitted = carrier_override or detect["carrier_field"]
+    emitted = detect["carrier_field"]
     print(
         f"  emitted carrier: {emitted or '(none)'} | "
         f"reasoning_len={len(detect['reasoning'])} | input={detect['prompt_tokens']}"
@@ -480,6 +480,7 @@ async def _probe_model(
 
     if carrier_override:
         carriers = [carrier_override]
+        print(f"  forced replay carrier: {carrier_override}")
     else:
         carriers = [emitted] if emitted in VBOT_REPLAY_FIELDS else []
         if emitted and emitted not in VBOT_REPLAY_FIELDS:
