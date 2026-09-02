@@ -38,6 +38,7 @@ from core.sessions.store import (
     messages_from_connection,
 )
 from scripts.converters.jsonl_sessions import (
+    CapturedArtifact,
     CaptureInventory,
     LegacySession,
     capture_inventory,
@@ -59,6 +60,7 @@ ALLOWED_STAGES = (
 )
 _TRANSITION_HOOK: Any = None
 _RELOCATION_CHECKPOINT_BATCH_SIZE = 250
+_CONTINUATION_RECORD_VERSION = 1
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -160,18 +162,32 @@ def _address_payload(address: SessionAddress) -> list[str | None]:
     return [address.project_id, address.agent_id, address.session_id]
 
 
+def _artifact_record(artifact: CapturedArtifact) -> dict[str, Any]:
+    classification = artifact.classification
+    return {
+        "relative_path": artifact.relative_path,
+        "kind": artifact.kind,
+        "classification": classification,
+        "disposition": "relocate" if classification == "accepted_source" else "preserve",
+        "present": artifact.present,
+        "sha256": artifact.sha256,
+        "size": artifact.size,
+        "mtime_ns": artifact.mtime_ns,
+    }
+
+
+def _evidence_payload(capture: CaptureInventory) -> dict[str, Any]:
+    return {
+        "artifacts": [_artifact_record(artifact) for artifact in capture.artifacts],
+        "orphan_sidecars": list(capture.orphan_sidecars),
+        "unknown_files": list(capture.unknown_files),
+        "rejected_paths": list(capture.rejected_paths),
+        "skipped_sessions": list(capture.skipped_sessions),
+    }
+
+
 def _source_record(session: LegacySession, source: Path) -> dict[str, Any]:
-    artifacts = [
-        {
-            "relative_path": artifact.relative_path,
-            "kind": artifact.kind,
-            "present": artifact.present,
-            "sha256": artifact.sha256,
-            "size": artifact.size,
-            "mtime_ns": artifact.mtime_ns,
-        }
-        for artifact in session.captured_artifacts
-    ]
+    artifacts = [_artifact_record(artifact) for artifact in session.captured_artifacts]
     return {
         "relative_path": session.transcript.relative_to(source).as_posix(),
         "root_kind": session.root_kind,
@@ -191,12 +207,7 @@ def _inventory_payload(capture: CaptureInventory, source: Path) -> dict[str, Any
         "source": str(source),
         "captured_at": _now(),
         "sources": [_source_record(session, source) for session in sessions],
-        "evidence": {
-            "orphan_sidecars": list(capture.orphan_sidecars),
-            "unknown_files": list(capture.unknown_files),
-            "rejected_paths": list(capture.rejected_paths),
-            "skipped_sessions": list(capture.skipped_sessions),
-        },
+        "evidence": _evidence_payload(capture),
         "count": len(sessions),
     }
 
@@ -214,12 +225,7 @@ def _capture_source(source: Path) -> CaptureInventory:
 def _same_capture(manifest: dict[str, Any], capture: CaptureInventory, source: Path) -> None:
     expected = {
         "sources": [_source_record(session, source) for session in capture.sessions],
-        "evidence": {
-            "orphan_sidecars": list(capture.orphan_sidecars),
-            "unknown_files": list(capture.unknown_files),
-            "rejected_paths": list(capture.rejected_paths),
-            "skipped_sessions": list(capture.skipped_sessions),
-        },
+        "evidence": _evidence_payload(capture),
     }
     actual = {"sources": manifest["sources"], "evidence": manifest.get("evidence", {})}
     if actual != expected:
@@ -283,9 +289,269 @@ def _force_delete_journal(path: Path) -> None:
 
 
 def _verify_db(path: Path, sessions: tuple[LegacySession, ...]) -> dict[str, Any]:
-    return _verify_db_expected(
+    result = _verify_db_expected(
         path, {session.generation_id: len(session.messages) for session in sessions}
     )
+    expected = {session.generation_id: session for session in sessions}
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
+        for row in rows:
+            generation_id = str(row["generation_id"])
+            session = expected.get(generation_id)
+            if session is None:
+                raise RuntimeError(f"unexpected converted Session generation: {generation_id}")
+            actual_address = [row["project_id"] or None, row["agent_id"], row["session_id"]]
+            if actual_address != _address_payload(session.address):
+                raise RuntimeError(f"converted Session address mismatch: {generation_id}")
+            expected_status = "archived" if session.archived else "live"
+            if row["status"] != expected_status:
+                raise RuntimeError(f"converted Session lifecycle mismatch: {generation_id}")
+            actual_messages = [
+                message.to_dict()
+                for message in messages_from_connection(connection, int(row["session_key"]))
+            ]
+            expected_messages = [message.to_dict() for message in session.messages]
+            if actual_messages != expected_messages:
+                raise RuntimeError(f"converted Session Messages mismatch: {generation_id}")
+            if SessionStore.metadata_from_state(row) != session.metadata:
+                raise RuntimeError(f"converted Session metadata mismatch: {generation_id}")
+            try:
+                activity = json.loads(str(row["activity_json"]))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"converted Session activity is invalid: {generation_id}"
+                ) from exc
+            if activity != session.activity:
+                raise RuntimeError(f"converted Session activity mismatch: {generation_id}")
+            actual_continuation = _continuation_state_from_connection(
+                connection, int(row["session_key"])
+            )
+            if actual_continuation != _fold_continuation(session.continuation):
+                raise RuntimeError(f"converted Session Continuation mismatch: {generation_id}")
+    return result
+
+
+def _continuation_string(record: dict[str, Any], key: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"continuation record {key} must be a non-empty string")
+    return value
+
+
+def _continuation_step(record: dict[str, Any]) -> int:
+    value = record.get("step")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError("continuation record step must be a non-negative integer")
+    return value
+
+
+def _upsert_folded_operation(
+    operations: dict[str, dict[str, Any]],
+    *,
+    tool_call_id: str,
+    name: str,
+    run_id: str,
+    status: str,
+    ok: bool | None,
+    replace_unknown: bool,
+) -> None:
+    existing = operations.get(tool_call_id)
+    if existing is None:
+        operations[tool_call_id] = {
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "run_id": run_id,
+            "status": status,
+            "ok": ok,
+        }
+    elif replace_unknown or status == "completed":
+        existing.update({"name": name, "run_id": run_id, "status": status, "ok": ok})
+
+
+def _fold_continuation(records: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+    state: dict[str, Any] | None = None
+    requests: list[Any] = []
+    steps: dict[tuple[str, int], dict[str, Any]] = {}
+    operations: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if record.get("version") != _CONTINUATION_RECORD_VERSION:
+            raise RuntimeError("unsupported continuation record version")
+        record_type = record.get("type")
+        if record_type == "run_started":
+            checkpoint_id = _continuation_string(record, "checkpoint_id")
+            run_id = _continuation_string(record, "run_id")
+            origin_run_id = _continuation_string(record, "origin_run_id")
+            if state is None or state["checkpoint_id"] != checkpoint_id:
+                state = {
+                    "checkpoint_id": checkpoint_id,
+                    "origin_run_id": origin_run_id,
+                    "latest_run_id": run_id,
+                    "cause": None,
+                    "active": True,
+                }
+                requests = []
+                steps = {}
+                operations = {}
+            else:
+                state.update({"latest_run_id": run_id, "cause": None, "active": True})
+            if record.get("request") is not None:
+                requests.append(record["request"])
+            continue
+        if state is None:
+            continue
+        if record_type in {"stream_delta", "stream_attempt_discarded", "assistant_boundary"}:
+            run_id = _continuation_string(record, "run_id")
+            step_number = _continuation_step(record)
+            key = (run_id, step_number)
+            if record_type == "stream_attempt_discarded":
+                steps.pop(key, None)
+                continue
+            step = steps.get(key)
+            if step is None:
+                step = {
+                    "run_id": run_id,
+                    "step": step_number,
+                    "reasoning": "",
+                    "content": "",
+                    "assistant_message_id": None,
+                    "interrupted": False,
+                }
+                steps[key] = step
+            if record_type == "stream_delta":
+                if isinstance(record.get("reasoning_delta"), str):
+                    step["reasoning"] += record["reasoning_delta"]
+                if isinstance(record.get("content_delta"), str):
+                    step["content"] += record["content_delta"]
+            else:
+                if isinstance(record.get("reasoning"), str):
+                    step["reasoning"] = record["reasoning"]
+                if isinstance(record.get("content"), str):
+                    step["content"] = record["content"]
+                message_id = record.get("message_id")
+                step["assistant_message_id"] = message_id if isinstance(message_id, str) else None
+                step["interrupted"] = record.get("interrupted") is True
+                tool_calls = record.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    for tool_call in tool_calls:
+                        if not isinstance(tool_call, dict):
+                            continue
+                        tool_call_id = tool_call.get("id")
+                        name = tool_call.get("name")
+                        if (
+                            isinstance(tool_call_id, str)
+                            and tool_call_id
+                            and isinstance(name, str)
+                            and name
+                        ):
+                            _upsert_folded_operation(
+                                operations,
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                run_id=run_id,
+                                status="unknown",
+                                ok=None,
+                                replace_unknown=False,
+                            )
+            continue
+        if record_type == "tool_started":
+            _upsert_folded_operation(
+                operations,
+                tool_call_id=_continuation_string(record, "tool_call_id"),
+                name=_continuation_string(record, "name"),
+                run_id=_continuation_string(record, "run_id"),
+                status="unknown",
+                ok=None,
+                replace_unknown=True,
+            )
+            continue
+        if record_type == "tool_result":
+            _upsert_folded_operation(
+                operations,
+                tool_call_id=_continuation_string(record, "tool_call_id"),
+                name=_continuation_string(record, "name"),
+                run_id=_continuation_string(record, "run_id"),
+                status="completed",
+                ok=record.get("ok") is True,
+                replace_unknown=True,
+            )
+            continue
+        if record_type == "run_interrupted":
+            state.update(
+                {
+                    "latest_run_id": _continuation_string(record, "run_id"),
+                    "cause": _continuation_string(record, "cause"),
+                    "active": False,
+                }
+            )
+            continue
+        if record_type == "resolved" and record.get("checkpoint_id") == state["checkpoint_id"]:
+            state = None
+            requests = []
+            steps = {}
+            operations = {}
+    if state is None:
+        return None
+    return {
+        **state,
+        "requests": requests,
+        "steps": list(steps.values()),
+        "operations": list(operations.values()),
+    }
+
+
+def _continuation_state_from_connection(
+    connection: sqlite3.Connection, session_key: int
+) -> dict[str, Any] | None:
+    state = connection.execute(
+        "SELECT * FROM continuations WHERE session_key = ?", (session_key,)
+    ).fetchone()
+    if state is None:
+        return None
+    requests = [
+        json.loads(str(row["request_json"]))
+        for row in connection.execute(
+            "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    ]
+    steps = [
+        {
+            "run_id": str(row["run_id"]),
+            "step": int(row["step"]),
+            "reasoning": str(row["reasoning"]),
+            "content": str(row["content"]),
+            "assistant_message_id": row["assistant_message_id"],
+            "interrupted": bool(row["interrupted"]),
+        }
+        for row in connection.execute(
+            "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    ]
+    operations = [
+        {
+            "tool_call_id": str(row["tool_call_id"]),
+            "name": str(row["name"]),
+            "run_id": str(row["run_id"]),
+            "status": str(row["status"]),
+            "ok": None if row["ok"] is None else bool(row["ok"]),
+        }
+        for row in connection.execute(
+            "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    ]
+    return {
+        "checkpoint_id": str(state["checkpoint_id"]),
+        "origin_run_id": str(state["origin_run_id"]),
+        "latest_run_id": str(state["latest_run_id"]),
+        "cause": state["cause"],
+        "active": bool(state["active"]),
+        "requests": requests,
+        "steps": steps,
+        "operations": operations,
+    }
 
 
 def _verify_db_expected(path: Path, expected: dict[str, int]) -> dict[str, Any]:
@@ -402,7 +668,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
     capture = _capture_source(source)
     _same_capture(manifest, capture, source)
     result = _verify_db(database, capture.sessions)
-    if manifest.get("staged_sha256") and manifest["staged_sha256"] != result["sha256"]:
+    database_record = manifest.get("database")
+    if not isinstance(database_record, dict) or not isinstance(database_record.get("sha256"), str):
+        raise RuntimeError("conversion manifest is missing database.sha256")
+    if database_record["sha256"] != result["sha256"]:
         raise RuntimeError("staged database hash mismatch")
     if manifest.get("database_id") and manifest["database_id"] != _database_id(database):
         raise RuntimeError("staged database identity mismatch")
@@ -455,46 +724,34 @@ def _remove_maintenance_guard(source: Path) -> None:
 
 
 def _backup_external(
-    backup_dir: Path, source: Path, sessions: tuple[LegacySession, ...], run_id: str
+    backup_dir: Path, source: Path, capture: CaptureInventory, run_id: str
 ) -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
     staging = backup_dir / f".{run_id}.backup.tmp"
     final = backup_dir / f"session-conversion-{run_id}"
     if final.exists():
-        if _external_backup_matches(final, source, sessions):
+        if _external_backup_matches(final, source, capture.artifacts):
             return final
         raise RuntimeError("external conversion backup already exists but does not match capture")
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     try:
-        for session in sessions:
-            for artifact in session.captured_artifacts:
-                if not artifact.present:
-                    continue
-                target = staging / "legacy" / artifact.relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(artifact.path, target)
-                if target.stat().st_size != artifact.size or _sha256(target) != artifact.sha256:
-                    raise RuntimeError(
-                        f"legacy Session source changed while backing up: {artifact.relative_path}"
-                    )
-                _fsync_file(target)
+        for artifact in capture.artifacts:
+            target = staging / "legacy" / artifact.relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(artifact.path, target)
+            if target.stat().st_size != artifact.size or _sha256(target) != artifact.sha256:
+                raise RuntimeError(
+                    f"legacy Session source changed while backing up: {artifact.relative_path}"
+                )
+            _fsync_file(target)
         _write_json(
             staging / "backup-manifest.json",
             {
                 "manifest_version": MANIFEST_VERSION,
                 "source": str(source),
-                "files": [
-                    {
-                        "relative_path": artifact.relative_path,
-                        "sha256": artifact.sha256,
-                        "size": artifact.size,
-                    }
-                    for session in sessions
-                    for artifact in session.captured_artifacts
-                    if artifact.present
-                ],
+                "files": [_artifact_record(artifact) for artifact in capture.artifacts],
             },
         )
         _fsync_dir(staging)
@@ -507,7 +764,7 @@ def _backup_external(
 
 
 def _external_backup_matches(
-    bundle: Path, source: Path, sessions: tuple[LegacySession, ...]
+    bundle: Path, source: Path, artifacts: tuple[CapturedArtifact, ...]
 ) -> bool:
     """Accept an already-published bundle only when its immutable evidence matches."""
 
@@ -516,16 +773,7 @@ def _external_backup_matches(
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
-    expected_files = [
-        {
-            "relative_path": artifact.relative_path,
-            "sha256": artifact.sha256,
-            "size": artifact.size,
-        }
-        for session in sessions
-        for artifact in session.captured_artifacts
-        if artifact.present
-    ]
+    expected_files = [_artifact_record(artifact) for artifact in artifacts]
     if not isinstance(payload, dict) or payload.get("source") != str(source):
         return False
     if payload.get("files") != expected_files:
@@ -562,9 +810,16 @@ def _relocate_sources(
         ]
     else:
         artifacts = [artifact for record in manifest["sources"] for artifact in record["artifacts"]]
-    pending_checkpoint = 0
+    unique_artifacts: dict[str, dict[str, Any]] = {}
     for artifact in artifacts:
+        if not artifact["present"]:
+            continue
         relative_path = str(artifact["relative_path"])
+        previous = unique_artifacts.setdefault(relative_path, artifact)
+        if previous != artifact:
+            raise RuntimeError(f"source manifest has conflicting artifacts: {relative_path}")
+    pending_checkpoint = 0
+    for relative_path, artifact in unique_artifacts.items():
         artifact_size = artifact.get("size")
         if (
             isinstance(artifact_size, bool)
@@ -572,24 +827,32 @@ def _relocate_sources(
             or artifact_size < 0
         ):
             raise RuntimeError(f"source manifest has an invalid size: {relative_path}")
-        if not artifact["present"] or relative_path in relocated:
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"source manifest has an unsafe path: {relative_path}")
+        original = source / relative
+        destination = backup_root / "relocated" / relative
+        source_present = _path_entry_exists(original)
+        destination_present = _path_entry_exists(destination)
+        if relative_path in relocated and not source_present:
+            _require_artifact_match(
+                destination,
+                artifact_size,
+                str(artifact["sha256"]),
+                f"relocated destination changed: {relative_path}",
+            )
             continue
         if pending_checkpoint == 0:
             require_stopped()
-        original = source / Path(relative_path)
-        destination = backup_root / "relocated" / Path(relative_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if original.exists():
-            if original.stat().st_size != artifact_size or _sha256(original) != artifact["sha256"]:
-                raise RuntimeError(f"source changed before relocation: {relative_path}")
-            os.replace(original, destination)
-            _fsync_dir(destination.parent)
-        elif (
-            not destination.is_file()
-            or destination.stat().st_size != artifact_size
-            or _sha256(destination) != artifact["sha256"]
-        ):
-            raise RuntimeError(f"source disappeared before relocation: {relative_path}")
+        _relocate_source_artifact(
+            original,
+            destination,
+            size=artifact_size,
+            sha256=str(artifact["sha256"]),
+            relative_path=relative_path,
+            source_present=source_present,
+            destination_present=destination_present,
+        )
         relocated.add(relative_path)
         pending_checkpoint += 1
         if pending_checkpoint >= _RELOCATION_CHECKPOINT_BATCH_SIZE:
@@ -599,6 +862,93 @@ def _relocate_sources(
     if pending_checkpoint:
         manifest["relocated"] = sorted(relocated)
         _write_json(manifest_path, manifest)
+
+
+def _path_entry_exists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _artifact_matches(path: Path, size: int, sha256: str) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+            return False
+        return _sha256(path) == sha256
+    except OSError:
+        return False
+
+
+def _require_artifact_match(path: Path, size: int, sha256: str, message: str) -> None:
+    if not _artifact_matches(path, size, sha256):
+        raise RuntimeError(message)
+
+
+def _relocate_source_artifact(
+    original: Path,
+    destination: Path,
+    *,
+    size: int,
+    sha256: str,
+    relative_path: str,
+    source_present: bool,
+    destination_present: bool,
+) -> None:
+    """Durably publish one copy before unlinking its accepted legacy source."""
+    temporary = destination.with_name(f".{destination.name}.relocating")
+    if source_present:
+        _require_artifact_match(
+            original,
+            size,
+            sha256,
+            f"source changed before relocation: {relative_path}",
+        )
+    if destination_present:
+        _require_artifact_match(
+            destination,
+            size,
+            sha256,
+            f"relocated destination changed: {relative_path}",
+        )
+    else:
+        temporary_present = _path_entry_exists(temporary)
+        if temporary_present and not _artifact_matches(temporary, size, sha256):
+            if temporary.is_symlink() or not temporary.is_file():
+                raise RuntimeError(f"unsafe relocation temporary: {relative_path}")
+            temporary.unlink()
+            _fsync_dir(destination.parent)
+            temporary_present = False
+        if not temporary_present:
+            if not source_present:
+                raise RuntimeError(f"source disappeared before relocation: {relative_path}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(original, temporary)
+            _require_artifact_match(
+                temporary,
+                size,
+                sha256,
+                f"relocation copy hash mismatch: {relative_path}",
+            )
+            _fsync_file(temporary)
+        os.replace(temporary, destination)
+        _fsync_dir(destination.parent)
+        _require_artifact_match(
+            destination,
+            size,
+            sha256,
+            f"relocated destination changed: {relative_path}",
+        )
+    if source_present:
+        _require_artifact_match(
+            original,
+            size,
+            sha256,
+            f"source changed before relocation: {relative_path}",
+        )
+        original.unlink()
+        _fsync_dir(original.parent)
 
 
 def _publish_database(staged: Path, target: Path) -> None:
@@ -656,6 +1006,13 @@ def _install_from_manifest(
     if stage == "complete":
         _remove_maintenance_guard(source)
         return
+    if stage == "captured":
+        raise RuntimeError("conversion is not complete; resume conversion before install")
+    if not staged.is_file():
+        raise RuntimeError(
+            f"staged database is missing: {staged}; rerun convert in a new "
+            "work directory before install"
+        )
     capture: CaptureInventory | None = None
     if stage in {"converted", "install_preflight", "backup_publishing"}:
         capture = _capture_source(source)
@@ -685,8 +1042,6 @@ def _install_from_manifest(
     if manifest.get("database", {}).get("sha256") != _sha256(staged):
         raise RuntimeError("staged database changed after conversion")
 
-    if manifest["stage"] == "captured":
-        raise RuntimeError("conversion is not complete; resume conversion before install")
     if manifest["stage"] == "converted":
         if backup_dir is None:
             raise RuntimeError("install requires an external backup directory")
@@ -698,9 +1053,7 @@ def _install_from_manifest(
             backup_dir = Path(str(manifest["backup_dir"]))
         if capture is None:
             raise RuntimeError("source capture is unavailable before external backup")
-        backup_root = _backup_external(
-            backup_dir, source, capture.sessions, str(manifest["run_id"])
-        )
+        backup_root = _backup_external(backup_dir, source, capture, str(manifest["run_id"]))
         manifest["backup_dir"] = str(backup_root)
         _set_stage(manifest_path, manifest, "backup_publishing")
     backup_root = Path(str(manifest["backup_dir"]))
@@ -783,6 +1136,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         _set_stage(manifest_path, manifest, "converted")
         print(f"resume: converted staged database at {staged}")
         return 0
+    if args.host is None or args.port is None:
+        raise SystemExit(
+            f"resume of install stage {manifest['stage']} requires both --host and --port"
+        )
     _install_from_manifest(manifest_path, manifest, str(args.host), int(args.port), None)
     print(f"resume: {manifest['stage']} at {manifest_path}")
     return 0
@@ -832,8 +1189,14 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
                     "sha256": _write_export_file(transcript_path, transcript),
                 }
             ]
-            for suffix, key in (("meta.json", "metadata_json"), ("activity.json", "activity_json")):
-                payload = str(row[key]).encode("utf-8")
+            sidecars = (
+                ("meta.json", SessionStore.metadata_from_state(row)),
+                ("activity.json", json.loads(str(row["activity_json"]))),
+            )
+            for suffix, value in sidecars:
+                payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
                 path = session_root / f"{row['session_id']}.{suffix}"
                 files.append(
                     {
@@ -906,8 +1269,8 @@ def _parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=cmd_install)
     command = subcommands.add_parser("resume")
     command.add_argument("--manifest", required=True)
-    command.add_argument("--host", required=True)
-    command.add_argument("--port", required=True, type=int)
+    command.add_argument("--host")
+    command.add_argument("--port", type=int)
     command.set_defaults(handler=cmd_resume)
     command = subcommands.add_parser("export-jsonl")
     command.add_argument("--database", required=True)

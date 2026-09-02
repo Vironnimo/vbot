@@ -29,6 +29,7 @@ class CapturedArtifact:
     sha256: str
     size: int
     mtime_ns: int | None
+    classification: str = "unclassified"
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,7 @@ class CaptureInventory:
     """Immutable source capture plus non-fatal discovery evidence."""
 
     sessions: tuple[LegacySession, ...]
+    artifacts: tuple[CapturedArtifact, ...]
     orphan_sidecars: tuple[str, ...]
     unknown_files: tuple[str, ...]
     rejected_paths: tuple[str, ...]
@@ -136,8 +138,10 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
 
     sessions: list[LegacySession] = []
     skipped_sessions: list[JsonObject] = []
+    captured_artifacts: dict[str, CapturedArtifact] = {}
     seen_paths: set[Path] = set()
     seen_live: set[SessionAddress] = set()
+    candidate_transcripts = {transcript for _specification, transcript in candidates}
     for specification, transcript in sorted(
         candidates, key=lambda item: (item[0].archived, item[1].relative_to(root).as_posix())
     ):
@@ -145,6 +149,28 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
         if resolved in seen_paths:
             continue
         seen_paths.add(resolved)
+        captures: list[CapturedArtifact] = []
+        capture_error: ValueError | None = None
+        for kind, path in zip(
+            ("transcript", "metadata", "activity", "continuation"),
+            _artifacts(transcript),
+            strict=True,
+        ):
+            try:
+                captures.append(_capture_artifact(root, path, kind))
+            except ValueError as exc:
+                rejected.add(path.relative_to(root).as_posix())
+                capture_error = capture_error or exc
+        if capture_error is not None:
+            classified = _classified_artifacts(captures, "skipped_session")
+            _retain_artifacts(captured_artifacts, classified)
+            skipped_sessions.append(
+                {
+                    "relative_path": transcript.relative_to(root).as_posix(),
+                    "reason": str(capture_error),
+                }
+            )
+            continue
         relative_parts = transcript.relative_to(root).parts
         project_id = (
             relative_parts[specification.project_index]
@@ -156,6 +182,9 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
         try:
             _validate_address(address, transcript)
         except ValueError as exc:
+            _retain_artifacts(
+                captured_artifacts, _classified_artifacts(captures, "skipped_session")
+            )
             skipped_sessions.append(
                 {
                     "relative_path": transcript.relative_to(root).as_posix(),
@@ -165,6 +194,9 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
             continue
         if not specification.archived:
             if address in seen_live:
+                _retain_artifacts(
+                    captured_artifacts, _classified_artifacts(captures, "skipped_session")
+                )
                 skipped_sessions.append(
                     {
                         "relative_path": transcript.relative_to(root).as_posix(),
@@ -174,8 +206,14 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
                 continue
             seen_live.add(address)
         try:
-            sessions.append(_capture_session(root, specification, transcript, address))
+            accepted = _classified_artifacts(captures, "accepted_source")
+            session = _capture_session(root, specification, transcript, address, accepted)
+            sessions.append(session)
+            _retain_artifacts(captured_artifacts, accepted)
         except ValueError as exc:
+            _retain_artifacts(
+                captured_artifacts, _classified_artifacts(captures, "skipped_session")
+            )
             skipped_sessions.append(
                 {
                     "relative_path": transcript.relative_to(root).as_posix(),
@@ -183,24 +221,31 @@ def capture_inventory(data_dir: Path) -> CaptureInventory:
                 }
             )
 
-    known_artifacts = {
-        artifact.relative_path
-        for session in sessions
-        for artifact in session.captured_artifacts
-        if artifact.present
-    }
+    known_artifacts = set(captured_artifacts)
     unknown.difference_update(known_artifacts)
-    transcript_paths = {session.transcript for session in sessions}
     orphan_sidecars: set[str] = set()
     for path_text in sorted(unknown):
         path = root / Path(path_text)
-        if _is_sidecar_name(path.name):
-            transcript_name = path.name.split(".", 1)[0] + ".jsonl"
-            if path.with_name(transcript_name) not in transcript_paths:
-                orphan_sidecars.add(path_text)
+        is_orphan = _is_sidecar_name(path.name) and (
+            path.with_name(_sidecar_transcript_name(path.name)) not in candidate_transcripts
+        )
+        classification = "orphan_sidecar" if is_orphan else "unknown_file"
+        if is_orphan:
+            orphan_sidecars.add(path_text)
+        try:
+            artifact = _capture_artifact(root, path, "evidence")
+        except ValueError:
+            rejected.add(path_text)
+            continue
+        if artifact.present:
+            _retain_artifacts(
+                captured_artifacts,
+                (replace(artifact, classification=classification),),
+            )
 
     return CaptureInventory(
         sessions=tuple(sessions),
+        artifacts=tuple(captured_artifacts[path] for path in sorted(captured_artifacts)),
         orphan_sidecars=tuple(sorted(orphan_sidecars)),
         unknown_files=tuple(sorted(unknown - orphan_sidecars)),
         rejected_paths=tuple(sorted(rejected)),
@@ -237,11 +282,7 @@ def _match_root(
                 continue
             if entry.name.endswith(".jsonl") and not entry.name.endswith(".continuation.jsonl"):
                 matches.append(entry)
-            elif (
-                entry.name.endswith(".jsonl")
-                or _is_sidecar_name(entry.name)
-                or entry.name.endswith((".json", ".db"))
-            ):
+            else:
                 unknown.add(entry.relative_to(root).as_posix())
     return matches
 
@@ -306,16 +347,12 @@ def _path_components(root: Path, path: Path) -> list[Path]:
 
 
 def _capture_session(
-    root: Path, specification: LegacyRoot, transcript: Path, address: SessionAddress
+    root: Path,
+    specification: LegacyRoot,
+    transcript: Path,
+    address: SessionAddress,
+    captures: tuple[CapturedArtifact, ...],
 ) -> LegacySession:
-    captures = [
-        _capture_artifact(root, path, kind)
-        for kind, path in zip(
-            ("transcript", "metadata", "activity", "continuation"),
-            _artifacts(transcript),
-            strict=True,
-        )
-    ]
     messages, transcript_tail = _parse_messages(captures[0])
     metadata = _parse_object(captures[1])
     activity = _parse_object(captures[2])
@@ -337,6 +374,20 @@ def _capture_session(
         captured_artifacts=tuple(replace(artifact, data=b"") for artifact in captures),
         ignored_tails=(*transcript_tail, *continuation_tail),
     )
+
+
+def _classified_artifacts(
+    artifacts: list[CapturedArtifact], classification: str
+) -> tuple[CapturedArtifact, ...]:
+    return tuple(replace(artifact, classification=classification) for artifact in artifacts)
+
+
+def _retain_artifacts(
+    retained: dict[str, CapturedArtifact], artifacts: tuple[CapturedArtifact, ...]
+) -> None:
+    for artifact in artifacts:
+        if artifact.present:
+            retained[artifact.relative_path] = replace(artifact, data=b"")
 
 
 def _capture_artifact(root: Path, path: Path, kind: str) -> CapturedArtifact:
@@ -491,3 +542,10 @@ def _artifacts(transcript: Path) -> tuple[Path, Path, Path, Path]:
 
 def _is_sidecar_name(name: str) -> bool:
     return name.endswith((".meta.json", ".activity.json", ".continuation.jsonl"))
+
+
+def _sidecar_transcript_name(name: str) -> str:
+    for suffix in (".meta.json", ".activity.json", ".continuation.jsonl"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)] + ".jsonl"
+    raise ValueError(f"not a legacy Session sidecar: {name}")
