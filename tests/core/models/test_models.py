@@ -1713,6 +1713,28 @@ class TestModelRegistryRealResources:
             assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
 
     @pytest.mark.parametrize(
+        ("model_id", "max_output_tokens"),
+        [
+            ("deepseek-v4-flash:0731", 65_536),
+            ("deepseek-v4-pro:0813", 65_536),
+            ("glm-5.2", 131_072),
+            ("kimi-k2.7-code", 262_144),
+            ("minimax-m2.7", 131_072),
+            ("minimax-m3", 131_072),
+            ("nemotron-3-nano:30b", 131_072),
+            ("nemotron-3-super", 65_536),
+            ("nemotron-3-ultra", 65_536),
+            ("qwen3.5:397b", 65_536),
+        ],
+    )
+    def test_ollama_cloud_gateway_output_limits(
+        self, model_id: str, max_output_tokens: int
+    ) -> None:
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        assert registry.get("ollama-cloud", model_id).max_output_tokens == max_output_tokens
+
+    @pytest.mark.parametrize(
         ("provider_id", "model_id", "reasoning_field", "provider_replay", "model_replay"),
         [
             ("ollama-cloud", "glm-5.2", "reasoning", "full_history", None),

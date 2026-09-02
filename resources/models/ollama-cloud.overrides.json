@@ -167,6 +167,7 @@
             }
         },
         "minimax-m2.7": {
+            "max_output_tokens": 131072,
             "capabilities": {
                 "reasoning": {
                     "supported": true
@@ -221,6 +222,7 @@
             }
         },
         "nemotron-3-ultra": {
+            "max_output_tokens": 65536,
             "reasoning_replay": "none",
             "metadata": {
                 "ollama": {
