@@ -1497,7 +1497,11 @@ async def test_large_session_descriptor_list_returns_bounded_first_ten_without_c
                 timestamp=timestamp(1),
             ),
         )
-    monkeypatch.setattr(sessions, "list_with_metadata", lambda *_args: summaries)
+    monkeypatch.setattr(
+        sessions,
+        "list_recall_summaries",
+        lambda *_args, **_kwargs: summaries[:11],
+    )
     monkeypatch.setattr(
         sessions,
         "descriptor_sources",

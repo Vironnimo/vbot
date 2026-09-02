@@ -741,6 +741,7 @@ export function createChatController({
       }
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
+        nextBefore: history?.next_before,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,
@@ -803,6 +804,7 @@ export function createChatController({
 
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
+        nextBefore: history?.next_before,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,
@@ -840,9 +842,11 @@ export function createChatController({
       return false;
     }
     const before =
+      sessionState.historyBefore ||
       (sessionState.messages ?? []).find(
         (message) => typeof message?.id === 'string' && message.id.length > 0,
-      )?.id ?? '';
+      )?.id ||
+      '';
     if (!before) {
       sessionState.hasOlderHistory = false;
       return false;
@@ -858,6 +862,7 @@ export function createChatController({
       });
       prependHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
+        nextBefore: history?.next_before,
         backgroundBashStatuses: history?.background_bash_statuses,
       });
       return true;
@@ -1346,6 +1351,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       backgroundBashStatuses: {},
       reflectionTasks: {},
       hasOlderHistory: false,
+      historyBefore: '',
       loadingOlderHistory: false,
       hasUnreadCompletion: false,
       latestCompletionRunId: '',
@@ -1549,6 +1555,10 @@ export function loadHistory(sessionState, messages, options = {}) {
   sessionState.messages = visibleMessages;
   sessionState.historyLoaded = true;
   sessionState.hasOlderHistory = options.hasMore === true;
+  sessionState.historyBefore =
+    options.hasMore === true && typeof options.nextBefore === 'string'
+      ? options.nextBefore
+      : '';
   sessionState.runEvents = retainedRunEvents;
   sessionState.streamingRunEvents = retainedStreamingRunEvents;
   sessionState.streamingPhase = retainedStreamingPhase;
@@ -1628,6 +1638,10 @@ export function prependHistory(sessionState, messages, options = {}) {
 
   sessionState.messages = [...olderMessages, ...(sessionState.messages ?? [])];
   sessionState.hasOlderHistory = options.hasMore === true;
+  sessionState.historyBefore =
+    options.hasMore === true && typeof options.nextBefore === 'string'
+      ? options.nextBefore
+      : '';
   if (isRecord(options.backgroundBashStatuses)) {
     sessionState.backgroundBashStatuses = {
       ...options.backgroundBashStatuses,

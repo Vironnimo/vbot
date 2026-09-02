@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
     ReasoningRenderDescriber,
+    StatusSessionFacts,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
@@ -28,6 +29,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -118,11 +120,11 @@ def make_status_handler(
             return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
 
         try:
-            messages = sessions.get(
+            snapshot = sessions.get(
                 SessionAddress(
                     project_id=context.project_id, agent_id=agent_id, session_id=session_id
                 )
-            ).load()
+            ).status_snapshot()
         except ChatSessionError:
             return tool_failure(
                 "session_not_found",
@@ -137,7 +139,13 @@ def make_status_handler(
         try:
             text = build_status_reply(
                 agent,
-                messages,
+                StatusSessionFacts(
+                    first_message_at=snapshot.first_message_at,
+                    user_message_count=snapshot.user_message_count,
+                    latest_assistant_usage=snapshot.latest_assistant_usage,
+                    session_usage=snapshot.session_usage,
+                    cache_input_tokens=snapshot.cache_input_tokens,
+                ),
                 model_details.context_window,
                 started_at,
                 model_details.display_name,
@@ -194,17 +202,19 @@ def register_status_tool(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        make_status_handler(
-            agent_resolver,
-            sessions,
-            models,
-            chat_runs,
-            started_at,
-            providers,
-            projects,
-            local_context_windows_loader,
-            reasoning_render_describer,
-            timezone_name_loader,
+        offload_tool_handler(
+            make_status_handler(
+                agent_resolver,
+                sessions,
+                models,
+                chat_runs,
+                started_at,
+                providers,
+                projects,
+                local_context_windows_loader,
+                reasoning_render_describer,
+                timezone_name_loader,
+            )
         ),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},

@@ -32,6 +32,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
 )
+from core.sessions import ChatSession
 from core.sessions.format import write_bootstrap_marker
 from core.tools.tools import tool_success
 from server.events import ServerEventBus
@@ -351,6 +352,69 @@ async def test_chat_history_limit_returns_newest_visible_messages(tmp_path: Path
         "message-005",
     ]
     assert result["has_more"] is True
+    assert result["next_before"].startswith("vh1.")
+
+
+@pytest.mark.asyncio
+async def test_chat_history_cursor_is_unambiguous_when_message_ids_repeat(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    messages = [
+        replace(ChatMessage.user("zero"), id="zero"),
+        replace(ChatMessage.user("older duplicate"), id="duplicate"),
+        replace(ChatMessage.user("two"), id="two"),
+        replace(ChatMessage.user("newer duplicate"), id="duplicate"),
+        replace(ChatMessage.user("four"), id="four"),
+    ]
+    session.append_many(messages)
+
+    first = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 2}},
+    )
+    second = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {
+                "agent_id": "parent",
+                "limit": 2,
+                "before": first["result"]["next_before"],
+            },
+        },
+    )
+
+    assert [message["content"] for message in second["result"]["messages"]] == [
+        "older duplicate",
+        "two",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_history_does_not_load_a_complete_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    for index in range(1, 6):
+        session.append(_history_message(index))
+
+    def fail_full_load(self: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("chat.history must use its bounded Session read model")
+
+    monkeypatch.setattr(ChatSession, "load", fail_full_load)
+    monkeypatch.setattr(ChatSession, "load_active", fail_full_load)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 2}},
+    )
+
+    assert response["ok"] is True
+    assert [message["id"] for message in response["result"]["messages"]] == [
+        "message-004",
+        "message-005",
+    ]
 
 
 @pytest.mark.asyncio

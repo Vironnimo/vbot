@@ -896,7 +896,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
         summaries = await asyncio.to_thread(
-            self.sessions.list_with_metadata,
+            self.sessions.list_summaries,
             request.agent_id,
             request.project_id,
         )

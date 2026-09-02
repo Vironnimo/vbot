@@ -161,8 +161,12 @@ class SessionSource(Protocol):
 
     data_dir: Path
 
-    def list_with_metadata(
-        self, agent_id: str, project_id: str | None = None
+    def list_summaries(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+        *,
+        metadata_keys: Sequence[str] = (),
     ) -> list[JsonObject]: ...
 
     def get(self, address: SessionAddress) -> ChatSession: ...
@@ -873,7 +877,7 @@ class _Aggregator:
 
         ``agent_id`` is the report display key (bare id, or ``agent@projekt`` for
         a project Session). ``summary`` is the Session's merged canonical metadata
-        (from ``list_with_metadata``), carrying ``created_at`` and any
+        (from the narrow Session summary projection), carrying ``created_at`` and
         ``seen_skills``. All non-skills aggregates run over the in-window
         messages; the skills tally is fed the full activation notes and applies
         its own window (offered by session ``created_at``, activated by note
@@ -1707,7 +1711,13 @@ class StatisticsService:
                 project_id=None,
                 agent_id=agent.id,
                 display_key=agent.id,
-                summaries=tuple(self._sessions.list_with_metadata(agent.id, None)),
+                summaries=tuple(
+                    self._sessions.list_summaries(
+                        agent.id,
+                        None,
+                        metadata_keys=("seen_skills",),
+                    )
+                ),
             )
             for agent in self._agents.list()
         ]
@@ -1717,7 +1727,13 @@ class StatisticsService:
                     project_id=project_id,
                     agent_id=agent_id,
                     display_key=f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}",
-                    summaries=tuple(self._sessions.list_with_metadata(agent_id, project_id)),
+                    summaries=tuple(
+                        self._sessions.list_summaries(
+                            agent_id,
+                            project_id,
+                            metadata_keys=("seen_skills",),
+                        )
+                    ),
                 )
             )
         return tuple(scopes)
@@ -1803,7 +1819,11 @@ class StatisticsService:
     ) -> None:
         """Aggregate one session scope under its report display key."""
         resolved_summaries = (
-            self._sessions.list_with_metadata(agent_id, project_id)
+            self._sessions.list_summaries(
+                agent_id,
+                project_id,
+                metadata_keys=("seen_skills",),
+            )
             if summaries is None
             else summaries
         )
@@ -1837,7 +1857,11 @@ class StatisticsService:
         summaries: list[JsonObject] | None = None,
     ) -> None:
         resolved_summaries = (
-            self._sessions.list_with_metadata(agent_id, project_id)
+            self._sessions.list_summaries(
+                agent_id,
+                project_id,
+                metadata_keys=("seen_skills",),
+            )
             if summaries is None
             else summaries
         )

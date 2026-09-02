@@ -482,6 +482,54 @@ def test_cursor_freezes_snapshot_across_appends_and_later_compaction(tmp_path: P
     assert appended.id not in {message["id"] for message in _messages(second_page)}
 
 
+def test_cursor_uses_checkpoint_sequence_when_public_ids_repeat(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("agent", session_id="session-one")
+    first = ChatMessage.user("first")
+    first_checkpoint = _checkpoint("first")
+    second = ChatMessage.user("second")
+    third = ChatMessage.user("third")
+    repeated_checkpoint_data = _checkpoint("second").to_dict()
+    repeated_checkpoint_data["id"] = first_checkpoint.id
+    repeated_checkpoint = ChatMessage.from_dict(repeated_checkpoint_data)
+    for message in (first, first_checkpoint, second, third, repeated_checkpoint):
+        session.append(message)
+
+    first_page = _data(_call(manager, session, {"action": "read", "limit": 1}))
+    second_page = _data(
+        _call(manager, session, {"action": "read", "cursor": first_page["next_cursor"]})
+    )
+
+    assert first_page["snapshot"]["checkpoint_id"] == first_checkpoint.id
+    assert [message["id"] for message in _messages(second_page)] == [second.id]
+
+
+def test_search_scans_canonical_records_in_bounded_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("agent", session_id="session-one")
+    for index in range(300):
+        session.append(ChatMessage.user(f"ordinary record {index}"))
+    needle = ChatMessage.user("needle")
+    session.append(needle)
+    session.append(_checkpoint())
+    original = ChatSession.load_history_records
+    limits: list[int] = []
+
+    def recording_read(self: ChatSession, *args: Any, **kwargs: Any) -> Any:
+        limits.append(cast(int, kwargs["limit"]))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "load_history_records", recording_read)
+
+    data = _data(_call(manager, session, {"action": "search", "query": "needle", "limit": 1}))
+
+    assert [item["message_id"] for item in data["items"]] == [needle.id]
+    assert len(limits) == 3
+    assert max(limits) == 128
+
+
 def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
     tmp_path: Path,
 ) -> None:
@@ -633,11 +681,29 @@ def test_session_read_failure_returns_history_session_error(
     session = manager.create("agent", session_id="session-one")
     session.append(_checkpoint())
 
-    def fail_load(self: ChatSession) -> list[ChatMessage]:
+    def fail_load(self: ChatSession, *, snapshot_sequence: int | None = None) -> Any:
         raise OSError("database read failed")
 
-    monkeypatch.setattr(ChatSession, "load_active", fail_load)
+    monkeypatch.setattr(ChatSession, "resolve_history_snapshot", fail_load)
 
     result = _call(manager, session, {"action": "read"})
 
     assert result["error"]["code"] == "history_session_error"
+
+
+def test_history_reads_do_not_load_the_complete_active_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("agent", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    session.append(_checkpoint())
+
+    def fail_load_active(self: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("History must use bounded Session reads")
+
+    monkeypatch.setattr(ChatSession, "load_active", fail_load_active)
+
+    result = _call(manager, session, {"action": "read"})
+
+    assert result["ok"] is True

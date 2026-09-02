@@ -460,7 +460,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         active_session_ids = {
             str(summary["id"])
             for summary in cast(
-                list[JsonObject], self.sessions.list_with_metadata(agent_id, request.project_id)
+                list[JsonObject], self.sessions.list_summaries(agent_id, request.project_id)
             )
         }
         indexed_session_ids = {

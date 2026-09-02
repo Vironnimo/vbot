@@ -15,6 +15,7 @@ from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningRenderDescriber,
+    StatusSessionFacts,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
@@ -1429,7 +1430,7 @@ class CommandDispatcher:
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
         agent: RuntimeAgent | None = None
-        messages: list[ChatMessage] = []
+        status_session: list[ChatMessage] | StatusSessionFacts = []
         try:
             if self._agent_resolver is not None:
                 agent = await _COMMAND_WORKERS.run(
@@ -1460,10 +1461,17 @@ class CommandDispatcher:
                         session_id=context.session_id,
                     ),
                 )
-                messages = await _command_session_io(
+                snapshot = await _command_session_io(
                     session,
-                    "load_async",
-                    "load",
+                    "status_snapshot_async",
+                    "status_snapshot",
+                )
+                status_session = StatusSessionFacts(
+                    first_message_at=snapshot.first_message_at,
+                    user_message_count=snapshot.user_message_count,
+                    latest_assistant_usage=snapshot.latest_assistant_usage,
+                    session_usage=snapshot.session_usage,
+                    cache_input_tokens=snapshot.cache_input_tokens,
                 )
         except Exception as error:
             log = (
@@ -1489,7 +1497,7 @@ class CommandDispatcher:
         )
         text = build_status_reply(
             agent,
-            messages,
+            status_session,
             model_details.context_window,
             self._started_at,
             model_details.display_name,

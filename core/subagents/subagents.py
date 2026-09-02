@@ -227,21 +227,12 @@ def _inspect_subagent_work(
             status=SUBAGENT_STATUS_QUEUED,
         )
 
-    messages = session.load()
-    summary = next(
-        (
-            message
-            for message in reversed(messages)
-            if message.role == "run_summary" and message.work_id == work_id
-        ),
-        None,
-    )
-    if summary is None or summary.run_id is None or summary.status is None:
+    run_result = session.load_run_result(work_id=work_id)
+    if run_result is None:
         return None
-    terminal_result = _terminal_session_result(messages, summary.run_id)
-    if terminal_result is None:
+    assistant, summary = run_result.assistant, run_result.summary
+    if summary.run_id is None or summary.status is None:
         return None
-    assistant, _ = terminal_result
     inspection = _subagent_work_inspection(
         work_id,
         agent_id,
@@ -252,7 +243,7 @@ def _inspect_subagent_work(
         result=assistant.content if assistant is not None else None,
         usage=assistant.usage if assistant is not None else None,
         timing=summary.timing,
-        tool_name=_latest_tool_name_from_segment(messages, summary.run_id),
+        tool_name=run_result.latest_tool_name,
     )
     if assistant is not None:
         _add_interruption_details(inspection, assistant)
@@ -298,35 +289,6 @@ def _latest_tool_name_from_run(run: Run) -> str | None:
         name = tool_call.get("name")
         if isinstance(name, str) and name:
             return name
-    return None
-
-
-def _latest_tool_name_from_segment(
-    messages: list[ChatMessage],
-    run_id: str,
-) -> str | None:
-    summary_index = next(
-        (
-            index
-            for index in range(len(messages) - 1, -1, -1)
-            if messages[index].role == "run_summary" and messages[index].run_id == run_id
-        ),
-        None,
-    )
-    if summary_index is None:
-        return None
-    segment_start = next(
-        (
-            index + 1
-            for index in range(summary_index - 1, -1, -1)
-            if messages[index].role == "run_summary"
-        ),
-        0,
-    )
-    for message in reversed(messages[segment_start:summary_index]):
-        for tool_call in reversed(message.tool_calls or []):
-            if tool_call.name:
-                return tool_call.name
     return None
 
 
@@ -1211,7 +1173,7 @@ def _result_from_session(
         session = runtime.chat_sessions.get(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         )
-        messages = session.load()
+        run_result = session.load_run_result(run_id=run_id, require_latest=run_id is None)
     except ChatSessionError as error:
         return (
             _with_target_project(
@@ -1230,8 +1192,7 @@ def _result_from_session(
             False,
         )
 
-    terminal_result = _terminal_session_result(messages, run_id)
-    if terminal_result is None:
+    if run_result is None:
         return (
             _with_target_project(
                 {
@@ -1249,7 +1210,7 @@ def _result_from_session(
             False,
         )
 
-    assistant, summary = terminal_result
+    assistant, summary = run_result.assistant, run_result.summary
     result = _with_target_project(
         {
             "agent_id": agent_id,
@@ -1418,53 +1379,6 @@ def _should_poll_session_result(result: JsonObject) -> bool:
 
 def _session_result_has_output(result: JsonObject) -> bool:
     return bool(result.get("result"))
-
-
-def _terminal_session_result(
-    messages: list[ChatMessage],
-    run_id: str | None,
-) -> tuple[ChatMessage | None, ChatMessage] | None:
-    summary_index: int | None = None
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.role != "run_summary":
-            continue
-        if run_id is None or message.run_id == run_id:
-            summary_index = index
-            break
-    if summary_index is None:
-        return None
-
-    summary = messages[summary_index]
-    if summary.run_id is None or summary.status not in {
-        RunStatus.COMPLETED.value,
-        RunStatus.FAILED.value,
-        RunStatus.CANCELLED.value,
-        RunStatus.INTERRUPTED.value,
-    }:
-        return None
-
-    if run_id is None and any(
-        message.role in {"user", "assistant", "tool", "error"}
-        for message in messages[summary_index + 1 :]
-    ):
-        return None
-
-    segment_start = 0
-    for index in range(summary_index - 1, -1, -1):
-        if messages[index].role == "run_summary":
-            segment_start = index + 1
-            break
-
-    assistant = next(
-        (
-            message
-            for message in reversed(messages[segment_start:summary_index])
-            if message.role == "assistant" and message.content
-        ),
-        None,
-    )
-    return assistant, summary
 
 
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:

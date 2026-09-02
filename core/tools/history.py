@@ -9,9 +9,16 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import (
+    ChatSession,
+    ChatSessionManager,
+    SessionAddress,
+    SessionHistoryCheckpoint,
+    SessionHistoryRecord,
+    SessionHistorySnapshot,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -51,7 +58,8 @@ HISTORY_DIRECTIONS = ("start", "end")
 HISTORY_RESULT_MAX_BYTES = 50 * 1024
 HISTORY_SEARCH_EXCERPT_CHARS = 320
 HISTORY_OVERVIEW_SUMMARY_CHARS = 320
-HISTORY_CURSOR_VERSION = 1
+HISTORY_CURSOR_VERSION = 2
+HISTORY_SCAN_BATCH_SIZE = 128
 
 _HISTORY_CHECKPOINT_PARAMETER: JsonObject = {
     "type": "integer",
@@ -148,10 +156,13 @@ _CURSOR_KEYS = frozenset(
     {
         "v",
         "session_id",
+        "generation_id",
         "action",
+        "snapshot_seq",
         "snapshot_id",
         "snapshot_ordinal",
         "checkpoint",
+        "checkpoint_seq",
         "checkpoint_id",
         "roles",
         "direction",
@@ -161,9 +172,8 @@ _CURSOR_KEYS = frozenset(
         "before",
         "after",
         "message_id",
-        "next_index",
+        "next_seq",
         "within_offset",
-        "next_item_id",
     }
 )
 
@@ -175,40 +185,19 @@ class _HistoryError(ValueError):
 
 
 @dataclass(frozen=True)
-class _Checkpoint:
-    ordinal: int
-    index: int
-    message: Any
-
-
-@dataclass(frozen=True)
-class _Record:
-    message: JsonObject
-    checkpoint: int
-    search_text: str
-
-    @property
-    def id(self) -> str:
-        return str(self.message["id"])
-
-    @property
-    def role(self) -> str:
-        return str(self.message["role"])
-
-    @property
-    def timestamp(self) -> str:
-        return str(self.message["timestamp"])
-
-
-@dataclass(frozen=True)
 class _Snapshot:
-    messages: tuple[Any, ...]
-    checkpoints: tuple[_Checkpoint, ...]
-    records: tuple[_Record, ...]
+    generation_id: str
+    checkpoints: tuple[SessionHistoryCheckpoint, ...]
 
     @property
-    def latest(self) -> _Checkpoint:
+    def latest(self) -> SessionHistoryCheckpoint:
         return self.checkpoints[-1]
+
+
+@dataclass(frozen=True)
+class _SourceItem:
+    sequence: int
+    data: JsonObject
 
 
 @dataclass(frozen=True)
@@ -223,9 +212,8 @@ class _Request:
     before: int
     after: int
     message_id: str | None
-    next_index: int = 0
+    next_sequence: int | None = None
     within_offset: int = 0
-    next_item_id: str | None = None
 
 
 def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) -> None:
@@ -272,26 +260,38 @@ def make_history_handler(sessions: ChatSessionManager):
         direction = ""
         try:
             try:
-                messages = sessions.get(
+                session = sessions.get(
                     SessionAddress(
                         project_id=context.project_id,
                         agent_id=context.agent_id,
                         session_id=context.session_id,
                     )
-                ).load_active()
+                )
             except Exception as error:
                 raise _HistoryError(
                     "history_session_error", "Unable to read canonical Session history."
                 ) from error
-            if not any(message.role == "compaction_checkpoint" for message in messages):
+
+            cursor_payload = _cursor_payload(arguments, context.session_id)
+            snapshot_sequence = (
+                cursor_payload.get("snapshot_seq") if cursor_payload is not None else None
+            )
+            if snapshot_sequence is not None and (
+                isinstance(snapshot_sequence, bool) or not isinstance(snapshot_sequence, int)
+            ):
+                raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+            resolved = session.resolve_history_snapshot(snapshot_sequence=snapshot_sequence)
+            if resolved is None:
+                if cursor_payload is not None:
+                    raise _HistoryError("invalid_cursor", "History cursor is invalid.")
                 raise _HistoryError(
                     "history_unavailable",
                     "History is unavailable until this Session has a successful Compaction.",
                 )
-
-            cursor_payload = _cursor_payload(arguments, context.session_id)
-            snapshot_id = cursor_payload.get("snapshot_id") if cursor_payload is not None else None
-            snapshot = _build_snapshot(messages, snapshot_id=snapshot_id)
+            snapshot = _Snapshot(
+                generation_id=resolved.generation_id,
+                checkpoints=resolved.checkpoints,
+            )
             request = (
                 _request_from_cursor(cursor_payload, snapshot, context.session_id)
                 if cursor_payload is not None
@@ -300,7 +300,7 @@ def make_history_handler(sessions: ChatSessionManager):
             action = request.action
             checkpoint = request.checkpoint
             direction = request.direction
-            source = _source_items(snapshot, request)
+            source = _source_items(session, snapshot, request)
             _validate_cursor_position(request, source)
             data = _render_page(snapshot, request, source, context.session_id)
             result = tool_success(data)
@@ -334,69 +334,11 @@ def make_history_handler(sessions: ChatSessionManager):
     return history_handler
 
 
-def _build_snapshot(messages: list[Any], *, snapshot_id: Any = None) -> _Snapshot:
-    all_checkpoints = [
-        _Checkpoint(ordinal=ordinal, index=index, message=message)
-        for ordinal, (index, message) in enumerate(
-            (
-                (index, message)
-                for index, message in enumerate(messages)
-                if message.role == "compaction_checkpoint"
-            ),
-            start=1,
-        )
-    ]
-    if not all_checkpoints:
-        raise _HistoryError("history_unavailable", "History is unavailable.")
-    if snapshot_id is None:
-        upper = all_checkpoints[-1]
-    elif isinstance(snapshot_id, str):
-        matched = next(
-            (checkpoint for checkpoint in all_checkpoints if checkpoint.message.id == snapshot_id),
-            None,
-        )
-        if matched is None:
-            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
-        upper = matched
-    else:
-        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
-
-    checkpoints = tuple(
-        checkpoint for checkpoint in all_checkpoints if checkpoint.ordinal <= upper.ordinal
-    )
-    history_call_ids = {
-        tool_call.id
-        for message in messages[: upper.index]
-        if message.role == "assistant" and message.tool_calls
-        for tool_call in message.tool_calls
-        if tool_call.name == HISTORY_TOOL_NAME
-    }
-    records: list[_Record] = []
-    next_section = 1
-    for message in messages[: upper.index]:
-        if message.role == "compaction_checkpoint":
-            next_section += 1
-            continue
-        sanitized = _sanitize_record(message.to_dict(), history_call_ids)
-        if sanitized is None:
-            continue
-        records.append(
-            _Record(
-                message=sanitized,
-                checkpoint=next_section,
-                search_text=_record_search_text(sanitized),
-            )
-        )
-    return _Snapshot(messages=tuple(messages), checkpoints=checkpoints, records=tuple(records))
-
-
-def _sanitize_record(data: JsonObject, history_call_ids: set[str]) -> JsonObject | None:
+def _sanitize_record(data: JsonObject) -> JsonObject | None:
     role = data.get("role")
     if role == "compaction_checkpoint":
         return None
-    if role == "tool" and (
-        data.get("name") == HISTORY_TOOL_NAME or data.get("tool_call_id") in history_call_ids
-    ):
+    if role == "tool" and data.get("name") == HISTORY_TOOL_NAME:
         return None
     if role != "assistant":
         return dict(data)
@@ -524,7 +466,11 @@ def _request_from_cursor(
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if payload.get("session_id") != session_id:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
-    if payload.get("snapshot_id") != snapshot.latest.message.id:
+    if payload.get("generation_id") != snapshot.generation_id:
+        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+    if payload.get("snapshot_seq") != snapshot.latest.sequence:
+        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+    if payload.get("snapshot_id") != snapshot.latest.message_id:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if payload.get("snapshot_ordinal") != snapshot.latest.ordinal:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
@@ -538,27 +484,30 @@ def _request_from_cursor(
     ):
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     selected = _checkpoint(snapshot, checkpoint, cursor=True)
-    if payload.get("checkpoint_id") != (selected.message.id if selected is not None else None):
+    if payload.get("checkpoint_seq") != (selected.sequence if selected is not None else None):
+        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+    if payload.get("checkpoint_id") != (selected.message_id if selected is not None else None):
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
 
     direction = payload.get("direction")
     match = payload.get("match")
     query = payload.get("query")
     message_id = payload.get("message_id")
-    next_item_id = payload.get("next_item_id")
     if direction not in HISTORY_DIRECTIONS or match not in HISTORY_MATCH_MODES:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if query is not None and not isinstance(query, str):
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if message_id is not None and not isinstance(message_id, str):
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
-    if next_item_id is not None and not isinstance(next_item_id, str):
-        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     limit = _cursor_int(payload.get("limit"), minimum=1, maximum=100)
     before = _cursor_int(payload.get("before"), minimum=0, maximum=100)
     after = _cursor_int(payload.get("after"), minimum=0, maximum=100)
-    next_index = _cursor_int(payload.get("next_index"), minimum=0)
+    next_sequence = payload.get("next_seq")
+    if next_sequence is not None:
+        next_sequence = _cursor_int(next_sequence, minimum=0)
     within_offset = _cursor_int(payload.get("within_offset"), minimum=0)
+    if next_sequence is None:
+        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if action == "overview" and (
         checkpoint is not None
         or roles != HISTORY_DEFAULT_ROLES
@@ -607,89 +556,200 @@ def _request_from_cursor(
         before=before,
         after=after,
         message_id=message_id,
-        next_index=next_index,
+        next_sequence=next_sequence,
         within_offset=within_offset,
-        next_item_id=next_item_id,
     )
 
 
-def _source_items(snapshot: _Snapshot, request: _Request) -> list[JsonObject]:
+def _source_items(
+    session: ChatSession,
+    snapshot: _Snapshot,
+    request: _Request,
+) -> list[_SourceItem]:
+    amount = request.limit if request.action != "around" else request.before + request.after + 1
     if request.action == "overview":
-        return [_overview_item(snapshot, checkpoint) for checkpoint in snapshot.checkpoints]
-
-    records = [
-        record
-        for record in snapshot.records
-        if (request.checkpoint is None or record.checkpoint == request.checkpoint)
-        and record.role in request.roles
-    ]
-    if request.action == "search":
-        return [
-            {
-                "message_id": record.id,
-                "role": record.role,
-                "timestamp": record.timestamp,
-                "checkpoint": record.checkpoint,
-                "excerpt": _search_excerpt(record.search_text, request.query or "", request.match),
-            }
-            for record in records
-            if _matches(record.search_text, request.query or "", request.match)
+        checkpoints = list(snapshot.checkpoints)
+        if request.next_sequence is not None:
+            start = next(
+                (
+                    index
+                    for index, checkpoint in enumerate(checkpoints)
+                    if checkpoint.sequence == request.next_sequence
+                ),
+                None,
+            )
+            if start is None:
+                return []
+            checkpoints = checkpoints[start:]
+        selected = checkpoints[: amount + 1]
+        sections = [
+            (
+                -1
+                if checkpoint.ordinal == 1
+                else snapshot.checkpoints[checkpoint.ordinal - 2].sequence,
+                checkpoint.sequence,
+            )
+            for checkpoint in selected
         ]
-    if request.action == "read":
-        if request.direction == "end":
-            records.reverse()
-        return [_record_item(record) for record in records]
-
-    assert request.action == "around"
-    assert request.message_id is not None
-    if not any(message.id == request.message_id for message in snapshot.messages):
-        raise _HistoryError("message_not_found", "History message was not found.")
-    anchor_index = next(
-        (index for index, record in enumerate(records) if record.id == request.message_id),
-        None,
-    )
-    if anchor_index is None:
-        raise _HistoryError(
-            "anchor_outside_scope", "History message is outside the selected scope."
+        stats = session.history_section_stats(
+            SessionHistorySnapshot(snapshot.generation_id, snapshot.checkpoints),
+            sections=sections,
+            excluded_tool_name=HISTORY_TOOL_NAME,
         )
-    start = max(0, anchor_index - request.before)
-    end = min(len(records), anchor_index + request.after + 1)
-    return [_record_item(record) for record in records[start:end]]
+        if stats is None:
+            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+        return [
+            _SourceItem(
+                checkpoint.sequence,
+                {
+                    "checkpoint": checkpoint.ordinal,
+                    "checkpoint_id": checkpoint.message_id,
+                    "timestamp": checkpoint.timestamp,
+                    "start_timestamp": stats[checkpoint.sequence].start_timestamp,
+                    "end_timestamp": stats[checkpoint.sequence].end_timestamp,
+                    "eligible_count": stats[checkpoint.sequence].eligible_count,
+                    "summary": _bounded_preview(checkpoint.summary, HISTORY_OVERVIEW_SUMMARY_CHARS),
+                },
+            )
+            for checkpoint in selected
+        ]
+
+    lower_sequence, upper_sequence = _history_bounds(snapshot, request.checkpoint)
+    resolved_snapshot = SessionHistorySnapshot(snapshot.generation_id, snapshot.checkpoints)
+    if request.action == "around":
+        assert request.message_id is not None
+        around = session.load_history_around(
+            resolved_snapshot,
+            lower_sequence=lower_sequence,
+            upper_sequence=upper_sequence,
+            roles=request.roles,
+            message_id=request.message_id,
+            before=request.before,
+            after=request.after,
+            excluded_tool_name=HISTORY_TOOL_NAME,
+        )
+        if around is None:
+            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+        exists, records = around
+        if not exists:
+            raise _HistoryError("message_not_found", "History message was not found.")
+        if not records:
+            raise _HistoryError(
+                "anchor_outside_scope", "History message is outside the selected scope."
+            )
+        around_source = [_record_source_item(snapshot, record) for record in records]
+        if request.next_sequence is not None:
+            start = next(
+                (
+                    index
+                    for index, item in enumerate(around_source)
+                    if item.sequence == request.next_sequence
+                ),
+                None,
+            )
+            if start is None:
+                return []
+            around_source = around_source[start:]
+        return around_source
+
+    if request.action == "read":
+        read_records = session.load_history_records(
+            resolved_snapshot,
+            lower_sequence=lower_sequence,
+            upper_sequence=upper_sequence,
+            roles=request.roles,
+            direction=request.direction,
+            cursor_sequence=request.next_sequence,
+            limit=amount + 1,
+            excluded_tool_name=HISTORY_TOOL_NAME,
+        )
+        if read_records is None:
+            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+        return [_record_source_item(snapshot, record) for record in read_records]
+
+    assert request.action == "search"
+    source: list[_SourceItem] = []
+    scan_sequence = request.next_sequence
+    while len(source) < amount + 1:
+        search_records = session.load_history_records(
+            resolved_snapshot,
+            lower_sequence=lower_sequence,
+            upper_sequence=upper_sequence,
+            roles=request.roles,
+            direction="start",
+            cursor_sequence=scan_sequence,
+            limit=HISTORY_SCAN_BATCH_SIZE,
+            excluded_tool_name=HISTORY_TOOL_NAME,
+        )
+        if search_records is None:
+            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+        if not search_records:
+            break
+        for record in search_records:
+            data = _sanitized_record(record)
+            search_text = _record_search_text(data)
+            if _matches(search_text, request.query or "", request.match):
+                source.append(
+                    _SourceItem(
+                        record.sequence,
+                        {
+                            "message_id": str(data["id"]),
+                            "role": str(data["role"]),
+                            "timestamp": str(data["timestamp"]),
+                            "checkpoint": _record_checkpoint(snapshot, record.sequence),
+                            "excerpt": _search_excerpt(
+                                search_text, request.query or "", request.match
+                            ),
+                        },
+                    )
+                )
+                if len(source) >= amount + 1:
+                    break
+        if len(source) >= amount + 1 or len(search_records) < HISTORY_SCAN_BATCH_SIZE:
+            break
+        scan_sequence = search_records[-1].sequence + 1
+    return source
 
 
-def _overview_item(snapshot: _Snapshot, checkpoint: _Checkpoint) -> JsonObject:
-    section = [
-        record
-        for record in snapshot.records
-        if record.checkpoint == checkpoint.ordinal and record.role in HISTORY_DEFAULT_ROLES
-    ]
-    summary = checkpoint.message.content if isinstance(checkpoint.message.content, str) else ""
-    return {
-        "checkpoint": checkpoint.ordinal,
-        "checkpoint_id": checkpoint.message.id,
-        "timestamp": checkpoint.message.timestamp,
-        "start_timestamp": section[0].timestamp if section else None,
-        "end_timestamp": section[-1].timestamp if section else None,
-        "eligible_count": len(section),
-        "summary": _bounded_preview(summary, HISTORY_OVERVIEW_SUMMARY_CHARS),
-    }
+def _history_bounds(snapshot: _Snapshot, ordinal: int | None) -> tuple[int, int]:
+    selected = _checkpoint(snapshot, ordinal)
+    if selected is None:
+        return -1, snapshot.latest.sequence
+    lower = -1 if selected.ordinal == 1 else snapshot.checkpoints[selected.ordinal - 2].sequence
+    return lower, selected.sequence
 
 
-def _record_item(record: _Record) -> JsonObject:
-    return {"checkpoint": record.checkpoint, "message": dict(record.message)}
+def _record_checkpoint(snapshot: _Snapshot, sequence: int) -> int:
+    return 1 + sum(checkpoint.sequence < sequence for checkpoint in snapshot.checkpoints)
+
+
+def _sanitized_record(record: SessionHistoryRecord) -> JsonObject:
+    sanitized = _sanitize_record(record.message.to_dict())
+    if sanitized is None:
+        raise _HistoryError("history_session_error", "History record is malformed.")
+    return sanitized
+
+
+def _record_source_item(snapshot: _Snapshot, record: SessionHistoryRecord) -> _SourceItem:
+    return _SourceItem(
+        record.sequence,
+        {
+            "checkpoint": _record_checkpoint(snapshot, record.sequence),
+            "message": _sanitized_record(record),
+        },
+    )
 
 
 def _render_page(
     snapshot: _Snapshot,
     request: _Request,
-    source: list[JsonObject],
+    source: list[_SourceItem],
     session_id: str,
 ) -> JsonObject:
-    start = request.next_index
     amount = request.limit if request.action != "around" else request.before + request.after + 1
-    target_end = min(len(source), start + amount)
+    target_end = min(len(source), amount)
     items: list[JsonObject] = []
-    index = start
+    index = 0
     within_offset = request.within_offset
     while index < target_end:
         item = source[index]
@@ -699,15 +759,14 @@ def _render_page(
             candidate = _page_data(
                 snapshot,
                 request,
-                [*items, item],
+                [*items, item.data],
                 session_id,
-                next_index=next_index,
+                next_sequence=source[next_index].sequence if has_more else None,
                 within_offset=0,
-                next_item_id=_item_id(source[next_index]) if has_more else None,
                 has_more=has_more,
             )
             if _serialized_result_bytes(candidate) <= HISTORY_RESULT_MAX_BYTES:
-                items.append(item)
+                items.append(item.data)
                 index = next_index
                 continue
             if items:
@@ -716,9 +775,8 @@ def _render_page(
                     request,
                     items,
                     session_id,
-                    next_index=index,
+                    next_sequence=item.sequence,
                     within_offset=0,
-                    next_item_id=_item_id(item),
                     has_more=True,
                 )
             if request.action not in {"read", "around"}:
@@ -740,9 +798,8 @@ def _render_page(
         request,
         items,
         session_id,
-        next_index=index,
+        next_sequence=source[index].sequence if index < len(source) else None,
         within_offset=0,
-        next_item_id=_item_id(source[index]) if index < len(source) else None,
         has_more=index < len(source),
     )
 
@@ -750,13 +807,13 @@ def _render_page(
 def _segmented_record_page(
     snapshot: _Snapshot,
     request: _Request,
-    source: list[JsonObject],
+    source: list[_SourceItem],
     index: int,
     offset: int,
     session_id: str,
 ) -> JsonObject:
     item = source[index]
-    message = item.get("message")
+    message = item.data.get("message")
     if not isinstance(message, dict):
         raise _HistoryError("history_session_error", "History record is malformed.")
     record_json = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
@@ -771,13 +828,13 @@ def _segmented_record_page(
         incomplete = end < len(record_json)
         next_index = index if incomplete else index + 1
         has_more = incomplete or next_index < len(source)
-        next_item_id = (
-            _item_id(item)
+        next_sequence = (
+            item.sequence
             if incomplete
-            else (_item_id(source[next_index]) if next_index < len(source) else None)
+            else (source[next_index].sequence if next_index < len(source) else None)
         )
         segment = {
-            "checkpoint": item["checkpoint"],
+            "checkpoint": item.data["checkpoint"],
             "message_id": message.get("id"),
             "role": message.get("role"),
             "timestamp": message.get("timestamp"),
@@ -793,9 +850,8 @@ def _segmented_record_page(
             request,
             [segment],
             session_id,
-            next_index=next_index,
+            next_sequence=next_sequence,
             within_offset=end if incomplete else 0,
-            next_item_id=next_item_id,
             has_more=has_more,
         )
         if _serialized_result_bytes(candidate) <= HISTORY_RESULT_MAX_BYTES:
@@ -816,9 +872,8 @@ def _page_data(
     items: list[JsonObject],
     session_id: str,
     *,
-    next_index: int,
+    next_sequence: int | None,
     within_offset: int,
-    next_item_id: str | None,
     has_more: bool,
 ) -> JsonObject:
     selected = _checkpoint(snapshot, request.checkpoint)
@@ -826,12 +881,12 @@ def _page_data(
         "action": request.action,
         "snapshot": {
             "checkpoint": snapshot.latest.ordinal,
-            "checkpoint_id": snapshot.latest.message.id,
-            "timestamp": snapshot.latest.message.timestamp,
+            "checkpoint_id": snapshot.latest.message_id,
+            "timestamp": snapshot.latest.timestamp,
         },
         "scope": {
             "checkpoint": request.checkpoint,
-            "checkpoint_id": selected.message.id if selected is not None else None,
+            "checkpoint_id": selected.message_id if selected is not None else None,
         },
         "items": items,
         "has_more": has_more,
@@ -843,9 +898,8 @@ def _page_data(
                 snapshot,
                 request,
                 session_id,
-                next_index=next_index,
+                next_sequence=next_sequence,
                 within_offset=within_offset,
-                next_item_id=next_item_id,
             )
         )
     return _with_formatted_bytes(data)
@@ -856,19 +910,21 @@ def _cursor_for(
     request: _Request,
     session_id: str,
     *,
-    next_index: int,
+    next_sequence: int | None,
     within_offset: int,
-    next_item_id: str | None,
 ) -> JsonObject:
     selected = _checkpoint(snapshot, request.checkpoint)
     return {
         "v": HISTORY_CURSOR_VERSION,
         "session_id": session_id,
+        "generation_id": snapshot.generation_id,
         "action": request.action,
-        "snapshot_id": snapshot.latest.message.id,
+        "snapshot_seq": snapshot.latest.sequence,
+        "snapshot_id": snapshot.latest.message_id,
         "snapshot_ordinal": snapshot.latest.ordinal,
         "checkpoint": request.checkpoint,
-        "checkpoint_id": selected.message.id if selected is not None else None,
+        "checkpoint_seq": selected.sequence if selected is not None else None,
+        "checkpoint_id": selected.message_id if selected is not None else None,
         "roles": list(request.roles),
         "direction": request.direction,
         "query": request.query,
@@ -877,21 +933,17 @@ def _cursor_for(
         "before": request.before,
         "after": request.after,
         "message_id": request.message_id,
-        "next_index": next_index,
+        "next_seq": next_sequence,
         "within_offset": within_offset,
-        "next_item_id": next_item_id,
     }
 
 
-def _validate_cursor_position(request: _Request, source: list[JsonObject]) -> None:
-    if request.next_index < 0 or request.next_index >= len(source):
-        if request.next_index == 0 and not source and request.next_item_id is None:
-            return
-        raise _HistoryError("invalid_cursor", "History cursor is invalid.")
-    if (
-        request.next_item_id is not None
-        and _item_id(source[request.next_index]) != request.next_item_id
-    ):
+def _validate_cursor_position(request: _Request, source: list[_SourceItem]) -> None:
+    if request.next_sequence is None:
+        if request.within_offset:
+            raise _HistoryError("invalid_cursor", "History cursor is invalid.")
+        return
+    if not source or source[0].sequence != request.next_sequence:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if request.within_offset and request.action not in {"read", "around"}:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
@@ -902,7 +954,7 @@ def _checkpoint(
     ordinal: int | None,
     *,
     cursor: bool = False,
-) -> _Checkpoint | None:
+) -> SessionHistoryCheckpoint | None:
     if ordinal is None:
         return None
     selected = next(
@@ -963,16 +1015,6 @@ def _enum(value: Any, values: tuple[str, ...], field: str) -> str:
     if not isinstance(value, str) or value not in values:
         raise _HistoryError("invalid_arguments", f"{field} is invalid")
     return value
-
-
-def _item_id(item: JsonObject) -> str:
-    message = item.get("message")
-    if isinstance(message, dict) and isinstance(message.get("id"), str):
-        return cast(str, message["id"])
-    for key in ("message_id", "checkpoint_id"):
-        if isinstance(item.get(key), str):
-            return str(item[key])
-    raise _HistoryError("history_session_error", "History item has no immutable id.")
 
 
 def _record_search_text(data: JsonObject) -> str:

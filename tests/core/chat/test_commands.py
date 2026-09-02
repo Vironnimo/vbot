@@ -35,6 +35,7 @@ from core.chat.status_report import (
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_temperature,
+    status_session_facts,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
@@ -240,6 +241,9 @@ class _StubSession:
 
     def load(self) -> list[ChatMessage]:
         return list(self._messages)
+
+    def status_snapshot(self) -> Any:
+        return status_session_facts(self._messages)
 
 
 class _StubCreatedSession:

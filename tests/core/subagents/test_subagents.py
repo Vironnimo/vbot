@@ -25,7 +25,7 @@ from core.runs import (
     RunAdmission,
     RunNotFoundError,
 )
-from core.sessions import SessionAddress
+from core.sessions import ChatSession, SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -474,6 +474,7 @@ def make_runtime(
 
 async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -510,6 +511,11 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
             iteration_count=1,
         )
     )
+
+    def fail_full_load(self: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("Sub-Agent inspection must use the terminal Run projection")
+
+    monkeypatch.setattr(ChatSession, "load", fail_full_load)
 
     result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
         "worker",

@@ -545,21 +545,13 @@ class BootstrapService:
             if session_id is None:
                 continue
             try:
-                messages = self._sessions.get(
+                summary = self._sessions.get(
                     SessionAddress(
                         project_id=job.project_id, agent_id=job.agent_id, session_id=session_id
                     )
-                ).load()
+                ).find_run_summary(run_id=job.last_run_id)
             except Exception:
                 continue
-            summary = next(
-                (
-                    message
-                    for message in reversed(messages)
-                    if message.role == "run_summary" and message.run_id == job.last_run_id
-                ),
-                None,
-            )
             if summary is None or summary.status not in {
                 "completed",
                 "failed",

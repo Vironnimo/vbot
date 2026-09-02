@@ -397,29 +397,17 @@ async def _list_sessions(
     sessions: ChatSessionManager,
 ) -> JsonObject:
     agent_id = _agent_id(arguments, context)
-    summaries = await run_tool_worker(sessions.list_with_metadata, agent_id, context.project_id)
-    summaries = _visible_session_summaries(
-        summaries,
-        include_subagents=arguments.get("include_subagents") is True,
-    )
-    if agent_id == context.agent_id:
-        summaries = [
-            summary for summary in summaries if str(summary.get("id")) != context.session_id
-        ]
     since, until = _parse_period(arguments.get("period"))
-    if since is not None or until is not None:
-        matching_ids = await run_tool_worker(
-            sessions.session_ids_with_messages,
-            agent_id,
-            context.project_id,
-            SESSION_RECALL_DEFAULT_ROLES,
-            since,
-            until,
-        )
-        summaries = [
-            summary for summary in summaries if str(summary.get("id") or "") in matching_ids
-        ]
-    summaries.sort(key=lambda item: str(item.get("last_active_at") or ""), reverse=True)
+    summaries = await run_tool_worker(
+        sessions.list_recall_summaries,
+        agent_id,
+        context.project_id,
+        include_subagents=arguments.get("include_subagents") is True,
+        excluded_session_id=context.session_id if agent_id == context.agent_id else None,
+        since=since,
+        until=until,
+        limit=SESSION_SEARCH_DEFAULT_LIMIT + 1,
+    )
     selected_summaries = summaries[:SESSION_SEARCH_DEFAULT_LIMIT]
     page = await run_tool_worker(
         _session_summary_items,
@@ -592,7 +580,7 @@ async def _search_sessions(
             "session_search_unavailable", "Canonical Session storage is unavailable."
         )
     summaries = await run_tool_worker(
-        sessions.list_with_metadata,
+        sessions.list_summaries,
         agent_id,
         context.project_id,
     )

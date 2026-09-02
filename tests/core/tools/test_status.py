@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,7 @@ from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningIntent,
     build_status_text,
+    status_session_facts,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
@@ -123,6 +125,9 @@ class _StubSession:
     def load(self) -> list[ChatMessage]:
         return list(self._messages)
 
+    def status_snapshot(self) -> Any:
+        return status_session_facts(self._messages)
+
 
 class _StubSessions:
     def __init__(self, messages: list[ChatMessage]) -> None:
@@ -194,6 +199,7 @@ def test_status_tool_registered_with_correct_name() -> None:
     assert "oneOf" not in tool.parameters
     assert "additionalProperties" not in tool.parameters
     assert tool.open_input_schema is True
+    assert inspect.iscoroutinefunction(tool.handler)
 
 
 def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
