@@ -62,6 +62,7 @@ from core.sessions.sqlite_runtime import (
     TRANSCRIPT_WRITE_PATIENCE_S,
     WRITE_PATIENCE_S,
     SQLiteRuntime,
+    classify_write_error,
 )
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ _DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 JsonObject = dict[str, Any]
 
 _SESSION_METADATA_PROJECTION_VERSION_KEY = "session_metadata_projection_version"
-_SESSION_METADATA_PROJECTION_VERSION = "2"
+_SESSION_METADATA_PROJECTION_VERSION = "3"
 _SESSION_METADATA_SCALAR_COLUMNS = (
     ("title", "title"),
     ("auto_title", "auto_title"),
@@ -681,10 +682,27 @@ _FTS_BATCH_SIZE = 100
 _FTS_REBUILD_THROTTLE_S = 0.01
 _OFFLINE_IMPORT_CACHE_KIB = 262_144
 _SEARCH_RESULT_LIMIT = 1_000
-_SEARCH_FETCH_BATCH_SIZE = 100
+_CANONICAL_SEARCH_SCAN_LIMIT = 10_000
 _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
 _CONTINUATION_RECORD_VERSION = 1
 _CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
+
+
+class _FtsSearchRows(builtins.list[tuple["SessionAddress", str, str, str, float]]):
+    """List-compatible search rows with internal fallback coverage metadata."""
+
+    def __init__(
+        self,
+        rows: Sequence[tuple[SessionAddress, str, str, str, float]] = (),
+        *,
+        source: str,
+        complete: bool = True,
+        fallback_reason: str | None = None,
+    ) -> None:
+        super().__init__(rows)
+        self.source = source
+        self.complete = complete
+        self.fallback_reason = fallback_reason
 
 
 def _fts_meta(connection: sqlite3.Connection, key: str) -> str | None:
@@ -1522,9 +1540,16 @@ class SessionStore:
                     with suppress(Exception):
                         self._runtime.execute_write(_detach_fts, patience_s=patience_s)
                     continue
-                raise SessionStoreUnavailableError(
-                    f"Session database write failed: {self.path}"
-                ) from exc
+                classification = classify_write_error(exc)
+                if classification == "corrupt":
+                    raise SessionStoreCorruptError(
+                        f"Session database write found corruption: {self.path}"
+                    ) from exc
+                if classification == "unavailable":
+                    raise SessionStoreUnavailableError(
+                        f"Session database write failed: {self.path}"
+                    ) from exc
+                raise
 
     def _try_wal_checkpoint(self) -> None:
         self._runtime.checkpoint()
@@ -1797,8 +1822,10 @@ class SessionStore:
             if self._find_live(connection, address) is not None:
                 return
             connection.execute(
-                "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, *self._scope(address), timestamp),
+                "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, "
+                "created_at, active_sort) VALUES (?, ?, ?, ?, ?, "
+                "COALESCE(julianday(?), 0.0))",
+                (uuid.uuid4().hex, *self._scope(address), timestamp, timestamp),
             )
 
         self._execute_write(_fn)
@@ -2883,7 +2910,9 @@ class SessionStore:
 
         def canonical_rows(
             connection: sqlite3.Connection,
-        ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+            *,
+            fallback_reason: str,
+        ) -> _FtsSearchRows:
             sql = (
                 f"SELECT s.project_id, s.agent_id, s.session_id, {_MESSAGE_RECORD_COLUMNS} "
                 f"FROM messages AS m {_MESSAGE_RECORD_JOINS} "
@@ -2916,36 +2945,40 @@ class SessionStore:
                 placeholders = ", ".join("?" for _ in excluded_session_ids)
                 sql += f" AND s.session_id NOT IN ({placeholders})"
                 params.extend(excluded_session_ids)
-            sql += " ORDER BY m.timestamp DESC, m.message_key"
+            sql += " ORDER BY julianday(m.timestamp) DESC, m.message_key DESC LIMIT ?"
+            params.append(_CANONICAL_SEARCH_SCAN_LIMIT + 1)
             result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
-            cursor = connection.execute(sql, params)
-            while len(result) < limit:
-                batch = cursor.fetchmany(_SEARCH_FETCH_BATCH_SIZE)
-                if not batch:
-                    break
-                for row in batch:
-                    message = message_from_row(row)
-                    if not matches(_search_projection(message)):
-                        continue
-                    payload = _message_payload(row)
-                    from core.sessions.sessions import SessionAddress as SessionAddr
+            candidates = connection.execute(sql, params).fetchmany(_CANONICAL_SEARCH_SCAN_LIMIT + 1)
+            complete = len(candidates) <= _CANONICAL_SEARCH_SCAN_LIMIT
+            for row in candidates[:_CANONICAL_SEARCH_SCAN_LIMIT]:
+                message = message_from_row(row)
+                if not matches(_search_projection(message)):
+                    continue
+                payload = _message_payload(row)
+                from core.sessions.sessions import SessionAddress as SessionAddr
 
-                    result.append(
-                        (
-                            SessionAddr(
-                                project_id=row["project_id"] or None,
-                                agent_id=row["agent_id"],
-                                session_id=row["session_id"],
-                            ),
-                            str(row["message_id"]),
-                            str(row["timestamp"]),
-                            payload,
-                            0.0,
-                        )
+                result.append(
+                    (
+                        SessionAddr(
+                            project_id=row["project_id"] or None,
+                            agent_id=row["agent_id"],
+                            session_id=row["session_id"],
+                        ),
+                        str(row["message_id"]),
+                        str(row["timestamp"]),
+                        payload,
+                        0.0,
                     )
-                    if len(result) >= limit:
-                        break
-            return result
+                )
+                if len(result) >= limit:
+                    complete = True
+                    break
+            return _FtsSearchRows(
+                result,
+                source="canonical",
+                complete=complete,
+                fallback_reason=fallback_reason,
+            )
 
         terms = [term for term in compact.split(" ") if term]
         if match_mode == "phrase":
@@ -2960,14 +2993,14 @@ class SessionStore:
 
         if not self.is_fts_available():
             with self._transaction(write=False) as connection:
-                return canonical_rows(connection)
+                return canonical_rows(connection, fallback_reason="fts_unavailable")
 
         try:
             with self._transaction(write=False) as connection:
 
                 def query_fts(
                     fts_table: str,
-                ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+                ) -> _FtsSearchRows:
                     sql = (
                         f"SELECT s.project_id, s.agent_id, s.session_id, "
                         f"{_MESSAGE_RECORD_COLUMNS}, bm25({fts_table}) AS rank "
@@ -3023,13 +3056,13 @@ class SessionStore:
                                 float(row["rank"]) if row["rank"] is not None else 0.0,
                             )
                         )
-                    return found
+                    return _FtsSearchRows(found, source="fts")
 
                 result = query_fts(FTS_TABLE)
                 if not result and trigram_supported and not (roles is not None and "tool" in roles):
                     result = query_fts(FTS_TRIGRAM_TABLE)
                 if not result and (roles is None or "tool" in roles):
-                    result = canonical_rows(connection)
+                    result = canonical_rows(connection, fallback_reason="tool_inclusive")
                 return result
         except sqlite3.Error as exc:
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
@@ -3037,7 +3070,7 @@ class SessionStore:
                 with suppress(Exception):
                     self._execute_write(lambda connection: _detach_fts(connection, error_message))
             with self._transaction(write=False) as connection:
-                return canonical_rows(connection)
+                return canonical_rows(connection, fallback_reason="fts_error")
 
     def archive(self, address: SessionAddress) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")

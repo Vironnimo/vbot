@@ -386,3 +386,62 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
         assert len(reopened.fts_search("resume", project_id=None, agent_id="agent")) == 105
     finally:
         reopened.close()
+
+
+def test_time_filter_uses_instant_index_and_preserves_timestamp_encodings(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="instant-boundary")
+    equivalent = [
+        ChatMessage.user("boundary z"),
+        ChatMessage.user("boundary utc"),
+        ChatMessage.user("boundary offset"),
+    ]
+    before = ChatMessage.user("boundary before")
+    after = ChatMessage.user("boundary after")
+    session.append_many([before, *equivalent, after])
+    try:
+        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            connection.executemany(
+                "UPDATE messages SET timestamp = ? WHERE message_id = ?",
+                [
+                    ("2026-05-01T12:00:00.249Z", before.id),
+                    ("2026-05-01T12:00:00.250Z", equivalent[0].id),
+                    ("2026-05-01T12:00:00.250+00:00", equivalent[1].id),
+                    ("2026-05-01T14:00:00.250+02:00", equivalent[2].id),
+                    ("2026-05-01T12:00:00.251Z", after.id),
+                ],
+            )
+            session_key = connection.execute(
+                "SELECT session_key FROM sessions WHERE session_id = ?",
+                (session.address.session_id,),
+            ).fetchone()[0]
+            plan = " ".join(
+                str(row[3])
+                for row in connection.execute(
+                    "EXPLAIN QUERY PLAN SELECT message_id FROM messages "
+                    "WHERE session_key = ? AND julianday(timestamp) >= julianday(?) "
+                    "AND julianday(timestamp) <= julianday(?)",
+                    (
+                        session_key,
+                        "2026-05-01T12:00:00.250Z",
+                        "2026-05-01T12:00:00.250Z",
+                    ),
+                )
+            )
+            selected = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT message_id FROM messages "
+                    "WHERE session_key = ? AND julianday(timestamp) >= julianday(?) "
+                    "AND julianday(timestamp) <= julianday(?)",
+                    (
+                        session_key,
+                        "2026-05-01T12:00:00.250Z",
+                        "2026-05-01T12:00:00.250Z",
+                    ),
+                )
+            }
+        assert "messages_by_session_instant" in plan
+        assert selected == {message.id for message in equivalent}
+    finally:
+        sessions.close()

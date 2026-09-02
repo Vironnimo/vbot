@@ -110,6 +110,27 @@ def passage_request(
     )
 
 
+def message_request(
+    query: str,
+    *,
+    roles: tuple[str, ...] = ("user", "assistant", "error", "compaction_checkpoint"),
+    limit: int = 20,
+) -> RecallSearchRequest:
+    return RecallSearchRequest(
+        agent_id="coder",
+        project_id=None,
+        session_id=None,
+        query=query,
+        since=None,
+        until=None,
+        roles=roles,
+        match_mode="all_terms",
+        order="relevance",
+        offset=0,
+        limit=limit,
+    )
+
+
 async def test_sqlite_fts_passage_arm_returns_multiple_source_faithful_hits(
     tmp_path: Path,
 ) -> None:
@@ -431,3 +452,53 @@ async def test_sqlite_fts_identity_recall_unchanged_by_project_field(tmp_path: P
 
     assert [m["session_id"] for m in explicit_none["matches"]] == ["s1"]
     assert [m["session_id"] for m in default["matches"]] == ["s1"]
+
+
+async def test_tool_inclusive_substring_search_uses_complete_bounded_fallback(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    target = ChatMessage.tool(
+        tool_call_id="call-target",
+        name="read",
+        content='{"ok":true,"data":"prefixneedle"}',
+        timestamp=timestamp(1),
+    )
+    sessions.create("coder", session_id="tool-substring").append(target)
+    try:
+        page = await backend(tmp_path, sessions).search_page(
+            message_request("needle", roles=("tool",))
+        )
+
+        assert [hit.message_id for hit in page.hits] == [target.id]
+        assert page.ranking == "substring_scan_newest"
+        assert page.degraded is False
+        assert page.degradation_reason is None
+    finally:
+        sessions.close()
+
+
+async def test_large_canonical_fallback_reports_partial_instead_of_false_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.sessions import store as store_module
+
+    monkeypatch.setattr(store_module, "_CANONICAL_SEARCH_SCAN_LIMIT", 3)
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="bounded-fallback")
+    target = ChatMessage.user("prefixhiddenneedle", timestamp=timestamp(1))
+    session.append_many(
+        [target]
+        + [ChatMessage.user(f"filler {day}", timestamp=timestamp(day)) for day in range(2, 8)]
+    )
+    monkeypatch.setattr(sessions._store, "is_fts_available", lambda: False)
+    try:
+        page = await backend(tmp_path, sessions).search_page(message_request("hiddenneedle"))
+
+        assert page.hits == ()
+        assert page.ranking == "substring_scan_newest"
+        assert page.degraded is True
+        assert page.degradation_reason
+    finally:
+        sessions.close()

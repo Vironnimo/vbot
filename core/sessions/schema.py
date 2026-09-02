@@ -122,6 +122,9 @@ CREATE TABLE messages (
 CREATE INDEX messages_by_session_time
   ON messages (session_key, timestamp, seq);
 
+CREATE INDEX messages_by_session_instant
+  ON messages (session_key, julianday(timestamp), seq);
+
 CREATE INDEX messages_by_message_id
   ON messages (session_key, message_id);
 

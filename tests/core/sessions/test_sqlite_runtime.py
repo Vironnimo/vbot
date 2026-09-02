@@ -86,6 +86,23 @@ def test_busy_transaction_retries_as_one_idempotent_unit(tmp_path: Path) -> None
         runtime.close()
 
 
+def test_failed_write_rolls_back_before_preserving_an_unclassified_error(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.writer.execute("CREATE TABLE rollback_probe (value TEXT NOT NULL UNIQUE)")
+
+    def write(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO rollback_probe(value) VALUES ('transient')")
+        raise sqlite3.IntegrityError("injected unexpected constraint")
+
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="unexpected constraint"):
+            runtime.execute_write(write)
+        assert runtime.writer.in_transaction is False
+        assert runtime.writer.execute("SELECT COUNT(*) FROM rollback_probe").fetchone()[0] == 0
+    finally:
+        runtime.close()
+
+
 def test_reader_permits_are_bounded_and_released_on_failure(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     readers = []

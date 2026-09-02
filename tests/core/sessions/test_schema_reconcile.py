@@ -464,3 +464,47 @@ def test_store_moves_an_existing_wal_database_off_vulnerable_wal(tmp_path, monke
     store.close()
     # Hermes WAL-reset safety: never live-downgrade an existing WAL DB.
     assert _journal_mode(database) == "wal"
+
+
+def test_reopen_repairs_zero_active_sort_for_metadata_only_ensure_live_session(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    address = SessionAddress(None, "agent", "metadata-only")
+    store = SessionStore(database)
+    store.ensure_live(address)
+    store.close()
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE sessions SET active_sort = 0 WHERE session_id = ?",
+            (address.session_id,),
+        )
+        connection.execute(
+            "UPDATE store_meta SET value = '2' WHERE key = 'session_metadata_projection_version'"
+        )
+        connection.commit()
+
+    repaired = SessionStore(database)
+    try:
+        state = repaired.state(address)
+        expected = repaired._writer.execute(
+            "SELECT julianday(created_at) FROM sessions WHERE session_id = ?",
+            (address.session_id,),
+        ).fetchone()[0]
+        assert state["message_count"] == 0
+        assert state["active_sort"] == pytest.approx(expected)
+    finally:
+        repaired.close()
+
+    reopened = SessionStore(database)
+    try:
+        state = reopened.state(address)
+        assert state["message_count"] == 0
+        assert state["active_sort"] == pytest.approx(expected)
+        assert (
+            reopened._writer.execute(
+                "SELECT value FROM store_meta WHERE key = 'session_metadata_projection_version'"
+            ).fetchone()[0]
+            == "3"
+        )
+    finally:
+        reopened.close()
