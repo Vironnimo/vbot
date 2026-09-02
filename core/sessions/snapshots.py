@@ -38,6 +38,7 @@ SNAPSHOT_HEALTH_FILE = "session-snapshot-health.json"
 SNAPSHOT_KEEP_COUNT = 5
 SNAPSHOT_KEEP_BYTES = 512 * 1024 * 1024
 SNAPSHOT_RESERVE_BYTES = 64 * 1024 * 1024
+SNAPSHOT_LOCK_TIMEOUT_SECONDS = 10.0
 MANIFEST_VERSION = 1
 _SNAPSHOT_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 _HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -76,6 +77,12 @@ class _SnapshotVerification:
     message_count: int
     latest_history_revision: int
     latest_state_revision: int
+
+
+@dataclass(frozen=True)
+class _SnapshotInventoryEntry:
+    path: Path
+    manifest: SnapshotManifest
 
 
 @dataclass
@@ -583,7 +590,7 @@ def create_snapshot(
         os.replace(partial, final)
         partial = None
         _fsync_dir(root)
-        _prune_snapshots(root)
+        _prune_snapshots(root, protected_snapshot=final)
         _record_snapshot_health(data_dir, "healthy", snapshot_id=snapshot_id)
         return final
     except _SnapshotCancelledError:
@@ -650,24 +657,65 @@ def snapshot_summaries(
         if parsed is None:
             continue
         manifest, _database_path = parsed
-        summaries.append(
-            {
-                "snapshot_id": manifest.snapshot_id,
-                "created_at": manifest.created_at,
-                "reason": manifest.reason,
-                "database_id": manifest.database_id,
-                "schema_version": manifest.schema_version,
-                "file_size": manifest.file_size,
-                "sha256": manifest.sha256,
-                "session_count": manifest.session_count,
-                "message_count": manifest.message_count,
-                "latest_history_revision": manifest.latest_history_revision,
-                "latest_state_revision": manifest.latest_state_revision,
-                "integrity": manifest.integrity,
-                "complete": manifest.complete,
-            }
-        )
+        summaries.append(_snapshot_summary(manifest))
     return summaries
+
+
+def _snapshot_summary(manifest: SnapshotManifest) -> dict[str, Any]:
+    return {
+        "snapshot_id": manifest.snapshot_id,
+        "created_at": manifest.created_at,
+        "reason": manifest.reason,
+        "database_id": manifest.database_id,
+        "schema_version": manifest.schema_version,
+        "file_size": manifest.file_size,
+        "sha256": manifest.sha256,
+        "session_count": manifest.session_count,
+        "message_count": manifest.message_count,
+        "latest_history_revision": manifest.latest_history_revision,
+        "latest_state_revision": manifest.latest_state_revision,
+        "integrity": manifest.integrity,
+        "complete": manifest.complete,
+    }
+
+
+def _snapshot_inventory_entry(
+    data_dir: Path,
+    snapshot_dir: Path,
+    *,
+    expected_database_id: str | None = None,
+) -> _SnapshotInventoryEntry | None:
+    try:
+        parsed = _read_manifest(snapshot_dir, data_dir)
+    except OSError:
+        return None
+    if parsed is None:
+        return None
+    manifest, database_path = parsed
+    try:
+        if database_path.stat().st_size != manifest.file_size:
+            return None
+    except OSError:
+        return None
+    if expected_database_id is not None and manifest.database_id != expected_database_id:
+        return None
+    return _SnapshotInventoryEntry(path=Path(snapshot_dir), manifest=manifest)
+
+
+def read_snapshot_summary(
+    data_dir: Path,
+    snapshot_dir: Path,
+    *,
+    expected_database_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Read one strict published manifest and matching file stat without deep verification."""
+
+    entry = _snapshot_inventory_entry(
+        data_dir,
+        snapshot_dir,
+        expected_database_id=expected_database_id,
+    )
+    return None if entry is None else _snapshot_summary(entry.manifest)
 
 
 def snapshot_inventory(
@@ -685,60 +733,58 @@ def snapshot_inventory(
     for child in children:
         if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
             continue
-        parsed = _read_manifest(child, data_dir)
-        if parsed is None:
-            continue
-        manifest, database_path = parsed
-        try:
-            if database_path.stat().st_size != manifest.file_size:
-                continue
-        except OSError:
-            continue
-        if expected_database_id is not None and manifest.database_id != expected_database_id:
+        entry = _snapshot_inventory_entry(
+            data_dir,
+            child,
+            expected_database_id=expected_database_id,
+        )
+        if entry is None:
             continue
         candidates.append(
             (
-                manifest.created_at,
-                {
-                    "snapshot_id": manifest.snapshot_id,
-                    "created_at": manifest.created_at,
-                    "reason": manifest.reason,
-                    "database_id": manifest.database_id,
-                    "schema_version": manifest.schema_version,
-                    "file_size": manifest.file_size,
-                    "sha256": manifest.sha256,
-                    "session_count": manifest.session_count,
-                    "message_count": manifest.message_count,
-                    "latest_history_revision": manifest.latest_history_revision,
-                    "latest_state_revision": manifest.latest_state_revision,
-                    "integrity": manifest.integrity,
-                    "complete": manifest.complete,
-                },
+                entry.manifest.created_at,
+                _snapshot_summary(entry.manifest),
             )
         )
     candidates.sort(key=lambda item: item[0], reverse=True)
     return [summary for _created_at, summary in candidates]
 
 
-def _prune_snapshots(root: Path) -> None:
+def _prune_snapshots(root: Path, *, protected_snapshot: Path) -> None:
     """Apply retention only after a verified snapshot has been published."""
 
-    snapshots = list_snapshots(root.parent)
-    if len(snapshots) <= 1:
+    try:
+        children = list(root.iterdir())
+    except OSError:
         return
-    total = 0
+    entries = [
+        entry
+        for child in children
+        if child.is_dir() and not child.is_symlink() and not child.name.startswith(".")
+        if (entry := _snapshot_inventory_entry(root.parent, child)) is not None
+    ]
+    protected = next((entry for entry in entries if entry.path == protected_snapshot), None)
+    if protected is None:
+        return
+    others = sorted(
+        (entry for entry in entries if entry.path != protected_snapshot),
+        key=lambda entry: (entry.manifest.created_at, entry.manifest.snapshot_id),
+        reverse=True,
+    )
+    if not others:
+        return
+    total = protected.manifest.file_size
+    retained_count = 1
     remove: list[Path] = []
-    for index, snapshot in enumerate(snapshots):
-        try:
-            size = (snapshot / SNAPSHOT_DATABASE_NAME).stat().st_size
-        except OSError:
-            size = 0
-        if index >= SNAPSHOT_KEEP_COUNT or (
-            index < SNAPSHOT_KEEP_COUNT and total + size > SNAPSHOT_KEEP_BYTES and total > 0
+    for entry in others:
+        if (
+            retained_count >= SNAPSHOT_KEEP_COUNT
+            or total + entry.manifest.file_size > SNAPSHOT_KEEP_BYTES
         ):
-            remove.append(snapshot)
+            remove.append(entry.path)
         else:
-            total += size
+            retained_count += 1
+            total += entry.manifest.file_size
     for snapshot in remove:
         with suppress(OSError):
             __import__("shutil").rmtree(snapshot, ignore_errors=True)
@@ -1012,11 +1058,37 @@ def read_recovery_incident(data_dir: Path) -> dict[str, Any] | None:
 
 def acknowledge_recovery_incident(data_dir: Path, incident_id: str | None = None) -> bool:
     """Acknowledge only the incident currently observed by the caller."""
+
+    lock_path = snapshot_root(data_dir) / SNAPSHOT_LOCK_NAME
+    try:
+        lock = _acquire_lock(lock_path, timeout=SNAPSHOT_LOCK_TIMEOUT_SECONDS)
+    except OSError as exc:
+        raise SessionStoreUnavailableError(
+            "recovery incident acknowledgement lock is unavailable"
+        ) from exc
+    if lock is None:
+        raise SessionStoreUnavailableError("recovery incident acknowledgement lock is busy")
     path = _incident_path(data_dir)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
+        try:
+            serialized = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return False
+        except UnicodeError as exc:
+            raise SessionStoreCorruptError("recovery incident is not valid UTF-8") from exc
+        except OSError as exc:
+            raise SessionStoreUnavailableError("recovery incident could not be read") from exc
+        try:
+            payload = json.loads(serialized)
+        except json.JSONDecodeError as exc:
+            raise SessionStoreCorruptError("recovery incident is not valid JSON") from exc
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("incident_id"), str)
+            or not payload["incident_id"]
+            or not isinstance(payload.get("acknowledged"), bool)
+        ):
+            raise SessionStoreCorruptError("recovery incident has an invalid shape")
         current_id = payload.get("incident_id")
         if incident_id is not None and current_id != incident_id:
             raise SessionRecoveryConflictError("recovery incident has changed; refresh status")
@@ -1031,13 +1103,16 @@ def acknowledge_recovery_incident(data_dir: Path, incident_id: str | None = None
             _fsync_file(temporary)
             os.replace(temporary, path)
             _fsync_dir(path.parent)
+        except OSError as exc:
+            raise SessionStoreUnavailableError(
+                "recovery incident acknowledgement could not be durably published"
+            ) from exc
         finally:
-            temporary.unlink(missing_ok=True)
+            with suppress(OSError):
+                temporary.unlink()
         return True
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
+    finally:
+        _release_lock(lock)
 
 
 def _canonical_probe(data_dir: Path, database_path: Path) -> _CanonicalProbe:

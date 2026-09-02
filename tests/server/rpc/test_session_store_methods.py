@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from core.sessions import ChatSessionManager
+from core.sessions import snapshots as snapshots_module
 from core.sessions.format import write_bootstrap_marker
 from core.sessions.snapshots import write_recovery_incident
 from server.events import ServerEventBus
@@ -78,5 +80,48 @@ async def test_status_and_incident_acknowledgement_are_operator_safe(tmp_path: P
         assert acknowledged["result"]["state"] == "healthy"
         assert acknowledged["result"]["incident"] is None
         assert state.event_bus.events[-1]["payload"] == {"kind": "session_store"}
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_create_returns_without_reverifying_the_snapshot_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            chat_sessions=sessions,
+            storage=SimpleNamespace(data_dir=tmp_path),
+        ),
+        event_bus=ServerEventBus(),
+    )
+    sha256_calls: list[Path] = []
+    verification_calls: list[Path] = []
+    real_sha256 = snapshots_module._sha256
+    real_verify = snapshots_module._verify_snapshot_db
+
+    def counted_sha256(path: Path, **kwargs: Any) -> str:
+        sha256_calls.append(path)
+        return real_sha256(path, **kwargs)
+
+    def counted_verify(path: Path, *args: Any, **kwargs: Any) -> Any:
+        verification_calls.append(path)
+        return real_verify(path, *args, **kwargs)
+
+    monkeypatch.setattr(snapshots_module, "_sha256", counted_sha256)
+    monkeypatch.setattr(snapshots_module, "_verify_snapshot_db", counted_verify)
+    try:
+        created = await dispatch_rpc(
+            state,
+            {"method": "session_store.snapshot_create", "params": {"reason": "manual"}},
+        )
+
+        assert created["ok"] is True
+        assert created["result"]["snapshot"]["reason"] == "manual"
+        assert len(sha256_calls) == 1
+        assert len(verification_calls) == 1
     finally:
         sessions.close()

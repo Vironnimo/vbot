@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import snapshots as snapshots_module
 from core.sessions.snapshots import (
+    SNAPSHOT_DATABASE_NAME,
     SNAPSHOT_KEEP_COUNT,
+    SNAPSHOT_MANIFEST_NAME,
     create_snapshot,
     list_snapshots,
     read_snapshot_health,
@@ -83,6 +91,124 @@ def test_snapshot_retention_prunes_only_after_verified_publish(tmp_path: Path) -
             assert create_snapshot(tmp_path, tmp_path / "sessions.db", manager.backup_snapshot)
         assert 1 <= len(list_snapshots(tmp_path)) <= SNAPSHOT_KEEP_COUNT
         assert snapshot_root(tmp_path).is_dir()
+    finally:
+        manager.close()
+
+
+def test_snapshot_retention_does_not_reverify_retained_databases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+        assert manager.create_snapshot(reason="test") is not None
+        sha256_calls = 0
+        verification_calls = 0
+        real_sha256 = snapshots_module._sha256
+        real_verify = snapshots_module._verify_snapshot_db
+
+        def counted_sha256(
+            path: Path,
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> str:
+            nonlocal sha256_calls
+            sha256_calls += 1
+            return real_sha256(path, cancelled=cancelled)
+
+        def counted_verify(
+            path: Path,
+            expected_database_id: str | None = None,
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> Any:
+            nonlocal verification_calls
+            verification_calls += 1
+            return real_verify(
+                path,
+                expected_database_id,
+                cancelled=cancelled,
+            )
+
+        monkeypatch.setattr(snapshots_module, "_sha256", counted_sha256)
+        monkeypatch.setattr(snapshots_module, "_verify_snapshot_db", counted_verify)
+
+        assert manager.create_snapshot(reason="test") is not None
+
+        assert sha256_calls == 1
+        assert verification_calls == 1
+    finally:
+        manager.close()
+
+
+def test_snapshot_retention_always_keeps_the_just_published_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+        first = manager.create_snapshot(reason="test")
+        assert first is not None
+        manifest_path = first / SNAPSHOT_MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["created_at"] = "2099-01-01T00:00:00Z"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
+
+        published = manager.create_snapshot(reason="test")
+
+        assert published is not None
+        assert published.is_dir()
+        assert first.exists() is False
+        assert list_snapshots(tmp_path) == [published]
+    finally:
+        manager.close()
+
+
+def test_snapshot_retention_enforces_the_byte_limit_around_the_published_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    try:
+        manager.create("coder", session_id="session-one").append(ChatMessage.user("hello"))
+        first = manager.create_snapshot(reason="test")
+        assert first is not None
+        snapshot_size = (first / SNAPSHOT_DATABASE_NAME).stat().st_size
+        monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_BYTES", snapshot_size * 2)
+
+        assert manager.create_snapshot(reason="test") is not None
+        published = manager.create_snapshot(reason="test")
+
+        retained = list_snapshots(tmp_path)
+        assert published is not None
+        assert published in retained
+        assert len(retained) == 2
+        assert sum((path / SNAPSHOT_DATABASE_NAME).stat().st_size for path in retained) <= (
+            snapshot_size * 2
+        )
+    finally:
+        manager.close()
+
+
+def test_snapshot_retention_leaves_malformed_directories_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    malformed = snapshot_root(tmp_path) / "20260101T000000Z-deadbeef"
+    malformed.mkdir(parents=True)
+    (malformed / SNAPSHOT_MANIFEST_NAME).write_text("{", encoding="utf-8")
+    (malformed / SNAPSHOT_DATABASE_NAME).write_bytes(b"evidence")
+    monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
+    manager = ChatSessionManager(tmp_path)
+    try:
+        published = manager.create_snapshot(reason="test")
+
+        assert published is not None
+        assert published.is_dir()
+        assert (malformed / SNAPSHOT_DATABASE_NAME).read_bytes() == b"evidence"
     finally:
         manager.close()
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.sessions.errors import SessionRecoveryConflictError, SessionStoreUnavailableError
-from core.sessions.snapshots import acknowledge_recovery_incident, snapshot_summaries
+from core.sessions.snapshots import acknowledge_recovery_incident, read_snapshot_summary
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SESSION_STORE
 from server.rpc.dispatcher import RpcMethodHandler
@@ -48,8 +48,7 @@ async def _session_store_snapshot_create(state: Any, params: JsonObject) -> Json
         snapshot = await _SESSION_STORE_WORKERS.run(sessions.create_snapshot, reason=reason)
         if snapshot is None:
             raise SessionStoreUnavailableError("Session snapshot was not created")
-        summaries = snapshot_summaries(sessions.data_dir)
-        summary = next((item for item in summaries if item["snapshot_id"] == snapshot.name), None)
+        summary = read_snapshot_summary(sessions.data_dir, snapshot)
         if summary is None:
             raise SessionStoreUnavailableError("Session snapshot verification is unavailable")
         publish_resource_changed(state, RESOURCE_KIND_SESSION_STORE)
