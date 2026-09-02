@@ -164,6 +164,10 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         self._run.raise_if_cancelled()
+        # Publish cancellation readiness before the started event reaches an
+        # accessor. Tool-owned cleanup can register a moment later; Run retains
+        # an early user request and fires that callback as soon as it arrives.
+        self._run.begin_tool_call(context.tool_call_id)
         self._run.tool_call_count += 1
         self._run.tool_call_names.add(context.tool_name)
         started_at = datetime.now(UTC)

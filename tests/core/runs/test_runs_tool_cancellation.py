@@ -53,6 +53,21 @@ async def test_cancel_tool_call_with_unknown_id_returns_false() -> None:
     assert run.cancel_requested is False
 
 
+async def test_cancel_started_tool_call_before_callback_registration_fires_callback_later() -> None:
+    """An immediate accessor cancel must survive until Tool cleanup registers."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+    run.begin_tool_call("tool-1")
+
+    cancelled = run.cancel_tool_call("tool-1")
+    run.register_tool_cancel("tool-1", lambda: invocations.append("aborted"))
+
+    assert cancelled is True
+    assert invocations == ["aborted"]
+    assert run.tool_call_cancelled("tool-1") is True
+    assert run.cancel_requested is False
+
+
 async def test_cancel_tool_call_after_clear_returns_false() -> None:
     """clear_tool_cancel drops the entry; subsequent cancel_tool_call returns False."""
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")

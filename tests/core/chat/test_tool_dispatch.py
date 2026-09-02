@@ -484,6 +484,60 @@ class TestDispatchCancelWiring:
         assert messages[0].tool_call_id == "call-cancel"
 
     @pytest.mark.asyncio
+    async def test_cancel_after_started_event_waits_for_late_tool_callback(
+        self, tmp_path: Path
+    ) -> None:
+        # Arrange: hold the handler before it registers cleanup, reproducing an
+        # accessor clicking Cancel as soon as tool_call_started is rendered.
+        handler_entered = asyncio.Event()
+        allow_registration = asyncio.Event()
+        cancel_fired = asyncio.Event()
+
+        async def cancellable_handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            handler_entered.set()
+            await allow_registration.wait()
+            context.on_cancel(cancel_fired.set)
+            await asyncio.wait_for(cancel_fired.wait(), timeout=5.0)
+            if context.was_cancelled_by_user():
+                return tool_failure("cancelled_by_user", CANCELLED_BY_USER_MESSAGE)
+            return tool_success({"unexpected": True})
+
+        tools = ToolRegistry()
+        tools.register(
+            "cancellable",
+            "Tool that deliberately registers cancellation late.",
+            {"type": "object"},
+            cancellable_handler,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-cancel", name="cancellable", arguments={})]
+        dispatch_task = asyncio.create_task(
+            _dispatch_tool_calls(
+                runtime,
+                agent,
+                tool_calls,
+                session,
+                run,
+                nesting_depth=0,
+            )
+        )
+        await asyncio.wait_for(handler_entered.wait(), timeout=5.0)
+
+        # Act
+        cancelled = run.cancel_tool_call("call-cancel")
+        allow_registration.set()
+        messages, _ = await dispatch_task
+
+        # Assert
+        assert cancelled is True
+        assert cancel_fired.is_set()
+        assert _decode_tool_result(messages[0].content) == tool_failure(
+            "cancelled_by_user", CANCELLED_BY_USER_MESSAGE
+        )
+
+    @pytest.mark.asyncio
     async def test_per_tool_cancel_leaves_run_running_and_does_not_set_cancel_requested(
         self, tmp_path: Path
     ) -> None:
