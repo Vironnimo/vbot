@@ -1,74 +1,15 @@
 {
-  "fetched_at": "2026-08-25T08:13:57.313198+00:00",
+  "fetched_at": "2026-09-02T17:52:27.088998+00:00",
   "provider_id": "mistral",
   "raw_response": {
     "data": [
-      {
-        "aliases": [],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": true,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": true
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.3,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Our frontier-class multimodal model released May 2025.",
-        "id": "mistral-medium-2505",
-        "max_context_length": 131072,
-        "name": "mistral-medium-2505",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": true,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": true
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.3,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Update on Mistral Medium 3 with improved capabilities.",
-        "id": "mistral-medium-2508",
-        "max_context_length": 131072,
-        "name": "mistral-medium-2508",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
       {
         "aliases": [
           "codestral-latest",
           "mistral-code-latest",
           "mistral-code-fim-latest"
         ],
+        "billing_model_name": "codestral-2508",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -85,7 +26,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -103,6 +44,7 @@
           "mistral-code-latest",
           "mistral-code-fim-latest"
         ],
+        "billing_model_name": "codestral-2508",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -119,7 +61,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -137,6 +79,7 @@
           "codestral-latest",
           "mistral-code-fim-latest"
         ],
+        "billing_model_name": "codestral-2508",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -153,7 +96,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -171,6 +114,7 @@
           "codestral-latest",
           "mistral-code-latest"
         ],
+        "billing_model_name": "codestral-2508",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -187,7 +131,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -201,146 +145,11 @@
       },
       {
         "aliases": [
-          "devstral-medium-latest",
-          "devstral-latest",
-          "mistral-code-agent-latest"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.2,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Official devstral-2512 Mistral AI model",
-        "id": "devstral-2512",
-        "max_context_length": 262144,
-        "name": "devstral-2512",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
-          "devstral-2512",
-          "devstral-latest",
-          "mistral-code-agent-latest"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.2,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Official devstral-2512 Mistral AI model",
-        "id": "devstral-medium-latest",
-        "max_context_length": 262144,
-        "name": "devstral-2512",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
-          "devstral-2512",
-          "devstral-medium-latest",
-          "mistral-code-agent-latest"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.2,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Official devstral-2512 Mistral AI model",
-        "id": "devstral-latest",
-        "max_context_length": 262144,
-        "name": "devstral-2512",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
-          "devstral-2512",
-          "devstral-medium-latest",
-          "devstral-latest"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": 0.2,
-        "deprecation": "2026-08-31T12:00:00Z",
-        "deprecation_replacement_model": "mistral-medium-3-5",
-        "description": "Official devstral-2512 Mistral AI model",
-        "id": "mistral-code-agent-latest",
-        "max_context_length": 262144,
-        "name": "devstral-2512",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
           "mistral-small-latest",
           "mistral-vibe-cli-fast",
           "magistral-small-latest"
         ],
+        "billing_model_name": "mistral-small-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -357,7 +166,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -375,6 +184,7 @@
           "mistral-vibe-cli-fast",
           "magistral-small-latest"
         ],
+        "billing_model_name": "mistral-small-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -391,7 +201,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -409,6 +219,7 @@
           "mistral-small-latest",
           "magistral-small-latest"
         ],
+        "billing_model_name": "mistral-small-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -425,7 +236,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -443,6 +254,7 @@
           "mistral-small-latest",
           "mistral-vibe-cli-fast"
         ],
+        "billing_model_name": "mistral-small-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -459,7 +271,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -475,6 +287,7 @@
         "aliases": [
           "voxtral-small-latest"
         ],
+        "billing_model_name": "voxtral-small-2507",
         "capabilities": {
           "audio": true,
           "audio_speech": false,
@@ -491,7 +304,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.2,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -507,6 +320,7 @@
         "aliases": [
           "voxtral-small-2507"
         ],
+        "billing_model_name": "voxtral-small-2507",
         "capabilities": {
           "audio": true,
           "audio_speech": false,
@@ -523,7 +337,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.2,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -539,6 +353,7 @@
         "aliases": [
           "labs-leanstral-1-5"
         ],
+        "billing_model_name": "labs-leanstral-1-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -555,7 +370,7 @@
           "unified_resources": true,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -571,6 +386,7 @@
         "aliases": [
           "labs-leanstral-1-5-1"
         ],
+        "billing_model_name": "labs-leanstral-1-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -587,7 +403,7 @@
           "unified_resources": true,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -603,6 +419,7 @@
         "aliases": [
           "mistral-large-latest"
         ],
+        "billing_model_name": "mistral-large-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -619,7 +436,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -635,6 +452,7 @@
         "aliases": [
           "mistral-large-2512"
         ],
+        "billing_model_name": "mistral-large-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -651,7 +469,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -667,6 +485,7 @@
         "aliases": [
           "ministral-3b-latest"
         ],
+        "billing_model_name": "ministral-3b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -683,7 +502,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -699,6 +518,7 @@
         "aliases": [
           "ministral-3b-2512"
         ],
+        "billing_model_name": "ministral-3b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -715,7 +535,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -731,6 +551,7 @@
         "aliases": [
           "ministral-8b-latest"
         ],
+        "billing_model_name": "ministral-8b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -747,7 +568,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -763,6 +584,7 @@
         "aliases": [
           "ministral-8b-2512"
         ],
+        "billing_model_name": "ministral-8b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -779,7 +601,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -795,6 +617,7 @@
         "aliases": [
           "ministral-14b-latest"
         ],
+        "billing_model_name": "ministral-14b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -811,7 +634,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -827,6 +650,7 @@
         "aliases": [
           "ministral-14b-2512"
         ],
+        "billing_model_name": "ministral-14b-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -843,7 +667,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -866,6 +690,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -882,7 +707,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -905,6 +730,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -921,7 +747,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -944,6 +770,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -960,7 +787,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -983,6 +810,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -999,7 +827,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1022,6 +850,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1038,7 +867,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1061,6 +890,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1077,7 +907,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1100,6 +930,7 @@
           "mistral-vibe-cli-with-tools",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1116,7 +947,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1139,6 +970,7 @@
           "mistral-vibe-cli-latest",
           "magistral-medium-latest"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1155,7 +987,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1178,6 +1010,7 @@
           "mistral-vibe-cli-latest",
           "mistral-vibe-cli-with-tools"
         ],
+        "billing_model_name": "mistral-medium-3-5",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1194,7 +1027,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1208,72 +1041,9 @@
       },
       {
         "aliases": [
-          "zai-glm-5-2"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": true,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": null,
-        "deprecation": null,
-        "deprecation_replacement_model": null,
-        "description": "Official Z.ai GLM 5.2 model",
-        "id": "glm-5-2",
-        "max_context_length": 1048576,
-        "name": "glm-5-2",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
-          "glm-5-2"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": true,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": false,
-          "reasoning": true,
-          "unified_resources": false,
-          "vision": false
-        },
-        "created": 1787645649,
-        "default_model_temperature": null,
-        "deprecation": null,
-        "deprecation_replacement_model": null,
-        "description": "Official Z.ai GLM 5.2 model",
-        "id": "zai-glm-5-2",
-        "max_context_length": 1048576,
-        "name": "glm-5-2",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
           "mistral-embed"
         ],
+        "billing_model_name": "mistral-embed",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1290,7 +1060,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1306,6 +1076,7 @@
         "aliases": [
           "mistral-embed-2312"
         ],
+        "billing_model_name": "mistral-embed",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1322,7 +1093,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1338,6 +1109,7 @@
         "aliases": [
           "codestral-embed-2505"
         ],
+        "billing_model_name": "codestral-embed-2505",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1354,7 +1126,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1370,6 +1142,7 @@
         "aliases": [
           "codestral-embed"
         ],
+        "billing_model_name": "codestral-embed-2505",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1386,7 +1159,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1400,6 +1173,7 @@
       },
       {
         "aliases": [],
+        "billing_model_name": "mistral-moderation-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1416,7 +1190,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1433,6 +1207,7 @@
           "mistral-ocr-3-0",
           "mistral-ocr-3"
         ],
+        "billing_model_name": "mistral-ocr-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1449,7 +1224,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1466,6 +1241,7 @@
           "mistral-ocr-2512",
           "mistral-ocr-3"
         ],
+        "billing_model_name": "mistral-ocr-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1482,7 +1258,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1499,6 +1275,7 @@
           "mistral-ocr-2512",
           "mistral-ocr-3-0"
         ],
+        "billing_model_name": "mistral-ocr-2512",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1515,7 +1292,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1529,6 +1306,7 @@
       },
       {
         "aliases": [],
+        "billing_model_name": "mistral-ocr-4",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1545,7 +1323,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1562,6 +1340,7 @@
           "mistral-ocr-4",
           "mistral-ocr-4-1"
         ],
+        "billing_model_name": "mistral-ocr-4",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1578,7 +1357,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1595,6 +1374,7 @@
           "mistral-ocr-latest",
           "mistral-ocr-4-1"
         ],
+        "billing_model_name": "mistral-ocr-4",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1611,7 +1391,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1628,6 +1408,7 @@
           "mistral-ocr-latest",
           "mistral-ocr-4"
         ],
+        "billing_model_name": "mistral-ocr-4",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1644,7 +1425,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1660,6 +1441,7 @@
         "aliases": [
           "voxtral-mini-latest"
         ],
+        "billing_model_name": "voxtral-mini-2602",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1676,7 +1458,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1692,6 +1474,7 @@
         "aliases": [
           "voxtral-mini-2602"
         ],
+        "billing_model_name": "voxtral-mini-2602",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1708,7 +1491,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1725,6 +1508,7 @@
           "voxtral-mini-realtime-2602",
           "voxtral-mini-realtime-latest"
         ],
+        "billing_model_name": "voxtral-mini-realtime-2602",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1741,7 +1525,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1758,6 +1542,7 @@
           "voxtral-mini-transcribe-realtime-2602",
           "voxtral-mini-realtime-latest"
         ],
+        "billing_model_name": "voxtral-mini-realtime-2602",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1774,7 +1559,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1791,6 +1576,7 @@
           "voxtral-mini-transcribe-realtime-2602",
           "voxtral-mini-realtime-2602"
         ],
+        "billing_model_name": "voxtral-mini-realtime-2602",
         "capabilities": {
           "audio": false,
           "audio_speech": false,
@@ -1807,7 +1593,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1823,6 +1609,7 @@
         "aliases": [
           "voxtral-mini-tts-latest"
         ],
+        "billing_model_name": "voxtral-mini-tts-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": true,
@@ -1839,7 +1626,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1855,6 +1642,7 @@
         "aliases": [
           "voxtral-mini-tts-2603"
         ],
+        "billing_model_name": "voxtral-mini-tts-2603",
         "capabilities": {
           "audio": false,
           "audio_speech": true,
@@ -1871,7 +1659,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1787645649,
+        "created": 1788371552,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
