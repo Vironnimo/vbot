@@ -37,6 +37,14 @@ Scenarios:
   its original output items (including opaque encrypted reasoning) are sent
   back in a real plain continuation and a real tool continuation. This is the
   probe for Responses models whose reasoning is not readable text.
+- ``preserved_history``: reproduces Kimi K3's official preserved-thinking
+  example. Two numbers exist only in prior assistant reasoning; the follow-up
+  must recover them through the history carrier.
+- ``preserved_history_tools``: repeats that exact history test while the
+  follow-up request carries Tool definitions.
+- ``generated_history``: asks the model to choose two values only in its own
+  real reasoning, then compares exact readable, exact native-meta, absent, and
+  visible replay. This catches gateways that reject synthetic reasoning state.
 
 ``--policy`` selects the replay policy applied by the shaping (default:
 the model's effective policy from the overrides).
@@ -78,6 +86,10 @@ from core.providers.token_getter import StaticTokenGetter
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
+API_KEY_ENV_BY_PROVIDER = {
+    "ollama-cloud": "OLLAMA_API_KEY",
+    "opencode-go": "OPENCODE_GO_API_KEY",
+}
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",
@@ -114,6 +126,7 @@ INSTRUCTION_RESPONSE = "hello world"
 class TurnResult:
     content: str
     reasoning: str
+    reasoning_meta: dict[str, Any] | None
     tool_calls: list[dict[str, Any]]
     input_tokens: int | None
 
@@ -157,9 +170,11 @@ def _extract_openai_message(message: dict[str, Any]) -> TurnResult:
             break
     usage = message.get("usage")
     input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+    reasoning_meta = message.get("reasoning_meta")
     return TurnResult(
         content=message.get("content") or "",
         reasoning=reasoning,
+        reasoning_meta=dict(reasoning_meta) if isinstance(reasoning_meta, dict) else None,
         tool_calls=message.get("tool_calls") or [],
         input_tokens=input_tokens if isinstance(input_tokens, int) else None,
     )
@@ -226,6 +241,55 @@ async def _run_turn(
     return _extract_openai_message(message)
 
 
+def _build_exact_payload(
+    adapter: Any,
+    messages: list[dict[str, Any]],
+    model_id: str,
+    *,
+    tools: list[dict[str, Any]] | None,
+    effort: str,
+) -> dict[str, Any]:
+    """Build the payload for the same model-selected wire used by ``send``."""
+
+    protocol_resolver = getattr(adapter, "_model_protocol", None)
+    protocol = protocol_resolver(model_id) if callable(protocol_resolver) else "openai"
+    kwargs: dict[str, Any] = {
+        "temperature": 1.0,
+        "thinking_effort": effort,
+    }
+    if tools:
+        kwargs["tools"] = tools
+    if protocol == "anthropic":
+        return dict(adapter._messages._build_payload(messages, model_id, **kwargs))
+    if protocol == "responses":
+        return dict(adapter._build_responses_payload(messages, model_id=model_id, **kwargs))
+    return dict(adapter._build_payload(messages, model_id, **kwargs))
+
+
+def _assistant_wire_carriers(payload: dict[str, Any]) -> list[str]:
+    """Describe reasoning carriers in final Assistant history wire items."""
+
+    carriers: list[str] = []
+    for message in payload.get("messages", []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for key in ("reasoning", "reasoning_content", "reasoning_details", "thinking"):
+            if key in message:
+                carriers.append(key)
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"thinking", "redacted_thinking"}:
+                    carriers.append(f"content:{block_type}")
+    for item in payload.get("input", []):
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            carriers.append("input:reasoning")
+    return sorted(carriers)
+
+
 def _shape_history(
     messages: list[ChatMessage],
     *,
@@ -281,6 +345,16 @@ async def _run_exact_probe(
             await _run_instruction_round(adapter, model_id, carrier_field, policy, effort)
         elif scenario == "responses_roundtrip":
             await _run_responses_roundtrip_round(adapter, model_id)
+        elif scenario in {"preserved_history", "preserved_history_tools"}:
+            await _run_preserved_history_round(
+                adapter,
+                model_id,
+                policy,
+                effort,
+                tools_enabled=scenario == "preserved_history_tools",
+            )
+        elif scenario == "generated_history":
+            await _run_generated_history_round(adapter, model_id, policy, effort)
         else:
             await _run_cross_turn_round(
                 adapter,
@@ -406,6 +480,221 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
     )
 
 
+async def _run_preserved_history_round(
+    adapter: Any,
+    model_id: str,
+    policy: str,
+    effort: str,
+    *,
+    tools_enabled: bool,
+) -> None:
+    """Reproduce Kimi K3's official preserved-thinking history example."""
+
+    first_prompt = "Tell me three random numbers."
+    visible_numbers = "473, 921, 235"
+    hidden_numbers = ("215", "222")
+    prior_reasoning = (
+        "I'll start by listing five numbers: 473, 921, 235, 215, 222, "
+        "and I'll tell you the first three."
+    )
+    ask = "What are the other two numbers you had in mind? Reply with only those numbers."
+    request_tools = [TOOL_DEFINITION] if tools_enabled else None
+
+    async def follow_up(assistant_msg: ChatMessage, label: str) -> tuple[bool, int | None]:
+        session = [
+            ChatMessage.user(first_prompt),
+            assistant_msg,
+            ChatMessage.user(ask),
+        ]
+        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        payload = _build_exact_payload(
+            adapter,
+            wire_messages,
+            model_id,
+            tools=request_tools,
+            effort=effort,
+        )
+        assistant_wire_fields = _assistant_wire_carriers(payload)
+        result = await _run_turn(
+            adapter,
+            model_id,
+            wire_messages,
+            tools=request_tools,
+            effort=effort,
+        )
+        recalled = all(number in result.content for number in hidden_numbers)
+        print(
+            f"  {label}: wire_fields={assistant_wire_fields} | "
+            f"answer={result.content[:80]!r} | recalled={recalled} | input={result.input_tokens}"
+        )
+        return recalled, result.input_tokens
+
+    recalled_with, input_with = await follow_up(
+        ChatMessage.assistant(
+            model=model_id,
+            content=visible_numbers,
+            reasoning=prior_reasoning,
+        ),
+        "carrier in history",
+    )
+    recalled_without, input_without = await follow_up(
+        ChatMessage.assistant(model=model_id, content=visible_numbers),
+        "no carrier      ",
+    )
+    recalled_visible, input_visible = await follow_up(
+        ChatMessage.assistant(
+            model=model_id,
+            content=f"{visible_numbers}\n\n{prior_reasoning}",
+        ),
+        "visible control ",
+    )
+    carrier_delta = (
+        input_with - input_without if input_with is not None and input_without is not None else None
+    )
+    visible_delta = (
+        input_visible - input_without
+        if input_visible is not None and input_without is not None
+        else None
+    )
+    print(
+        f"  verdict: carrier_recall={recalled_with} no_carrier_recall={recalled_without} "
+        f"visible_recall={recalled_visible} carrier_delta={carrier_delta} "
+        f"visible_delta={visible_delta}"
+    )
+
+
+async def _run_generated_history_round(
+    adapter: Any,
+    model_id: str,
+    policy: str,
+    effort: str,
+) -> None:
+    """Test replay with state generated by the model rather than the probe."""
+
+    first_prompt = (
+        "Choose two random five-digit numbers. In your hidden reasoning, record them "
+        "exactly as PRIVATE_NUMBERS: 12345, 67890, using your chosen values instead of "
+        "the example values. Do not show the chosen numbers in this first visible answer, "
+        "but reveal them if the user asks in a later turn. Your visible answer must be "
+        "exactly READY."
+    )
+    first = await _run_turn(
+        adapter,
+        model_id,
+        [{"role": "user", "content": first_prompt}],
+        tools=None,
+        effort=effort,
+    )
+    match = re.search(
+        r"PRIVATE_NUMBERS\s*[:=]\s*(\d{5})\s*[,;/ ]+\s*(\d{5})",
+        first.reasoning,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise RuntimeError(
+            "the model did not place PRIVATE_NUMBERS in its reasoning; "
+            f"reasoning_len={len(first.reasoning)}"
+        )
+    expected = match.groups()
+    meta_json = (
+        json.dumps(first.reasoning_meta, sort_keys=True, separators=(",", ":"))
+        if first.reasoning_meta
+        else ""
+    )
+    print(
+        f"  generated values: {expected[0]}, {expected[1]} | "
+        f"reasoning_len={len(first.reasoning)} | "
+        f"reasoning_meta_fields={sorted(first.reasoning_meta or {})} | "
+        f"reasoning_meta_bytes={len(meta_json.encode('utf-8'))}"
+    )
+    ask = "What exact two PRIVATE_NUMBERS did you choose? Reply with only those numbers."
+
+    async def follow_up(
+        assistant_msg: ChatMessage,
+        label: str,
+        *,
+        force_readable_with_meta: bool = False,
+    ) -> tuple[bool, int | None]:
+        session = [ChatMessage.user(first_prompt), assistant_msg, ChatMessage.user(ask)]
+        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        original_formatter = adapter._format_assistant_message
+
+        def format_assistant_with_both(
+            message: dict[str, Any],
+            *,
+            model_id: str | None = None,
+        ) -> dict[str, Any]:
+            wire = dict(original_formatter(message, model_id=model_id))
+            reasoning = message.get("reasoning")
+            if isinstance(reasoning, str) and reasoning:
+                wire["reasoning_content"] = reasoning
+            reasoning_meta = message.get("reasoning_meta")
+            if isinstance(reasoning_meta, dict):
+                for key in ("encrypted_content", "reasoning_details"):
+                    if key in reasoning_meta:
+                        wire[key] = reasoning_meta[key]
+            return wire
+
+        if force_readable_with_meta:
+            adapter._format_assistant_message = format_assistant_with_both
+        try:
+            payload = _build_exact_payload(
+                adapter,
+                wire_messages,
+                model_id,
+                tools=None,
+                effort=effort,
+            )
+            result = await _run_turn(
+                adapter,
+                model_id,
+                wire_messages,
+                tools=None,
+                effort=effort,
+            )
+        finally:
+            if force_readable_with_meta:
+                adapter._format_assistant_message = original_formatter
+        assistant_wire_fields = _assistant_wire_carriers(payload)
+        recalled = all(number in result.content for number in expected)
+        print(
+            f"  {label}: wire_fields={assistant_wire_fields} | "
+            f"answer={result.content[:80]!r} | recalled={recalled} | input={result.input_tokens}"
+        )
+        return recalled, result.input_tokens
+
+    readable = ChatMessage.assistant(
+        model=model_id,
+        content=first.content,
+        reasoning=first.reasoning,
+    )
+    native_meta = ChatMessage.assistant(
+        model=model_id,
+        content=first.content,
+        reasoning_meta=first.reasoning_meta,
+    )
+    combined = ChatMessage.assistant(
+        model=model_id,
+        content=first.content,
+        reasoning=first.reasoning,
+        reasoning_meta=first.reasoning_meta,
+    )
+    absent = ChatMessage.assistant(model=model_id, content=first.content)
+    visible = ChatMessage.assistant(
+        model=model_id,
+        content="\n\n".join(part for part in (first.content, first.reasoning) if part),
+    )
+    await follow_up(readable, "real readable carrier")
+    await follow_up(native_meta, "real native meta     ")
+    await follow_up(
+        combined,
+        "readable + native meta",
+        force_readable_with_meta=True,
+    )
+    await follow_up(absent, "no carrier           ")
+    await follow_up(visible, "visible control       ")
+
+
 def _shape_session(
     messages: list[ChatMessage],
     *,
@@ -456,7 +745,10 @@ def _wire_carrier_present(
         if message.get("role") != "assistant":
             continue
         value = message.get("reasoning")
-        if isinstance(value, str) and value:
+        reasoning_meta = message.get("reasoning_meta")
+        if (isinstance(value, str) and value) or (
+            isinstance(reasoning_meta, dict) and reasoning_meta
+        ):
             return True
     return False
 
@@ -471,7 +763,8 @@ def _build_tool_calls(tool_calls: list[dict[str, Any]]) -> list[Any]:
         function = call.get("function", {})
         if not isinstance(function, dict):
             function = {}
-        arguments = function.get("arguments")
+        name = function.get("name") or call.get("name") or ""
+        arguments = function.get("arguments", call.get("arguments"))
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -482,7 +775,7 @@ def _build_tool_calls(tool_calls: list[dict[str, Any]]) -> list[Any]:
         built.append(
             ToolCall(
                 id=call.get("id") or f"call_{position}",
-                name=function.get("name") or "",
+                name=name,
                 arguments=arguments,
             )
         )
@@ -553,9 +846,6 @@ async def _run_tool_loop_round(
     policy: str,
     effort: str,
 ) -> None:
-    secret = _make_secret()
-    print(f"  planted secret: {secret}")
-
     turn1 = await _run_turn(
         adapter,
         model_id,
@@ -567,7 +857,17 @@ async def _run_tool_loop_round(
         print(f"  turn1 invalid: no tool call (reasoning_len={len(turn1.reasoning)})")
         print(f"  reasoning: {turn1.reasoning[:200]!r}")
         return
-    print(f"  turn1: tool_calls={len(turn1.tool_calls)} reasoning_len={len(turn1.reasoning)}")
+    meta_json = (
+        json.dumps(turn1.reasoning_meta, sort_keys=True, separators=(",", ":"))
+        if turn1.reasoning_meta
+        else ""
+    )
+    print(
+        f"  turn1: tool_calls={len(turn1.tool_calls)} "
+        f"reasoning_len={len(turn1.reasoning)} "
+        f"reasoning_meta_fields={sorted(turn1.reasoning_meta or {})} "
+        f"reasoning_meta_bytes={len(meta_json.encode('utf-8'))}"
+    )
 
     tool_calls = _build_tool_calls(turn1.tool_calls)
     tool_result = ChatMessage.tool(
@@ -576,7 +876,7 @@ async def _run_tool_loop_round(
         content='{"temperature": 20, "condition": "sunny"}',
     )
 
-    async def run_persisted(assistant_msg: ChatMessage, label: str) -> bool:
+    async def run_persisted(assistant_msg: ChatMessage, label: str) -> int | None:
         """Case A: the assistant turn is persisted and shaped as history.
 
         ``_assemble_request_history`` strips reasoning under
@@ -591,7 +891,7 @@ async def _run_tool_loop_round(
         wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
         return await _run_case(assistant_msg, wire_messages, label)
 
-    async def run_live(live_assistant: ChatMessage, label: str) -> bool:
+    async def run_live(live_assistant: ChatMessage, label: str) -> int | None:
         """Case B: the same assistant turn is shaped as the live continuation.
 
         The chat loop replaces the persisted entry with
@@ -616,8 +916,16 @@ async def _run_tool_loop_round(
         assistant_msg: ChatMessage,
         wire_messages: list[dict[str, Any]],
         label: str,
-    ) -> bool:
+    ) -> int | None:
         carrier_on_wire = _wire_carrier_present(wire_messages)
+        payload = _build_exact_payload(
+            adapter,
+            wire_messages,
+            model_id,
+            tools=[TOOL_DEFINITION],
+            effort=effort,
+        )
+        assistant_wire_fields = _assistant_wire_carriers(payload)
         result = await _run_turn(
             adapter,
             model_id,
@@ -625,54 +933,62 @@ async def _run_tool_loop_round(
             tools=[TOOL_DEFINITION],
             effort=effort,
         )
-        hit = secret in result.content or secret in result.reasoning
         print(
             f"  {label}: carrier_on_wire={carrier_on_wire} | "
-            f"answer={result.content[:45]!r} | "
-            f"secret_in_answer={secret in result.content} | "
-            f"secret_in_reasoning2={secret in result.reasoning} | "
-            f"reasoning2_len={len(result.reasoning)}"
+            f"wire_fields={assistant_wire_fields} | "
+            f"answer_len={len(result.content)} | "
+            f"reasoning2_len={len(result.reasoning)} | input={result.input_tokens}"
         )
-        return hit
+        return result.input_tokens
 
-    hit_a = await run_persisted(
+    input_a = await run_persisted(
         ChatMessage.assistant(
             model=model_id,
-            content="",
-            reasoning=_secret_reasoning(secret),
+            content=turn1.content,
+            reasoning=turn1.reasoning or None,
+            reasoning_meta=turn1.reasoning_meta,
             tool_calls=tool_calls,
         ),
         "A persisted w/ carrier",
     )
-    hit_a2 = await run_persisted(
-        ChatMessage.assistant(model=model_id, content="", tool_calls=tool_calls),
+    input_a2 = await run_persisted(
+        ChatMessage.assistant(model=model_id, content=turn1.content, tool_calls=tool_calls),
         "A persisted no carrier",
     )
-    hit_b = await run_live(
+    input_b = await run_live(
         ChatMessage.assistant(
             model=model_id,
-            content="",
-            reasoning=_secret_reasoning(secret),
+            content=turn1.content,
+            reasoning=turn1.reasoning or None,
+            reasoning_meta=turn1.reasoning_meta,
             tool_calls=tool_calls,
         ),
         "B live w/ carrier    ",
     )
-    hit_b2 = await run_live(
-        ChatMessage.assistant(model=model_id, content="", tool_calls=tool_calls),
+    input_b2 = await run_live(
+        ChatMessage.assistant(model=model_id, content=turn1.content, tool_calls=tool_calls),
         "B live no carrier    ",
     )
-    hit_c = await run_persisted(
+    visible_content = "\n\n".join(part for part in (turn1.content, turn1.reasoning) if part)
+    input_c = await run_persisted(
         ChatMessage.assistant(
             model=model_id,
-            content=f"I recorded the secret {secret}.",
+            content=visible_content,
             tool_calls=tool_calls,
         ),
         "C visible control   ",
     )
+    persisted_carrier_delta = (
+        input_a - input_a2 if input_a is not None and input_a2 is not None else None
+    )
+    live_carrier_delta = (
+        input_b - input_b2 if input_b is not None and input_b2 is not None else None
+    )
+    visible_delta = input_c - input_a2 if input_c is not None and input_a2 is not None else None
     print(
-        f"  behavioral recall only (not transport verdict): "
-        f"A_persisted=(with={hit_a}, without={hit_a2}) "
-        f"B_live=(with={hit_b}, without={hit_b2}) control={hit_c}"
+        "  transport token deltas: "
+        f"A_persisted={persisted_carrier_delta} "
+        f"B_live={live_carrier_delta} visible_control={visible_delta}"
     )
 
 
@@ -772,6 +1088,9 @@ def main(argv: list[str] | None = None) -> int:
             "cross_turn_tools",
             "instruction",
             "responses_roundtrip",
+            "preserved_history",
+            "preserved_history_tools",
+            "generated_history",
         ),
         default="cross_turn",
     )
@@ -779,12 +1098,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--policy", choices=("auto", "none", "current_run", "full_history"), default="auto"
     )
-    parser.add_argument("--api-key-env", default="OLLAMA_API_KEY")
+    parser.add_argument(
+        "--api-key-env",
+        help="Credential name in the data-dir .env (defaults by provider).",
+    )
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--effort", default="max", help="reasoning_effort / think value.")
     args = parser.parse_args(argv)
 
-    api_key = _load_api_key(args.api_key_env, args.data_dir)
+    api_key_env = args.api_key_env or API_KEY_ENV_BY_PROVIDER.get(args.provider)
+    if api_key_env is None:
+        raise SystemExit(
+            f"no default API-key environment variable for provider {args.provider!r}; "
+            "pass --api-key-env"
+        )
+    api_key = _load_api_key(api_key_env, args.data_dir)
     print(f"api key length: {len(api_key)}")
     print(
         f"provider: {args.provider} | model: {args.model} | "
