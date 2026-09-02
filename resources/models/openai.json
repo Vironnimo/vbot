@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-25T08:14:20.739126+00:00",
+  "fetched_at": "2026-09-02T17:52:51.900427+00:00",
   "models": {
     "codex-auto-review": {
       "capabilities": {
@@ -66,6 +66,40 @@
       "context_window": 128000,
       "max_output_tokens": 16384,
       "name": "GPT-5.2"
+    },
+    "gpt-5.3-codex-spark": {
+      "canonical": "openai/gpt-5.3-codex-spark",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 128000,
+      "family": "gpt-codex-spark",
+      "max_output_tokens": 32000,
+      "name": "GPT-5.3-Codex-Spark"
     },
     "gpt-5.4": {
       "canonical": "openai/gpt-5.4",
@@ -281,6 +315,42 @@
       "family": "gpt-terra",
       "max_output_tokens": 128000,
       "name": "GPT-5.6-Terra"
+    },
+    "gpt-reserve": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 272000,
+      "max_output_tokens": null,
+      "name": "GPT-Reserve"
     }
   },
   "provider_id": "openai",

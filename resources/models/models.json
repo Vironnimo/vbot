@@ -4503,6 +4503,42 @@
       "release_date": "2026-08-13",
       "temperature": true
     },
+    "google/gemini-3.8-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "last_updated": "2026-09-02",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.8 Flash",
+      "release_date": "2026-09-02",
+      "temperature": true
+    },
     "google/gemini-embedding-001": {
       "capabilities": {
         "input_modalities": [
