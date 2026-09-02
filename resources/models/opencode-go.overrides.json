@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand layer for OpenCode Go, re-verified 2026-09-02 against the current official 26-model endpoint table, current models.dev feed, upstream Model documentation, OpenCode/OpenClaw/Hermes source, and live raw plus exact-vBot probes. Endpoint protocol, Reasoning request control, response carrier, and Assistant-history carrier are independent facts. OpenCode and Hermes replay readable Chat Reasoning as reasoning_content even when the gateway response arrives as reasoning plus reasoning_details; vBot therefore uses readable-only fidelity on the Chat route. Exact vBot input accounting corrected earlier false negatives: glm-5.3-flash and deepseek-v4-flash consume persisted reasoning_content with Tools and inherit full_history. LongCat consumes it both with and without Tools. MiMo consumes plain later-Run history, while current Hy3/Hy4 and Kimi K3 gateway probes strip or ignore the documented carrier despite positive visible controls. Kimi K3's upstream contract explicitly requires complete preserved-thinking history as reasoning_content, and OpenCode plus Hermes send that carrier, so the Provider retains full_history rather than baking a current gateway divergence into a narrower client policy. OpenCode's published DeepSeek zero-retention agreement ended 2026-08-31; no current ZDR claim is encoded here. Legacy live-only ids remain profiled but are not part of the current official endpoint table. Override metadata is wholesale at load, so OpenAI-route profiles repeat protocol and reasoning_response_field.",
+  "_comment": "Hand layer for OpenCode Go, re-verified 2026-09-02 against the current official 27-model endpoint table, current models.dev feed, upstream Model documentation, OpenCode/OpenClaw/Hermes source, and live raw plus exact-vBot probes. Endpoint protocol, Reasoning request control, response carrier, and Assistant-history carrier are independent facts. All current Models were audited for exact later-Run or Tool-continuation replay; Provider-wide full_history remains required. GPT-5.6 Luna and both Muse Spark versions preserve encrypted Responses items exactly in plain and Tool history; Luna's explicit none rung must be sent rather than omitted, and Muse Spark 1.3 routes to /responses. OpenCode and Hermes replay readable Chat Reasoning as reasoning_content even when the gateway response arrives as reasoning plus reasoning_details; vBot therefore uses readable-only fidelity on the Chat route. Exact vBot input accounting corrected earlier false negatives: glm-5.3-flash and deepseek-v4-flash consume persisted reasoning_content with Tools and inherit full_history. LongCat consumes it both with and without Tools. MiMo consumes plain later-Run history, while current Hy3/Hy4, Kimi K2.6/K3, and MiniMax M2.5/M2.7 gateway probes strip or ignore their documented carriers despite positive visible controls. Their upstream contracts require full preserved-thinking history, so the Provider retains full_history rather than baking a current gateway divergence into a narrower client policy. OpenCode's published DeepSeek zero-retention agreement ended 2026-08-31; no current ZDR claim is encoded here. Legacy live-only ids remain profiled but are not part of the current official endpoint table. Override metadata is wholesale at load, so OpenAI-route profiles repeat protocol and reasoning_response_field.",
   "reasoning_replay": "full_history",
   "models": {
     "deepseek-v4-flash": {
@@ -223,6 +223,13 @@
       }
     },
     "muse-spark-1.2-contributor": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "responses"
+        }
+      }
+    },
+    "muse-spark-1.3-contributor": {
       "metadata": {
         "opencode_go": {
           "protocol": "responses"

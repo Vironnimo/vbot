@@ -131,6 +131,10 @@ class OpenCodeGoResponsesPolicy:
     def allows_any_reasoning_controls(self) -> bool:
         return bool(self.allowed_reasoning_efforts)
 
+    @property
+    def supports_explicit_none_effort(self) -> bool:
+        return "none" in self.allowed_reasoning_efforts
+
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         filtered = {key: value for key, value in kwargs.items() if value is not None}
         if not self.allows_any_reasoning_controls:
@@ -146,10 +150,11 @@ class OpenCodeGoResponsesPolicy:
         if not normalized:
             return None
         if normalized == "none":
-            # The wire rejects an explicit ``none`` rung (HTTP 400). An
-            # always-reasoning Model falls back to its cheapest documented
-            # rung (the override's ``minimum_reasoning_effort`` fact); any
-            # other Model simply omits the reasoning object.
+            if self.supports_explicit_none_effort:
+                return "none"
+            # Models without an off rung fall back to their cheapest
+            # documented rung when one is known; otherwise omission lets the
+            # Provider apply its fixed/default reasoning behavior.
             return self.minimum_reasoning_effort
         return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
 
