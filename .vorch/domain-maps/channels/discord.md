@@ -22,7 +22,7 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 
 - In group `response_mode: "mention"` with `observe_unaddressed: false`, an addressed non-command message fetches up to 50 messages immediately before the trigger, newest-first. Collection stops at the bot's latest message; retained entries are reversed to chronological order and enqueued through `observe_inbound_text` before the triggering turn.
 - Backfilled attachments are context placeholders (`[media] <filename>`); they are not downloaded. The engine snapshots every backfilled sender role and persists the normal `[channel-message] [<display_name>|<platform_user_id>|<role>]: ...` note format.
-- Process-local seen ids suppress duplicate backfill while multiple triggers are pending; the set is cleared after a successful outbound bot send. Backfill failure is logged as a warning and does not block the triggering message.
+- Process-local seen ids suppress duplicate backfill while multiple triggers are pending; the set is cleared after a successful outbound bot send. Seen-id and known-conversation maps are bounded least-recently-used caches, while per-chat serialization locks are removed as soon as their active/waiting user count reaches zero, so a long-lived adapter cannot retain state for every historical chat. Backfill failure is logged as a warning and does not block the triggering message.
 - `observe_unaddressed: true` switches to the engine's live passive-observation path and disables history backfill to avoid duplicate context.
 
 ## Outbound

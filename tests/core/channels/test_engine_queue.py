@@ -48,7 +48,7 @@ async def test_non_command_text_queues_behind_blocked_worker(
     monkeypatch.setattr(engine, "_relay_run_events", AsyncMock(side_effect=block_relay))
 
     await engine.handle_inbound_text(make_conversation(), "hello")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await engine.handle_inbound_text(make_conversation(), "still queued")
     await asyncio.sleep(0)
@@ -90,7 +90,7 @@ async def test_chat_waiting_limit_rejects_ninth_followup(
     monkeypatch.setattr(engine, "_relay_run_events", block_first_relay)
 
     await engine.handle_inbound_text(make_conversation(), "running")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
         await engine.handle_inbound_text(make_conversation(), f"queued {index}")
 
@@ -131,10 +131,14 @@ async def test_global_waiting_limit_rejects_followup_from_another_chat(
     monkeypatch.setattr(engine, "_relay_run_events", block_first_relay)
 
     await engine.handle_inbound_text(make_conversation(chat_id=12345), "running one")
-    await asyncio.wait_for(first_relays_started["12345"].wait(), timeout=1)
+    await asyncio.wait_for(
+        first_relays_started["12345"].wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS
+    )
     await engine.handle_inbound_text(make_conversation(chat_id=12345), "queued one")
     await engine.handle_inbound_text(make_conversation(chat_id=67890), "running two")
-    await asyncio.wait_for(first_relays_started["67890"].wait(), timeout=1)
+    await asyncio.wait_for(
+        first_relays_started["67890"].wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS
+    )
     await engine.handle_inbound_text(make_conversation(chat_id=67890), "queued two")
 
     assert waiting_work_manager.waiting_work_count() == 2
@@ -207,7 +211,7 @@ async def test_overflow_busy_reply_is_throttled_per_chat(
     monkeypatch.setattr(engine, "_relay_run_events", block_relay)
 
     await engine.handle_inbound_text(make_conversation(), "running")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
         await engine.handle_inbound_text(make_conversation(), f"queued {index}")
     await engine.handle_inbound_text(make_conversation(), "overflow one")
@@ -246,7 +250,7 @@ async def test_overflow_rejects_media_before_download(
     monkeypatch.setattr(engine, "_relay_run_events", block_relay)
 
     await engine.handle_inbound_text(make_conversation(), "running")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     for index in range(engine_module.CHANNEL_WAITING_WORK_LIMIT):
         await engine.handle_inbound_text(make_conversation(), f"queued {index}")
     await engine.handle_inbound_media(make_conversation(), (SimpleNamespace(caption="photo"),))
@@ -284,7 +288,7 @@ async def test_observed_message_waits_behind_active_channel_run(
         make_conversation(kind="group", mentioned_bot=True),
         "hello bot",
     )
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await engine.handle_inbound_text(
         make_conversation(kind="group", user_display_name="Alice"),
