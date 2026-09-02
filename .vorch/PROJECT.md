@@ -29,7 +29,7 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Persistence:** Canonical Session history lives in normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). Standard external-content FTS covers searchable Messages and a second trigram index excludes Tool-role bulk; no mirrored search-text table exists. Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore and are created only by explicit operator, update, or converter workflows; normal Runtime startup and operation never copy the database. `session-recovery.json` records incidents.
 
-**Tools:** Canonical schema contracts, argument normalization/validation, concurrency policy, and authoring rules live in `tools.md`; Agent-facing definitions follow repository-root `TOOLS.md`.
+**Tools:** Canonical schema contracts, argument normalization/validation, and concurrency policy live in `tools.md`; the design rules for agent-facing Tool definitions live in `tools/designing-agent-tools.md`.
 
 **Configuration:** The data directory (`~/.vbot`) owns `settings.json` (application settings) and `.env` (user-owned fallback credential snapshot; process environment takes precedence, vBot never rewrites `os.environ`). Every user-editable JSON file is validated by its owning domain before runtime consumption; public accessors configure Settings only through cataloged paths. Contracts and internals live in `settings.md` and `storage.md`; Custom Provider credentials in `providers/connections.md`.
 
