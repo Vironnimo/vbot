@@ -1,42 +1,6 @@
 {
-  "fetched_at": "2026-09-02T17:52:51.900427+00:00",
+  "fetched_at": "2026-09-02T18:15:50.604192+00:00",
   "models": {
-    "codex-auto-review": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "reasoning",
-          "response_format",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "subscription"
-      ],
-      "context_window": 272000,
-      "max_output_tokens": null,
-      "name": "Codex Auto Review"
-    },
     "gpt-5.2": {
       "capabilities": {
         "input_modalities": [
@@ -315,42 +279,6 @@
       "family": "gpt-terra",
       "max_output_tokens": 128000,
       "name": "GPT-5.6-Terra"
-    },
-    "gpt-reserve": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "reasoning",
-          "response_format",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "subscription"
-      ],
-      "context_window": 272000,
-      "max_output_tokens": null,
-      "name": "GPT-Reserve"
     }
   },
   "provider_id": "openai",

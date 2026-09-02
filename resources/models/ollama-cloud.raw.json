@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-02T17:52:47.367258+00:00",
+  "fetched_at": "2026-09-02T18:15:46.162633+00:00",
   "provider_id": "ollama-cloud",
   "raw_enrichment_responses": [
     {
@@ -28,34 +28,6 @@
           "general.parameter_count": 550000000000
         },
         "modified_at": "2026-06-04T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "glm-5.3"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "thinking",
-          "tools"
-        ],
-        "details": {
-          "families": null,
-          "family": "glm_dsa_moe",
-          "format": "",
-          "parameter_size": "753329940480",
-          "parent_model": "glm-5.3",
-          "quantization_level": "FP8"
-        },
-        "model_info": {
-          "general.architecture": "glm_dsa_moe",
-          "general.parameter_count": 753329940480,
-          "glm_dsa_moe.context_length": 1048576,
-          "glm_dsa_moe.embedding_length": 0
-        },
-        "modified_at": "2026-08-28T08:00:00-07:00"
       }
     },
     {
@@ -90,143 +62,29 @@
     {
       "endpoint": "/api/show",
       "request": {
-        "model": "glm-5.2"
-      },
-      "response": {
-        "capabilities": [
-          "thinking",
-          "completion",
-          "tools"
-        ],
-        "details": {
-          "families": null,
-          "family": "glm5.2",
-          "format": "",
-          "parameter_size": "756162687872",
-          "parent_model": "glm-5.2",
-          "quantization_level": ""
-        },
-        "model_info": {
-          "general.architecture": "glm5.2",
-          "general.parameter_count": 756162687872,
-          "glm5.2.context_length": 1048576,
-          "glm5.2.embedding_length": 0
-        },
-        "modified_at": "2026-06-16T08:00:00-07:00"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "minimax-m3"
+        "model": "mistral-large-3:675b"
       },
       "response": {
         "capabilities": [
           "completion",
-          "tools",
-          "thinking",
-          "vision"
-        ],
-        "details": {
-          "families": null,
-          "family": "minimax-m3",
-          "format": "",
-          "parameter_size": "0",
-          "parent_model": "minimax-m3",
-          "quantization_level": ""
-        },
-        "model_info": {
-          "general.architecture": "minimax-m3",
-          "general.parameter_count": 0,
-          "minimax-m3.context_length": 524288,
-          "minimax-m3.embedding_length": 0
-        },
-        "modified_at": "2026-06-01T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "deepseek-v4-flash:0731"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "tools",
-          "thinking"
-        ],
-        "details": {
-          "families": null,
-          "family": "deepseek4",
-          "format": "",
-          "parameter_size": "304180418494",
-          "parent_model": "deepseek-v4-flash:0731",
-          "quantization_level": "FP8"
-        },
-        "model_info": {
-          "deepseek4.context_length": 1048576,
-          "deepseek4.embedding_length": 4096,
-          "general.architecture": "deepseek4",
-          "general.parameter_count": 304180418494
-        },
-        "modified_at": "2026-07-31T08:00:00-07:00"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "glm-5.3-flash"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "thinking",
           "tools",
           "vision"
         ],
         "details": {
           "families": null,
-          "family": "glm5_next",
+          "family": "mistral3",
           "format": "",
-          "parameter_size": "321323031390",
-          "parent_model": "glm-5.3-flash",
+          "parameter_size": "675000000000",
+          "parent_model": "mistral-large-3:675b",
           "quantization_level": "FP8"
         },
         "model_info": {
-          "general.architecture": "glm5_next",
-          "general.parameter_count": 321323031390,
-          "glm5_next.context_length": 1048576,
-          "glm5_next.embedding_length": 4096
+          "general.architecture": "mistral3",
+          "general.parameter_count": 675000000000,
+          "mistral3.context_length": 262144,
+          "mistral3.embedding_length": 7168
         },
-        "modified_at": "2026-08-26T07:00:00-07:00"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "gpt-oss:20b"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "tools",
-          "thinking"
-        ],
-        "details": {
-          "families": null,
-          "family": "gptoss",
-          "format": "",
-          "parameter_size": "20914757184",
-          "parent_model": "gpt-oss:20b",
-          "quantization_level": "MXFP4"
-        },
-        "model_info": {
-          "general.architecture": "gptoss",
-          "general.parameter_count": 20914757184,
-          "gptoss.context_length": 131072,
-          "gptoss.embedding_length": 2880
-        },
-        "modified_at": "2025-08-05T00:00:00Z"
+        "modified_at": "2025-12-02T00:00:00Z"
       }
     },
     {
@@ -261,7 +119,176 @@
     {
       "endpoint": "/api/show",
       "request": {
-        "model": "kimi-k3"
+        "model": "glm-5.3"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "thinking",
+          "tools"
+        ],
+        "details": {
+          "families": null,
+          "family": "glm_dsa_moe",
+          "format": "",
+          "parameter_size": "753329940480",
+          "parent_model": "glm-5.3",
+          "quantization_level": "FP8"
+        },
+        "model_info": {
+          "general.architecture": "glm_dsa_moe",
+          "general.parameter_count": 753329940480,
+          "glm_dsa_moe.context_length": 1048576,
+          "glm_dsa_moe.embedding_length": 0
+        },
+        "modified_at": "2026-08-28T08:00:00-07:00"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "glm-5.1"
+      },
+      "response": {
+        "capabilities": [
+          "thinking",
+          "completion",
+          "tools"
+        ],
+        "details": {
+          "families": null,
+          "family": "glm5.1",
+          "format": "",
+          "parameter_size": "756162687872",
+          "parent_model": "glm-5.1",
+          "quantization_level": "FP8"
+        },
+        "model_info": {
+          "general.architecture": "glm5.1",
+          "general.parameter_count": 756162687872,
+          "glm5.1.context_length": 202752,
+          "glm5.1.embedding_length": 6144
+        },
+        "modified_at": "2026-04-07T08:00:00-07:00"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "gpt-oss:20b"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "tools",
+          "thinking"
+        ],
+        "details": {
+          "families": null,
+          "family": "gptoss",
+          "format": "",
+          "parameter_size": "20914757184",
+          "parent_model": "gpt-oss:20b",
+          "quantization_level": "MXFP4"
+        },
+        "model_info": {
+          "general.architecture": "gptoss",
+          "general.parameter_count": 20914757184,
+          "gptoss.context_length": 131072,
+          "gptoss.embedding_length": 2880
+        },
+        "modified_at": "2025-08-05T00:00:00Z"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "glm-5.3-flash"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "thinking",
+          "tools",
+          "vision"
+        ],
+        "details": {
+          "families": null,
+          "family": "glm5_next",
+          "format": "",
+          "parameter_size": "321323031390",
+          "parent_model": "glm-5.3-flash",
+          "quantization_level": "FP8"
+        },
+        "model_info": {
+          "general.architecture": "glm5_next",
+          "general.parameter_count": 321323031390,
+          "glm5_next.context_length": 1048576,
+          "glm5_next.embedding_length": 4096
+        },
+        "modified_at": "2026-08-26T07:00:00-07:00"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "deepseek-v4-flash:0731"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "tools",
+          "thinking"
+        ],
+        "details": {
+          "families": null,
+          "family": "deepseek4",
+          "format": "",
+          "parameter_size": "304180418494",
+          "parent_model": "deepseek-v4-flash:0731",
+          "quantization_level": "FP8"
+        },
+        "model_info": {
+          "deepseek4.context_length": 1048576,
+          "deepseek4.embedding_length": 4096,
+          "general.architecture": "deepseek4",
+          "general.parameter_count": 304180418494
+        },
+        "modified_at": "2026-07-31T08:00:00-07:00"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "minimax-m2.7"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "tools",
+          "thinking"
+        ],
+        "details": {
+          "families": null,
+          "family": "minimax-m2",
+          "format": "",
+          "parameter_size": "229000000000",
+          "parent_model": "minimax-m2.7",
+          "quantization_level": ""
+        },
+        "model_info": {
+          "general.architecture": "minimax-m2",
+          "general.parameter_count": 229000000000,
+          "minimax-m2.context_length": 196608,
+          "minimax-m2.embedding_length": 3072
+        },
+        "modified_at": "2026-03-18T00:00:00Z"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "kimi-k2.6"
       },
       "response": {
         "capabilities": [
@@ -272,19 +299,47 @@
         ],
         "details": {
           "families": null,
-          "family": "kimi-k3",
+          "family": "kimi-k2",
           "format": "",
-          "parameter_size": "2812000000000",
-          "parent_model": "kimi-k3",
-          "quantization_level": "MXFP4"
+          "parameter_size": "1042000000000",
+          "parent_model": "kimi-k2.6",
+          "quantization_level": "INT4"
         },
         "model_info": {
-          "general.architecture": "kimi-k3",
-          "general.parameter_count": 2812000000000,
-          "kimi-k3.context_length": 1048576,
-          "kimi-k3.embedding_length": 7168
+          "general.architecture": "kimi-k2",
+          "general.parameter_count": 1042000000000,
+          "kimi-k2.context_length": 262144,
+          "kimi-k2.embedding_length": 2048
         },
-        "modified_at": "2026-07-27T08:00:00-07:00"
+        "modified_at": "2026-04-20T00:00:00Z"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "nemotron-3-super"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "thinking",
+          "tools"
+        ],
+        "details": {
+          "families": null,
+          "family": "nemotron_h_moe",
+          "format": "",
+          "parameter_size": "120000000000",
+          "parent_model": "nemotron-3-super",
+          "quantization_level": "NVFP4"
+        },
+        "model_info": {
+          "general.architecture": "nemotron_h_moe",
+          "general.parameter_count": 120000000000,
+          "nemotron_h_moe.context_length": 262144,
+          "nemotron_h_moe.embedding_length": 4096
+        },
+        "modified_at": "2026-03-11T00:00:00Z"
       }
     },
     {
@@ -347,119 +402,6 @@
     {
       "endpoint": "/api/show",
       "request": {
-        "model": "kimi-k2.6"
-      },
-      "response": {
-        "capabilities": [
-          "vision",
-          "thinking",
-          "completion",
-          "tools"
-        ],
-        "details": {
-          "families": null,
-          "family": "kimi-k2",
-          "format": "",
-          "parameter_size": "1042000000000",
-          "parent_model": "kimi-k2.6",
-          "quantization_level": "INT4"
-        },
-        "model_info": {
-          "general.architecture": "kimi-k2",
-          "general.parameter_count": 1042000000000,
-          "kimi-k2.context_length": 262144,
-          "kimi-k2.embedding_length": 2048
-        },
-        "modified_at": "2026-04-20T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "mistral-large-3:675b"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "tools",
-          "vision"
-        ],
-        "details": {
-          "families": null,
-          "family": "mistral3",
-          "format": "",
-          "parameter_size": "675000000000",
-          "parent_model": "mistral-large-3:675b",
-          "quantization_level": "FP8"
-        },
-        "model_info": {
-          "general.architecture": "mistral3",
-          "general.parameter_count": 675000000000,
-          "mistral3.context_length": 262144,
-          "mistral3.embedding_length": 7168
-        },
-        "modified_at": "2025-12-02T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "nemotron-3-super"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "thinking",
-          "tools"
-        ],
-        "details": {
-          "families": null,
-          "family": "nemotron_h_moe",
-          "format": "",
-          "parameter_size": "120000000000",
-          "parent_model": "nemotron-3-super",
-          "quantization_level": "NVFP4"
-        },
-        "model_info": {
-          "general.architecture": "nemotron_h_moe",
-          "general.parameter_count": 120000000000,
-          "nemotron_h_moe.context_length": 262144,
-          "nemotron_h_moe.embedding_length": 4096
-        },
-        "modified_at": "2026-03-11T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
-        "model": "minimax-m2.7"
-      },
-      "response": {
-        "capabilities": [
-          "completion",
-          "tools",
-          "thinking"
-        ],
-        "details": {
-          "families": null,
-          "family": "minimax-m2",
-          "format": "",
-          "parameter_size": "229000000000",
-          "parent_model": "minimax-m2.7",
-          "quantization_level": ""
-        },
-        "model_info": {
-          "general.architecture": "minimax-m2",
-          "general.parameter_count": 229000000000,
-          "minimax-m2.context_length": 196608,
-          "minimax-m2.embedding_length": 3072
-        },
-        "modified_at": "2026-03-18T00:00:00Z"
-      }
-    },
-    {
-      "endpoint": "/api/show",
-      "request": {
         "model": "nemotron-3-nano:30b"
       },
       "response": {
@@ -516,7 +458,36 @@
     {
       "endpoint": "/api/show",
       "request": {
-        "model": "glm-5.1"
+        "model": "minimax-m3"
+      },
+      "response": {
+        "capabilities": [
+          "completion",
+          "tools",
+          "thinking",
+          "vision"
+        ],
+        "details": {
+          "families": null,
+          "family": "minimax-m3",
+          "format": "",
+          "parameter_size": "0",
+          "parent_model": "minimax-m3",
+          "quantization_level": ""
+        },
+        "model_info": {
+          "general.architecture": "minimax-m3",
+          "general.parameter_count": 0,
+          "minimax-m3.context_length": 524288,
+          "minimax-m3.embedding_length": 0
+        },
+        "modified_at": "2026-06-01T00:00:00Z"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "glm-5.2"
       },
       "response": {
         "capabilities": [
@@ -526,19 +497,48 @@
         ],
         "details": {
           "families": null,
-          "family": "glm5.1",
+          "family": "glm5.2",
           "format": "",
           "parameter_size": "756162687872",
-          "parent_model": "glm-5.1",
-          "quantization_level": "FP8"
+          "parent_model": "glm-5.2",
+          "quantization_level": ""
         },
         "model_info": {
-          "general.architecture": "glm5.1",
+          "general.architecture": "glm5.2",
           "general.parameter_count": 756162687872,
-          "glm5.1.context_length": 202752,
-          "glm5.1.embedding_length": 6144
+          "glm5.2.context_length": 1048576,
+          "glm5.2.embedding_length": 0
         },
-        "modified_at": "2026-04-07T08:00:00-07:00"
+        "modified_at": "2026-06-16T08:00:00-07:00"
+      }
+    },
+    {
+      "endpoint": "/api/show",
+      "request": {
+        "model": "kimi-k3"
+      },
+      "response": {
+        "capabilities": [
+          "vision",
+          "thinking",
+          "completion",
+          "tools"
+        ],
+        "details": {
+          "families": null,
+          "family": "kimi-k3",
+          "format": "",
+          "parameter_size": "2812000000000",
+          "parent_model": "kimi-k3",
+          "quantization_level": "MXFP4"
+        },
+        "model_info": {
+          "general.architecture": "kimi-k3",
+          "general.parameter_count": 2812000000000,
+          "kimi-k3.context_length": 1048576,
+          "kimi-k3.embedding_length": 7168
+        },
+        "modified_at": "2026-07-27T08:00:00-07:00"
       }
     }
   ],
@@ -553,11 +553,11 @@
           "parent_model": "",
           "quantization_level": ""
         },
-        "digest": "4eecabff7a75",
-        "model": "nemotron-3-ultra",
-        "modified_at": "2026-06-04T00:00:00Z",
-        "name": "nemotron-3-ultra",
-        "size": 0
+        "digest": "f7e3b2a16d5c",
+        "model": "mistral-large-3:675b",
+        "modified_at": "2025-12-02T00:00:00Z",
+        "name": "mistral-large-3:675b",
+        "size": 682000000000
       },
       {
         "details": {
@@ -583,11 +583,11 @@
           "parent_model": "",
           "quantization_level": ""
         },
-        "digest": "0c238824336d",
-        "model": "glm-5.3-flash",
-        "modified_at": "2026-08-26T07:00:00-07:00",
-        "name": "glm-5.3-flash",
-        "size": 328250014584
+        "digest": "221b330d11a8",
+        "model": "gemma4:31b",
+        "modified_at": "2026-04-02T09:00:00-08:00",
+        "name": "gemma4:31b",
+        "size": 62546177752
       },
       {
         "details": {
@@ -598,10 +598,10 @@
           "parent_model": "",
           "quantization_level": ""
         },
-        "digest": "f553240f6dc4",
-        "model": "glm-5.2",
-        "modified_at": "2026-06-16T08:00:00-07:00",
-        "name": "glm-5.2",
+        "digest": "4eecabff7a75",
+        "model": "nemotron-3-ultra",
+        "modified_at": "2026-06-04T00:00:00Z",
+        "name": "nemotron-3-ultra",
         "size": 0
       },
       {
@@ -658,146 +658,11 @@
           "parent_model": "",
           "quantization_level": ""
         },
-        "digest": "9ce5291d9c0e",
-        "model": "minimax-m3",
-        "modified_at": "2026-06-01T00:00:00Z",
-        "name": "minimax-m3",
-        "size": 0
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "d189309738f0",
-        "model": "kimi-k3",
-        "modified_at": "2026-07-27T08:00:00-07:00",
-        "name": "kimi-k3",
-        "size": 1560860324864
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "db976f1eacdd",
-        "model": "deepseek-v4-pro:0813",
-        "modified_at": "2026-08-13T08:00:00-07:00",
-        "name": "deepseek-v4-pro:0813",
-        "size": 892744322880
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "f7e3b2a16d5c",
-        "model": "mistral-large-3:675b",
-        "modified_at": "2025-12-02T00:00:00Z",
-        "name": "mistral-large-3:675b",
-        "size": 682000000000
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "da11955bb451",
-        "model": "nemotron-3-super",
-        "modified_at": "2026-03-11T00:00:00Z",
-        "name": "nemotron-3-super",
-        "size": 230500000000
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "221b330d11a8",
-        "model": "gemma4:31b",
-        "modified_at": "2026-04-02T09:00:00-08:00",
-        "name": "gemma4:31b",
-        "size": 62546177752
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "4764ecb21f85",
-        "model": "kimi-k2.6",
-        "modified_at": "2026-04-20T00:00:00Z",
-        "name": "kimi-k2.6",
-        "size": 595148192736
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
         "digest": "d1008bea3761",
         "model": "minimax-m2.7",
         "modified_at": "2026-03-18T00:00:00Z",
         "name": "minimax-m2.7",
         "size": 480836588544
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "b909ca2f1b7f",
-        "model": "qwen3.5:397b",
-        "modified_at": "2026-02-16T00:00:00Z",
-        "name": "qwen3.5:397b",
-        "size": 397000000000
-      },
-      {
-        "details": {
-          "families": null,
-          "family": "",
-          "format": "",
-          "parameter_size": "",
-          "parent_model": "",
-          "quantization_level": ""
-        },
-        "digest": "a4b4f1851393",
-        "model": "nemotron-3-nano:30b",
-        "modified_at": "2025-12-15T00:00:00Z",
-        "name": "nemotron-3-nano:30b",
-        "size": 32645090390
       },
       {
         "details": {
@@ -823,11 +688,146 @@
           "parent_model": "",
           "quantization_level": ""
         },
+        "digest": "da11955bb451",
+        "model": "nemotron-3-super",
+        "modified_at": "2026-03-11T00:00:00Z",
+        "name": "nemotron-3-super",
+        "size": 230500000000
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "db976f1eacdd",
+        "model": "deepseek-v4-pro:0813",
+        "modified_at": "2026-08-13T08:00:00-07:00",
+        "name": "deepseek-v4-pro:0813",
+        "size": 892744322880
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "0c238824336d",
+        "model": "glm-5.3-flash",
+        "modified_at": "2026-08-26T07:00:00-07:00",
+        "name": "glm-5.3-flash",
+        "size": 328250014584
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "4764ecb21f85",
+        "model": "kimi-k2.6",
+        "modified_at": "2026-04-20T00:00:00Z",
+        "name": "kimi-k2.6",
+        "size": 595148192736
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "a4b4f1851393",
+        "model": "nemotron-3-nano:30b",
+        "modified_at": "2025-12-15T00:00:00Z",
+        "name": "nemotron-3-nano:30b",
+        "size": 32645090390
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "9ce5291d9c0e",
+        "model": "minimax-m3",
+        "modified_at": "2026-06-01T00:00:00Z",
+        "name": "minimax-m3",
+        "size": 0
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "f553240f6dc4",
+        "model": "glm-5.2",
+        "modified_at": "2026-06-16T08:00:00-07:00",
+        "name": "glm-5.2",
+        "size": 0
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
         "digest": "d98fe6ba01e6",
         "model": "gpt-oss:120b",
         "modified_at": "2025-08-05T00:00:00Z",
         "name": "gpt-oss:120b",
         "size": 65290180781
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "b909ca2f1b7f",
+        "model": "qwen3.5:397b",
+        "modified_at": "2026-02-16T00:00:00Z",
+        "name": "qwen3.5:397b",
+        "size": 397000000000
+      },
+      {
+        "details": {
+          "families": null,
+          "family": "",
+          "format": "",
+          "parameter_size": "",
+          "parent_model": "",
+          "quantization_level": ""
+        },
+        "digest": "d189309738f0",
+        "model": "kimi-k3",
+        "modified_at": "2026-07-27T08:00:00-07:00",
+        "name": "kimi-k3",
+        "size": 1560860324864
       }
     ]
   }
