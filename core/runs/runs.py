@@ -242,6 +242,13 @@ class _CancelledToolCallSentinel:
 _CANCELLED_TOOL_CALL = _CancelledToolCallSentinel()
 
 
+class _ActiveToolCallSentinel:
+    """Internal marker for a started call whose cancel callback is not ready yet."""
+
+
+_ACTIVE_TOOL_CALL = _ActiveToolCallSentinel()
+
+
 class Run:
     """One active execution inside a persisted chat session."""
 
@@ -301,7 +308,10 @@ class Run:
         # remains unchanged.
         self._execution_started = False
         self._cancel_callbacks: list[CancelCallback] = []
-        self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
+        self._tool_cancel_callbacks: dict[
+            str,
+            CancelCallback | _ActiveToolCallSentinel | _CancelledToolCallSentinel,
+        ] = {}
         self._cancel_cleanup_futures: set[asyncio.Future[Any]] = set()
         self._started_from_queue_item_id: str | None = None
         # Executor-supplied extras merged into every terminal event payload
@@ -363,14 +373,24 @@ class Run:
 
     def register_tool_cancel(self, tool_call_id: str, callback: CancelCallback) -> None:
         """Register a per-tool-call cancel callback without cancelling the run."""
-        if self.cancel_requested:
-            # Close the same-tick registration race with ``request_cancel``:
-            # late registration belongs to an already-cancelled Run and must
-            # receive the same cleanup signal rather than becoming an orphan.
+        if (
+            self.cancel_requested
+            or self._tool_cancel_callbacks.get(tool_call_id) is _CANCELLED_TOOL_CALL
+        ):
+            # Close both registration races: a callback may arrive after the
+            # whole Run was cancelled or after this started Tool Call received
+            # its own early cancel request.
             self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
             self._schedule_cancel_callback(callback)
             return
         self._tool_cancel_callbacks[tool_call_id] = callback
+
+    def begin_tool_call(self, tool_call_id: str) -> None:
+        """Make a started tool call cancellable before its callback is ready."""
+        if self.cancel_requested:
+            self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
+            return
+        self._tool_cancel_callbacks.setdefault(tool_call_id, _ACTIVE_TOOL_CALL)
 
     def cancel_tool_call(self, tool_call_id: str) -> bool:
         """Cancel a specific tool call without cancelling the run itself."""
@@ -378,7 +398,8 @@ class Run:
         if entry is None or entry is _CANCELLED_TOOL_CALL:
             return False
         self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
-        self._schedule_cancel_callback(cast(CancelCallback, entry))
+        if entry is not _ACTIVE_TOOL_CALL:
+            self._schedule_cancel_callback(cast(CancelCallback, entry))
         return True
 
     def _schedule_cancel_callback(self, callback: CancelCallback) -> None:
