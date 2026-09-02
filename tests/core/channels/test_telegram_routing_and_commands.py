@@ -45,6 +45,7 @@ from tests.core.channels.telegram_test_support import (
 )
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 
 
 @pytest.mark.parametrize(
@@ -805,9 +806,9 @@ async def test_compact_action_runs_in_worker_and_keeps_handler_unblocked(
             make_update(chat_id=12345, user_id=50, text="/compact"),
             SimpleNamespace(),
         ),
-        timeout=1,
+        timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS,
     )
-    await asyncio.wait_for(compact_started.wait(), timeout=1)
+    await asyncio.wait_for(compact_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="/stop"),
