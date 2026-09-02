@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from core.sessions.format import read_session_store_marker
+from core.sessions.schema import SCHEMA_VERSION
+from core.sessions.store import SessionStore
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -241,6 +244,15 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     expected_settings["providers"]["custom"]["fake"]["base_url"] = "http://127.0.0.1:18422/v1"
     expected_settings["server_port"] = 8422
     assert json.loads((data_dir / "settings.json").read_text(encoding="utf-8")) == expected_settings
+    session_store_marker = read_session_store_marker(data_dir)
+    assert session_store_marker is not None
+    assert session_store_marker["state"] == "bootstrap"
+    assert session_store_marker["schema_version"] == SCHEMA_VERSION
+    session_store = SessionStore(data_dir / "sessions.db")
+    session_store.close()
+    ready_marker = read_session_store_marker(data_dir)
+    assert ready_marker is not None
+    assert ready_marker["state"] == "ready"
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
     assert not (data_dir / "agents" / "main").exists()
 
