@@ -1,8 +1,76 @@
 {
-  "fetched_at": "2026-09-02T18:15:52.682041+00:00",
+  "fetched_at": "2026-09-02T20:15:35.888934+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "meta/muse-spark-1.3-20260902",
+        "context_length": 1048576,
+        "created": 1788378359,
+        "default_parameters": {},
+        "description": "Muse Spark 1.3 is a multimodal reasoning model from Meta for long-running agentic, multi-agent, and coding workflows. It is designed to keep track of information across extended tasks, work through...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "meta/muse-spark-1.3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/meta/muse-spark-1.3-20260902/endpoints"
+        },
+        "name": "Meta: Muse Spark 1.3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00000425",
+          "input_cache_read": "0.00000015",
+          "prompt": "0.00000125",
+          "web_search": "0.0025"
+        },
+        "reasoning": {
+          "default_effort": "medium",
+          "mandatory": true,
+          "supported_efforts": [
+            "xhigh",
+            "high",
+            "medium",
+            "low",
+            "minimal"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1048576,
+          "is_moderated": true,
+          "max_completion_tokens": 943718
+        }
+      },
       {
         "architecture": {
           "input_modalities": [
@@ -143,6 +211,74 @@
           "context_length": 1048576,
           "is_moderated": false,
           "max_completion_tokens": 65536
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "file",
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "meta/muse-spark-1.3-contributor-20260902",
+        "context_length": 1048576,
+        "created": 1788360486,
+        "default_parameters": {},
+        "description": "Muse Spark 1.3 Contributor is the cost-efficient contributor tier of Meta\u2019s multimodal reasoning model for experimentation, learning, and early-stage agentic, multi-agent, and coding workflows. It is designed to track information...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "meta/muse-spark-1.3-contributor",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/meta/muse-spark-1.3-contributor-20260902/endpoints"
+        },
+        "name": "Meta: Muse Spark 1.3 Contributor",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000002",
+          "input_cache_read": "0.000000002",
+          "prompt": "0.0000001",
+          "web_search": "0.0025"
+        },
+        "reasoning": {
+          "default_effort": "medium",
+          "mandatory": true,
+          "supported_efforts": [
+            "xhigh",
+            "high",
+            "medium",
+            "low",
+            "minimal"
+          ]
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1048576,
+          "is_moderated": true,
+          "max_completion_tokens": 943718
         }
       },
       {
@@ -10019,9 +10155,9 @@
         "name": "NVIDIA: Nemotron 3 Ultra",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000003125",
-          "input_cache_read": "0.0000001875",
-          "prompt": "0.000000625"
+          "completion": "0.0000024",
+          "input_cache_read": "0.00000012",
+          "prompt": "0.0000006"
         },
         "reasoning": {
           "default_effort": "high",
@@ -10055,9 +10191,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 256000,
+          "context_length": 202800,
           "is_moderated": false,
-          "max_completion_tokens": 32768
+          "max_completion_tokens": 182520
         }
       },
       {
@@ -14802,9 +14938,9 @@
         "name": "DeepSeek: DeepSeek V4 Pro 0423",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000002061552",
-          "input_cache_read": "0.000000085898",
-          "prompt": "0.000001030776"
+          "completion": "0.00000205494",
+          "input_cache_read": "0.0000000856225",
+          "prompt": "0.00000102747"
         },
         "reasoning": {
           "default_effort": "high",
@@ -14936,9 +15072,9 @@
         "name": "DeepSeek: DeepSeek V4 Flash 0423",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000000168",
-          "input_cache_read": "0.0000000168",
-          "prompt": "0.000000084"
+          "completion": "0.00000016492",
+          "input_cache_read": "0.000000016492",
+          "prompt": "0.00000008246"
         },
         "reasoning": {
           "default_effort": "high",
@@ -47152,7 +47288,7 @@
     "links": {
       "next": null
     },
-    "total_count": 423
+    "total_count": 425
   },
   "raw_task_responses": {
     "/images/models": {
@@ -53988,6 +54124,69 @@
         },
         {
           "allowed_passthrough_parameters": [
+            "negative_prompt",
+            "prompt_extend",
+            "audio",
+            "ratio",
+            "last_image",
+            "video",
+            "videos",
+            "images"
+          ],
+          "canonical_slug": "alibaba/wan-2.7-20260414",
+          "created": 1776211362,
+          "creativity": null,
+          "description": "Wan 2.7 is a video generation model from Alibaba. It supports text-to-video, image-to-video with first and last frame control, and reference-to-video, where multiple reference images guide the style and content...",
+          "generate_audio": true,
+          "hugging_face_id": null,
+          "id": "alibaba/wan-2.7",
+          "name": "Alibaba: Wan 2.7",
+          "pricing_skus": {
+            "duration_seconds": "0.1"
+          },
+          "seed": true,
+          "supported_aspect_ratios": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "supported_durations": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "supported_frame_images": [
+            "first_frame",
+            "last_frame"
+          ],
+          "supported_resolutions": [
+            "720p",
+            "1080p"
+          ],
+          "supported_sizes": [
+            "1280x720",
+            "720x1280",
+            "1920x1080",
+            "1080x1920",
+            "720x720",
+            "1080x1080",
+            "960x720",
+            "720x960",
+            "1440x1080",
+            "1080x1440"
+          ],
+          "upscale_factor": null
+        },
+        {
+          "allowed_passthrough_parameters": [
             "watermark",
             "req_key"
           ],
@@ -54050,69 +54249,6 @@
             "960x720",
             "1280x720",
             "1680x720"
-          ],
-          "upscale_factor": null
-        },
-        {
-          "allowed_passthrough_parameters": [
-            "negative_prompt",
-            "prompt_extend",
-            "audio",
-            "ratio",
-            "last_image",
-            "video",
-            "videos",
-            "images"
-          ],
-          "canonical_slug": "alibaba/wan-2.7-20260414",
-          "created": 1776211362,
-          "creativity": null,
-          "description": "Wan 2.7 is a video generation model from Alibaba. It supports text-to-video, image-to-video with first and last frame control, and reference-to-video, where multiple reference images guide the style and content...",
-          "generate_audio": true,
-          "hugging_face_id": null,
-          "id": "alibaba/wan-2.7",
-          "name": "Alibaba: Wan 2.7",
-          "pricing_skus": {
-            "duration_seconds": "0.1"
-          },
-          "seed": true,
-          "supported_aspect_ratios": [
-            "16:9",
-            "9:16",
-            "1:1",
-            "4:3",
-            "3:4"
-          ],
-          "supported_durations": [
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10
-          ],
-          "supported_frame_images": [
-            "first_frame",
-            "last_frame"
-          ],
-          "supported_resolutions": [
-            "720p",
-            "1080p"
-          ],
-          "supported_sizes": [
-            "1280x720",
-            "720x1280",
-            "1920x1080",
-            "1080x1920",
-            "720x720",
-            "1080x1080",
-            "960x720",
-            "720x960",
-            "1440x1080",
-            "1080x1440"
           ],
           "upscale_factor": null
         },

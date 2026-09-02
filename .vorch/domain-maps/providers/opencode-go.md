@@ -55,7 +55,7 @@ Since `metadata` is replaced **wholesale** by the highest layer at load (assembl
 
 ## Catalog Integrity
 
-The gateway's `/models` response is retained verbatim in `opencode-go.raw.json`, but the usable projection applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The live endpoint returned 33 raw ids on 2026-09-02, while the official endpoint table names 27 current Models. Treat extra ids as legacy availability, not current protocol documentation.
+The gateway's `/models` response is retained verbatim in `opencode-go.raw.json`, but the usable projection applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The full refresh returned 34 raw ids on 2026-09-02, while the official endpoint table names 27 current Models and all 27 were present. Treat extra ids as legacy availability, not current protocol documentation.
 
 ## Prompt Caching
 
