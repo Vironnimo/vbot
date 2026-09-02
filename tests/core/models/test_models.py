@@ -1801,22 +1801,79 @@ class TestModelRegistryRealResources:
         assert pinned.recommended_temperature == 1.0
 
     def test_opencode_go_glm_5_3_flash_override_loads(self):
-        """``opencode-go.overrides.json`` pins glm-5.3-flash to current_run.
+        """GLM-5.3-Flash inherits full-history replay on OpenCode Go.
 
-        The override is a bare pin-only patch (overrides only ever carry what
-        they override); the required record fields come from the generated
-        provider catalog, which now contains glm-5.3-flash after the
-        2026-08-26 refresh. Pin restored to current_run by explicit user
-        decision 2026-08-26 after field-level probes showed no billed replay
-        (see the override _comment).
+        Required record fields come from the generated provider catalog, while
+        the override owns its exact protocol and response carrier. Exact vBot
+        probes corrected the old raw-probe false negative on 2026-09-02:
+        persisted ``reasoning_content`` is billed in a Tool continuation, so
+        the Model must inherit Provider full_history.
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         model = registry.get("opencode-go", "glm-5.3-flash")
-        assert model.reasoning_replay == "current_run"
+        assert registry.provider_reasoning_replay("opencode-go") == "full_history"
+        assert model.reasoning_replay is None
         assert model.context_window == 1_000_000
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
+
+    def test_opencode_go_current_endpoint_profiles_load(self):
+        """All 26 current official Models route through their documented wire."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        expected_by_protocol = {
+            "responses": (
+                "grok-4.6",
+                "gpt-5.6-luna",
+                "muse-spark-1.2-contributor",
+            ),
+            "openai": (
+                "glm-5.3-flash",
+                "glm-5.3",
+                "glm-5.2",
+                "glm-5.1",
+                "kimi-k3",
+                "kimi-k2.7-code",
+                "kimi-k2.6",
+                "longcat-2.0",
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+                "deepseek-v4-flash-vision-exp",
+                "mimo-v2.5",
+                "mimo-v2.5-pro",
+                "hy4-preview",
+                "hy3",
+            ),
+            "anthropic": (
+                "minimax-m3",
+                "minimax-m2.7",
+                "minimax-m2.5",
+                "qwen3.8-max",
+                "qwen3.8-flash",
+                "qwen3.7-max",
+                "qwen3.7-plus",
+                "qwen3.6-plus",
+            ),
+        }
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 26
+        for protocol, model_ids in expected_by_protocol.items():
+            for model_id in model_ids:
+                model = registry.get("opencode-go", model_id)
+                assert model.metadata["opencode_go"]["protocol"] == protocol
+
+    def test_opencode_go_response_fields_are_not_history_field_guesses(self):
+        """Profiles describe inbound response carriers, not outbound replay."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        for model_id in ("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"):
+            metadata = registry.get("opencode-go", model_id).metadata["opencode_go"]
+            assert metadata["reasoning_response_field"] == "reasoning"
+        for model_id in ("mimo-v2.5", "mimo-v2.5-pro"):
+            metadata = registry.get("opencode-go", model_id).metadata["opencode_go"]
+            assert metadata["reasoning_response_field"] == "reasoning_content"
 
     def test_ollama_cloud_reasoning_replay_policies(self):
         """Ollama Cloud replay pins, live-verified through 2026-09-02.

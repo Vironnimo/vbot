@@ -1,9 +1,8 @@
 {
-  "_comment": "Hand layer for OpenCode Go, verified 2026-08-25 against its official endpoint table (three wires: /responses, /chat/completions, /messages), current models.dev feed, upstream model documentation, and live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22; ox-alpha-free added 2026-08-23 from live replay/effort probes (model never reads replayed reasoning in any scenario, accepts every effort rung, reasons even at 'none' while 'low' yields no thinking; policy stays current_run as a safety margin since the gateway silently discards surplus carriers); glm-5.3-flash re-measured 2026-08-26 with STREAMING requests in vBot's real request shapes and full usage accounting (prompt + cached tokens): field-level replay probes (reasoning_content, reasoning, thinking, reasoning_details) showed no billed input in-run or cross-run, and behavioral secret probes stayed negative with clean visible controls. The pin stays current_run by explicit user decision 2026-08-26 (a model that demonstrably gets its reasoning back on other providers must at least get current-run reasoning here; the probe evidence is not trusted as proof of gateway stripping). deepseek-v4-flash re-measured 2026-08-26 with STREAMING requests in vBot's real request shapes: in-run continuation (assistant tool-call turn carrying reasoning_content) is ACCEPTED and billed (+841 at effort low and high, visible-content control validates accounting), while cross-run replay on a plain history turn is stripped (+0, control +843) - both DeepSeek V4 Flash entries therefore pinned current_run to mirror exact gateway behavior. DeepSeek routes run under a monthly zero-data-retention agreement that expires 2026-08-31 — re-check the agreement before relying on these entries afterwards. The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
+  "_comment": "Hand layer for OpenCode Go, re-verified 2026-09-02 against the current official 26-model endpoint table, current models.dev feed, upstream Model documentation, OpenCode/OpenClaw/Hermes source, and live raw plus exact-vBot probes. Endpoint protocol, Reasoning request control, response carrier, and Assistant-history carrier are independent facts. OpenCode and Hermes replay readable Chat Reasoning as reasoning_content even when the gateway response arrives as reasoning plus reasoning_details; vBot therefore uses readable-only fidelity on the Chat route. Exact vBot input accounting corrected earlier false negatives: glm-5.3-flash and deepseek-v4-flash consume persisted reasoning_content with Tools and inherit full_history. LongCat consumes it both with and without Tools. MiMo consumes plain later-Run history, while current Hy3/Hy4 and Kimi K3 gateway probes strip or ignore the documented carrier despite positive visible controls. Kimi K3's upstream contract explicitly requires complete preserved-thinking history as reasoning_content, and OpenCode plus Hermes send that carrier, so the Provider retains full_history rather than baking a current gateway divergence into a narrower client policy. OpenCode's published DeepSeek zero-retention agreement ended 2026-08-31; no current ZDR claim is encoded here. Legacy live-only ids remain profiled but are not part of the current official endpoint table. Override metadata is wholesale at load, so OpenAI-route profiles repeat protocol and reasoning_response_field.",
   "reasoning_replay": "full_history",
   "models": {
     "deepseek-v4-flash": {
-      "reasoning_replay": "current_run",
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
@@ -12,7 +11,6 @@
       }
     },
     "deepseek-v4-flash-vision-exp": {
-      "reasoning_replay": "current_run",
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
@@ -73,7 +71,6 @@
       }
     },
     "glm-5.3-flash": {
-      "reasoning_replay": "current_run",
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
@@ -96,11 +93,27 @@
         }
       }
     },
+    "grok-4.6": {
+      "metadata": {
+        "opencode_go": {
+          "minimum_reasoning_effort": "low",
+          "protocol": "responses"
+        }
+      }
+    },
     "hy3": {
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
-          "reasoning_response_field": "reasoning_details"
+          "reasoning_response_field": "reasoning"
+        }
+      }
+    },
+    "hy4-preview": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning"
         }
       }
     },
@@ -129,7 +142,7 @@
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
+          "reasoning_response_field": "reasoning",
           "thinking_control": "toggle",
           "thinking_keep": "all"
         }
@@ -160,7 +173,7 @@
         "opencode_go": {
           "minimum_reasoning_effort": "low",
           "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
+          "reasoning_response_field": "reasoning"
         }
       }
     },
@@ -176,7 +189,7 @@
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
-          "reasoning_response_field": "reasoning_details"
+          "reasoning_response_field": "reasoning_content"
         }
       }
     },
@@ -184,7 +197,7 @@
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
-          "reasoning_response_field": "reasoning_details"
+          "reasoning_response_field": "reasoning_content"
         }
       }
     },
@@ -245,6 +258,13 @@
       }
     },
     "qwen3.8-max": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
+    },
+    "qwen3.8-flash": {
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"

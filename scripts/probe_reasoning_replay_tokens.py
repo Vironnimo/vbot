@@ -37,6 +37,12 @@ own response (first non-empty of ``reasoning_content`` / ``reasoning`` /
 (e.g. vBot's default ``reasoning_content`` for a model whose responses carry
 an opaque field vBot never replays).
 
+``--preserved-history`` runs Kimi K3's official semantic history example
+instead of token-only inference: two numbers exist only in a prior assistant
+reasoning field, and the follow-up must recover them. Without ``--carrier`` it
+tries every known OpenAI-compatible reasoning field. Combine it with
+``--include-cross-run-tools`` to keep Tool definitions on the follow-up.
+
 Prints measurements only: carrier, lengths, per-variant input tokens and
 deltas. Never prints API keys, full prompts, or full responses.
 
@@ -138,9 +144,10 @@ async def _send_stream(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "reasoning_effort": effort,
         "max_tokens": max_tokens,
     }
+    if effort:
+        body["reasoning_effort"] = effort
     if tools:
         body["tools"] = tools
     if extra_request:
@@ -260,9 +267,10 @@ async def _send_stream_raw(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "reasoning_effort": effort,
         "max_tokens": max_tokens,
     }
+    if effort:
+        body["reasoning_effort"] = effort
     if tools:
         body["tools"] = tools
     if extra_request:
@@ -469,6 +477,87 @@ async def _measure_shape(
     }
 
 
+async def _probe_preserved_history(
+    base_url: str,
+    api_key: str,
+    model: str,
+    *,
+    effort: str,
+    max_tokens: int,
+    carrier_override: str,
+    tools_enabled: bool,
+    extra_request: dict[str, Any] | None = None,
+) -> None:
+    """Run Kimi K3's official preserved-thinking semantic example."""
+
+    first_prompt = "Tell me three random numbers."
+    visible_numbers = "473, 921, 235"
+    hidden_numbers = ("215", "222")
+    prior_reasoning = (
+        "I'll start by listing five numbers: 473, 921, 235, 215, 222, "
+        "and I'll tell you the first three."
+    )
+    ask = "What are the other two numbers you had in mind? Reply with only those numbers."
+    request_tools = [TOOL_DEFINITION] if tools_enabled else None
+
+    async def send(assistant: dict[str, Any]) -> dict[str, Any]:
+        return await _send_stream(
+            base_url,
+            api_key,
+            model,
+            [
+                {"role": "user", "content": first_prompt},
+                assistant,
+                {"role": "user", "content": ask},
+            ],
+            tools=request_tools,
+            effort=effort,
+            max_tokens=max_tokens,
+            extra_request=extra_request,
+        )
+
+    print(f"\n=== PRESERVED HISTORY {model} (tools={tools_enabled}) ===")
+    without = await send({"role": "assistant", "content": visible_numbers})
+    visible = await send(
+        {
+            "role": "assistant",
+            "content": f"{visible_numbers}\n\n{prior_reasoning}",
+        }
+    )
+    print(
+        f"  without: input={without['prompt_tokens']} "
+        f"recalled={all(number in without['content'] for number in hidden_numbers)} "
+        f"answer={without['content'][:80]!r}"
+    )
+    print(
+        f"  visible: input={visible['prompt_tokens']} "
+        f"recalled={all(number in visible['content'] for number in hidden_numbers)} "
+        f"answer={visible['content'][:80]!r}"
+    )
+
+    carriers = [carrier_override] if carrier_override else list(CARRIER_FIELDS)
+    for carrier in carriers:
+        carrier_value: Any = prior_reasoning
+        if carrier == "reasoning_details":
+            carrier_value = [{"type": "reasoning.text", "text": prior_reasoning}]
+        assistant = {
+            "role": "assistant",
+            "content": visible_numbers,
+            carrier: carrier_value,
+        }
+        try:
+            result = await send(assistant)
+        except Exception as exc:  # noqa: BLE001 - carrier sweep must continue
+            print(f"  {carrier}: ERROR {exc}")
+            continue
+        recalled = all(number in result["content"] for number in hidden_numbers)
+        print(
+            f"  {carrier}: input={result['prompt_tokens']} "
+            f"delta={result['prompt_tokens'] - without['prompt_tokens']:+d} "
+            f"recalled={recalled} answer={result['content'][:80]!r}"
+        )
+
+
 async def _probe_model(
     base_url: str,
     api_key: str,
@@ -568,6 +657,22 @@ async def _run(args: argparse.Namespace) -> int:
         f"effort: {args.effort} | streaming with include_usage"
     )
     models = args.models.split(",") if args.models else [args.model]
+    if args.preserved_history:
+        for model in models:
+            model = model.strip()
+            if not model:
+                continue
+            await _probe_preserved_history(
+                args.base_url,
+                api_key,
+                model,
+                effort=args.effort,
+                max_tokens=args.max_tokens,
+                carrier_override=args.carrier,
+                tools_enabled=args.include_cross_run_tools,
+                extra_request=extra_request,
+            )
+        return 0
     if args.inspect:
         for model in models:
             model = model.strip()
@@ -695,6 +800,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Only run a real tool-call turn and report every assistant delta "
         "field (wire-shape inspection, no replay measurement).",
+    )
+    parser.add_argument(
+        "--preserved-history",
+        action="store_true",
+        help="Run Kimi K3's official semantic preserved-thinking example.",
     )
     parser.add_argument("--effort", default=DEFAULT_EFFORT)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)

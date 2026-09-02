@@ -40,15 +40,21 @@ CLOSED_TOOL = {
 # hardcoded adapter set. These ids carry "anthropic" in the protocol map below
 # and must route through the internal Messages adapter.
 ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
-    "minimax-m2.7",
     "minimax-m2.5",
+    "minimax-m2.7",
+    "minimax-m3",
+    "qwen3.6-plus",
+    "qwen3.7-max",
     "qwen3.7-plus",
+    "qwen3.8-flash",
+    "qwen3.8-max",
 )
 # Ids carrying "responses" in the protocol map below must route through the
 # shared stateless Responses machinery (/responses endpoint).
 RESPONSES_MODELS: tuple[str, ...] = (
     "gpt-5.6-luna",
     "grok-4.5",
+    "grok-4.6",
     "muse-spark-1.2-contributor",
 )
 # Small per-model profiles mirroring the independent facts carried by
@@ -60,11 +66,18 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     "qwen3.7-plus": {"protocol": "anthropic"},
     "qwen3.7-max": {"protocol": "anthropic"},
     "qwen3.8-max": {"protocol": "anthropic"},
+    "qwen3.8-flash": {"protocol": "anthropic"},
     "qwen3.6-plus": {"protocol": "anthropic"},
     "deepseek-v4-flash": {"protocol": "openai"},
+    "deepseek-v4-flash-vision-exp": {"protocol": "openai"},
     "deepseek-v4-pro": {"protocol": "openai"},
+    "glm-5.1": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
     "glm-5.2": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
     "glm-5.3": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
+    "glm-5.3-flash": {
+        "protocol": "openai",
+        "reasoning_response_field": "reasoning_content",
+    },
     "longcat-2.0": {
         "protocol": "openai",
         "reasoning_response_field": "reasoning_content",
@@ -75,13 +88,19 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
         "minimum_reasoning_effort": "low",
         "protocol": "responses",
     },
-    "hy3": {"protocol": "openai"},
+    "grok-4.6": {
+        "minimum_reasoning_effort": "low",
+        "protocol": "responses",
+    },
+    "hy3": {"protocol": "openai", "reasoning_response_field": "reasoning"},
+    "hy4-preview": {"protocol": "openai", "reasoning_response_field": "reasoning"},
     "kimi-k2.5": {
         "protocol": "openai",
         "thinking_control": "toggle",
     },
     "kimi-k2.6": {
         "protocol": "openai",
+        "reasoning_response_field": "reasoning",
         "thinking_control": "toggle",
         "thinking_keep": "all",
     },
@@ -92,6 +111,12 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     "kimi-k3": {
         "minimum_reasoning_effort": "low",
         "protocol": "openai",
+        "reasoning_response_field": "reasoning",
+    },
+    "mimo-v2.5": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
+    "mimo-v2.5-pro": {
+        "protocol": "openai",
+        "reasoning_response_field": "reasoning_content",
     },
     "qwen3.6-plus-openai": {
         "protocol": "openai",
@@ -109,7 +134,7 @@ def _model_with_profile(
     reasoning = ReasoningCapabilities(supported=True)
     if model_id in {"kimi-k2.5", "kimi-k2.6"}:
         reasoning = ReasoningCapabilities(supported=True, control="on_off")
-    elif model_id == "grok-4.5":
+    elif model_id in {"grok-4.5", "grok-4.6"}:
         reasoning = ReasoningCapabilities(
             supported=True,
             control="levels",
@@ -207,7 +232,16 @@ def model_with_output_limit(
 class TestOpenCodeGoAdapter:
     @pytest.mark.parametrize(
         "model_id",
-        [*ANTHROPIC_MESSAGES_MODELS, "deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
+        [
+            *ANTHROPIC_MESSAGES_MODELS,
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek/deepseek-v4-flash",
+            "glm-5.3-flash",
+            "kimi-k3",
+            "longcat-2.0",
+            "mimo-v2.5",
+        ],
     )
     def test_reasoning_replay_policy_is_full_history_on_both_routes(
         self,
@@ -222,7 +256,7 @@ class TestOpenCodeGoAdapter:
     ) -> None:
         assert opencode_go_adapter.reasoning_replay_policy("new-unprofiled-model") == "full_history"
 
-    @pytest.mark.parametrize("model_id", ["kimi-k2.5", "kimi-k2.7-code"])
+    @pytest.mark.parametrize("model_id", ["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code"])
     def test_kimi_models_inherit_full_history_replay(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
@@ -308,6 +342,43 @@ class TestOpenCodeGoAdapter:
 
         assert payload["reasoning_effort"] == "low"
 
+    def test_chat_route_declares_readable_only_reasoning_replay(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        assert opencode_go_adapter.reasoning_replay_fidelity("kimi-k3") == "readable_only"
+
+    def test_kimi_k3_response_and_history_use_independent_reasoning_fields(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        normalized = opencode_go_adapter.normalize_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Answer",
+                            "reasoning": "Readable trace",
+                            "reasoning_details": [{"type": "reasoning.text", "text": "meta"}],
+                        }
+                    }
+                ]
+            },
+            model_id="kimi-k3",
+        )
+
+        payload = opencode_go_adapter._build_payload([normalized], "kimi-k3")
+        assistant = payload["messages"][0]
+
+        assert normalized["reasoning"] == "Readable trace"
+        assert normalized["reasoning_meta"] == {
+            "reasoning_details": [{"type": "reasoning.text", "text": "meta"}]
+        }
+        assert assistant["reasoning_content"] == "Readable trace"
+        assert "reasoning" not in assistant
+        assert "reasoning_details" not in assistant
+
     def test_format_assistant_message_adds_reasoning_content(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
@@ -320,7 +391,10 @@ class TestOpenCodeGoAdapter:
             "reasoning_meta": None,
         }
 
-        wire = opencode_go_adapter._format_assistant_message(internal_message)
+        wire = opencode_go_adapter._format_assistant_message(
+            internal_message,
+            model_id="kimi-k3",
+        )
 
         assert wire["reasoning_content"] == "I think..."
         assert wire["content"] == "Answer"
@@ -338,7 +412,10 @@ class TestOpenCodeGoAdapter:
             "reasoning_meta": None,
         }
 
-        wire = opencode_go_adapter._format_assistant_message(internal_message)
+        wire = opencode_go_adapter._format_assistant_message(
+            internal_message,
+            model_id="kimi-k3",
+        )
 
         assert "reasoning_content" not in wire
 
@@ -354,7 +431,10 @@ class TestOpenCodeGoAdapter:
             "reasoning_meta": None,
         }
 
-        wire = opencode_go_adapter._format_assistant_message(internal_message)
+        wire = opencode_go_adapter._format_assistant_message(
+            internal_message,
+            model_id="kimi-k3",
+        )
 
         assert "reasoning_content" not in wire
 
@@ -468,12 +548,10 @@ class TestOpenCodeGoAdapter:
             message for message in payload["messages"] if message.get("role") == "assistant"
         ]
         assert len(assistant_messages) == 2
-        # Meta supersedes duplicated plaintext: when a turn captured opaque
-        # reasoning_details, no readable reasoning_content is duplicated.
-        assert assistant_messages[0]["reasoning_details"] == [{"trace": "first"}]
-        assert "reasoning_content" not in assistant_messages[0]
-        assert assistant_messages[1]["reasoning_details"] == [{"trace": "second"}]
-        assert "reasoning_content" not in assistant_messages[1]
+        assert assistant_messages[0]["reasoning_content"] == "first reasoning"
+        assert "reasoning_details" not in assistant_messages[0]
+        assert assistant_messages[1]["reasoning_content"] == "second reasoning"
+        assert "reasoning_details" not in assistant_messages[1]
 
     def test_deepseek_none_thinking_effort_omits_reasoning_effort(
         self,
@@ -1272,11 +1350,10 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             if isinstance(message, dict) and message.get("role") == "assistant"
         ]
         assert len(assistant_messages) == 2
-        # Meta supersedes duplicated plaintext under meta_preferred fidelity.
-        assert assistant_messages[0]["reasoning_details"] == [{"trace": "old"}]
-        assert "reasoning_content" not in assistant_messages[0]
-        assert assistant_messages[1]["reasoning_details"] == [{"trace": "latest"}]
-        assert "reasoning_content" not in assistant_messages[1]
+        assert assistant_messages[0]["reasoning_content"] == "old thinking"
+        assert "reasoning_details" not in assistant_messages[0]
+        assert assistant_messages[1]["reasoning_content"] == "latest thinking"
+        assert "reasoning_details" not in assistant_messages[1]
 
     @pytest.mark.parametrize("model_id", ANTHROPIC_MESSAGES_MODELS)
     @respx.mock
@@ -1523,11 +1600,13 @@ class TestOpenCodeGoResponsesRouting:
     ) -> None:
         assert opencode_go_adapter._model_protocol(model_id) == "responses"
 
-    def test_longcat_resolves_openai_and_qwen38_max_resolves_anthropic(
+    def test_current_chat_and_messages_models_resolve_documented_protocols(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
         assert opencode_go_adapter._model_protocol("longcat-2.0") == "openai"
+        assert opencode_go_adapter._model_protocol("hy4-preview") == "openai"
+        assert opencode_go_adapter._model_protocol("qwen3.8-flash") == "anthropic"
         assert opencode_go_adapter._model_protocol("qwen3.8-max") == "anthropic"
 
     def test_responses_context_estimate_uses_rendered_responses_items(

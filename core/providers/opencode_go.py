@@ -34,6 +34,8 @@ from core.providers.github_copilot_responses import (
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+    ReasoningReplayFidelity,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
@@ -192,8 +194,11 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter for the OpenCode Go gateway.
 
-    Models with reasoning capability (DeepSeek, Kimi, GLM, ...) return
-    ``reasoning_content`` in assistant messages.
+    Chat Models normalize readable Reasoning from their profiled response
+    carrier and replay it as ``reasoning_content``. The two field names are
+    intentionally independent: Kimi K3 and Hy currently respond with
+    ``reasoning`` plus ``reasoning_details``, while their compatible Assistant
+    history uses ``reasoning_content``.
 
     Replay scope follows the shared System → Provider → Model hierarchy. Wire
     controls remain explicit per-Model facts because some gateway backends need
@@ -248,6 +253,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
+
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """Declare the reasoning class accepted by the selected wire.
+
+        OpenCode's own OpenAI-compatible client serializes historical
+        Reasoning as readable ``reasoning_content`` and does not replay
+        ``reasoning_details``. The Messages and Responses routes already own
+        their native block/item fidelity and bypass this Chat serializer.
+        """
+
+        if self._model_protocol(model_id) == PROTOCOL_OPENAI:
+            return REASONING_REPLAY_FIDELITY_READABLE_ONLY
+        return super().reasoning_replay_fidelity(model_id)
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Resolve media support from the wire selected for this model."""
