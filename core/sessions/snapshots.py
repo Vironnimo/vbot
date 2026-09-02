@@ -27,6 +27,7 @@ from core.sessions.errors import (
     SessionStoreUnavailableError,
 )
 from core.sessions.schema import APPLICATION_ID, DATABASE_ID_META_KEY, SCHEMA_VERSION
+from core.sessions.sqlite_runtime import readonly_sqlite_uri
 
 SNAPSHOT_ROOT_NAME = "session-snapshots"
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
@@ -413,7 +414,7 @@ def _verify_snapshot_db(
 
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(readonly_sqlite_uri(path), uri=True)
         if cancelled is not None:
             connection.set_progress_handler(lambda: int(cancelled()), 10_000)
         application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
@@ -1052,7 +1053,7 @@ def _canonical_probe(data_dir: Path, database_path: Path) -> _CanonicalProbe:
         return _CanonicalProbe(False, True, "missing canonical Session database", detected_at)
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{database_path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(readonly_sqlite_uri(database_path), uri=True)
         app_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version > SCHEMA_VERSION:

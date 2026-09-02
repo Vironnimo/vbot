@@ -12,6 +12,7 @@ from core.sessions import sqlite_runtime
 from core.sessions.sqlite_runtime import (
     READ_CONNECTION_LIMIT,
     SQLiteRuntime,
+    readonly_sqlite_uri,
     tracked_connection_count,
 )
 
@@ -147,3 +148,26 @@ def test_checkpoint_with_a_reader_keeps_the_runtime_usable(tmp_path: Path) -> No
             runtime._close_reader(reader)
         runtime.close()
     assert runtime.live_connection_count() == 0
+
+
+def test_readonly_connections_escape_special_path_characters(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data#snapshot%source"
+    data_dir.mkdir()
+    database = data_dir / "sessions.db"
+    runtime = SQLiteRuntime(database)
+    runtime.open_writer(create=True, database_id="a" * 32)
+    reader = None
+    try:
+        uri = readonly_sqlite_uri(database)
+        assert "%23" in uri
+        assert "%25" in uri
+        reader = runtime._checkout_reader()
+        assert reader is not None
+        assert reader.execute("SELECT 1").fetchone()[0] == 1
+        runtime._close_reader(reader)
+        reader = None
+        assert runtime.backup(tmp_path / "backup.db") is True
+    finally:
+        if reader is not None:
+            runtime._close_reader(reader)
+        runtime.close()
