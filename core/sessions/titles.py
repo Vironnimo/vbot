@@ -181,12 +181,7 @@ class SessionTitleService:
         )
 
         session = sessions.get(address)
-        user_message_count = 0
-        for message in session.load_active():
-            if message.role == "user":
-                user_message_count += 1
-                if user_message_count > 1:
-                    break
+        user_message_count = session.active_user_message_count(limit=2)
         if user_message_count != 1:
             sessions.mark_auto_title_initialized(address)
             return None

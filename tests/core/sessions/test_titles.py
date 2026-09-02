@@ -464,12 +464,21 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(tmp
 
 
 @pytest.mark.asyncio
-async def test_existing_session_is_marked_without_backfill_or_model_request(tmp_path) -> None:
+async def test_existing_session_is_marked_without_backfill_or_model_request(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runtime = StubRuntime(tmp_path, enabled=True, adapters=[])
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Old first request"))
     session.append(ChatMessage.assistant(model="openai/agent", content="Old answer"))
     session.append(ChatMessage.user("New request"))
+    monkeypatch.setattr(
+        session,
+        "load_active",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("title initialization must not load the complete active history")
+        ),
+    )
     service = SessionTitleService(cast(Any, runtime))
 
     service.notify_user_message(

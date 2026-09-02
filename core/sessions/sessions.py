@@ -785,6 +785,15 @@ class ChatSession:
     async def load_active_async(self) -> list[ChatMessage]:
         return await _run_session_io(self.load_active)
 
+    def active_user_message_count(self, *, limit: int = 2) -> int:
+        return self._store.active_user_message_count(self.address, limit=limit)
+
+    def latest_note(self, content_prefix: str) -> ChatMessage | None:
+        return self._store.latest_note(self.address, content_prefix=content_prefix)
+
+    async def latest_note_async(self, content_prefix: str) -> ChatMessage | None:
+        return await _run_session_io(self.latest_note, content_prefix)
+
     def read_chat_history_snapshot(
         self,
         *,
