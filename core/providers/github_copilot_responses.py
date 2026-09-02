@@ -72,6 +72,9 @@ class ResponsesRequestPolicy(Protocol):
     @property
     def allows_any_reasoning_controls(self) -> bool: ...
 
+    @property
+    def supports_explicit_none_effort(self) -> bool: ...
+
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]: ...
 
     def closest_reasoning_effort(self, effort: Any) -> str | None: ...
@@ -605,7 +608,9 @@ def _apply_responses_reasoning(
         payload["reasoning"] = dict(reasoning)
     else:
         safe_effort = policy.closest_reasoning_effort(effort)
-        if safe_effort is not None and safe_effort != "none":
+        if safe_effort is not None and (
+            safe_effort != "none" or policy.supports_explicit_none_effort
+        ):
             payload["reasoning"] = {"effort": safe_effort, "summary": "auto"}
     # Reasoning-capable Responses wires always need encrypted continuity bytes on
     # the next turn, including always-on Models that omit an effort object and

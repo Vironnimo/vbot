@@ -1218,6 +1218,7 @@ class OpenAISubscriptionResponsesPolicy:
     supports_streaming: bool = True
     endpoint_path: str = RESPONSES_POLICY_ENDPOINT
     supported_request_parameters: frozenset[str] = OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
+    supports_explicit_none_effort: bool = False
 
     @property
     def allows_any_reasoning_controls(self) -> bool:

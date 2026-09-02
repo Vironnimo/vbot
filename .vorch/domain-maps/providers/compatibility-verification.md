@@ -15,6 +15,7 @@ Record the following before the first request:
 - Claimed capabilities to verify: Reasoning, Reasoning control, Reasoning Replay, streaming, Usage, Tools, media, structured output, sampling controls, Context, output limit, and error behavior as applicable.
 - Material request variants required by the Provider contract, especially streaming vs non-streaming, Tools present vs absent, Tool continuation vs a later Run, and stateful vs stateless endpoints.
 - Existing vBot profile values and their source: Provider config, generated Model catalog, override file, Adapter code, or default policy.
+- The Provider's current documented Model table and live discovery ids, diffed against every hand-maintained endpoint/control profile. A newly discovered id must not inherit an unverified fallback route merely because catalog generation succeeded.
 
 Keep upstream Model capabilities separate from gateway capabilities. A Model card describes the Model; the selected Provider and endpoint determine what vBot can actually send, receive, and replay.
 
@@ -57,6 +58,10 @@ Then exercise documented Reasoning controls independently:
 4. Confirm that disabling Reasoning does not accidentally disable Tool Calls or another claimed feature.
 
 If the Provider accepts a control but produces unchanged Reasoning, record it as ignored or unresolved; do not advertise a false control. If Reasoning requires an explicit enable flag, omitting that flag invalidates a negative replay result because there may be no Reasoning state to replay.
+
+Treat an explicit off value and omission as different experiments. Omission can select a Provider or Model default that still enables Reasoning; verify the final payload, returned effective-control metadata when available, and Reasoning Usage before claiming that `none` or another off setting works.
+
+Give Reasoning enough output budget to finish and still emit the expected message or Tool Call. If a response is incomplete or consumes the entire output allowance in Reasoning, retry with a realistic larger budget before classifying an absent message, carrier, stream event, or Tool Call as a compatibility failure.
 
 ## 5. Prove Reasoning Replay with controlled input accounting
 
@@ -158,6 +163,7 @@ Put each fact in its durable owner:
 - Bundled Provider config for stable Connection-wide defaults and endpoint/auth facts.
 - Provider/Model override files for verified durable facts omitted or misstated by generated feeds, including per-Model Reasoning Replay and gateway limits.
 - Generated Model catalogs only through their refresh pipeline; never hand-edit them. After compatibility changes, refresh the complete tracked Model DB by default: the refresh already selects only usable Providers and Connections, and the resulting files must form one coherent snapshot. Use a Provider-scoped refresh only for an explicitly scoped diagnostic, never as the final catalog refresh for a completed compatibility change.
+- Per-Model override/profile data for every documented or discovered id whose endpoint, Reasoning control, or carrier differs from the safe default. Reconcile this set whenever the catalog changes, and protect the complete current endpoint matrix with a regression test so a new Model cannot silently take the fallback wire.
 - Focused unit tests for exact request fields, response carriers, policy precedence, normalization, and limits.
 - Provider-specific reference for dated Provider/Model observations, endpoint decisions, exceptions, and remaining unknowns.
 - This reference for the generic verification method; never copy the whole workflow into one Provider's reference.

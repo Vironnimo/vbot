@@ -56,6 +56,7 @@ RESPONSES_MODELS: tuple[str, ...] = (
     "grok-4.5",
     "grok-4.6",
     "muse-spark-1.2-contributor",
+    "muse-spark-1.3-contributor",
 )
 # Small per-model profiles mirroring the independent facts carried by
 # ``metadata.opencode_go``. Models absent here are unknown to the adapter.
@@ -84,6 +85,7 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     },
     "gpt-5.6-luna": {"protocol": "responses"},
     "muse-spark-1.2-contributor": {"protocol": "responses"},
+    "muse-spark-1.3-contributor": {"protocol": "responses"},
     "grok-4.5": {
         "minimum_reasoning_effort": "low",
         "protocol": "responses",
@@ -134,6 +136,18 @@ def _model_with_profile(
     reasoning = ReasoningCapabilities(supported=True)
     if model_id in {"kimi-k2.5", "kimi-k2.6"}:
         reasoning = ReasoningCapabilities(supported=True, control="on_off")
+    elif model_id == "gpt-5.6-luna":
+        reasoning = ReasoningCapabilities(
+            supported=True,
+            control="levels",
+            levels=("none", "low", "medium", "high", "xhigh", "max"),
+        )
+    elif model_id in {"muse-spark-1.2-contributor", "muse-spark-1.3-contributor"}:
+        reasoning = ReasoningCapabilities(
+            supported=True,
+            control="levels",
+            levels=("minimal", "low", "medium", "high", "xhigh"),
+        )
     elif model_id in {"grok-4.5", "grok-4.6"}:
         reasoning = ReasoningCapabilities(
             supported=True,
@@ -187,6 +201,7 @@ def opencode_go_config() -> ProviderConfig:
         name="OpenCode Go",
         adapter="opencode_go",
         base_url="https://opencode-go.example/v1",
+        extra_headers={"User-Agent": "vBot"},
         connections=[
             ConnectionConfig(
                 id="api-key",
@@ -734,6 +749,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         request = messages_route.calls.last.request
         assert request.headers["x-api-key"] == API_KEY
         assert request.headers["anthropic-version"] == "2023-06-01"
+        assert request.headers["user-agent"] == "vBot"
         body = json.loads(request.content)
         assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
@@ -837,6 +853,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         assert chat_route.called
         assert not messages_route.called
+        assert chat_route.calls.last.request.headers["user-agent"] == "vBot"
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1692,6 +1709,7 @@ class TestOpenCodeGoResponsesRouting:
         assert not chat_route.called
         assert not messages_route.called
         request_body = json.loads(responses_route.calls.last.request.content)
+        assert responses_route.calls.last.request.headers["user-agent"] == "vBot"
         # Stateless shape: complete history as input items, never stored.
         assert request_body["store"] is False
         assert request_body["instructions"] == "Be brief."
@@ -1731,6 +1749,44 @@ class TestOpenCodeGoResponsesRouting:
         # The gateway publishes no sticky-conversation contract; the routing
         # kwarg is dropped instead of leaking onto the wire.
         assert "session_id" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_gpt_luna_sends_live_verified_none_effort(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="gpt-5.6-luna",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(responses_route.calls.last.request.content)
+        assert request_body["reasoning"] == {"effort": "none", "summary": "auto"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_muse_omits_unsupported_none_effort(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="muse-spark-1.3-contributor",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(responses_route.calls.last.request.content)
+        assert "reasoning" not in request_body
 
     @respx.mock
     @pytest.mark.asyncio

@@ -263,6 +263,12 @@ class GitHubCopilotModelPolicy:
             or self.supports_adaptive_thinking
         )
 
+    @property
+    def supports_explicit_none_effort(self) -> bool:
+        # Copilot's Responses wire has not established an explicit ``none``
+        # payload contract; keep its existing omission behavior.
+        return False
+
     def allows_reasoning_effort(self, effort: str) -> bool:
         if not effort or effort == "none":
             return True

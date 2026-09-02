@@ -1868,7 +1868,7 @@ class TestModelRegistryRealResources:
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
 
     def test_opencode_go_current_endpoint_profiles_load(self):
-        """All 26 current official Models route through their documented wire."""
+        """All 27 current official Models route through their documented wire."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
@@ -1877,6 +1877,7 @@ class TestModelRegistryRealResources:
                 "grok-4.6",
                 "gpt-5.6-luna",
                 "muse-spark-1.2-contributor",
+                "muse-spark-1.3-contributor",
             ),
             "openai": (
                 "glm-5.3-flash",
@@ -1906,7 +1907,7 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 26
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 27
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)

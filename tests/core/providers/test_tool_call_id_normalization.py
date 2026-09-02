@@ -31,6 +31,7 @@ class _ResponsesPolicy:
     supports_parallel_tool_calls = True
     supports_structured_outputs = True
     allows_any_reasoning_controls = True
+    supports_explicit_none_effort = False
 
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         return dict(kwargs)

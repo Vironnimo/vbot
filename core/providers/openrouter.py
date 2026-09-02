@@ -745,6 +745,12 @@ class OpenRouterResponsesPolicy:
     def allows_any_reasoning_controls(self) -> bool:
         return bool(self.allowed_reasoning_efforts)
 
+    @property
+    def supports_explicit_none_effort(self) -> bool:
+        # No Responses-routed OpenRouter Model has been live-proven to need an
+        # explicit off rung yet; preserve omission until its wire is audited.
+        return False
+
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         filtered = {key: value for key, value in kwargs.items() if value is not None}
         if not self.supports_tools:
