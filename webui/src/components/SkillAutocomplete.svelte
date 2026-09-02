@@ -49,7 +49,7 @@
   }
 
   export function selectActive() {
-    const skill = matchingSkills[activeIndex] ?? matchingSkills[0];
+    const skill = matchingSkills[activeIndex];
 
     if (skill) {
       onSelect(skill);

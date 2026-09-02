@@ -351,12 +351,13 @@ def validate_memory_prompt_mode(mode: object) -> MemoryPromptMode:
 
 
 def _read_entries(path: Path) -> list[str]:
-    """Read a memory file's entries — its ``- `` bullet lines, in order.
+    """Read a memory file's entries — its optionally indented bullet lines, in order.
 
     The file holds only entries now (no preamble, no section heading), so every
-    ``- `` line is an entry and anything else is ignored. A not-yet-created file
-    reads as no entries — lazy ownership: the file is created only on the first
-    write. An unreadable file raises :class:`MemoryError`.
+    line whose left-stripped content starts with ``- `` is an entry and anything
+    else is ignored. A not-yet-created file reads as no entries — lazy ownership:
+    the file is created only on the first write. An unreadable file raises
+    :class:`MemoryError`.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -369,7 +370,9 @@ def _read_entries(path: Path) -> list[str]:
 
 def _parse_entries(text: str) -> list[str]:
     entries = [
-        _strip_entry_bullet(line) for line in text.splitlines() if line.startswith(_BULLET_PREFIX)
+        _strip_entry_bullet(line)
+        for line in text.splitlines()
+        if line.lstrip().startswith(_BULLET_PREFIX)
     ]
     return [entry for entry in entries if entry]
 
@@ -378,7 +381,7 @@ def _strip_entry_bullet(line: str) -> str:
     # Entries are normalized to a single line and written behind a "- " prefix, so a
     # leading-dash entry round-trips by stripping the prefix exactly once. No "\-"
     # unescaping: nothing writes it, and replacing it would corrupt literal "\-" content.
-    return line.removeprefix(_BULLET_PREFIX).strip()
+    return line.lstrip().removeprefix(_BULLET_PREFIX).strip()
 
 
 def _write_entries(path: Path, entries: list[str]) -> None:

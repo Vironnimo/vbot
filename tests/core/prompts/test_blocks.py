@@ -354,6 +354,22 @@ def test_generated_marker_empty_producer_leaves_no_residue() -> None:
     assert result == ""
 
 
+def test_generated_marker_failing_producer_renders_empty_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail(_context: BlockRenderContext) -> str:
+        raise RuntimeError("producer broke")
+
+    with caplog.at_level(logging.WARNING):
+        result = expand_generated_markers(
+            "before{generated:broken}after", {"broken": fail}, _context()
+        )
+
+    assert result == "beforeafter"
+    assert "broken" in caplog.text
+    assert "producer broke" in caplog.text
+
+
 def test_generated_producer_receives_context() -> None:
     seen: list[str] = []
 

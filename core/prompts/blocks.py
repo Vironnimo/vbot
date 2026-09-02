@@ -360,9 +360,10 @@ def expand_generated_markers(
     """Replace every ``{generated:NAME}`` marker with its producer's output.
 
     A known marker is replaced by ``producer(context)`` (which may be empty — no
-    skills renders ``""`` and the marker leaves no trace after normalization). An
-    **unknown** marker renders to ``""`` and logs a warning — fail-soft, mirroring
-    a missing ``{include:…}``; it is never a :class:`PromptError`.
+    skills renders ``""`` and the marker leaves no trace after normalization).
+    Unknown markers and failing producers render to ``""`` and log a warning —
+    fail-soft, mirroring a missing ``{include:…}``; neither is a
+    :class:`PromptError`.
     """
 
     def replace(match: re.Match[str]) -> str:
@@ -371,7 +372,15 @@ def expand_generated_markers(
         if producer is None:
             _LOGGER.warning("Skipping unknown generated marker: {generated:%s}", name)
             return ""
-        return producer(context)
+        try:
+            return producer(context)
+        except Exception as exc:  # noqa: BLE001 - one producer drops, never the Run
+            _LOGGER.warning(
+                "Skipping generated marker {generated:%s}; producer failed: %s",
+                name,
+                exc,
+            )
+            return ""
 
     return GENERATED_PATTERN.sub(replace, text)
 

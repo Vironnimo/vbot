@@ -104,6 +104,13 @@ def test_redacts_underscore_delimited_sensitive_words():
     assert result["x_token_value"] == _REDACTED
 
 
+def test_redacts_dot_delimited_sensitive_words():
+    """Dots are treated as word separators like hyphens and underscores."""
+    headers = {"auth.token": "sensitive"}
+    result = redact_headers(headers)
+    assert result["auth.token"] == _REDACTED
+
+
 def test_redact_headers_does_not_mutate_original():
     """The input dict is not modified."""
     headers = {"Authorization": "secret", "Content-Type": "json"}
@@ -189,6 +196,13 @@ def test_redact_url_redacts_case_insensitive_param_name():
     assert "abc" not in result
 
 
+def test_redact_url_redacts_dot_delimited_param_name():
+    """Dotted query keys such as api.key must not leak their values."""
+    result = redact_url("http://example.com/api?api.key=abc&safe=ok")
+    assert "abc" not in result
+    assert "safe=ok" in result
+
+
 # ---------------------------------------------------------------------------
 # redact_json_body
 # ---------------------------------------------------------------------------
@@ -199,6 +213,14 @@ def test_redacts_top_level_sensitive_key():
     body = {"password": "hunter2", "username": "alice"}
     result = redact_json_body(body)
     assert result == {"password": _REDACTED, "username": "alice"}
+
+
+def test_redacts_dot_delimited_json_key():
+    """Dotted structured keys are redacted recursively like other keys."""
+    assert redact_json_body({"auth.token": "abc", "safe": "ok"}) == {
+        "auth.token": _REDACTED,
+        "safe": "ok",
+    }
 
 
 def test_recursively_redacts_nested_dict_keys():

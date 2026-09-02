@@ -35,9 +35,9 @@ ParsedResultT = TypeVar("ParsedResultT")
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 
 # Option name of the JSON escape hatch every provider task target carries:
-# a free-form object merged into the request payload by the task wire
-# clients, so an option vBot does not surface stays usable without a code
-# change. Owned here because all task wire clients share the semantics.
+# a free-form object adding provider-specific request fields not authored by
+# the task wire client, so an option vBot does not surface stays usable without
+# a code change. Owned here because all task wire clients share the semantics.
 EXTRA_OPTIONS_KEY = "extra_options"
 
 
@@ -85,18 +85,28 @@ def is_omittable_option(value: Any) -> bool:
 
 
 def merge_extra_options(payload: JsonObject, options: JsonObject) -> None:
-    """Merge the ``extra_options`` escape hatch into *payload* (extra wins).
+    """Add ``extra_options`` fields without overriding authored payload fields.
 
-    Letting the escape hatch override authored keys keeps it a true last
-    word; empty placeholder values are dropped like everywhere else.
+    Empty placeholder values are dropped like everywhere else. A collision is
+    rejected before mutating *payload* so the escape hatch cannot silently
+    redirect a request or replace task-owned content and controls.
     """
 
     extra = options.get(EXTRA_OPTIONS_KEY)
     if not isinstance(extra, dict):
         return
-    for key, value in extra.items():
-        if isinstance(key, str) and key and not is_omittable_option(value):
-            payload[key] = value
+    additions = {
+        key: value
+        for key, value in extra.items()
+        if isinstance(key, str) and key and not is_omittable_option(value)
+    }
+    collisions = sorted(payload.keys() & additions.keys())
+    if collisions:
+        raise ProviderError(
+            "extra_options cannot override request fields: " + ", ".join(collisions),
+            retryable=False,
+        )
+    payload.update(additions)
 
 
 class _ProviderLookupProtocol(Protocol):

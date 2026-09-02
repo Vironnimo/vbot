@@ -298,7 +298,7 @@ def _build_openrouter_image_payload(
     :func:`core.providers.task_client.is_omittable_option`) are dropped so unset optional fields are
     not forwarded. ``provider_options`` becomes the nested
     ``provider.options`` object (provider-specific passthrough keys), and
-    ``extra_options`` merges last.
+    ``extra_options`` adds only fields not already authored by this builder.
     """
 
     payload: JsonObject = {
@@ -373,7 +373,8 @@ def _build_openai_image_payload(
     (see :func:`core.providers.task_client.is_omittable_option`). ``n > 1`` is honored: the response
     ``data`` array is mapped to one image per element downstream, and
     ``ImageService.generate_artifacts`` already loops over the result to
-    persist one artifact per image. ``extra_options`` merges last.
+    persist one artifact per image. ``extra_options`` adds only fields not
+    already authored by this builder.
     """
 
     payload: JsonObject = {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -212,23 +213,34 @@ def test_build_payload_nests_provider_options() -> None:
     assert "provider_options" not in payload
 
 
-def test_build_payload_merges_extra_options_last() -> None:
-    """The ``extra_options`` escape hatch merges into the top-level payload
-    and wins over authored keys — it is the user's last word."""
+def test_build_payload_adds_non_conflicting_extra_options() -> None:
+    """The ``extra_options`` escape hatch adds provider-specific fields."""
 
     payload = _build_openrouter_image_payload(
         "black-forest-labs/flux.2-pro",
         "a cat",
         {
             "aspect_ratio": "1:1",
-            "extra_options": {"aspect_ratio": "21:9", "guidance": 3.5, "empty": ""},
+            "extra_options": {"guidance": 3.5, "empty": ""},
         },
     )
 
-    assert payload["aspect_ratio"] == "21:9"
+    assert payload["aspect_ratio"] == "1:1"
     assert payload["guidance"] == 3.5
     assert "empty" not in payload
     assert "extra_options" not in payload
+
+
+@pytest.mark.parametrize("builder", [_build_openrouter_image_payload, _build_openai_image_payload])
+def test_image_payload_rejects_extra_options_model_override(
+    builder: Callable[..., object],
+) -> None:
+    with pytest.raises(ProviderError, match="model"):
+        builder(
+            "safe-image-model",
+            "a cat",
+            {"extra_options": {"model": "redirected-image-model"}},
+        )
 
 
 def test_build_payload_encodes_source_images_as_input_references() -> None:
@@ -643,7 +655,7 @@ def test_build_openai_payload_drops_empty_placeholder_values() -> None:
     }
 
 
-def test_build_openai_payload_merges_extra_options_last() -> None:
+def test_build_openai_payload_adds_non_conflicting_extra_options() -> None:
     """The escape hatch also applies to the OpenAI native path."""
 
     payload = _build_openai_image_payload(
@@ -651,11 +663,11 @@ def test_build_openai_payload_merges_extra_options_last() -> None:
         "a cat",
         {
             "size": "1024x1024",
-            "extra_options": {"size": "2048x1152", "partial_images": 2},
+            "extra_options": {"partial_images": 2},
         },
     )
 
-    assert payload["size"] == "2048x1152"
+    assert payload["size"] == "1024x1024"
     assert payload["partial_images"] == 2
 
 
@@ -732,7 +744,6 @@ def test_build_openai_codex_payload_drops_n_and_model_even_from_extra_options() 
             "extra_options": {
                 "n": 10,
                 "model": "gpt-image-2",
-                "output_format": "jpeg",
                 "future_option": "kept",
             },
         },
@@ -741,7 +752,7 @@ def test_build_openai_codex_payload_drops_n_and_model_even_from_extra_options() 
     tool = payload["tools"][0]
     assert tool == {
         "type": "image_generation",
-        "output_format": "jpeg",
+        "output_format": "webp",
         "future_option": "kept",
     }
 

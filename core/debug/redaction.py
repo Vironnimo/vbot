@@ -32,9 +32,9 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     from the sensitive-word list: ``token``, ``secret``, ``key``,
     ``password``, ``credential``.
 
-    Whole-word matching splits on hyphens and underscores so that
-    ``x-api-key`` and ``x_token_header`` both match while ``donkey``
-    does not.
+    Whole-word matching splits on hyphens, underscores, and dots so
+    that ``x-api-key``, ``x_token_header``, and ``auth.token`` all
+    match while ``donkey`` does not.
     """
     return {
         name: _REDACTED if _is_sensitive_key(name) else value for name, value in headers.items()
@@ -98,5 +98,5 @@ def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
     if lower in _SENSITIVE_HEADERS:
         return True
-    parts = lower.replace("_", "-").split("-")
+    parts = lower.replace("_", "-").replace(".", "-").split("-")
     return any(part in _SENSITIVE_WORDS for part in parts)

@@ -32,7 +32,7 @@ Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/` plus
 
 ### Redaction
 
-Applied before disk, **structured only** - on header and query-parameter *names*, never body content: names matching exactly `authorization`/`x-api-key` (lower-cased) or containing a whole split-on-dash/underscore word from `{token, secret, key, password, credential}` redact to `[REDACTED]` (`x-api-key`, `x_token_header`, `api-secret` match; `donkey` does not). There is **no** cookie rule - cookies capture raw unless named into a match. Bodies stay verbatim (the UI warns they persist locally in full); `redact_json_body` remains exported for other uses but the capture path does not apply it. Header keys record as httpx lower-cases them.
+Applied before disk, **structured only** - on header and query-parameter *names*, never body content: names matching exactly `authorization`/`x-api-key` (lower-cased) or containing a whole split-on-dash/underscore/dot word from `{token, secret, key, password, credential}` redact to `[REDACTED]` (`x-api-key`, `x_token_header`, `api-secret`, and `auth.token` match; `donkey` does not). There is **no** cookie rule - cookies capture raw unless named into a match. Bodies stay verbatim (the UI warns they persist locally in full); `redact_json_body` remains exported for other uses but the capture path does not apply it. Header keys record as httpx lower-cases them.
 
 ## Interfaces
 

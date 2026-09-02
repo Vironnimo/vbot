@@ -2038,6 +2038,58 @@ def test_rpc_call_returns_empty_for_rpc_error(
     assert worker._rpc_call("agent.get", {"id": "main"}) == {}
 
 
+def test_transcribe_returns_none_for_invalid_success_json(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            raise ValueError("invalid json")
+
+    monkeypatch.setattr(worker_module.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    assert worker._transcribe(b"audio") is None
+    assert "invalid JSON" in caplog.text
+
+
+def test_rpc_call_returns_empty_for_invalid_success_json(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            raise ValueError("invalid json")
+
+    monkeypatch.setattr(worker_module.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    assert worker._rpc_call("agent.get", {"id": "main"}) == {}
+    assert "invalid JSON" in caplog.text
+
+
 @pytest.mark.parametrize("method", ["session.create", "chat.stream"])
 def test_rpc_call_does_not_retry_mutation_after_ambiguous_transport_failure(
     fake_bridge: FakeBridge,

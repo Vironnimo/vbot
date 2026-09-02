@@ -53,7 +53,7 @@
   }
 
   export function selectActive() {
-    const option = matchingOptions[activeIndex] ?? matchingOptions[0];
+    const option = matchingOptions[activeIndex];
 
     if (option) {
       onSelect(option);
