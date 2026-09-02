@@ -139,7 +139,8 @@ Example:
 
 The model-facing texts decide whether a Tool gets chosen and called correctly; the handler behind them is secondary. Three surfaces share one craft: the description selects the Tool, the parameter descriptions steer the call, the result and error texts steer the loop.
 
-- Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. The general rules and the mandatory review workflow live in `AGENTS.md` (Agent-facing text review).
+- Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. Explain the available behavior and the next valid action, and never name a hidden implementation category merely to explain an exclusion.
+- All three surfaces are runtime Agent-facing text under wording review: before creating one, show the user the complete proposed wording verbatim with all new text in bold; before changing one, show exactly two complete versions - the current wording with every passage to be changed or removed in bold, then the proposed wording with every changed or added passage in bold. Never substitute a summary or description of the text.
 - Judge every sentence by one test: can the Agent learn this from the Tool's own failure or result message? If yes, cut it - error-time information belongs in the error text, not in the description. Truncation hints with "use offset", read-before-write guards, and similar-file suggestions are result-text material.
 - Cut what the Agent cannot act on: silent behavior with no decision value, non-actionable qualifiers, and duplication. A rule lives once, at its usage site - in the parameter description when it binds to that parameter, in the main description when it binds to the operation; a parameter description duplicating the main description shrinks to a minimal role label.
 - Keep in the pre-call texts what only they can teach: capabilities the Agent needs before the first call (accepted file types, output row shape, sort order, omit-defaults), deviations from standard semantics (case-insensitivity, exclusion syntax), behavior invisible in results, silent-hang warnings where bad input blocks forever without an error, and deliberate steering sentences planted to guide Agent behavior.
@@ -162,7 +163,7 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 - The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, and representative invalid calls that the handler must reject safely.
 - A Tool change is verified only when every matrix call produces a satisfactory Tool Call and runtime result. Documentation or schema inspection alone is not verification.
 - Commit each fully verified Tool as its own cohesive releaseable change before editing the next Tool.
-- Quality gates follow the repository rules in `AGENTS.md` - a scoped non-mutating pass while working, the full gate once when the task closes. Tool work adds no separate gate schedule.
+- Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
 
 ## Review Checklist
 
