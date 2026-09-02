@@ -64,7 +64,7 @@ from core.recall.vector_store import (
     VectorStoreError,
     format_started_at,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 
 # Target size of an embedded chunk in characters. ~500 tokens for the
 # common English case; small chunks give the KNN finer-grained matches
@@ -1042,9 +1042,11 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             cached = indexed.get(session_id)
             if cached is not None and cached == (generation_id, history_revision):
                 continue
-            stale_sessions.append(
-                (summary, generation_id, history_revision, self.sessions.get(address).load_active())
-            )
+            try:
+                messages = self.sessions.get(address).load_active()
+            except SessionNotFoundError:
+                continue
+            stale_sessions.append((summary, generation_id, history_revision, messages))
 
         # A session that yields zero indexable chunks is not covered by
         # ``upsert_many_chunks``. Clear its old rows explicitly.
@@ -1085,13 +1087,16 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
     ) -> JsonObject | None:
         """Hydrate a per-chunk result anchored at a request-eligible message."""
 
-        messages = self.sessions.get(
-            SessionAddress(
-                project_id=request.project_id,
-                agent_id=request.agent_id,
-                session_id=record.session_id,
-            )
-        ).load_active()
+        try:
+            messages = self.sessions.get(
+                SessionAddress(
+                    project_id=request.project_id,
+                    agent_id=request.agent_id,
+                    session_id=record.session_id,
+                )
+            ).load_active()
+        except SessionNotFoundError:
+            return None
         if not messages:
             return None
         anchor_index = self._resolve_request_anchor(messages, record, request)

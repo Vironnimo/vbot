@@ -13,6 +13,10 @@ class SessionStorageError(ChatSessionError):
     """Base error for an unsafe or unavailable Session storage state."""
 
 
+class SessionNotFoundError(ChatSessionError):
+    """Raised when a requested live Session generation does not exist."""
+
+
 class SessionStorageFormatError(SessionStorageError):
     """Raised when the data directory does not authorize a current-format Session store.
 

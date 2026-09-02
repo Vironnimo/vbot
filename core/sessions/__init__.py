@@ -3,6 +3,7 @@
 from core.chat.errors import ChatSessionError
 from core.sessions.errors import (
     FtsHealth,
+    SessionNotFoundError,
     SessionRecoveryConflictError,
     SessionStorageError,
     SessionStorageFormatError,
@@ -62,6 +63,7 @@ __all__ = [
     "ChatSession",
     "ChatSessionError",
     "FtsHealth",
+    "SessionNotFoundError",
     "SessionStorageError",
     "SessionStorageFormatError",
     "SessionRecoveryConflictError",

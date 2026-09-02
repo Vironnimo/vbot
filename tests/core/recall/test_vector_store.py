@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -669,6 +670,31 @@ def test_vector_store_knn_search_returns_nearest_chunk_across_sessions(
     nearest = hydrated[nearest_rowid]
     assert nearest.session_id == "s1"
     assert nearest.chunk_index == 0
+
+
+def test_vector_store_time_filters_keep_chunks_with_invalid_timestamps(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    malformed = replace(
+        _chunk_record("malformed-time", 0),
+        started_at="not-a-timestamp",
+        start_timestamp="not-a-timestamp",
+        end_timestamp="not-a-timestamp",
+    )
+    store.upsert_many_chunks(header=header, records=[(malformed, [1.0, 0.0, 0.0])])
+
+    results = store.knn_search(
+        header=header,
+        query_vector=[1.0, 0.0, 0.0],
+        limit=1,
+        agent_id="coder",
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        until=datetime(2026, 12, 31, tzinfo=UTC),
+    )
+
+    assert len(results) == 1
 
 
 # ---------------------------------------------------------------------------

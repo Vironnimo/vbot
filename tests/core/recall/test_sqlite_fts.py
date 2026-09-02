@@ -92,14 +92,16 @@ def passage_request(
     *,
     limit: int = 20,
     session_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> RecallSearchRequest:
     return RecallSearchRequest(
         agent_id="coder",
         project_id=None,
         session_id=session_id,
         query=query,
-        since=None,
-        until=None,
+        since=since,
+        until=until,
         roles=("user", "assistant", "error", "compaction_checkpoint"),
         match_mode="all_terms",
         order="relevance",
@@ -125,6 +127,32 @@ async def test_sqlite_fts_passage_arm_returns_multiple_source_faithful_hits(
     assert all(hit.session_id == "passages" for hit in page.hits)
     assert all(hit.sources == ("literal",) for hit in page.hits)
     assert page.hits[0].text in original
+
+
+async def test_passage_time_filters_compare_equivalent_timestamp_encodings(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="timestamp-encoding").append(
+        ChatMessage.user("encoding needle", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("needle"))
+    with sqlite3.connect(recall.index_path) as connection:
+        connection.execute(
+            "UPDATE passages SET start_timestamp = ?, end_timestamp = ?",
+            ("2026-05-01T12:00:00Z", "2026-05-01T12:00:00Z"),
+        )
+
+    page = await recall.search_passages(
+        passage_request(
+            "needle",
+            since=datetime(2026, 5, 1, 12, tzinfo=UTC),
+            until=datetime(2026, 5, 1, 12, tzinfo=UTC),
+        )
+    )
+
+    assert [hit.session_id for hit in page.hits] == ["timestamp-encoding"]
 
 
 async def test_sqlite_fts_filtered_search_keeps_other_scope_sessions_indexed(

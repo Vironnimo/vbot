@@ -16,6 +16,7 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
     SessionAddress,
+    SessionNotFoundError,
     SessionReadBatch,
     SessionReadCursor,
     skill_context_note_name,
@@ -226,27 +227,30 @@ class StatisticsIndex:
             for raw_summary in scope.summaries:
                 session_id = str(raw_summary["id"])
                 key = (project_key, scope.agent_id, session_id)
-                current_keys.add(key)
+                address = SessionAddress(
+                    project_id=scope.project_id,
+                    agent_id=scope.agent_id,
+                    session_id=session_id,
+                )
+                version = versions.get(address)
+                if version is None:
+                    continue
                 summary = _statistics_summary(raw_summary)
-                handle = sessions.get(
-                    SessionAddress(
-                        project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
+                try:
+                    handle = sessions.get(address)
+                    self._reconcile_session(
+                        connection,
+                        sessions,
+                        handle,
+                        key,
+                        summary,
+                        version=version,
                     )
-                )
-                self._reconcile_session(
-                    connection,
-                    sessions,
-                    handle,
-                    key,
-                    summary,
-                    version=versions.get(
-                        SessionAddress(
-                            project_id=scope.project_id,
-                            agent_id=scope.agent_id,
-                            session_id=session_id,
-                        )
-                    ),
-                )
+                except SessionNotFoundError:
+                    # The live generation vanished after the batched version read.
+                    # Omitting its key also prunes an older derived row below.
+                    continue
+                current_keys.add(key)
         return current_keys
 
     def _reconcile_session(
