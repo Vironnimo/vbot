@@ -1236,6 +1236,34 @@
       "name": "Qwen3.8 Flash",
       "release_date": "2026-08-26"
     },
+    "alibaba/qwen3.8-flash-next": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-08-27",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Flash Next",
+      "release_date": "2026-08-27",
+      "temperature": true
+    },
     "alibaba/qwen3.8-max": {
       "capabilities": {
         "input_modalities": [
@@ -1501,6 +1529,40 @@
       "max_output_tokens": 128000,
       "name": "Claude Fable 5",
       "release_date": "2026-06-09",
+      "temperature": false
+    },
+    "anthropic/claude-fable-5-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-fable",
+      "knowledge": "2026-06",
+      "last_updated": "2026-09-01",
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5.1",
+      "release_date": "2026-09-01",
       "temperature": false
     },
     "anthropic/claude-haiku-4-5": {
@@ -2210,7 +2272,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2237,7 +2299,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2264,7 +2326,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2291,7 +2353,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2347,7 +2409,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2375,7 +2437,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2403,7 +2465,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2431,7 +2493,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2459,7 +2521,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2487,7 +2549,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2515,7 +2577,7 @@
           "image",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4605,7 +4667,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [

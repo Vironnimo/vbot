@@ -1,0 +1,268 @@
+{
+  "fetched_at": "2026-09-02T15:24:20.938096+00:00",
+  "models": {
+    "grok-4.20-0309-non-reasoning": {
+      "canonical": "xai/grok-4.20-0309-non-reasoning",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 1000000,
+      "family": "grok",
+      "max_output_tokens": 30000,
+      "name": "grok-4.20-0309-non-reasoning"
+    },
+    "grok-4.20-0309-reasoning": {
+      "canonical": "xai/grok-4.20-0309-reasoning",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 1000000,
+      "family": "grok",
+      "max_output_tokens": 30000,
+      "name": "grok-4.20-0309-reasoning"
+    },
+    "grok-4.20-multi-agent-0309": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 1000000,
+      "family": "grok",
+      "max_output_tokens": 30000,
+      "name": "grok-4.20-multi-agent-0309"
+    },
+    "grok-4.3": {
+      "canonical": "xai/grok-4.3",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 1000000,
+      "family": "grok",
+      "max_output_tokens": 30000,
+      "name": "grok-4.3"
+    },
+    "grok-4.5": {
+      "canonical": "xai/grok-4.5",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 500000,
+      "name": "grok-4.5"
+    },
+    "grok-4.6": {
+      "canonical": "xai/grok-4.6",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 500000,
+      "name": "grok-4.6"
+    },
+    "grok-build-0.1": {
+      "canonical": "xai/grok-build-0.1",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 256000,
+      "family": "grok-build",
+      "max_output_tokens": 256000,
+      "name": "grok-build-0.1"
+    }
+  },
+  "provider_id": "xai",
+  "source": "discovery"
+}

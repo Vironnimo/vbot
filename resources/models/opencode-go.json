@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-26T20:48:04.191977+00:00",
+  "fetched_at": "2026-09-02T15:17:41.643205+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -458,6 +458,40 @@
       "family": "Hy",
       "max_output_tokens": 64000,
       "name": "hy3"
+    },
+    "hy4-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1024000,
+      "family": "Hy",
+      "max_output_tokens": 64000,
+      "name": "hy4-preview"
     },
     "kimi-k2.5": {
       "capabilities": {
@@ -974,6 +1008,43 @@
       "max_output_tokens": 65536,
       "name": "qwen3.7-plus"
     },
+    "qwen3.8-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen",
+      "max_output_tokens": 131072,
+      "name": "qwen3.8-flash"
+    },
     "qwen3.8-max": {
       "capabilities": {
         "input_modalities": [
@@ -986,8 +1057,12 @@
           "text"
         ],
         "reasoning": {
-          "budget_max": 262144,
-          "control": "budget",
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
           "supported": true
         },
         "supported_parameters": [],
