@@ -14,7 +14,7 @@ import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -53,7 +53,7 @@ from core.providers.reasoning import (
     model_reasoning_levels,
     normalize_thinking_effort,
 )
-from core.providers.token_getter import TokenGetter
+from core.providers.token_getter import RejectedTokenRefresher, TokenGetter
 
 CODEX_RESPONSES_MODE = "codex_responses"
 CODEX_EXTRA_HEADERS: dict[str, str] = {
@@ -115,6 +115,8 @@ _CODEX_WEBSOCKET_STATUS_CODE = 101
 CodexTransport = Literal["auto", "sse"]
 CodexWebSocketConnector = Callable[..., Awaitable[Any]]
 CodexWebSocketRoute = tuple[str, str, str]
+_RequestResult = TypeVar("_RequestResult")
+_HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 
 
 @dataclass
@@ -695,13 +697,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         cache_scope_id: str | None = None,
     ) -> dict[str, Any]:
-        return await post_json_with_retry(
-            self._client,
-            endpoint_path,
-            payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
-            handle_error_status=self._handle_error_status,
-            provider_context="OpenAI provider",
+        async def execute(build_headers: _HeaderBuilder) -> dict[str, Any]:
+            return await post_json_with_retry(
+                self._client,
+                endpoint_path,
+                payload,
+                build_headers=build_headers,
+                handle_error_status=self._handle_error_status,
+                provider_context="OpenAI provider",
+            )
+
+        return await self._execute_with_codex_auth_recovery(
+            execute,
+            cache_scope_id=cache_scope_id,
         )
 
     async def _connect_stream(
@@ -711,13 +719,50 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
-        return await connect_streaming_with_retry(
-            self._client,
-            endpoint_path,
-            payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
-            handle_error_status=self._handle_error_status,
+        async def execute(build_headers: _HeaderBuilder) -> httpx.Response:
+            return await connect_streaming_with_retry(
+                self._client,
+                endpoint_path,
+                payload,
+                build_headers=build_headers,
+                handle_error_status=self._handle_error_status,
+            )
+
+        return await self._execute_with_codex_auth_recovery(
+            execute,
+            cache_scope_id=cache_scope_id,
         )
+
+    async def _execute_with_codex_auth_recovery(
+        self,
+        execute: Callable[[_HeaderBuilder], Awaitable[_RequestResult]],
+        *,
+        cache_scope_id: str | None,
+    ) -> _RequestResult:
+        rejected_access_token: str | None = None
+
+        async def build_headers() -> dict[str, str]:
+            nonlocal rejected_access_token
+            headers = await self._build_headers(cache_scope_id)
+            if self._connection_mode == CODEX_RESPONSES_MODE:
+                rejected_access_token = _auth_header_token(
+                    headers.get(self._auth_config.header),
+                    self._auth_config.prefix,
+                )
+            return headers
+
+        try:
+            return await execute(build_headers)
+        except ProviderAuthError as exc:
+            if (
+                self._connection_mode != CODEX_RESPONSES_MODE
+                or getattr(exc, "status_code", None) != 401
+                or rejected_access_token is None
+                or not isinstance(self._token_getter, RejectedTokenRefresher)
+            ):
+                raise
+            await self._token_getter.refresh_after_unauthorized(rejected_access_token)
+            return await execute(build_headers)
 
     async def _stream_responses(
         self,
@@ -1219,6 +1264,13 @@ def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _optional_string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _auth_header_token(value: str | None, prefix: str) -> str | None:
+    if value is None or not value.startswith(prefix):
+        return None
+    token = value[len(prefix) :]
+    return token or None
 
 
 def _optional_mapping(value: Any) -> Mapping[str, Any]:

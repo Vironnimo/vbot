@@ -65,6 +65,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - Polling posts JSON `{"device_auth_id": ..., "user_code": ...}` to the matching `/token` device-auth endpoint. HTTP 403 and 404 are treated as `authorization_pending` for this provider.
 - Successful polling returns an authorization code and PKCE verifier; vBot exchanges them at `https://auth.openai.com/oauth/token` with `grant_type=authorization_code` and `redirect_uri=https://auth.openai.com/deviceauth/callback`.
 - Refresh uses the OAuth `refresh_token` grant against the same token endpoint. Refreshed tokens keep a replacement refresh token when OpenAI sends one and preserve the existing token otherwise.
+- A subscription HTTP/SSE establishment rejected with HTTP 401 forces one OAuth refresh even when the stored token expiry is still in the future, rebuilds the token-derived Authorization and ChatGPT Account headers, and retries the original establishment once. A second 401, HTTP 403, a getter without refresh capability, or a refresh failure propagates as an auth error; an exchange that has emitted Provider events is never replayed by this recovery.
 - The OAuth token file path is `<data_dir>/oauth/openai-subscription.json` for the `default` Account and `openai-subscription--<account>.json` for additional named Accounts (see `providers/connections.md` -> Identity and Accounts).
 
 ## ChatGPT Account Header
@@ -148,6 +149,7 @@ The subscription usage fetcher in `core/providers/usage.py` (see `providers/usag
 ## Error Classification
 
 - 401/403 -> `ProviderAuthError`
+- The subscription-only pre-stream 401 recovery is the one exception before final classification; API-key wires do not invoke it.
 - 429 -> `ProviderRateLimitError`
 - 502/503 -> retryable `ProviderError`
 - Other 4xx/5xx -> non-retryable `ProviderError`

@@ -352,6 +352,54 @@ async def test_oauth_token_getter_refreshes_expired_openai_codex_token(
     assert stored.extra == {"chatgpt_account_id": "acct_new"}
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_oauth_token_getters_coalesce_forced_refresh_of_rejected_token(
+    tmp_path: Path,
+) -> None:
+    """Separate getters share one refresh when the Provider rejects their token."""
+
+    token_store = TokenStore(tmp_path)
+    stale_access_token = _jwt_with_account("acct_old")
+    token_store.save(
+        "openai",
+        "subscription",
+        OAuthToken(
+            access_token=stale_access_token,
+            refresh_token="refresh-secret",
+            expires_at=datetime.now(UTC) + timedelta(days=7),
+            extra={"chatgpt_account_id": "acct_old"},
+        ),
+    )
+    refreshed_access_token = _jwt_with_account("acct_new")
+    route = respx.post(OPENAI_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": refreshed_access_token,
+                "refresh_token": "new-refresh-secret",
+                "expires_in": 120,
+            },
+        )
+    )
+    getters = [
+        OAuthTokenGetter(
+            token_store,
+            "openai",
+            "subscription",
+            _openai_oauth_config(),
+        )
+        for _ in range(2)
+    ]
+
+    tokens = await asyncio.gather(
+        *(getter.refresh_after_unauthorized(stale_access_token) for getter in getters)
+    )
+
+    assert tokens == [refreshed_access_token, refreshed_access_token]
+    assert route.call_count == 1
+
+
 @pytest.mark.asyncio
 async def test_oauth_token_getter_expired_without_refresh_path_raises(
     tmp_path: Path,

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
@@ -59,6 +58,13 @@ class TokenGetter(Protocol):
     async def __call__(self) -> str: ...
 
 
+@runtime_checkable
+class RejectedTokenRefresher(Protocol):
+    """Optional token-getter capability for recovering from a rejected token."""
+
+    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str: ...
+
+
 class StaticTokenGetter:
     """Token getter for static API-key credentials."""
 
@@ -72,7 +78,7 @@ class StaticTokenGetter:
 
 
 class OAuthTokenGetter:
-    """Token getter that refreshes stored OAuth provider tokens on expiry."""
+    """Token getter that refreshes stored OAuth Provider tokens when needed."""
 
     def __init__(
         self,
@@ -91,7 +97,11 @@ class OAuthTokenGetter:
         self._account_id = account_id
         self._client = client
         self._owns_client = client is None
-        self._lock = asyncio.Lock()
+        self._lock = token_store.refresh_lock(
+            provider_id,
+            local_connection_id,
+            account_id=account_id,
+        )
 
     async def __aenter__(self) -> OAuthTokenGetter:
         return self
@@ -124,9 +134,24 @@ class OAuthTokenGetter:
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if not _is_expiring(token):
                 return token.access_token
-            return await self._refresh_expired_token(token)
+            return await self._refresh_token(token)
 
-    async def _refresh_expired_token(self, token: OAuthToken) -> str:
+    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str:
+        """Refresh a token rejected by the Provider despite its stored expiry."""
+
+        async with self._lock:
+            token = self._token_store.load(
+                self._provider_id,
+                self._local_connection_id,
+                account_id=self._account_id,
+            )
+            if token is None:
+                raise ProviderAuthError("No OAuth token — please connect this provider first")
+            if token.access_token != rejected_access_token and not _is_expiring(token):
+                return token.access_token
+            return await self._refresh_token(token)
+
+    async def _refresh_token(self, token: OAuthToken) -> str:
         token_exchange_url = self._oauth_config.token_exchange_url
         github_oauth_token = token.extra.get(GITHUB_OAUTH_TOKEN_EXTRA_KEY)
         if token_exchange_url and github_oauth_token:
