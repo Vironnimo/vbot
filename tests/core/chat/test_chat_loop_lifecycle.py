@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 
 from core.chat.continuation import ContinuationTracker
-from core.runs import RunAdmission
+from core.runs import RunAdmission, RunStatus
+from core.sessions import ChatSession
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
@@ -106,6 +107,71 @@ async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Pat
     await run.wait()
 
     assert session.load_continuation_records()
+
+
+@pytest.mark.asyncio
+async def test_run_summary_write_failure_preserves_result_and_resolves_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
+    await tracker.interrupt("process_restart")
+    append_async = ChatSession.append_async
+
+    async def fail_run_summary(self, message):
+        if message.role == "run_summary":
+            raise OSError("injected summary write failure")
+        await append_async(self, message)
+
+    monkeypatch.setattr(ChatSession, "append_async", fail_run_summary)
+
+    run = await build_chat_loop(runtime).start_run(
+        "coder",
+        "Verify the update",
+        session_id="session-one",
+        internal=True,
+        resume_process_restart=True,
+    )
+    result = await run.wait()
+
+    assert run.status is RunStatus.COMPLETED
+    assert result.content == "Verified"
+    assert session.load_continuation_records() == []
+    assert all(message.role != "run_summary" for message in session.load())
+
+
+@pytest.mark.asyncio
+async def test_continuation_finalization_failure_does_not_replace_run_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
+    await tracker.interrupt("process_restart")
+
+    async def fail_resolve(_self):
+        raise OSError("injected Continuation finalization failure")
+
+    monkeypatch.setattr(ContinuationTracker, "resolve", fail_resolve)
+
+    run = await build_chat_loop(runtime).start_run(
+        "coder",
+        "Finish the update",
+        session_id="session-one",
+        internal=True,
+        resume_process_restart=True,
+    )
+    result = await run.wait()
+
+    assert run.status is RunStatus.COMPLETED
+    assert result.content == "Done"
 
 
 @pytest.mark.asyncio
