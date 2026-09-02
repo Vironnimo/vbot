@@ -66,6 +66,12 @@ def _key(path: Path | str) -> str:
         return str(path)
 
 
+def readonly_sqlite_uri(path: Path | str) -> str:
+    """Return a percent-escaped SQLite URI for an existing read-only database."""
+
+    return f"{Path(path).expanduser().resolve().as_uri()}?mode=ro"
+
+
 def _canonical_db_path(conn: sqlite3.Connection) -> str | None:
     try:
         row = conn.execute("PRAGMA database_list").fetchone()
@@ -654,7 +660,7 @@ class SQLiteRuntime:
         connection: sqlite3.Connection | None = None
         try:
             connection = connect_tracked(
-                f"file:{self.db_path.as_posix()}?mode=ro",
+                readonly_sqlite_uri(self.db_path),
                 tracking_path=self.db_path,
                 uri=True,
                 isolation_level=None,
@@ -730,7 +736,7 @@ class SQLiteRuntime:
                 if self._writer is None or self._closed:
                     raise RuntimeError("SQLite runtime is closed")
             source = connect_tracked(
-                f"file:{self.db_path.as_posix()}?mode=ro",
+                readonly_sqlite_uri(self.db_path),
                 tracking_path=self.db_path,
                 uri=True,
                 isolation_level=None,
