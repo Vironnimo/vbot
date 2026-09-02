@@ -89,3 +89,10 @@ The bundled default layout lives in `resources/prompts/layout.json` shipping sou
 - Preview uses the live manager (current registries, extensions, layout, overrides), renders the Working Project frame prospectively without persisting a snapshot, has no Session and therefore no Session-scoped Tools such as `history`; no scope shows the Agent's baseline, `scope: {type: "default"}` previews the default scope.
 - Chat builds the prompt per request and omits the provider system message entirely when the result is empty/whitespace-only.
 - Do not move block behavior into Agent or WebUI code: Agents own only the flag and Workspace path, WebUI owns editing UX, this domain owns assembly semantics and the block contract.
+- Adding a keyword parameter to `build_system_prompt` breaks every duplicated prompt-manager test double that spells out the full signature - grep `class .*Prompts` under `tests/` (eight today, across `tests/core/chat`, `tests/core/runtime`, and `tests/server`). The failure appears at runtime as `TypeError: ... unexpected keyword argument` inside server/integration tests, not at import time; update every double in the same change.
+
+## References
+
+Read these only when your task matches - not by default.
+
+- Adding a new pinned prompt-epoch input -> `prompts/adding-a-pinned-input.md`
