@@ -846,7 +846,6 @@ def cmd_create(args: argparse.Namespace) -> int:
     try:
         with _port_allocation_lock():
             port = find_free_port(WORKTREES_DIR)
-            data_dir.mkdir(parents=True, exist_ok=True)
             initialize_data_dir(data_dir)
             seed_worktree_settings(data_dir / "settings.json", server_port=port)
             marker = worktree_path / WORKTREE_FILE_NAME
