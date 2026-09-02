@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +41,13 @@ _LOGGER = get_logger("channels.discord")
 DISCORD_MESSAGE_LIMIT = 2000
 _DISCORD_FILE_BATCH_LIMIT = 10
 _HISTORY_BACKFILL_LIMIT = 50
+_DISCORD_CHAT_STATE_LIMIT = 1024
+
+
+@dataclass
+class _MessageLockState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
 
 
 class DiscordChannelAdapter(ChannelAdapter):
@@ -81,9 +90,9 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._bot_id: str | None = None
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
         self._denied_chat_log = DeniedChatLog()
-        self._message_locks: dict[str, asyncio.Lock] = {}
-        self._backfilled_message_ids: dict[str, set[str]] = {}
-        self._known_conversations: dict[str, ConversationFacts] = {}
+        self._message_locks: dict[str, _MessageLockState] = {}
+        self._backfilled_message_ids: OrderedDict[str, set[str]] = OrderedDict()
+        self._known_conversations: OrderedDict[str, ConversationFacts] = OrderedDict()
 
     async def start(self) -> None:
         """Connect to Discord's Gateway and process messages until stopped."""
@@ -175,6 +184,8 @@ class DiscordChannelAdapter(ChannelAdapter):
                 )
             conversation = self._conversation_facts_for_target(target)
             self._remember_conversation(conversation)
+        else:
+            self._known_conversations.move_to_end(normalized_target)
         return self._engine.ensure_channel_session(conversation)
 
     # -- ConversationTransport --------------------------------------------------------
@@ -312,8 +323,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             return
 
         self._remember_conversation(conversation)
-        lock = self._message_locks.setdefault(conversation.chat_id, asyncio.Lock())
-        async with lock:
+        async with self._message_lock(conversation.chat_id):
             should_backfill = self._should_backfill(conversation, content)
             if should_backfill:
                 await self._backfill_history(message)
@@ -655,6 +665,21 @@ class DiscordChannelAdapter(ChannelAdapter):
 
     # -- State helpers ----------------------------------------------------------------
 
+    @contextlib.asynccontextmanager
+    async def _message_lock(self, platform_target: str) -> AsyncIterator[None]:
+        state = self._message_locks.get(platform_target)
+        if state is None:
+            state = _MessageLockState()
+            self._message_locks[platform_target] = state
+        state.users += 1
+        try:
+            async with state.lock:
+                yield
+        finally:
+            state.users -= 1
+            if state.users == 0 and self._message_locks.get(platform_target) is state:
+                self._message_locks.pop(platform_target, None)
+
     def _effective_bot_id(self) -> str | None:
         if self._bot_id is not None:
             return self._bot_id
@@ -663,6 +688,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         return _snowflake_string(user_id)
 
     def _remember_conversation(self, conversation: ConversationFacts) -> None:
+        self._known_conversations.pop(conversation.chat_id, None)
         self._known_conversations[conversation.chat_id] = ConversationFacts(
             platform=conversation.platform,
             channel_id=conversation.channel_id,
@@ -673,9 +699,17 @@ class DiscordChannelAdapter(ChannelAdapter):
             kind=conversation.kind,
             user_display_name=conversation.user_display_name,
         )
+        while len(self._known_conversations) > _DISCORD_CHAT_STATE_LIMIT:
+            self._known_conversations.popitem(last=False)
 
     def _seen_message_ids(self, platform_target: str) -> set[str]:
-        return self._backfilled_message_ids.setdefault(platform_target, set())
+        seen = self._backfilled_message_ids.pop(platform_target, None)
+        if seen is None:
+            seen = set()
+        self._backfilled_message_ids[platform_target] = seen
+        while len(self._backfilled_message_ids) > _DISCORD_CHAT_STATE_LIMIT:
+            self._backfilled_message_ids.popitem(last=False)
+        return seen
 
     def _require_client(self) -> Any:
         client = self._client

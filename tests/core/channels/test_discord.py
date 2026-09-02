@@ -13,7 +13,7 @@ import pytest
 
 import core.channels.discord as discord_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
-from core.channels.adapter import FileData
+from core.channels.adapter import ConversationFacts, FileData
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.discord import (
     DISCORD_MESSAGE_LIMIT,
@@ -264,6 +264,55 @@ def test_channel_config_normalizes_discord_snowflakes_to_strings() -> None:
 
     assert config.allowed_chat_ids == ["123456789012345678"]
     assert config.to_dict()["allowed_chat_ids"] == ["123456789012345678"]
+
+
+@pytest.mark.asyncio
+async def test_transient_per_chat_state_is_bounded_and_idle_locks_are_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    adapter, _sessions, _trigger, _client = make_adapter(tmp_path, target=channel)
+    monkeypatch.setattr(discord_module, "_DISCORD_CHAT_STATE_LIMIT", 2)
+
+    for chat_id in ("one", "two", "one", "three"):
+        adapter._remember_conversation(
+            ConversationFacts(
+                platform="discord",
+                channel_id="dc-assistant",
+                chat_id=chat_id,
+                user_id="50",
+                access_scope_id=chat_id,
+                kind="group",
+            )
+        )
+        adapter._seen_message_ids(chat_id).add(f"message-{chat_id}")
+
+    assert list(adapter._known_conversations) == ["one", "three"]
+    assert list(adapter._backfilled_message_ids) == ["one", "three"]
+
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def hold_lock() -> None:
+        async with adapter._message_lock("three"):
+            first_entered.set()
+            await release_first.wait()
+
+    async def wait_for_lock() -> None:
+        async with adapter._message_lock("three"):
+            pass
+
+    first = asyncio.create_task(hold_lock())
+    await first_entered.wait()
+    second = asyncio.create_task(wait_for_lock())
+    await asyncio.sleep(0)
+    assert adapter._message_locks["three"].users == 2
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    assert adapter._message_locks == {}
+    await adapter.stop()
 
 
 @pytest.mark.asyncio
