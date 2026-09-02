@@ -1,5 +1,6 @@
 """Tool call, sender, reply-surface, factory, and parsing tests."""
 
+from core.chat.content_blocks import FileMentionBlock
 from core.chat.messages import ToolCallRejection
 from core.chat.output_files import AssistantFileReference
 from core.chat.wire_shaping import _assistant_message_from_response
@@ -319,6 +320,22 @@ class TestChatMessageFactories:
 
         parsed = ChatMessage.from_dict(message.to_dict())
         assert parsed.content == blocks
+
+    def test_user_message_round_trips_file_mention_block(self):
+        blocks = [
+            TextBlock(type="text", text="Please inspect this file."),
+            FileMentionBlock(
+                type="file_mention",
+                path="src/app.py",
+                status="inlined",
+                text="print('hello')",
+                size_bytes=14,
+            ),
+        ]
+
+        message = ChatMessage.user(blocks, timestamp=FIXED_TIMESTAMP)
+
+        assert ChatMessage.from_dict(message.to_dict()).content == blocks
 
     def test_note_message_contains_only_content(self):
         message = ChatMessage.note("Background task completed.", timestamp=FIXED_TIMESTAMP)

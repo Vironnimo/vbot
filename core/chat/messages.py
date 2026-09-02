@@ -13,6 +13,7 @@ from core.chat.content_blocks import (
     ContentBlock,
     ContentBlockError,
     FileBlock,
+    FileMentionBlock,
     MediaBlock,
     TextBlock,
     content_block_from_dict,
@@ -1303,7 +1304,7 @@ def _validate_tool_call_argument_sequence(index: Any, length: Any) -> None:
 
 
 def _is_content_block(value: Any) -> bool:
-    return isinstance(value, (TextBlock, MediaBlock, FileBlock))
+    return isinstance(value, (TextBlock, MediaBlock, FileBlock, FileMentionBlock))
 
 
 def _is_tool_call_object(value: Any) -> JsonObject:
