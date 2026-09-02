@@ -127,6 +127,23 @@ class _RotatingTokenGetter:
         return token
 
 
+class _RefreshableTokenGetter:
+    """Token getter that replaces one Provider-rejected OAuth token."""
+
+    def __init__(self, stale_token: str, fresh_token: str) -> None:
+        self._token = stale_token
+        self._fresh_token = fresh_token
+        self.refresh_calls: list[str] = []
+
+    async def __call__(self) -> str:
+        return self._token
+
+    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str:
+        self.refresh_calls.append(rejected_access_token)
+        self._token = self._fresh_token
+        return self._token
+
+
 def _jwt_with_account(account_id: str = "acct_vbot") -> str:
     payload = {
         "https://api.openai.com/auth": {
@@ -1472,6 +1489,69 @@ async def test_codex_stream_rebuilds_headers_per_connect_attempt() -> None:
     assert route.calls[1].request.headers.get("chatgpt-account-id") == "acct-fresh"
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_refreshes_provider_rejected_oauth_token_once() -> None:
+    """A Provider 401 forces one refresh even when local expiry has not elapsed."""
+
+    stale_token = _jwt_with_account("acct-stale")
+    fresh_token = _jwt_with_account("acct-fresh")
+    token_getter = _RefreshableTokenGetter(stale_token, fresh_token)
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        token_getter,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        side_effect=[
+            httpx.Response(
+                401,
+                json={"error": {"code": "token_expired", "message": "Token expired"}},
+            ),
+            _codex_sse_response({"id": "resp_1", "status": "completed", "output": []}),
+        ]
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-codex")
+
+    assert route.call_count == 2
+    assert token_getter.refresh_calls == [stale_token]
+    assert route.calls[0].request.headers["Authorization"] == f"Bearer {stale_token}"
+    assert route.calls[0].request.headers["chatgpt-account-id"] == "acct-stale"
+    assert route.calls[1].request.headers["Authorization"] == f"Bearer {fresh_token}"
+    assert route.calls[1].request.headers["chatgpt-account-id"] == "acct-fresh"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_does_not_loop_when_refreshed_token_is_rejected() -> None:
+    """A second 401 surfaces after the single auth-recovery attempt."""
+
+    stale_token = _jwt_with_account("acct-stale")
+    token_getter = _RefreshableTokenGetter(
+        stale_token,
+        _jwt_with_account("acct-fresh"),
+    )
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        token_getter,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(
+            401,
+            json={"error": {"code": "token_expired", "message": "Token expired"}},
+        )
+    )
+
+    with pytest.raises(ProviderAuthError) as exc_info:
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-codex")
+
+    assert getattr(exc_info.value, "status_code", None) == 401
+    assert route.call_count == 2
+    assert token_getter.refresh_calls == [stale_token]
+
+
 def test_codex_discovery_headers_merge_extra_headers() -> None:
     """Discovery merges the adapter-owned Codex headers on top of caller headers."""
 
@@ -1550,6 +1630,28 @@ async def test_default_mode_send_targets_chat_completions_endpoint() -> None:
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 2},
     }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_platform_401_does_not_trigger_subscription_oauth_recovery() -> None:
+    """The rejected-token recovery is isolated from the API-key wire."""
+
+    token_getter = _RefreshableTokenGetter("sk-stale", "sk-fresh")
+    adapter = OpenAIAdapter(
+        _platform_config(),
+        token_getter,
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    route = respx.post(OPENAI_PLATFORM_RESPONSES_URL).mock(
+        return_value=httpx.Response(401, json={"error": {"message": "Invalid API key"}})
+    )
+
+    with pytest.raises(ProviderAuthError):
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.6-terra")
+
+    assert route.call_count == 1
+    assert token_getter.refresh_calls == []
 
 
 @respx.mock

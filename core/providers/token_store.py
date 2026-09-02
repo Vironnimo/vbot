@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -31,6 +32,27 @@ class TokenStore:
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
         self._oauth_dir = data_dir / "oauth"
+        self._refresh_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+
+    def refresh_lock(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> asyncio.Lock:
+        """Return the shared refresh lock for one Provider Connection Account."""
+
+        key = (
+            self._validate_token_id("provider_id", provider_id),
+            self._validate_token_id("local_connection_id", local_connection_id),
+            self._validate_account_id(account_id),
+        )
+        lock = self._refresh_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._refresh_locks[key] = lock
+        return lock
 
     def save(
         self,
