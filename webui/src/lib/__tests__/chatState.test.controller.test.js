@@ -48,6 +48,35 @@ function setup({
 }
 
 describe('chat controller', () => {
+  it('uses the opaque server cursor when loading older History', async () => {
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ id: 'duplicate', role: 'user', content: 'newer' }],
+        has_more: true,
+        next_before: 'vh1.opaque',
+      })
+      .mockResolvedValueOnce({
+        messages: [{ id: 'duplicate', role: 'user', content: 'older' }],
+        has_more: false,
+      });
+    const { chatState, controller } = setup({
+      operationOverrides: { loadChatHistory },
+    });
+
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    await controller.loadOlderHistory(sessionState);
+
+    expect(loadChatHistory).toHaveBeenNthCalledWith(2, {
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      limit: 50,
+      before: 'vh1.opaque',
+    });
+    expect(sessionState.historyBefore).toBe('');
+  });
+
   it('applies each connection snapshot object only once', () => {
     const { controller, runStream } = setup();
     const snapshot = { active_runs: [] };

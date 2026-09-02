@@ -205,7 +205,7 @@ class CanonicalSessionRecallBackend:
 
     def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
         summaries = cast(
-            list[JsonObject], self.sessions.list_with_metadata(request.agent_id, request.project_id)
+            list[JsonObject], self.sessions.list_summaries(request.agent_id, request.project_id)
         )
         return [
             summary
@@ -236,7 +236,7 @@ class CanonicalSessionRecallBackend:
             summary
             for summary in cast(
                 list[JsonObject],
-                self.sessions.list_with_metadata(request.agent_id, request.project_id),
+                self.sessions.list_summaries(request.agent_id, request.project_id),
             )
             if session_matches_request(summary, request)
         ]

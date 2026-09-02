@@ -14,7 +14,11 @@ from core.projects import (
     ProjectNotFoundError,
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
-from core.sessions import SessionRecoveryConflictError, SessionStoreUnavailableError
+from core.sessions import (
+    SessionPageCursorError,
+    SessionRecoveryConflictError,
+    SessionStoreUnavailableError,
+)
 from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
@@ -56,7 +60,7 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_RUN_NOT_FOUND, str(error))
     if isinstance(error, RunCancelledError):
         return RpcError(RPC_ERROR_CANCELLED, str(error))
-    if isinstance(error, SessionRecoveryConflictError):
+    if isinstance(error, (SessionPageCursorError, SessionRecoveryConflictError)):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, SessionStoreUnavailableError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))

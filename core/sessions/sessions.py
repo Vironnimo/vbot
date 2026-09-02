@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import builtins
 import contextvars
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -20,7 +23,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
-from core.sessions.errors import FtsHealth
+from core.sessions.errors import FtsHealth, SessionPageCursorError
 from core.sessions.store import SessionStore
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.skills.skills import format_skill_activation_context
@@ -64,6 +67,7 @@ PROJECT_TOOL_LOADED_STATUS = "loaded"
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _SESSION_IO_WORKERS = BoundedWorkerPool(name="session-io", max_workers=8)
+_CHAT_HISTORY_CURSOR_PREFIX = "vh1."
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,70 @@ class SessionReadCursor:
 class SessionReadBatch:
     messages: tuple[ChatMessage, ...]
     cursor: SessionReadCursor
+
+
+@dataclass(frozen=True)
+class SessionMessagePage:
+    messages: tuple[ChatMessage, ...]
+    has_more: bool
+    editable_message_ids: frozenset[str] = frozenset()
+    before_cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionChatHistorySnapshot:
+    page: SessionMessagePage
+    session_usage: JsonObject
+    context_messages: tuple[ChatMessage, ...]
+    background_messages: tuple[ChatMessage, ...]
+
+
+@dataclass(frozen=True)
+class SessionStatusSnapshot:
+    first_message_at: str | None
+    user_message_count: int
+    latest_assistant_usage: JsonObject | None
+    session_usage: JsonObject
+    cache_input_tokens: int
+
+
+@dataclass(frozen=True)
+class SessionRunResult:
+    assistant: ChatMessage | None
+    summary: ChatMessage
+    latest_tool_name: str | None
+
+
+@dataclass(frozen=True)
+class SessionHistoryCheckpoint:
+    ordinal: int
+    sequence: int
+    message_id: str
+    timestamp: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class SessionHistorySnapshot:
+    generation_id: str
+    checkpoints: tuple[SessionHistoryCheckpoint, ...]
+
+    @property
+    def latest(self) -> SessionHistoryCheckpoint:
+        return self.checkpoints[-1]
+
+
+@dataclass(frozen=True)
+class SessionHistoryRecord:
+    sequence: int
+    message: ChatMessage
+
+
+@dataclass(frozen=True)
+class SessionHistorySectionStats:
+    eligible_count: int
+    start_timestamp: str | None
+    end_timestamp: str | None
 
 
 @dataclass(frozen=True)
@@ -522,9 +590,51 @@ class _SessionWriteLock:
 
 
 async def _run_session_io(
-    function: Callable[..., _SessionIoResult], *arguments: Any
+    function: Callable[..., _SessionIoResult],
+    *arguments: Any,
 ) -> _SessionIoResult:
     return await _SESSION_IO_WORKERS.run(function, *arguments)
+
+
+def _encode_chat_history_cursor(generation_id: str, sequence: int) -> str:
+    body = json.dumps(
+        {"generation_id": generation_id, "sequence": sequence},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(body).digest()
+    token = base64.urlsafe_b64encode(body + digest).decode("ascii").rstrip("=")
+    return f"{_CHAT_HISTORY_CURSOR_PREFIX}{token}"
+
+
+def _decode_chat_history_cursor(value: str) -> tuple[str, int] | None:
+    if not value.startswith(_CHAT_HISTORY_CURSOR_PREFIX):
+        return None
+    try:
+        token = value.removeprefix(_CHAT_HISTORY_CURSOR_PREFIX)
+        encoded = base64.urlsafe_b64decode((token + "=" * (-len(token) % 4)).encode("ascii"))
+        digest_size = hashlib.sha256().digest_size
+        if len(encoded) <= digest_size:
+            raise ValueError
+        body = encoded[:-digest_size]
+        if not hmac.compare_digest(hashlib.sha256(body).digest(), encoded[-digest_size:]):
+            raise ValueError
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, dict) or set(payload) != {"generation_id", "sequence"}:
+            raise ValueError
+        generation_id = payload["generation_id"]
+        sequence = payload["sequence"]
+        if (
+            not isinstance(generation_id, str)
+            or not generation_id
+            or isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or sequence < 0
+        ):
+            raise ValueError
+        return generation_id, sequence
+    except (binascii.Error, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise SessionPageCursorError("before cursor is invalid") from error
 
 
 class ChatSession:
@@ -674,6 +784,213 @@ class ChatSession:
 
     async def load_active_async(self) -> list[ChatMessage]:
         return await _run_session_io(self.load_active)
+
+    def read_chat_history_snapshot(
+        self,
+        *,
+        limit: int | None,
+        before: str | None = None,
+        excluded_roles: Sequence[str] = (),
+        complete_run_segment: bool = False,
+        background_roles: Sequence[str] = (),
+        background_tool_names: Sequence[str] = (),
+    ) -> SessionChatHistorySnapshot:
+        decoded_cursor = None if before is None else _decode_chat_history_cursor(before)
+        before_message_id = before if decoded_cursor is None else None
+        expected_generation_id = None if decoded_cursor is None else decoded_cursor[0]
+        before_sequence = None if decoded_cursor is None else decoded_cursor[1]
+        (
+            messages,
+            has_more,
+            editable_ids,
+            usage,
+            context_messages,
+            background_messages,
+            generation_id,
+            page_floor,
+        ) = self._store.chat_history_snapshot(
+            self.address,
+            limit=limit,
+            before_message_id=before_message_id,
+            before_sequence=before_sequence,
+            expected_generation_id=expected_generation_id,
+            excluded_roles=excluded_roles,
+            complete_run_segment=complete_run_segment,
+            background_roles=background_roles,
+            background_tool_names=background_tool_names,
+        )
+        return SessionChatHistorySnapshot(
+            page=SessionMessagePage(
+                tuple(messages),
+                has_more,
+                editable_ids,
+                (
+                    _encode_chat_history_cursor(generation_id, page_floor)
+                    if has_more and page_floor is not None
+                    else None
+                ),
+            ),
+            session_usage=usage,
+            context_messages=tuple(context_messages),
+            background_messages=tuple(background_messages),
+        )
+
+    def status_snapshot(self) -> SessionStatusSnapshot:
+        first_message_at, user_count, latest_usage, usage, cache_input_tokens = (
+            self._store.status_snapshot(self.address)
+        )
+        return SessionStatusSnapshot(
+            first_message_at=first_message_at,
+            user_message_count=user_count,
+            latest_assistant_usage=latest_usage,
+            session_usage=usage,
+            cache_input_tokens=cache_input_tokens,
+        )
+
+    async def status_snapshot_async(self) -> SessionStatusSnapshot:
+        return await _run_session_io(self.status_snapshot)
+
+    def resolve_history_snapshot(
+        self,
+        *,
+        snapshot_sequence: int | None = None,
+    ) -> SessionHistorySnapshot | None:
+        resolved = self._store.history_snapshot(
+            self.address,
+            snapshot_sequence=snapshot_sequence,
+        )
+        if resolved is None:
+            return None
+        generation_id, checkpoints = resolved
+        return SessionHistorySnapshot(
+            generation_id=generation_id,
+            checkpoints=tuple(
+                SessionHistoryCheckpoint(
+                    ordinal=ordinal,
+                    sequence=sequence,
+                    message_id=message_id,
+                    timestamp=timestamp,
+                    summary=summary,
+                )
+                for ordinal, (sequence, message_id, timestamp, summary) in enumerate(
+                    checkpoints, start=1
+                )
+            ),
+        )
+
+    def load_history_records(
+        self,
+        snapshot: SessionHistorySnapshot,
+        *,
+        lower_sequence: int,
+        upper_sequence: int,
+        roles: Sequence[str],
+        direction: str,
+        cursor_sequence: int | None,
+        limit: int,
+        excluded_tool_name: str,
+    ) -> tuple[SessionHistoryRecord, ...] | None:
+        records = self._store.history_records(
+            self.address,
+            expected_generation_id=snapshot.generation_id,
+            snapshot_sequence=snapshot.latest.sequence,
+            lower_sequence=lower_sequence,
+            upper_sequence=upper_sequence,
+            roles=roles,
+            direction=direction,
+            cursor_sequence=cursor_sequence,
+            limit=limit,
+            excluded_tool_name=excluded_tool_name,
+        )
+        if records is None:
+            return None
+        return tuple(
+            SessionHistoryRecord(sequence=sequence, message=message)
+            for sequence, message in records
+        )
+
+    def history_section_stats(
+        self,
+        snapshot: SessionHistorySnapshot,
+        *,
+        sections: Sequence[tuple[int, int]],
+        excluded_tool_name: str,
+    ) -> dict[int, SessionHistorySectionStats] | None:
+        stats = self._store.history_section_stats(
+            self.address,
+            expected_generation_id=snapshot.generation_id,
+            snapshot_sequence=snapshot.latest.sequence,
+            sections=sections,
+            excluded_tool_name=excluded_tool_name,
+        )
+        if stats is None:
+            return None
+        return {
+            sequence: SessionHistorySectionStats(
+                eligible_count=count,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+            )
+            for sequence, (count, start_timestamp, end_timestamp) in stats.items()
+        }
+
+    def load_history_around(
+        self,
+        snapshot: SessionHistorySnapshot,
+        *,
+        lower_sequence: int,
+        upper_sequence: int,
+        roles: Sequence[str],
+        message_id: str,
+        before: int,
+        after: int,
+        excluded_tool_name: str,
+    ) -> tuple[bool, tuple[SessionHistoryRecord, ...]] | None:
+        result = self._store.history_around(
+            self.address,
+            expected_generation_id=snapshot.generation_id,
+            snapshot_sequence=snapshot.latest.sequence,
+            lower_sequence=lower_sequence,
+            upper_sequence=upper_sequence,
+            roles=roles,
+            message_id=message_id,
+            before=before,
+            after=after,
+            excluded_tool_name=excluded_tool_name,
+        )
+        if result is None:
+            return None
+        exists, records = result
+        return exists, tuple(
+            SessionHistoryRecord(sequence=sequence, message=message)
+            for sequence, message in records
+        )
+
+    def find_run_summary(
+        self,
+        *,
+        run_id: str | None = None,
+        work_id: str | None = None,
+    ) -> ChatMessage | None:
+        return self._store.run_summary(self.address, run_id=run_id, work_id=work_id)
+
+    def load_run_result(
+        self,
+        *,
+        run_id: str | None = None,
+        work_id: str | None = None,
+        require_latest: bool = False,
+    ) -> SessionRunResult | None:
+        result = self._store.run_result(
+            self.address,
+            run_id=run_id,
+            work_id=work_id,
+            require_latest=require_latest,
+        )
+        if result is None:
+            return None
+        assistant, summary, latest_tool_name = result
+        return SessionRunResult(assistant, summary, latest_tool_name)
 
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
         result = self._store.messages_since(self.address, cursor)
@@ -996,6 +1313,51 @@ class ChatSessionManager:
             )
             result.append(summary)
         return result
+
+    def list_summaries(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+        *,
+        metadata_keys: Sequence[str] = (),
+    ) -> builtins.list[JsonObject]:
+        """Return normalized Session-list fields without open-ended metadata."""
+        summaries: builtins.list[JsonObject] = []
+        for state in self._store.list_summary_rows_for_scope(
+            project_id,
+            agent_id,
+            metadata_keys=metadata_keys,
+        ):
+            summary = _session_list_summary_from_state(state)
+            for key in metadata_keys:
+                payload = state[f"metadata_{key}_json"]
+                if payload is not None:
+                    summary[key] = json.loads(str(payload))
+            summaries.append(summary)
+        return summaries
+
+    def list_recall_summaries(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+        *,
+        include_subagents: bool,
+        excluded_session_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> builtins.list[JsonObject]:
+        """Return the exact Recall-visible Session set from normalized list fields."""
+        rows = self._store.list_recall_summary_rows(
+            project_id,
+            agent_id,
+            include_subagents=include_subagents,
+            excluded_session_id=excluded_session_id,
+            since=since,
+            until=until,
+            limit=limit,
+        )
+        return [_session_list_summary_from_state(row) for row in rows]
 
     async def list_with_metadata_async(
         self, agent_id: str, project_id: str | None = None

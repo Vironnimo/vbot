@@ -16,6 +16,7 @@ from core.chat.content_blocks import TextBlock
 from core.chat.continuation import fold_continuation_records
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
+from core.chat.usage import aggregate_session_usage
 from core.runs import RunKind
 from core.sessions import (
     FORK_SOURCE_META_KEY,
@@ -643,6 +644,52 @@ def test_repeated_message_ids_are_preserved_in_sequence_order(manager) -> None:
     session.append_many([checkpoint, checkpoint])
 
     assert session.load() == [checkpoint, checkpoint]
+
+
+def test_chat_history_sql_usage_matches_canonical_python_aggregation(manager) -> None:
+    session = manager.create("coder", session_id="usage-projection")
+    messages = [
+        ChatMessage.assistant(
+            model="test",
+            content="measured",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_tokens": 60,
+                "cache_write_tokens": 5,
+                "reasoning_tokens": 7,
+            },
+        ),
+        ChatMessage.assistant(
+            model="test",
+            content="estimated input",
+            usage={
+                "input_tokens": 80,
+                "output_tokens": 10,
+                "input_tokens_estimated": True,
+                "output_tokens_estimated": False,
+            },
+        ),
+        ChatMessage.assistant(
+            model="test",
+            content="estimated output",
+            usage={
+                "input_tokens": 50,
+                "output_tokens": 12,
+                "cache_read_tokens": 25,
+                "input_tokens_estimated": False,
+                "output_tokens_estimated": True,
+            },
+        ),
+    ]
+    session.append_many(messages)
+
+    snapshot = session.read_chat_history_snapshot(
+        limit=1,
+        excluded_roles=("note", "history_edit"),
+    )
+
+    assert snapshot.session_usage == aggregate_session_usage(messages)
 
 
 def test_concurrent_metadata_mutations_do_not_overwrite_each_other(manager) -> None:

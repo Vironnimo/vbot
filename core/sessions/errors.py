@@ -17,6 +17,10 @@ class SessionNotFoundError(ChatSessionError):
     """Raised when a requested live Session generation does not exist."""
 
 
+class SessionPageCursorError(ChatSessionError):
+    """Raised when a bounded Session read references an invalid page anchor."""
+
+
 class SessionStorageFormatError(SessionStorageError):
     """Raised when the data directory does not authorize a current-format Session store.
 

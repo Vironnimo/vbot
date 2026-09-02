@@ -18,7 +18,7 @@ from core.automation.bootstrap import (
 )
 from core.chat import ChatMessage
 from core.runs import RunStatus
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -269,6 +269,7 @@ async def test_restart_reconciles_terminal_run_before_retry(
     run_status: str,
     expected_job_status: str,
     expected_outcome: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     creator = make_service(StubTriggerService(), tmp_path, "creator")
     created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
@@ -292,6 +293,11 @@ async def test_restart_reconciles_terminal_run_before_retry(
     payload[0]["last_session_id"] = "bootstrap-session"
     payload[0]["last_started_startup_id"] = "crashed-startup"
     jobs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def fail_full_load(self: ChatSession) -> list[ChatMessage]:
+        raise AssertionError("Bootstrap reconciliation must query the target Run summary")
+
+    monkeypatch.setattr(ChatSession, "load", fail_full_load)
     trigger = StubTriggerService()
     service = BootstrapService(
         cast(Any, trigger),

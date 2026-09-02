@@ -11,7 +11,6 @@ from core.chat import (
     CommandResourceChange,
     PreparedCommand,
     ReplySurface,
-    aggregate_session_usage,
     latest_session_context_usage,
     queue_content_is_editable,
 )
@@ -21,8 +20,7 @@ from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
     SessionAddress,
-    active_session_messages,
-    editable_session_message_ids,
+    SessionMessagePage,
 )
 from core.tools.bash import background_bash_statuses
 from core.utils.logging import get_logger
@@ -42,7 +40,6 @@ from server.rpc.event_bridge import (
     publish_resource_changed,
 )
 from server.rpc.payloads import (
-    _is_visible_history_message,
     _queued_response,
     _run_response,
     _visible_message,
@@ -76,6 +73,7 @@ WEBUI_REPLY_SURFACE = ReplySurface.webui()
 class _ChatHistoryProjection:
     messages: list[JsonObject]
     has_more: bool
+    before_cursor: str | None
     background_bash_statuses: JsonObject
     session_usage: JsonObject
     context_usage: JsonObject | None
@@ -117,13 +115,22 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.chat_sessions.get,
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
         )
-        loaded_messages = await _CHAT_RPC_WORKERS.run(session.load)
-        projection = await _CHAT_RPC_WORKERS.run(
-            _project_chat_history,
-            loaded_messages,
-            file_delivery=getattr(state, "file_delivery", None),
+        history = await _CHAT_RPC_WORKERS.run(
+            session.read_chat_history_snapshot,
             limit=limit,
             before=before,
+            excluded_roles=("note", "history_edit"),
+            complete_run_segment=True,
+            background_roles=("note", "tool"),
+            background_tool_names=("bash", "process"),
+        )
+        projection = await _CHAT_RPC_WORKERS.run(
+            _project_chat_history,
+            history.page,
+            session_usage=history.session_usage,
+            context_messages=list(history.context_messages),
+            background_messages=list(history.background_messages),
+            file_delivery=getattr(state, "file_delivery", None),
         )
         active_run_object = _state_chat_runs(state).active_run(
             agent_id=agent_id,
@@ -151,6 +158,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         # slice, but these always cover the full transcript.
         "session_usage": projection.session_usage,
     }
+    if projection.before_cursor is not None:
+        response["next_before"] = projection.before_cursor
     context_usage = (
         active_run_object.terminal_payload_extras.get("context_usage")
         if active_run_object is not None
@@ -166,29 +175,27 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _project_chat_history(
-    loaded_messages: list[Any],
+    page: SessionMessagePage,
     *,
+    session_usage: JsonObject,
+    context_messages: list[Any],
+    background_messages: list[Any],
     file_delivery: Any,
-    limit: int | None,
-    before: str | None,
 ) -> _ChatHistoryProjection:
-    active_messages = active_session_messages(loaded_messages)
-    editable_message_ids = editable_session_message_ids(loaded_messages)
-    visible_messages = [
+    messages = [
         {
             **_visible_message(message, file_delivery=file_delivery),
-            **({"editable": True} if message.id in editable_message_ids else {}),
+            **({"editable": True} if message.id in page.editable_message_ids else {}),
         }
-        for message in active_messages
-        if _is_visible_history_message(message)
+        for message in page.messages
     ]
-    messages, has_more = _history_page(visible_messages, limit=limit, before=before)
     return _ChatHistoryProjection(
         messages=messages,
-        has_more=has_more,
-        background_bash_statuses=background_bash_statuses(active_messages),
-        session_usage=aggregate_session_usage(loaded_messages),
-        context_usage=latest_session_context_usage(active_messages),
+        has_more=page.has_more,
+        before_cursor=page.before_cursor,
+        background_bash_statuses=background_bash_statuses(background_messages),
+        session_usage=session_usage,
+        context_usage=latest_session_context_usage(context_messages),
     )
 
 
@@ -211,41 +218,6 @@ def _resolve_history_session_id(
         RPC_ERROR_INVALID_REQUEST,
         "params.session_id is required for a project agent address",
     )
-
-
-def _history_page(
-    messages: list[JsonObject], *, limit: int | None, before: str | None
-) -> tuple[list[JsonObject], bool]:
-    page_source = messages
-    if before is not None:
-        before_index = next(
-            (index for index, message in enumerate(messages) if message.get("id") == before),
-            None,
-        )
-        if before_index is None:
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.before must reference a message id")
-        page_source = messages[:before_index]
-
-    if limit is None:
-        return list(page_source), False
-
-    page_start = max(0, len(page_source) - limit)
-    page_start = _complete_history_segment_start(page_source, page_start)
-    page = page_source[page_start:]
-    return page, len(page_source) > len(page)
-
-
-def _complete_history_segment_start(messages: list[JsonObject], page_start: int) -> int:
-    """Expand the oldest page boundary to one complete persisted Run segment."""
-    if page_start <= 0 or page_start >= len(messages):
-        return page_start
-    has_later_summary = any(
-        message.get("role") == "run_summary" for message in messages[page_start:]
-    )
-    for index in range(page_start - 1, -1, -1):
-        if messages[index].get("role") == "run_summary":
-            return index + 1
-    return 0 if has_later_summary else page_start
 
 
 def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:

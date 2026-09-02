@@ -4,7 +4,7 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 
 ## Overview
 
-`core/tools/history.py` owns the built-in `history` Tool. It is bound to the current `ToolContext` Session, has no Agent/Project/Session addressing arguments, and becomes model-visible only when that Session already contains at least one persisted `compaction_checkpoint`. Its canonical Session read, snapshot construction, search, cursor validation, and page rendering run through the cancellation-safe Tool worker boundary. It reads canonical Session storage through `ChatSessionManager`; it does not use Recall indexes and does not alter provider Context.
+`core/tools/history.py` owns the built-in `history` Tool. It is bound to the current `ToolContext` Session, has no Agent/Project/Session addressing arguments, and becomes model-visible only when that Session already contains at least one persisted `compaction_checkpoint`. Its canonical Session read, snapshot construction, search, cursor validation, and page rendering run through the cancellation-safe Tool worker boundary. It reads checkpoint metadata and bounded canonical record batches through `ChatSessionManager`; it does not load the complete active Session, use Recall indexes, or alter provider Context.
 
 ## Interface
 
@@ -13,12 +13,13 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 - The first call freezes a snapshot at the latest checkpoint present at that moment. Results are divided into fixed checkpoint sections, so later Session appends cannot shift an existing cursor's view.
 - Success data carries the action, frozen snapshot/checkpoint identity, selected roles, section records, truncation state, and an opaque continuation cursor when more content remains. Search snippets are deterministic and at most 320 characters including ellipses. The Tool row derives its presentation-only `results` count from the returned `items`; `has_more: true` renders that page count as a lower bound, and failures publish no count.
 - Every complete success envelope is capped at 51,200 UTF-8 bytes. When one record cannot fit whole, the Tool returns lossless Unicode-safe segments and continues within that record before advancing.
-- Cursors are compact, versioned, base64url-encoded JSON with an integrity digest. They are validated against the current Session id, action, frozen snapshot, scope, and continuation position; malformed, cross-action, cross-Session, or fork-reused cursors fail as invalid arguments.
+- Cursors are compact, versioned, base64url-encoded JSON with an integrity digest. Frozen identity and continuation use Session generation plus internal checkpoint/record sequence, never public Message id alone, because duplicate checkpoint ids are valid. They are validated against the current Session id, action, generation, frozen snapshot, scope, and continuation position; malformed, cross-action, cross-Session, or fork-reused cursors fail as invalid arguments.
 
 ## Canonical Filtering
 
 - Prior `history` calls and results are excluded so the Tool cannot recursively retrieve its own output. A mixed Assistant carrier keeps unrelated text and Tool calls while removing only the `history` call portion.
 - Canonical ordering and content are preserved. Matching uses Unicode case-folding and whitespace compaction for deterministic literal search; returned read segments remain lossless.
+- `read` and `around` issue bounded SQL reads, `overview` obtains per-section count/bookends through SQL aggregates, and exact search scans canonical records in fixed 128-record batches until it can fill the requested page plus one lookahead. A no-match exact search may still scan the frozen range, but never materializes that range as one Python transcript.
 - The Tool emits only safe presentation metadata and logs request/result metadata rather than message bodies.
 
 ## Cross-Domain Contracts
