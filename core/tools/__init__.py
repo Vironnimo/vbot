@@ -31,9 +31,7 @@ from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import (
     ToolContract,
     ToolContractError,
-    action_schema,
     compile_tool_contract,
-    discriminated_union_schema,
 )
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
@@ -361,8 +359,6 @@ __all__ = [
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
     "bash_handler",
-    "action_schema",
-    "discriminated_union_schema",
     "edit_handler",
     "glob_handler",
     "grep_handler",

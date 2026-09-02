@@ -13,9 +13,7 @@ from core.tools import (
     ToolContext,
     ToolContractError,
     ToolRegistry,
-    action_schema,
     compile_tool_contract,
-    discriminated_union_schema,
     tool_success,
 )
 
@@ -46,80 +44,6 @@ def _input_schema() -> JsonObject:
         "required": ["count"],
         "additionalProperties": False,
     }
-
-
-def test_action_schema_builds_closed_required_branches_without_field_leakage() -> None:
-    schema = action_schema(
-        {
-            "add": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string"},
-                },
-                "required": ["content"],
-            },
-            "remove": {
-                "type": "object",
-                "properties": {
-                    "entry_id": {"type": "integer"},
-                },
-                "required": ["entry_id"],
-            },
-        },
-        description="Choose an action.",
-    )
-
-    contract = compile_tool_contract(name="sample", input_schema=schema)
-    branches = {branch["properties"]["action"]["enum"][0]: branch for branch in schema["oneOf"]}
-
-    assert set(branches["add"]["properties"]) == {"action", "content"}
-    assert branches["add"]["required"] == ["action", "content"]
-    assert set(branches["remove"]["properties"]) == {"action", "entry_id"}
-    assert branches["remove"]["required"] == ["action", "entry_id"]
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
-    contract.validate_arguments({"action": "add", "content": "fact"})
-    contract.validate_arguments({"action": "remove", "entry_id": 1})
-    with pytest.raises(ToolContractError, match="entry_id"):
-        contract.validate_arguments({"action": "add", "content": "fact", "entry_id": 1})
-
-
-def test_discriminated_union_schema_supports_non_action_discriminators() -> None:
-    schema = discriminated_union_schema(
-        "mode",
-        {
-            "foreground": {
-                "type": "object",
-                "properties": {"command": {"type": "string"}},
-                "required": ["command"],
-            },
-            "auto": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                    "background_after_seconds": {"type": "number"},
-                },
-                "required": ["command"],
-            },
-        },
-        description="Choose an execution mode.",
-        discriminator_description="Execution mode.",
-    )
-
-    contract = compile_tool_contract(name="sample", input_schema=schema)
-    branches = {branch["properties"]["mode"]["enum"][0]: branch for branch in schema["oneOf"]}
-
-    assert set(branches["foreground"]["properties"]) == {"mode", "command"}
-    assert branches["foreground"]["required"] == ["mode", "command"]
-    assert set(branches["auto"]["properties"]) == {"mode", "command", "background_after_seconds"}
-    assert branches["auto"]["required"] == ["mode", "command"]
-    contract.validate_arguments({"mode": "foreground", "command": "echo ok"})
-    contract.validate_arguments(
-        {"mode": "auto", "command": "echo ok", "background_after_seconds": 30}
-    )
-    with pytest.raises(ToolContractError, match="background_after_seconds"):
-        contract.validate_arguments(
-            {"mode": "foreground", "command": "echo ok", "background_after_seconds": 30}
-        )
 
 
 def test_compile_accepts_explicitly_open_model_facing_object() -> None:
@@ -410,21 +334,30 @@ def test_normalization_does_not_invent_boolean_aliases(value: str) -> None:
 def test_normalization_selects_the_matching_discriminated_union_branch() -> None:
     contract = compile_tool_contract(
         name="sample",
-        input_schema=action_schema(
-            {
-                "add": {
+        input_schema={
+            "type": "object",
+            "description": "Choose an action.",
+            "oneOf": [
+                {
                     "type": "object",
-                    "properties": {"content": {"type": "string"}},
-                    "required": ["content"],
+                    "properties": {
+                        "action": {"type": "string", "enum": ["add"]},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["action", "content"],
+                    "additionalProperties": False,
                 },
-                "remove": {
+                {
                     "type": "object",
-                    "properties": {"entry_id": {"type": "integer"}},
-                    "required": ["entry_id"],
+                    "properties": {
+                        "action": {"type": "string", "enum": ["remove"]},
+                        "entry_id": {"type": "integer"},
+                    },
+                    "required": ["action", "entry_id"],
+                    "additionalProperties": False,
                 },
-            },
-            description="Choose an action.",
-        ),
+            ],
+        },
     )
 
     normalized = contract.normalize_arguments({"action": "remove", "entry_id": "72"})
