@@ -306,6 +306,7 @@ def _model_lookup_with_openai_wire_policies(model_id: str) -> Model:
         ),
         context_window=1_050_000,
         max_output_tokens=128_000,
+        connection_context_windows={"api-key": 1_050_000, "subscription": 272_000},
         metadata={
             "openai": {
                 "wire_policies": {
@@ -1051,6 +1052,9 @@ async def test_chat_completions_send_ignores_conversation_id() -> None:
 @pytest.mark.parametrize(
     ("model_id", "expected"),
     [
+        ("gpt-5.2", "full_history"),
+        ("gpt-5.4", "full_history"),
+        ("gpt-5.4-mini", "full_history"),
         ("gpt-5.5", "full_history"),
         ("gpt-5.6", "full_history"),
         ("gpt-5.6-sol", "full_history"),
@@ -1076,6 +1080,23 @@ def test_reasoning_replay_policy_defaults_to_full_history_across_connections(
 
     assert platform.reasoning_replay_policy(model_id) == expected
     assert subscription.reasoning_replay_policy(model_id) == expected
+
+
+def test_openai_adapter_uses_connection_specific_context_window() -> None:
+    platform = OpenAIAdapter(
+        _platform_config(),
+        "sk-test",
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    subscription = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account(),
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+
+    assert platform._model_context_window("gpt-5.6-sol") == 1_050_000
+    assert subscription._model_context_window("gpt-5.6-sol") == 272_000
 
 
 @respx.mock
@@ -1153,7 +1174,8 @@ async def test_subscription_gpt_5_6_does_not_assume_public_reasoning_context() -
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_platform_gpt_5_5_uses_responses_without_all_turns() -> None:
+@pytest.mark.parametrize("model_id", ["gpt-5.2", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"])
+async def test_platform_pre_5_6_models_use_responses_without_all_turns(model_id: str) -> None:
     adapter = OpenAIAdapter(
         _platform_config(),
         "sk-test",
@@ -1176,9 +1198,9 @@ async def test_platform_gpt_5_5_uses_responses_without_all_turns() -> None:
         )
     )
 
-    response = await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5")
+    response = await adapter.send(SAMPLE_MESSAGES, model_id=model_id)
     payload = json.loads(route.calls.last.request.content)
-    normalized = adapter.normalize_response(response, model_id="gpt-5.5")
+    normalized = adapter.normalize_response(response, model_id=model_id)
 
     assert "reasoning" not in payload
     assert normalized["phase"] == "commentary"

@@ -9,9 +9,9 @@ wire shapes vBot uses in production:
 - ``ModelRegistry.load(resources)`` — the real model DB including the
   bundled overrides (``reasoning_response_field``, ``reasoning_replay``,
   ``recommended_temperature``, ``recommended_top_p``)
-- The real adapter (``OllamaCloudAdapter`` for ollama-cloud,
-  ``OpenCodeGoAdapter`` for opencode-go) with its ``send()`` /
-  ``normalize_response()`` / ``_format_assistant_message()`` pipeline
+- The real Provider adapter and selected Connection, including refresh-capable
+  OAuth credentials, with its ``send()`` / ``normalize_response()`` /
+  ``_format_assistant_message()`` pipeline
 - The real history shaping via ``_assemble_request_history`` with the
   configured replay policy (``full_history`` / ``current_run`` / ``none``),
   so the wire messages are exactly what the chat loop would send
@@ -80,8 +80,12 @@ from core.chat.messages import ChatMessage
 from core.chat.wire_shaping import _assemble_request_history, _assistant_continuation_dict
 from core.models.models import ModelRegistry
 from core.providers.ollama import OllamaCloudAdapter
-from core.providers.providers import ProviderRegistry
-from core.providers.token_getter import StaticTokenGetter
+from core.providers.openai import OpenAIAdapter
+from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.reasoning import model_reasoning_supported
+from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
+from core.providers.token_store import TokenStore
+from core.providers.xai import XAIAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
@@ -89,6 +93,11 @@ DEFAULT_DATA_DIR = Path.home() / ".vbot"
 API_KEY_ENV_BY_PROVIDER = {
     "ollama-cloud": "OLLAMA_API_KEY",
     "opencode-go": "OPENCODE_GO_API_KEY",
+}
+PROBE_ADAPTERS = {
+    "ollama-cloud": OllamaCloudAdapter,
+    "openai": OpenAIAdapter,
+    "xai": XAIAdapter,
 }
 
 TOOL_DEFINITION: dict[str, Any] = {
@@ -376,6 +385,18 @@ def _responses_output_items(message: dict[str, Any]) -> list[dict[str, Any]]:
     return output
 
 
+def _encrypted_reasoning_expected(adapter: Any, model_id: str) -> bool:
+    return model_reasoning_supported(getattr(adapter, "_model_lookup", None), model_id) is not False
+
+
+def _client_tools_expected(adapter: Any, model_id: str) -> bool:
+    model_lookup = getattr(adapter, "_model_lookup", None)
+    if model_lookup is None:
+        return True
+    model = model_lookup(model_id.split("::", 1)[0])
+    return model is None or model.capabilities.tools
+
+
 async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
     """Probe opaque Responses reasoning through the exact production path.
 
@@ -397,7 +418,8 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         item.get("type") == "reasoning" and isinstance(item.get("encrypted_content"), str)
         for item in plain_output
     )
-    if not plain_output or not encrypted_count:
+    encrypted_expected = _encrypted_reasoning_expected(adapter, model_id)
+    if not plain_output or (encrypted_expected and not encrypted_count):
         raise RuntimeError(
             "first Responses reply carried no encrypted reasoning output items; "
             "the round cannot verify opaque reasoning replay"
@@ -423,6 +445,29 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         thinking_effort="high",
     )
     plain_second = adapter.normalize_response(plain_second_raw, model_id=model_id)
+
+    if not _client_tools_expected(adapter, model_id):
+        filtered_payload = adapter._build_responses_payload(
+            [{"role": "user", "content": "Reply with only ok."}],
+            model_id=model_id,
+            thinking_effort="high",
+            tools=[TOOL_DEFINITION],
+        )
+        if "tools" in filtered_payload:
+            raise RuntimeError("Responses model without client Tools kept Tool definitions")
+        if "max_tokens" in filtered_payload or "max_output_tokens" in filtered_payload:
+            raise RuntimeError("Responses model without an output-limit parameter kept one")
+        print(
+            "  responses roundtrip: "
+            f"plain_items={len(plain_output)} encrypted_expected={encrypted_expected} "
+            f"encrypted_reasoning={encrypted_count} "
+            f"plain_exact={plain_exact} plain_reply_len={len(plain_second.get('content') or '')}"
+        )
+        print(
+            "  responses tool loop: client_tools=False tools_filtered=True "
+            "output_limit_filtered=True"
+        )
+        return
 
     tool_prompt = "You must call get_weather exactly once with city='Berlin' before answering."
     tool_first_raw = await adapter.send(
@@ -470,7 +515,8 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
 
     print(
         "  responses roundtrip: "
-        f"plain_items={len(plain_output)} encrypted_reasoning={encrypted_count} "
+        f"plain_items={len(plain_output)} encrypted_expected={encrypted_expected} "
+        f"encrypted_reasoning={encrypted_count} "
         f"plain_exact={plain_exact} plain_reply_len={len(plain_second.get('content') or '')}"
     )
     print(
@@ -1050,28 +1096,165 @@ async def _run_instruction_round(
     )
 
 
-def _build_adapter(provider_id: str, model_id: str, api_key: str) -> Any:
+@dataclass(frozen=True)
+class ProbeAdapter:
+    adapter: Any
+    connection_id: str
+    credential_source: str
+    token_getter: TokenGetter
+
+
+def _select_probe_connection(
+    provider_config: ProviderConfig,
+    *,
+    data_dir: Path,
+    connection_id: str | None,
+    api_key_env: str | None,
+) -> ConnectionConfig:
+    """Select one exact Connection without silently changing wire families."""
+
+    if connection_id:
+        try:
+            return provider_config.get_connection(connection_id)
+        except KeyError as error:
+            raise SystemExit(
+                f"unknown Connection {connection_id!r} for Provider {provider_config.id!r}"
+            ) from error
+
+    if api_key_env:
+        matching = [
+            connection
+            for connection in provider_config.connections
+            if connection.type == "api_key" and connection.auth.credential_key == api_key_env
+        ]
+        if len(matching) == 1:
+            return matching[0]
+
+    token_store = TokenStore(data_dir)
+    usable_oauth = [
+        connection
+        for connection in provider_config.connections
+        if connection.type == "oauth"
+        and connection.oauth is not None
+        and token_store.has_valid_token(provider_config.id, connection.id)
+    ]
+    if len(usable_oauth) == 1:
+        return usable_oauth[0]
+
+    if len(provider_config.connections) == 1:
+        return provider_config.connections[0]
+
+    choices = ", ".join(connection.id for connection in provider_config.connections)
+    raise SystemExit(
+        f"cannot select one Connection for Provider {provider_config.id!r}; "
+        f"pass --connection from: {choices}"
+    )
+
+
+def _probe_token_getter(
+    provider_config: ProviderConfig,
+    connection: ConnectionConfig,
+    *,
+    data_dir: Path,
+    api_key_env: str | None,
+) -> tuple[TokenGetter, str]:
+    if connection.type == "api_key":
+        env_name = api_key_env or connection.auth.credential_key
+        if not env_name:
+            raise SystemExit(
+                f"Connection {connection.id!r} has no credential key; pass --api-key-env"
+            )
+        return StaticTokenGetter(_load_api_key(env_name, data_dir)), f"api_key:{env_name}"
+    if connection.type == "oauth" and connection.oauth is not None:
+        token_store = TokenStore(data_dir)
+        if not token_store.has_valid_token(provider_config.id, connection.id):
+            raise SystemExit(
+                f"no usable OAuth token for {provider_config.id}:{connection.id} under {data_dir}"
+            )
+        return (
+            OAuthTokenGetter(
+                token_store,
+                provider_config.id,
+                connection.id,
+                connection.oauth,
+            ),
+            "oauth",
+        )
+    raise SystemExit(
+        f"Connection {provider_config.id}:{connection.id} has unsupported type {connection.type!r}"
+    )
+
+
+def _build_adapter(
+    provider_id: str,
+    model_id: str,
+    *,
+    data_dir: Path,
+    connection_id: str | None = None,
+    api_key_env: str | None = None,
+) -> ProbeAdapter:
     provider_registry = ProviderRegistry.load(RESOURCES_DIR)
     config = provider_registry.get(provider_id)
-    connection = config.connections[0]
+    connection = _select_probe_connection(
+        config,
+        data_dir=data_dir,
+        connection_id=connection_id,
+        api_key_env=api_key_env,
+    )
+    token_getter, credential_source = _probe_token_getter(
+        config,
+        connection,
+        data_dir=data_dir,
+        api_key_env=api_key_env,
+    )
     model_registry = ModelRegistry.load(RESOURCES_DIR)
-    if provider_id == "ollama-cloud":
-        return OllamaCloudAdapter(
-            config,
-            StaticTokenGetter(api_key),
-            auth_config=connection.auth,
-            model_lookup=lambda mid: model_registry.get(provider_id, mid.split("::", 1)[0]),
-        )
     if provider_id == "opencode-go":
         from core.providers.opencode_go import OpenCodeGoAdapter
 
-        return OpenCodeGoAdapter(
-            config,
-            StaticTokenGetter(api_key),
-            auth_config=connection.auth,
-            model_lookup=lambda mid: model_registry.get(provider_id, mid.split("::", 1)[0]),
+        adapter_class: Any = OpenCodeGoAdapter
+    else:
+        adapter_class = PROBE_ADAPTERS.get(provider_id)
+    if adapter_class is None:
+        raise SystemExit(f"provider {provider_id} not supported by the exact probe yet")
+    adapter = adapter_class(
+        config,
+        token_getter,
+        connection.base_url,
+        connection.auth,
+        model_lookup=lambda mid: model_registry.get(provider_id, mid.split("::", 1)[0]),
+        connection_mode=connection.mode,
+    )
+    return ProbeAdapter(
+        adapter=adapter,
+        connection_id=connection.id,
+        credential_source=credential_source,
+        token_getter=token_getter,
+    )
+
+
+async def _run_probe_with_cleanup(
+    built: ProbeAdapter,
+    *,
+    model_id: str,
+    scenario: str,
+    repeats: int,
+    policy: str | None,
+    effort: str,
+) -> None:
+    try:
+        await _run_exact_probe(
+            built.adapter,
+            model_id,
+            scenario,
+            repeats,
+            policy,
+            effort,
         )
-    raise SystemExit(f"provider {provider_id} not supported by the exact probe yet")
+    finally:
+        await built.adapter.aclose()
+        close_token_getter = getattr(built.token_getter, "aclose", None)
+        if close_token_getter is not None:
+            await close_token_getter()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1100,35 +1283,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--api-key-env",
-        help="Credential name in the data-dir .env (defaults by provider).",
+        help="Credential name in the data-dir .env for an API-key Connection.",
+    )
+    parser.add_argument(
+        "--connection",
+        help="Provider-local Connection id; auto-selects one usable OAuth Connection.",
     )
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--effort", default="max", help="reasoning_effort / think value.")
     args = parser.parse_args(argv)
 
     api_key_env = args.api_key_env or API_KEY_ENV_BY_PROVIDER.get(args.provider)
-    if api_key_env is None:
-        raise SystemExit(
-            f"no default API-key environment variable for provider {args.provider!r}; "
-            "pass --api-key-env"
-        )
-    api_key = _load_api_key(api_key_env, args.data_dir)
-    print(f"api key length: {len(api_key)}")
+    built = _build_adapter(
+        args.provider,
+        args.model,
+        data_dir=args.data_dir,
+        connection_id=args.connection,
+        api_key_env=api_key_env,
+    )
     print(
-        f"provider: {args.provider} | model: {args.model} | "
+        f"provider: {args.provider} | connection: {built.connection_id} | "
+        f"credential: {built.credential_source} | model: {args.model} | "
         f"scenario: {args.scenario} | policy: {args.policy}"
     )
 
-    adapter = _build_adapter(args.provider, args.model, api_key)
     policy: str | None = None if args.policy == "auto" else args.policy
     asyncio.run(
-        _run_exact_probe(
-            adapter,
-            args.model,
-            args.scenario,
-            args.repeats,
-            policy,
-            args.effort,
+        _run_probe_with_cleanup(
+            built,
+            model_id=args.model,
+            scenario=args.scenario,
+            repeats=args.repeats,
+            policy=policy,
+            effort=args.effort,
         )
     )
     return 0

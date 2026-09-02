@@ -1790,6 +1790,55 @@ class TestModelRegistryRealResources:
         tts = registry.get("openai", "tts-1")
         assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
 
+    def test_openai_reasoning_models_load_connection_specific_wire_policies(self):
+        """Current OpenAI reasoning Models use Responses on every allowed wire.
+
+        The unsuffixed GPT-5.6 alias is a Platform alias only: the live ChatGPT
+        Codex endpoint rejects it, while the named 5.6 variants are available on
+        both connections. Earlier Platform models use Responses without the
+        GPT-5.6-only ``all_turns`` request field.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        gpt_52 = registry.get("openai", "gpt-5.2")
+        assert gpt_52.connections == ("api-key",)
+        assert gpt_52.context_window == 400_000
+        assert gpt_52.max_output_tokens == 128_000
+        assert gpt_52.metadata["openai"]["wire_policies"] == {"api-key": {"protocol": "responses"}}
+        assert set(gpt_52.capabilities.supported_parameters) == {
+            "max_output_tokens",
+            "parallel_tool_calls",
+            "reasoning",
+            "response_format",
+            "tools",
+        }
+
+        for model_id in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.5"):
+            model = registry.get("openai", model_id)
+            assert model.connections == ("api-key", "subscription")
+            assert model.metadata["openai"]["wire_policies"] == {
+                "api-key": {"protocol": "responses"},
+                "subscription": {"protocol": "responses"},
+            }
+
+        assert registry.get("openai", "gpt-5.4").context_window_for("api-key") == 1_050_000
+        assert registry.get("openai", "gpt-5.4").context_window_for("subscription") == 272_000
+        assert registry.get("openai", "gpt-5.4-mini").context_window_for("api-key") == 400_000
+        for model_id in ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
+            model = registry.get("openai", model_id)
+            assert model.context_window_for("api-key") == 1_050_000
+            assert model.context_window_for("subscription") == 272_000
+
+        alias = registry.get("openai", "gpt-5.6")
+        assert alias.connections == ("api-key",)
+        assert alias.metadata["openai"]["wire_policies"] == {
+            "api-key": {
+                "protocol": "responses",
+                "reasoning_context": "all_turns",
+            }
+        }
+
     def test_deepseek_flash_top_p_override_applies_at_load(self):
         """``ollama-cloud.overrides.json`` pins recommended_top_p 0.95 for the
         DeepSeek V4 Flash id."""

@@ -217,7 +217,16 @@ class TestRefreshModels:
                             "input_modalities": ["text", "image"],
                             "context_window": 272000,
                             "supports_parallel_tool_calls": True,
-                        }
+                            "visibility": "list",
+                        },
+                        {
+                            "slug": "codex-auto-review",
+                            "display_name": "Codex Auto Review",
+                            "input_modalities": ["text", "image"],
+                            "context_window": 272000,
+                            "supports_parallel_tool_calls": True,
+                            "visibility": "hide",
+                        },
                     ]
                 },
             )
@@ -240,6 +249,14 @@ class TestRefreshModels:
         assert model.connections == ("subscription",)
         assert model.name == "GPT-5 Codex"
         assert catalog_data["models"]["gpt-5-codex"]["connections"] == ["subscription"]
+        assert "codex-auto-review" not in catalog_data["models"]
+        raw_data = json.loads(
+            (resources_dir / "models" / "openai.raw.json").read_text(encoding="utf-8")
+        )
+        assert {entry["slug"] for entry in raw_data["raw_response"]["models"]} == {
+            "codex-auto-review",
+            "gpt-5-codex",
+        }
 
     @respx.mock
     @pytest.mark.asyncio

@@ -1,6 +1,23 @@
 {
   "provider_id": "xai",
   "models": {
+    "grok-4.6": {
+      "canonical": "xai/grok-4.6",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "reasoning_effort",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
     "grok-build-0.1": {
       "canonical": "xai/grok-build-0.1",
       "connections": ["api-key", "subscription"],
@@ -92,7 +109,7 @@
       "connections": ["api-key", "subscription"],
       "capabilities": {
         "vision": true,
-        "tools": true,
+        "tools": false,
         "json_mode": true,
         "reasoning": {
           "supported": true,
@@ -102,14 +119,11 @@
         "input_modalities": ["text", "image"],
         "output_modalities": ["text"],
         "supported_parameters": [
-          "max_output_tokens",
-          "parallel_tool_calls",
           "prompt_cache_key",
           "reasoning_effort",
           "response_format",
           "service_tier",
           "temperature",
-          "tools",
           "top_p"
         ]
       },

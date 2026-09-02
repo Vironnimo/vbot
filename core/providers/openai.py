@@ -47,7 +47,7 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     closest_supported_effort,
     model_reasoning_levels,
@@ -226,6 +226,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if not isinstance(version, str) or not _CODEX_STABLE_VERSION_PATTERN.fullmatch(version):
             raise ValueError("Codex package metadata has no stable semantic version")
         return {"client_version": version}
+
+    @classmethod
+    def accepts_discovered_model(
+        cls,
+        raw: Mapping[str, Any],
+        connection: ConnectionConfig | None,
+    ) -> bool:
+        """Exclude Codex catalog entries that OpenAI marks as hidden."""
+
+        del cls
+        if getattr(connection, "mode", None) != CODEX_RESPONSES_MODE:
+            return True
+        return raw.get("visibility") != "hide"
 
     @classmethod
     def normalize_catalog_entry(
@@ -623,6 +636,21 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if self._connection_mode == CODEX_RESPONSES_MODE:
             return False
         return self._model_wire_policy(model_id).get("protocol") == OPENAI_RESPONSES_PROTOCOL
+
+    def _model_context_window(self, model_id: str) -> int | None:
+        """Resolve the Context window for the active OpenAI Connection."""
+
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        connection_id = (
+            OPENAI_SUBSCRIPTION_WIRE_KEY
+            if self._connection_mode == CODEX_RESPONSES_MODE
+            else OPENAI_API_KEY_WIRE_KEY
+        )
+        return model.context_window_for(connection_id)
 
     def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
         if self._model_lookup is None:

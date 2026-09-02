@@ -280,6 +280,11 @@ class Model:
     — the handoff places it here ("eigenes Feld am Modell"), replacing per-adapter
     family-from-name guessing. Optional; defaults to ``""`` when unknown.
 
+    ``connection_context_windows`` carries the exceptional case where two
+    Connections expose different Context limits for the same Provider wire id.
+    Callers that know the selected Connection use :meth:`context_window_for`;
+    other readers retain the conservative Model-wide ``context_window``.
+
     ``metadata`` is the sanctioned home for provider-scoped per-model wire facts.
     Conventions (keep them tight — this is not a dumping ground):
 
@@ -302,12 +307,20 @@ class Model:
     family: str = ""
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     connections: tuple[str, ...] = ()
+    connection_context_windows: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     recommended_temperature: float | None = None
     recommended_top_p: float | None = None
     reasoning_replay: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
+        object.__setattr__(
+            self,
+            "connection_context_windows",
+            _freeze_connection_context_windows(self.connection_context_windows),
+        )
 
     def allows_connection(self, connection_id: str) -> bool:
         """Whether this model may run on ``connection_id`` of its provider.
@@ -319,6 +332,11 @@ class Model:
         connection it forbids.
         """
         return not self.connections or connection_id in self.connections
+
+    def context_window_for(self, connection_id: str) -> int | None:
+        """Return the selected Connection's window or the Model-wide fallback."""
+
+        return self.connection_context_windows.get(connection_id, self.context_window)
 
 
 class ModelRegistry:
@@ -758,12 +776,32 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         family=record.get("family", ""),
         metadata=record.get("metadata", {}),
         connections=tuple(record.get("connections", ())),
+        connection_context_windows=record.get("connection_context_windows", {}),
         recommended_temperature=_coerce_recommended_temperature(
             record.get("recommended_temperature")
         ),
         recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p")),
         reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
     )
+
+
+def _freeze_connection_context_windows(value: Any) -> Mapping[str, int]:
+    """Validate and freeze optional per-Connection Context limits."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("connection_context_windows must be an object")
+    windows: dict[str, int] = {}
+    for connection_id, context_window in value.items():
+        if not isinstance(connection_id, str) or not connection_id:
+            raise ValueError("connection_context_windows keys must be non-empty strings")
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
+            raise ValueError("connection_context_windows values must be positive integers")
+        windows[connection_id] = context_window
+    return MappingProxyType(windows)
 
 
 def _coerce_reasoning_replay(value: Any) -> str | None:

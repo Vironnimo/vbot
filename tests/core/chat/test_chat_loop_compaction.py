@@ -75,6 +75,43 @@ from tests.core.chat.chat_loop_support import (
 JsonObject = dict[str, Any]
 
 
+def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) -> None:
+    model_key = ("openai", "gpt-5.4")
+    models = StubModels(
+        {model_key: 272_000},
+        connection_context_windows={model_key: {"api-key": 1_050_000, "subscription": 272_000}},
+    )
+
+    api_agent = StubAgent(id="api", model="openai/gpt-5.4", allowed_tools=["*"])
+    api_data_dir = tmp_path / "api"
+    api_data_dir.mkdir()
+    api_runtime = StubRuntime(
+        data_dir=api_data_dir,
+        agent=api_agent,
+        adapter=StubAdapter([]),
+        models=models,
+    )
+    assert build_chat_loop(api_runtime).resolve_context_window(api_agent) == 1_050_000
+
+    subscription_agent = StubAgent(
+        id="subscription",
+        model="openai/gpt-5.4::subscription",
+        allowed_tools=["*"],
+    )
+    subscription_data_dir = tmp_path / "subscription"
+    subscription_data_dir.mkdir()
+    subscription_runtime = StubRuntime(
+        data_dir=subscription_data_dir,
+        agent=subscription_agent,
+        adapter=StubAdapter([]),
+        adapters_by_connection={"openai:subscription": StubAdapter([])},
+        models=models,
+    )
+    assert (
+        build_chat_loop(subscription_runtime).resolve_context_window(subscription_agent) == 272_000
+    )
+
+
 class _BlockingOnceCompactionService:
     """Pause one successful Compaction so a concurrent Session append can race it."""
 

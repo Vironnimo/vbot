@@ -99,10 +99,13 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 - vBot `thinking_effort` and raw `reasoning_effort` map to the nearest safe OpenAI effort: `minimal -> low`, `low/medium/high` stay exact, `xhigh/max -> high`.
 - Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms reasoning support.
 - If injected `model_lookup` says reasoning is unsupported, reasoning request controls are stripped.
-- Replay scope follows the shared Model -> Provider -> system hierarchy and therefore defaults to `full_history` for GPT-5.5, the `gpt-5.6` alias, and GPT-5.6 Sol/Terra/Luna on both Connections. `metadata.openai.wire_policies.<connection>` now carries wire-only facts such as Responses protocol and public `reasoning_context`; it no longer hides replay scope. Assistant `phase` remains semantic history and is preserved across Runs.
+- Replay scope follows the shared Model -> Provider -> system hierarchy and defaults to `full_history` for the current reasoning Models on their allowed Connections. `metadata.openai.wire_policies.<connection>` carries wire-only facts such as Responses protocol and public `reasoning_context`; it does not hide replay scope. Assistant `phase` remains semantic history and is preserved across Runs.
+- Public Platform GPT-5.2, GPT-5.4, GPT-5.4 Mini, GPT-5.5, and GPT-5.6 use `/responses`; GPT-5.6 alone adds the `all_turns` persisted-reasoning request contract. The public Platform path is documentation- and local-contract-verified on 2026-09-02 but not live-verified because the development API-key Connection is not usable.
 - On public Platform Responses, GPT-5.6 sends `reasoning.context: "all_turns"` so prior output items are available as Session-wide reasoning context. The private subscription `/codex/responses` contract is also full-history replay for those Models, but vBot does not send the public `reasoning.context` field there because support is not documented or live-verified.
 - Opaque reasoning fields such as `encrypted_content` and the complete Responses `output` array stay in `reasoning_meta` for exact round-tripping. A GPT-5.6 full-history context therefore depends on both the all-turns request control where supported and the prior output items actually being present.
+- Live exact Adapter/history probes on 2026-09-02 verified complete output-item and encrypted-reasoning replay across later Runs plus Tool continuations for subscription GPT-5.3 Codex Spark, GPT-5.4, GPT-5.4 Mini, GPT-5.5, GPT-5.6 Luna/Sol/Terra, and the upstream `gpt-reserve` and `codex-auto-review` slugs. The last two remain excluded from the selectable catalog because `/codex/models` marks them `visibility: hide`.
 - On the Codex Responses path, supported reasoning efforts are `low`, `medium`, `high`, and `xhigh`; `max` maps to `xhigh`.
+- Shared OpenAI wire ids do not imply shared Context limits. The public Platform values are GPT-5.2 and GPT-5.4 Mini at 400,000 and GPT-5.4, GPT-5.5, and GPT-5.6 Luna/Sol/Terra at 1,050,000; the subscription Codex catalog reports 272,000 for its shared ids. `connection_context_windows` preserves both facts, and both Chat compaction and Adapter output budgeting resolve the active Connection instead of globally choosing either the unsafe larger value or the capability-reducing smaller value.
 
 ## Response And Catalog Normalization
 
@@ -117,6 +120,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 - `models_endpoint` is `/codex/models`; the `subscription` connection participates in `model.refresh_db` after OAuth is usable.
 - Discovery sends the same account-routing and beta/originator headers as runtime requests. `/codex/models` gates newly available Models by `client_version`: a refresh fetches the current stable `@openai/codex` npm version; if that fetch fails the adapter sends fallback `0.144.0`. Older values such as `0.1.0` can return a valid but empty list. GPT-5.6 Luna/Sol/Terra advertise `minimal_client_version` `0.144.0`. Chat `/codex/responses` requests do not send `client_version`.
 - `/codex/models` may return entries in a top-level `models` list rather than `data`, with ids/names exposed as `slug` and `display_name`.
+- The raw catalog dump preserves every returned entry for audit evidence, but the generated selectable catalog excludes entries whose Codex metadata says `visibility: hide`.
 - Sparse `/codex/models` entries remain usable as text Codex Responses models: tools, structured output, and reasoning default to supported unless the catalog explicitly says otherwise. Unknown context-window and max-output-token facts stay `null` (the OpenAI-compatible base normalizer the Codex path delegates to emits honest `None`, never a placeholder `0`); the read-side `resolve_context_window` chain fills a window when needed.
 - Do not hand-edit `resources/models/openai.json` for Codex entries; model refresh owns that file.
 
@@ -130,6 +134,8 @@ Each `Model` carries `connections: tuple[str, ...]`, loaded from `Model.connecti
 - Refresh tags every discovered model with `connections: [<credential_connection.id>]` and merges into the existing catalog by replacing only models whose `connections` include the current connection id; models belonging to other connections are preserved.
 
 OpenAI task-model overrides use the same allowlist to keep offered targets honest: OpenAI TTS/STT, DALL-E, `gpt-image-1`, `gpt-image-1-mini`, and `gpt-image-1.5` are `connections: ["api-key"]` because no working subscription task wire is verified for them. `gpt-image-2` stays unrestricted: on `api-key` it uses the Platform image endpoint, and on `subscription` it renders through the Codex image-generation tool, which the backend currently routes to the `gpt-image-2-codex` family.
+
+The public `gpt-5.6` alias is also `connections: ["api-key"]`: the subscription endpoint live-rejected that slug on 2026-09-02 with HTTP 400 while accepting GPT-5.6 Luna/Sol/Terra. Never infer alias availability from the named variants or transfer a Platform alias to the Codex wire.
 
 ## Codex Image Generation (`subscription` task wire)
 
