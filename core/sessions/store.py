@@ -22,6 +22,7 @@ from core.chat.errors import ChatSessionError
 from core.sessions.errors import (
     FtsHealth,
     QuarantineResult,
+    SessionNotFoundError,
     SessionStorageFormatError,
     SessionStoreCorruptError,
     SessionStoreHealth,
@@ -1275,7 +1276,7 @@ class SessionStore:
                 self._scope(address),
             ).fetchone()
         if row is None:
-            raise ChatSessionError(f"session does not exist: {address.session_id}")
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
         return cast(sqlite3.Row, row)
 
     def metadata(self, address: SessionAddress) -> JsonObject:
@@ -1287,7 +1288,7 @@ class SessionStore:
         """Load compact descriptor inputs without reconstructing Session history."""
         source = self.descriptor_sources((address,)).get(address)
         if source is None:
-            raise ChatSessionError(f"session does not exist: {address.session_id}")
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
         return source
 
     def descriptor_sources(
@@ -2141,7 +2142,7 @@ class SessionStore:
     def _require_live(self, connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row:
         row = self._find_live(connection, address)
         if row is None:
-            raise ChatSessionError(f"session does not exist: {address.session_id}")
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
         return row
 
     def _find_live(

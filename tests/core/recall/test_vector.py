@@ -277,6 +277,37 @@ async def test_typed_vector_search_returns_ranked_passages_without_session_dedup
     assert all(hit.sources == ("semantic",) for hit in page.hits)
 
 
+async def test_vector_search_skips_session_deleted_during_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="deleted-during-index")
+    session.append(ChatMessage.user("banana fruit", timestamp=timestamp(1)))
+    address = SessionAddress(
+        project_id=None,
+        agent_id="coder",
+        session_id=session.id,
+    )
+    list_history_versions = sessions.list_history_versions
+    deleted = False
+
+    def list_then_delete(addresses):
+        nonlocal deleted
+        versions = list_history_versions(addresses)
+        if not deleted:
+            sessions.delete(address)
+            deleted = True
+        return versions
+
+    monkeypatch.setattr(sessions, "list_history_versions", list_then_delete)
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("fruit"))
+
+    assert page.hits == ()
+
+
 async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
     tmp_path: Path,
 ) -> None:

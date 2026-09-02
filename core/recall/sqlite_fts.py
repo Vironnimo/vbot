@@ -657,10 +657,10 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             *session_ids,
         ]
         if request.since is not None:
-            conditions.append("p.end_timestamp >= ?")
+            conditions.append("julianday(p.end_timestamp) >= julianday(?)")
             parameters.append(request.since.isoformat())
         if request.until is not None:
-            conditions.append("p.start_timestamp <= ?")
+            conditions.append("julianday(p.start_timestamp) <= julianday(?)")
             parameters.append(request.until.isoformat())
         parameters.extend((request.limit + 1, request.offset))
         sql = f"""

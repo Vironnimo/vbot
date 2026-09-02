@@ -40,6 +40,7 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
     SessionAddress,
+    SessionNotFoundError,
     skill_context_note_name,
     skill_tool_activation_name,
 )
@@ -1768,10 +1769,17 @@ class StatisticsService:
         scope: StatisticsScope,
         snapshot: dict[tuple[str, str, str], IndexedStatisticsSession],
     ) -> None:
-        indexed_sessions = [
-            snapshot[statistics_session_key(scope.project_id, scope.agent_id, str(summary["id"]))]
-            for summary in scope.summaries
-        ]
+        indexed_sessions: list[IndexedStatisticsSession] = []
+        for summary in scope.summaries:
+            indexed = snapshot.get(
+                statistics_session_key(
+                    scope.project_id,
+                    scope.agent_id,
+                    str(summary["id"]),
+                )
+            )
+            if indexed is not None:
+                indexed_sessions.append(indexed)
         summaries = [session.summary for session in indexed_sessions]
         aggregator.register_agent(scope.display_key, summaries)
         aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
@@ -1799,14 +1807,22 @@ class StatisticsService:
             if summaries is None
             else summaries
         )
-        aggregator.register_agent(display_key, resolved_summaries)
-        aggregator.register_scope(agent_id=agent_id, project_id=project_id)
+        live_sessions: list[tuple[JsonObject, list[ChatMessage]]] = []
         for summary in resolved_summaries:
             session_id = str(summary["id"])
             address = SessionAddress(
                 project_id=project_id, agent_id=agent_id, session_id=session_id
             )
-            messages = self._sessions.get(address).load()
+            try:
+                messages = self._sessions.get(address).load()
+            except SessionNotFoundError:
+                continue
+            live_sessions.append((summary, messages))
+
+        aggregator.register_agent(display_key, [summary for summary, _messages in live_sessions])
+        aggregator.register_scope(agent_id=agent_id, project_id=project_id)
+        for summary, messages in live_sessions:
+            session_id = str(summary["id"])
             aggregator.process_session(display_key, session_id, messages, summary)
 
     def _scan_run_activity_scope(
@@ -1832,7 +1848,10 @@ class StatisticsService:
             address = SessionAddress(
                 project_id=project_id, agent_id=agent_id, session_id=session_id
             )
-            messages = self._sessions.get(address).load()
+            try:
+                messages = self._sessions.get(address).load()
+            except SessionNotFoundError:
+                continue
             activity_messages = _session_activity_messages(messages, summary)
             group: list[ChatMessage] = []
             for message in activity_messages:

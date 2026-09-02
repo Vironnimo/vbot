@@ -49,7 +49,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      alias or fallback from mixing vectors produced by different real models.
 # v8 → canonical Session generations/revisions replace filesystem freshness
 #      and prevent recreated addresses from reusing stale chunks.
-_SCHEMA_VERSION = 8
+# v9 → invalid chunk timestamps use unbounded interval endpoints instead of
+#      1970, preserving fail-open time-filter behavior for malformed metadata.
+_SCHEMA_VERSION = 9
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -73,6 +75,8 @@ _DEFAULT_CONTEXT_WINDOW = 8192
 # structural filters applied after KNN still leave us with ``limit`` hits.
 # The recall backend over-fetches further for chunk→session dedup.
 _KNN_OVERSHOOT = 4
+_UNBOUNDED_START_TIMESTAMP_MICROS = -(2**63)
+_UNBOUNDED_END_TIMESTAMP_MICROS = 2**63 - 1
 
 
 class VectorStoreError(RuntimeError):
@@ -442,8 +446,14 @@ class VectorStore:
                             row_id,
                             _scope_key(record.project_id, record.agent_id),
                             record.session_id,
-                            _timestamp_micros(record.start_timestamp or record.started_at),
-                            _timestamp_micros(record.end_timestamp or record.started_at),
+                            _timestamp_micros(
+                                record.start_timestamp or record.started_at,
+                                fallback=_UNBOUNDED_START_TIMESTAMP_MICROS,
+                            ),
+                            _timestamp_micros(
+                                record.end_timestamp or record.started_at,
+                                fallback=_UNBOUNDED_END_TIMESTAMP_MICROS,
+                            ),
                             json.dumps([float(value) for value in vector]),
                         ),
                     )
@@ -770,14 +780,14 @@ def _scope_key(project_id: str, agent_id: str) -> str:
     return f"{project_id}\0{agent_id}"
 
 
-def _timestamp_micros(value: str) -> int:
+def _timestamp_micros(value: str, *, fallback: int) -> int:
     if not value:
-        return 0
+        return fallback
     normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return 0
+        return fallback
     return _datetime_micros(parsed)
 
 

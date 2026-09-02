@@ -288,6 +288,27 @@ def test_deleted_session_is_pruned_from_index(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM statistics_records").fetchone()[0] == 0
 
 
+def test_session_deleted_between_listing_and_index_read_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, manager, session = _service(tmp_path)
+    address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
+    list_history_versions = manager.list_history_versions
+
+    def list_then_delete(addresses):
+        versions = list_history_versions(addresses)
+        manager.delete(address)
+        return versions
+
+    monkeypatch.setattr(manager, "list_history_versions", list_then_delete)
+
+    report = service.report()
+
+    assert report.overview.total_sessions == 0
+    assert report.overview.total_runs == 0
+
+
 def test_index_projection_does_not_store_large_or_sensitive_message_content(tmp_path: Path) -> None:
     secret_text = "DO-NOT-PERSIST-RAW-CONTENT"
     manager = ChatSessionManager(tmp_path)
