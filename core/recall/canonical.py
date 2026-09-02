@@ -53,6 +53,10 @@ SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
 )
 SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
+CANONICAL_FALLBACK_SCAN_LIMIT = 10_000
+CANONICAL_FALLBACK_PARTIAL_REASON = (
+    "The bounded canonical fallback reached its scan limit; results are partial."
+)
 
 
 def _session_address(request: Any, session_id: str) -> SessionAddress:
@@ -91,8 +95,16 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 class CanonicalSessionRecallBackend:
     """Recall backend that scans canonical Session history on demand."""
 
-    def __init__(self, sessions: ChatSessionManager) -> None:
+    def __init__(
+        self,
+        sessions: ChatSessionManager,
+        *,
+        search_scan_limit: int | None = None,
+    ) -> None:
+        if search_scan_limit is not None and search_scan_limit <= 0:
+            raise ValueError("search scan limit must be positive")
         self.sessions = sessions
+        self._search_scan_limit = search_scan_limit
 
     async def browse(self, request: RecallRequest) -> JsonObject:
         return await asyncio.to_thread(self._browse, request)
@@ -157,10 +169,18 @@ class CanonicalSessionRecallBackend:
             )
 
         ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
+        remaining = self._search_scan_limit
+        scan_complete = True
         for summary in summaries:
             session_id = str(summary["id"])
             messages = self.sessions.get(_session_address(request, session_id)).load_active()
-            for message_index, message in enumerate(messages):
+            selected_messages = messages
+            if remaining is not None:
+                if len(messages) > remaining:
+                    selected_messages = messages[:remaining]
+                    scan_complete = False
+                remaining -= len(selected_messages)
+            for message_index, message in enumerate(selected_messages):
                 if not message_matches_search_request(message, request):
                     continue
                 text = message_search_text(message)
@@ -188,6 +208,8 @@ class CanonicalSessionRecallBackend:
                         ),
                     )
                 )
+            if not scan_complete:
+                break
         ranked.sort(
             key=lambda item: (item[0], item[1], item[2]),
             reverse=request.order == "newest",
@@ -201,6 +223,8 @@ class CanonicalSessionRecallBackend:
             snapshot_id=snapshot_id,
             has_more=end < len(ranked),
             total_candidate_sessions=len(summaries),
+            degraded=not scan_complete,
+            degradation_reason=(CANONICAL_FALLBACK_PARTIAL_REASON if not scan_complete else None),
         )
 
     def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:

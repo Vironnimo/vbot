@@ -37,6 +37,44 @@ _WRITE_RETRY_SLOW_MAX_S = 1.000
 _WRITE_RETRY_SLOW_AFTER_S = 2.0
 _WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 _WAL_INCOMPAT_MARKERS = ("locking protocol", "not authorized", "disk i/o error")
+_SQLITE_PRIMARY_CODE_MASK = 0xFF
+_SQLITE_CORRUPTION_CODES = frozenset(
+    {
+        sqlite3.SQLITE_CORRUPT,
+        sqlite3.SQLITE_FORMAT,
+        sqlite3.SQLITE_NOTADB,
+    }
+)
+_SQLITE_UNAVAILABLE_CODES = frozenset(
+    {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_CANTOPEN,
+        sqlite3.SQLITE_FULL,
+        sqlite3.SQLITE_INTERRUPT,
+        sqlite3.SQLITE_IOERR,
+        sqlite3.SQLITE_LOCKED,
+        sqlite3.SQLITE_NOMEM,
+        sqlite3.SQLITE_PERM,
+        sqlite3.SQLITE_PROTOCOL,
+        sqlite3.SQLITE_READONLY,
+    }
+)
+_SQLITE_CORRUPTION_MARKERS = (
+    "database disk image is malformed",
+    "database corruption",
+    "file is not a database",
+    "malformed database schema",
+)
+_SQLITE_UNAVAILABLE_MARKERS = (
+    "attempt to write a readonly database",
+    "attempt to write a read-only database",
+    "database or disk is full",
+    "disk full",
+    "disk i/o error",
+    "unable to open database",
+    "cannot open database",
+    "permission denied",
+)
 
 _live_lock = threading.RLock()
 _live_connections: dict[str, int] = {}
@@ -409,6 +447,29 @@ def classify_unavailable(exc: BaseException) -> bool:
     return isinstance(exc, sqlite3.Error) and (
         is_busy_error(exc) or _is_transient_cursor_error(exc)
     )
+
+
+def classify_write_error(exc: BaseException) -> str:
+    """Classify an escaped SQLite write error without hiding programming defects.
+
+    Constraint errors deliberately remain ``other``: operation owners translate
+    the expected constraints they create, while an unexpected constraint or API
+    misuse remains visible to its caller instead of masquerading as an outage.
+    """
+    if not isinstance(exc, sqlite3.Error):
+        return "other"
+    code = getattr(exc, "sqlite_errorcode", None)
+    primary_code = code & _SQLITE_PRIMARY_CODE_MASK if isinstance(code, int) else None
+    message = str(exc).lower()
+    if primary_code in _SQLITE_CORRUPTION_CODES or any(
+        marker in message for marker in _SQLITE_CORRUPTION_MARKERS
+    ):
+        return "corrupt"
+    if primary_code in _SQLITE_UNAVAILABLE_CODES or any(
+        marker in message for marker in _SQLITE_UNAVAILABLE_MARKERS
+    ):
+        return "unavailable"
+    return "other"
 
 
 class SQLiteRuntime:

@@ -13,6 +13,8 @@ from typing import Any, cast
 
 from core.chat.messages import ChatMessage
 from core.recall.canonical import (
+    CANONICAL_FALLBACK_PARTIAL_REASON,
+    CANONICAL_FALLBACK_SCAN_LIMIT,
     CanonicalSessionRecallBackend,
     compact_text,
     first_match_span,
@@ -45,6 +47,13 @@ from core.sessions.schema import required_journal_mode
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
+_FTS_FALLBACK_REASON = (
+    "SQLite full-text search was unavailable; results came from the bounded canonical fallback."
+)
+_FTS_PARTIAL_FALLBACK_REASON = (
+    "SQLite full-text search was unavailable, and the bounded canonical fallback reached "
+    "its scan limit; results are partial."
+)
 
 
 def _session_address(request: Any, session_id: str) -> SessionAddress:
@@ -90,7 +99,10 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         self.data_dir = context.data_dir
         self.index_path = self.data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
         self.logger = context.logger
-        self._fallback = CanonicalSessionRecallBackend(context.sessions)
+        self._fallback = CanonicalSessionRecallBackend(
+            context.sessions,
+            search_scan_limit=CANONICAL_FALLBACK_SCAN_LIMIT,
+        )
         self._index_lock = asyncio.Lock()
 
     async def search(self, request: RecallRequest) -> JsonObject:
@@ -175,6 +187,10 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             until=None if request.until is None else request.until.isoformat(),
             excluded_session_ids=request.excluded_session_ids,
         )
+        fallback_reason = str(getattr(rows, "fallback_reason", "") or "")
+        complete = bool(getattr(rows, "complete", True))
+        used_canonical_fallback = bool(fallback_reason)
+        used_fts_fallback = fallback_reason in {"fts_unavailable", "fts_error"}
         summaries_by_id = {str(s["id"]): s for s in summaries}
         hits: list[tuple[float, str, str, RecallSearchHit]] = []
         for address, message_id, timestamp, message_payload, rank in rows:
@@ -225,10 +241,26 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         return RecallSearchPage(
             hits=tuple(h[3] for h in page_hits),
             result_type="message",
-            ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
+            ranking=(
+                f"substring_scan_{'newest' if request.order == 'relevance' else request.order}"
+                if used_canonical_fallback
+                else "bm25"
+                if request.order == "relevance"
+                else f"message_time_{request.order}"
+            ),
             snapshot_id=snapshot_id,
             has_more=has_more,
             total_candidate_sessions=len(summaries),
+            degraded=used_fts_fallback or not complete,
+            degradation_reason=(
+                _FTS_PARTIAL_FALLBACK_REASON
+                if used_fts_fallback and not complete
+                else _FTS_FALLBACK_REASON
+                if used_fts_fallback
+                else CANONICAL_FALLBACK_PARTIAL_REASON
+                if not complete
+                else None
+            ),
         )
 
     def search_capabilities(self) -> RecallSearchCapabilities:
@@ -259,19 +291,24 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             raise RecallSearchError(
                 "stale_cursor", "Session search source changed; repeat the search."
             )
-        # Integrated FTS only; otherwise canonical scan.
-        if self.sessions.is_fts_available():
-            try:
-                return await asyncio.to_thread(
-                    self._search_page_with_canonical_fts, request, summaries, snapshot_id
-                )
-            except Exception as error:  # pragma: no cover
-                self._warning("Canonical FTS page failed; falling back: %s", error)
+        try:
+            return await asyncio.to_thread(
+                self._search_page_with_canonical_fts, request, summaries, snapshot_id
+            )
+        except Exception as error:  # pragma: no cover
+            self._warning("Canonical FTS page failed; falling back: %s", error)
         fallback_request = (
             replace(request, order="newest") if request.order == "relevance" else request
         )
         page = await self._fallback.search_page(fallback_request)
-        return replace(page, ranking=f"substring_scan_{fallback_request.order}")
+        return replace(
+            page,
+            ranking=f"substring_scan_{fallback_request.order}",
+            degraded=True,
+            degradation_reason=(
+                _FTS_PARTIAL_FALLBACK_REASON if page.degraded else _FTS_FALLBACK_REASON
+            ),
+        )
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""

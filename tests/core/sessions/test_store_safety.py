@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -11,8 +12,10 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.errors import ChatSessionError
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions import snapshots as snapshots_module
+from core.sessions.errors import SessionStoreCorruptError, SessionStoreUnavailableError
 from core.sessions.snapshots import (
     SNAPSHOT_DATABASE_NAME,
     SNAPSHOT_KEEP_COUNT,
@@ -23,6 +26,50 @@ from core.sessions.snapshots import (
     snapshot_root,
 )
 from core.sessions.store import SessionStore, quarantine_database
+
+
+def test_write_error_classification_preserves_owner_errors_and_rolls_back(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.db")
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="duplicate")
+    try:
+        store.create(address)
+        with pytest.raises(ChatSessionError) as duplicate:
+            store.create(address)
+        assert not isinstance(duplicate.value, SessionStoreUnavailableError)
+
+        def corrupt(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "INSERT INTO store_meta(key, value) VALUES ('rollback-corrupt', 'value')"
+            )
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+        with pytest.raises(SessionStoreCorruptError):
+            store._execute_write(corrupt)
+        assert store._writer.in_transaction is False
+        assert (
+            store._writer.execute(
+                "SELECT value FROM store_meta WHERE key = 'rollback-corrupt'"
+            ).fetchone()
+            is None
+        )
+
+        def unavailable(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "INSERT INTO store_meta(key, value) VALUES ('rollback-unavailable', 'value')"
+            )
+            raise sqlite3.OperationalError("attempt to write a readonly database")
+
+        with pytest.raises(SessionStoreUnavailableError):
+            store._execute_write(unavailable)
+        assert store._writer.in_transaction is False
+        assert (
+            store._writer.execute(
+                "SELECT value FROM store_meta WHERE key = 'rollback-unavailable'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        store.close()
 
 
 def _address(session_id: str) -> SessionAddress:
