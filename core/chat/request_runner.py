@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.chat import (
     _CHAT_TRANSFORM_WORKERS,
+    OUTPUT_INTEGRITY_RECOVERY_NOTE,
     ChatLoopDependencies,
     _AssistantStep,
     _with_assistant_output_files,
@@ -33,7 +34,11 @@ from core.chat.streaming import (
 )
 from core.chat.wire_shaping import _assistant_message_from_response
 from core.providers.accounts import ConnectionRef
-from core.providers.adapter import terminal_outcome_from_response
+from core.providers.adapter import (
+    TERMINAL_OUTCOME_STOP,
+    TerminalOutcome,
+    terminal_outcome_from_response,
+)
 from core.providers.errors import NetworkError, ProviderError
 from core.runs import (
     PROVIDER_HEARTBEAT_EVENT,
@@ -80,14 +85,54 @@ def _normalize_non_streaming_step(
 ) -> _AssistantStep:
     """Normalize one Provider response and build its canonical Assistant step."""
     normalized = adapter.normalize_response(response, model_id=model_id)
-    return _AssistantStep(
-        message=_assistant_message_from_response(
-            agent_model,
-            normalized,
-            reasoning_scope=response_model,
-        ),
-        terminal_outcome=terminal_outcome_from_response(normalized),
+    terminal_outcome = terminal_outcome_from_response(normalized)
+    message = _assistant_message_from_response(
+        agent_model,
+        normalized,
+        reasoning_scope=response_model,
     )
+    if _needs_visible_answer_recovery(
+        terminal_outcome,
+        content=message.content,
+        reasoning=message.reasoning,
+        tool_calls=message.tool_calls,
+        ended_in_reasoning=False,
+    ):
+        _LOGGER.warning(
+            "Provider completed a non-streaming response without visible answer content; "
+            "requesting a continuation (model=%s)",
+            model_id,
+        )
+        return _AssistantStep(
+            message=replace(
+                message,
+                interrupted=True,
+                interruption_cause="provider",
+            ),
+            terminal_outcome=None,
+            recovery="continue",
+            recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
+            replay_reasoning=False,
+        )
+    return _AssistantStep(
+        message=message,
+        terminal_outcome=terminal_outcome,
+    )
+
+
+def _needs_visible_answer_recovery(
+    terminal_outcome: TerminalOutcome | None,
+    *,
+    content: object,
+    reasoning: str | None,
+    tool_calls: object,
+    ended_in_reasoning: bool,
+) -> bool:
+    """Detect a successful-looking step that ended before a visible answer."""
+    if terminal_outcome != TERMINAL_OUTCOME_STOP or not reasoning or tool_calls:
+        return False
+    has_visible_content = bool(content.strip()) if isinstance(content, str) else bool(content)
+    return not has_visible_content or ended_in_reasoning
 
 
 def _resolve_request_context_kwargs(
@@ -407,6 +452,30 @@ class WireRequestRunner:
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
+            if _needs_visible_answer_recovery(
+                assistant_fields.finish_reason,
+                content=assistant_fields.content,
+                reasoning=assistant_fields.reasoning,
+                tool_calls=assistant_fields.tool_calls,
+                ended_in_reasoning=accumulator.ends_with_reasoning,
+            ):
+                _LOGGER.warning(
+                    "Provider completed a stream in the Reasoning phase; requesting a visible "
+                    "answer continuation (run=%s model=%s)",
+                    run.id,
+                    model_id,
+                )
+                return self._finalize_interrupted_partial(
+                    agent,
+                    response_model,
+                    accumulator,
+                    run,
+                    interruption_cause="provider",
+                    recovery="continue",
+                    recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
+                    replay_reasoning=False,
+                    output_cwd=output_cwd,
+                )
         except (
             ProviderError,
             NetworkError,
@@ -551,6 +620,8 @@ class WireRequestRunner:
         interruption_cause: ContinuationCause,
         output_cwd: Path | None,
         recovery: Literal["none", "continue", "interrupt"] = "none",
+        recovery_note: str | None = None,
+        replay_reasoning: bool = True,
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
 
@@ -582,6 +653,8 @@ class WireRequestRunner:
             message=assistant_message,
             terminal_outcome=None,
             recovery=recovery,
+            recovery_note=recovery_note,
+            replay_reasoning=replay_reasoning,
         )
 
     def resolve_chunk_timeout(self, connection: ConnectionRef) -> float | None:

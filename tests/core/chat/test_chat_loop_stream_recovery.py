@@ -173,6 +173,140 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
 
 
 @pytest.mark.asyncio
+async def test_reasoning_only_stop_recovers_with_visible_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_sentinel = "test-owned output-integrity recovery"
+    monkeypatch.setattr(
+        "core.chat.request_runner.OUTPUT_INTEGRITY_RECOVERY_NOTE",
+        recovery_sentinel,
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Answer text routed as reasoning."},
+                {"type": "finish", "reason": "stop"},
+            ],
+            [
+                {"type": "content_delta", "text": "Recovered visible answer."},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert assistant.content == "Recovered visible answer."
+    assert run.status == RunStatus.COMPLETED
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
+    assert messages[1].reasoning == "Answer text routed as reasoning."
+    assert messages[1].interrupted is True
+    assert messages[1].interruption_cause == "provider"
+    assert messages[2].content == recovery_sentinel
+    assert len(adapter.stream_requests) == 2
+    second_request = adapter.stream_requests[1]["messages"]
+    assert recovery_sentinel in str(second_request)
+    assert all(message.get("role") != "assistant" for message in second_request)
+
+
+@pytest.mark.asyncio
+async def test_stream_switching_back_to_reasoning_recovers_visible_tail(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Partial visible answer"},
+                {"type": "reasoning_delta", "text": " tail routed as reasoning."},
+                {"type": "finish", "reason": "stop"},
+            ],
+            [
+                {"type": "content_delta", "text": " with a recovered ending."},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert assistant.content == " with a recovered ending."
+    assert messages[1].content == "Partial visible answer"
+    assert messages[1].reasoning == " tail routed as reasoning."
+    assert messages[1].interrupted is True
+    assert messages[3].content == " with a recovered ending."
+    assert len(adapter.stream_requests) == 2
+    replayed_assistant = next(
+        message
+        for message in adapter.stream_requests[1]["messages"]
+        if message.get("role") == "assistant"
+    )
+    assert replayed_assistant["content"] == "Partial visible answer"
+    assert not replayed_assistant.get("reasoning")
+
+
+@pytest.mark.asyncio
+async def test_normal_reasoning_then_visible_answer_needs_no_recovery(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Plan first."},
+                {"type": "content_delta", "text": "Complete visible answer."},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert assistant.content == "Complete visible answer."
+    assert assistant.interrupted is False
+    assert persisted_roles(messages) == ["user", "assistant"]
+    assert len(adapter.stream_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_reasoning_only_stop_recovers_visible_answer(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {"content": None, "reasoning": "Answer text routed as reasoning."},
+            {"content": "Recovered visible answer.", "reasoning": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=False).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert assistant.content == "Recovered visible answer."
+    assert messages[1].interrupted is True
+    assert messages[1].interruption_cause == "provider"
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
+    assert len(adapter.requests) == 2
+    assert all(message.get("role") != "assistant" for message in adapter.requests[1]["messages"])
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

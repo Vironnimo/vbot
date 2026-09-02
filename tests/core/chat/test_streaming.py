@@ -1204,4 +1204,17 @@ async def test_reasoning_timing_present_on_finalized_partial_fields() -> None:
     assert fields.reasoning_timing["started_at"] <= fields.reasoning_timing["completed_at"]
 
 
+async def test_accumulator_tracks_the_final_readable_text_phase() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Plan"})
+    assert accumulator.ends_with_reasoning is True
+
+    accumulator.add_delta({"type": "content_delta", "text": "Answer"})
+    assert accumulator.ends_with_reasoning is False
+
+    accumulator.add_delta({"type": "reasoning_delta", "text": " misrouted tail"})
+    assert accumulator.ends_with_reasoning is True
+
+
 AsyncIteratorForTest = Any

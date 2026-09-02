@@ -182,6 +182,7 @@ from core.providers.adapter import (
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
+    REASONING_REPLAY_NONE,
     ReasoningReplayPolicy,
 )
 from core.runs import (
@@ -279,6 +280,8 @@ class _AssistantStep:
     message: ChatMessage
     terminal_outcome: TerminalOutcome | None
     recovery: Literal["none", "continue", "interrupt"] = "none"
+    recovery_note: str | None = None
+    replay_reasoning: bool = True
 
 
 @dataclass(frozen=True)
@@ -810,6 +813,11 @@ STREAM_RECOVERY_NOTE = (
     "Continue the same task from exactly where it stopped without repeating that visible "
     "text. No Tool Call from the interrupted Model step was executed; if tools are still "
     "needed, emit every intended Tool Call again as a complete call."
+)
+OUTPUT_INTEGRITY_RECOVERY_NOTE = (
+    "The previous Model response ended after producing Reasoning but no complete visible "
+    "answer. Continue the same task by providing only the missing visible answer. Do not "
+    "repeat visible text that is already present, and do not emit raw Reasoning delimiter tags."
 )
 
 
@@ -2605,6 +2613,7 @@ class ChatLoop:
             assistant_message = assistant_step.message
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
+            recovery_note = assistant_step.recovery_note
             # Both an interrupted partial and a finished readable stream may
             # already be visible when Cancel arrives. The latter can race only
             # while acquiring the append lock; neither may vanish from History.
@@ -2631,13 +2640,24 @@ class ChatLoop:
             assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                 _assistant_continuation_dict,
                 assistant_message,
-                replay_policy=replay_policy,
+                replay_policy=(
+                    replay_policy if assistant_step.replay_reasoning else REASONING_REPLAY_NONE
+                ),
             )
+            assistant_request_messages: list[JsonObject] = [assistant_request_message]
+            if (
+                not assistant_step.replay_reasoning
+                and not assistant_request_message.get("content")
+                and not assistant_request_message.get("tool_calls")
+            ):
+                # A Reasoning-only integrity boundary becomes empty after native
+                # Reasoning is stripped. Do not send an empty Assistant entry.
+                assistant_request_messages = []
             assert isinstance(assistant_message.usage, dict)
             assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                 build_model_step_context_usage,
                 assistant_message.usage,
-                [*messages_for_request, assistant_request_message],
+                [*messages_for_request, *assistant_request_messages],
             )
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
@@ -2691,7 +2711,7 @@ class ChatLoop:
                     )
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
-                messages.append(assistant_request_message)
+                messages.extend(assistant_request_messages)
                 if (recovery != "none" or interruption_chain) and (
                     isinstance(assistant_message.content, str)
                     or assistant_message.reasoning is not None
@@ -2721,7 +2741,7 @@ class ChatLoop:
                                     output_cwd=output_cwd,
                                 ),
                             )
-                        await session.add_note_async(STREAM_RECOVERY_NOTE)
+                        await session.add_note_async(recovery_note or STREAM_RECOVERY_NOTE)
                         await context.session_snapshot.refresh(session)
                         stream_continuation_count += 1
                         continue
