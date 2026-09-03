@@ -123,6 +123,7 @@ pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importl
 ```bash
 python scripts/quality.py                                 # Full backend gate; auto-fixes
 python scripts/quality.py --check <paths...>              # Scoped backend gate; no source edits
+python scripts/quality.py --check --profile               # Full backend validation + 25 slowest tests
 python scripts/quality-frontend.py                        # Full frontend gate; auto-fixes
 python scripts/quality-frontend.py --check <paths...>     # Scoped frontend gate; no source edits
 ```

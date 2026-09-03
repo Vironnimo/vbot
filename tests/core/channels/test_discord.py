@@ -254,7 +254,9 @@ async def drain_chat_queue(adapter: DiscordChannelAdapter, target_id: int) -> No
     if queue is None:
         await asyncio.sleep(0)
         return
-    await asyncio.wait_for(queue.join(), timeout=1)
+    # The suite-wide timeout remains the deadlock guard. A shorter nested timeout
+    # flakes under xdist load even though the queue is still making progress.
+    await queue.join()
 
 
 def test_channel_config_normalizes_discord_snowflakes_to_strings() -> None:

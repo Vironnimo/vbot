@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 from curl_cffi import CurlOpt
@@ -137,13 +138,32 @@ class _StreamingRequest:
 
 
 class _StreamingSession:
-    def __init__(self, response: _StreamingResponse) -> None:
+    def __init__(self, response: _StreamingResponse | None = None) -> None:
         self._response = response
         self.calls: list[tuple[str, str, dict[str, object]]] = []
+        self.curl_options: dict[object, object] = {}
+
+    async def __aenter__(self) -> _StreamingSession:
+        return self
+
+    async def __aexit__(self, *arguments: object) -> None:
+        del arguments
 
     def stream(self, method: str, url: str, **kwargs: object) -> _StreamingRequest:
+        if self._response is None:
+            raise AssertionError("stream() requires a configured fake response")
         self.calls.append((method, url, kwargs))
         return _StreamingRequest(self._response)
+
+
+@pytest.fixture(autouse=True)
+def stub_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep mocked HTTP tests from creating curl's Windows selector thread."""
+    monkeypatch.setattr(
+        web_fetch_module,
+        "AsyncSession",
+        lambda **_kwargs: _StreamingSession(),
+    )
 
 
 def install_http_get(
@@ -161,6 +181,16 @@ def install_http_get(
         return responder(url)
 
     monkeypatch.setattr(web_fetch_module, "_http_get", _fake_http_get)
+
+
+def test_make_session_requests_browser_impersonation(monkeypatch: pytest.MonkeyPatch) -> None:
+    constructor = Mock(return_value=_StreamingSession())
+    monkeypatch.setattr(web_fetch_module, "AsyncSession", constructor)
+
+    session = web_fetch_module._make_session()
+
+    assert isinstance(session, _StreamingSession)
+    constructor.assert_called_once_with(impersonate=web_fetch_module._IMPERSONATE_TARGET)
 
 
 @pytest.mark.asyncio
