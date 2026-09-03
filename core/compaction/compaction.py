@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol, cast
 
 from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
+    COMPACTION_SUMMARY_END_MARKER,
     COMPACTION_SUMMARY_NOTE_PREFIX,
     TOOL_RESULT_COMPACTED_FIELD,
     ChatMessage,
@@ -43,9 +44,6 @@ COMPACTION_REFERENCE_PREFIX = (
     "Tool Calls appear after this summary, the Run is mid-iteration; continue that iteration "
     "normally. The current Session state may already reflect work described here; avoid "
     "repeating it:"
-)
-COMPACTION_SUMMARY_END_MARKER = (
-    "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
 )
 COMPACTION_TRIGGER_AUTO = "auto"
 COMPACTION_TRIGGER_MANUAL = "manual"

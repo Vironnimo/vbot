@@ -73,6 +73,9 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
 COMPACTION_SKILL_NOTE_PREFIX = "[compaction-skills] "
+COMPACTION_SUMMARY_END_MARKER = (
+    "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+)
 TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 HISTORY_COMPACTION_GUIDANCE = (
     "This is Compaction checkpoint {ordinal}. Some earlier original messages are no longer "
@@ -1089,7 +1092,13 @@ def finalize_checkpoint_history_guidance(
     if leading.role != "note" or not isinstance(leading.content, str):
         raise ChatMessageValidationError("checkpoint projection must begin with a summary note")
     if guidance not in leading.content:
-        leading = replace(leading, content=f"{leading.content}\n\n{guidance}")
+        content = leading.content
+        if content.endswith(COMPACTION_SUMMARY_END_MARKER):
+            summary = content.removesuffix(COMPACTION_SUMMARY_END_MARKER).rstrip()
+            content = f"{summary}\n\n{guidance}\n{COMPACTION_SUMMARY_END_MARKER}"
+        else:
+            content = f"{content}\n\n{guidance}"
+        leading = replace(leading, content=content)
         projection[0] = leading.to_dict()
     return replace(checkpoint, projection=projection)
 
