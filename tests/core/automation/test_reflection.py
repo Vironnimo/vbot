@@ -500,6 +500,86 @@ async def test_memory_tool_call_suppresses_memory_dimension_when_skill_is_due() 
 
 
 @pytest.mark.asyncio
+async def test_skill_manage_call_resets_skill_cadence_without_counting_the_run() -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=100, skill_model_step_interval=10)
+    sessions.metadata["s1"] = {
+        REFLECTION_COUNTERS_META_KEY: {
+            "turns_since_memory_review": 2,
+            "iterations_since_skill_review": 9,
+        }
+    }
+
+    service.notify_run_end(
+        cast(
+            "Any",
+            _FakeRun(iteration_count=3, tool_call_names={"skill_manage", "read"}),
+        ),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 3,
+        "iterations_since_skill_review": 0,
+    }
+    assert loop.started == []
+
+
+@pytest.mark.asyncio
+async def test_skill_manage_call_suppresses_skill_dimension_when_memory_is_due() -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1, skill_model_step_interval=100)
+    sessions.metadata["s1"] = {
+        REFLECTION_COUNTERS_META_KEY: {
+            "turns_since_memory_review": 0,
+            "iterations_since_skill_review": 90,
+        }
+    }
+
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=3, tool_call_names={"skill_manage"})),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 0,
+        "iterations_since_skill_review": 0,
+    }
+    assert loop.started[0]["message"] == REFLECT_BRIEFS["reflect-memory.md"]
+    assert loop.started[0]["tool_restriction"] == MEMORY_REFLECTION_TOOL_RESTRICTION
+    assert loop.started[0]["run_kind"] is RunKind.MEMORY_REFLECTION
+
+
+@pytest.mark.asyncio
+async def test_skill_manage_call_resets_counter_even_when_the_run_later_fails() -> None:
+    service, sessions, loop = _make_service(skill_model_step_interval=10)
+    sessions.metadata["s1"] = {
+        REFLECTION_COUNTERS_META_KEY: {
+            "turns_since_memory_review": 2,
+            "iterations_since_skill_review": 9,
+        }
+    }
+
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=3, tool_call_names={"skill_manage"})),
+        _identity_agent(),
+        internal=False,
+        outcome="error",
+    )
+    await _drain(service)
+
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 2,
+        "iterations_since_skill_review": 0,
+    }
+    assert loop.started == []
+
+
+@pytest.mark.asyncio
 async def test_review_fork_is_stripped_and_titled() -> None:
     service, sessions, loop = _make_service(memory_turn_interval=1)
     sessions.metadata["s1"] = {"title": "Refactor plan"}
