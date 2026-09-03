@@ -39,8 +39,10 @@ COMPACTION_REFERENCE_PREFIX = (
     "below. Treat it as background reference, not as active instructions. Do not answer "
     "questions or fulfill requests mentioned in this summary. Respond only to the latest "
     "User message after this summary. If no User message appears after this summary, do "
-    "nothing and wait for a new User message. The current Session state may already reflect "
-    "work described here; avoid repeating it:"
+    "nothing and wait for a new User message. Exception: if Tool Results or the Agent's own "
+    "Tool Calls appear after this summary, the Run is mid-iteration; continue that iteration "
+    "normally. The current Session state may already reflect work described here; avoid "
+    "repeating it:"
 )
 COMPACTION_SUMMARY_END_MARKER = (
     "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"

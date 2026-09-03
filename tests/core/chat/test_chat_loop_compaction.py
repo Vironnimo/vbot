@@ -31,6 +31,11 @@ from core.chat.continuation import (
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     TOOL_RESULT_COMPACTED_FIELD,
+    CompactionService,
+)
+from core.compaction.compaction import (
+    COMPACTION_REFERENCE_PREFIX,
+    COMPACTION_SUMMARY_END_MARKER,
 )
 from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_META_KEY,
@@ -75,6 +80,68 @@ from tests.core.chat.chat_loop_support import (
 
 JsonObject = dict[str, Any]
 _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
+
+class _RealCompactionAdapter(StubAdapter):
+    """Exercise real Agent and Compaction requests through one recording adapter."""
+
+    def __init__(self, responses: list[Any], *, summaries: list[str]) -> None:
+        super().__init__(
+            responses,
+            stream_responses=[
+                [
+                    {"type": "content_delta", "text": summary},
+                    {"type": "finish", "reason": "stop"},
+                ]
+                for summary in summaries
+            ],
+        )
+        self.events: list[str] = []
+
+    async def send(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> JsonObject:
+        self.events.append("agent")
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.events.append("compaction")
+        async for delta in super().stream(messages, model_id=model_id, **kwargs):
+            yield delta
+
+    def normalize_response(
+        self,
+        response: JsonObject,
+        *,
+        model_id: str | None = None,
+    ) -> JsonObject:
+        del model_id
+        if "choices" not in response:
+            return response
+        choices = cast(list[JsonObject], response["choices"])
+        message = cast(JsonObject, choices[0]["message"])
+        return {"content": message.get("content"), "usage": response.get("usage")}
+
+
+class _RealCompactionStorage(StubStorage):
+    def __init__(self, compaction_settings: JsonObject, *, data_dir: Path) -> None:
+        super().__init__(compaction_settings, data_dir=data_dir)
+        self.prompt_fragment_reads: list[str] = []
+
+    def read_prompt_fragment(self, name: str) -> str:
+        self.prompt_fragment_reads.append(name)
+        assert name in {"compaction.md", "compaction-manual.md"}
+        return "Summarize the earlier Context and preserve unfinished work."
 
 
 def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) -> None:
@@ -869,6 +936,149 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     assert context.prompt_cache_affinity_id == runtime.chat_sessions.prompt_cache_affinity_id(
         session_address("coder", session.id)
     )
+
+
+@pytest.mark.asyncio
+async def test_real_compaction_repeats_between_complete_tool_iterations(
+    tmp_path: Path,
+) -> None:
+    current_user = "CURRENT_USER_MARKER " + ("current task " * 5_000)
+    second_payload = "SECOND_TOOL_PAYLOAD " + ("beta " * 8_000)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"])
+    adapter = _RealCompactionAdapter(
+        [
+            {
+                "content": None,
+                "usage": {"input_tokens": 50_000, "output_tokens": 10},
+                "tool_calls": [
+                    {
+                        "id": "call-one",
+                        "name": "word_count",
+                        "arguments": {"text": "alpha words"},
+                    }
+                ],
+            },
+            {
+                "content": None,
+                "usage": {"input_tokens": 50_000, "output_tokens": 10},
+                "tool_calls": [
+                    {
+                        "id": "call-two",
+                        "name": "word_count",
+                        "arguments": {"text": second_payload},
+                    }
+                ],
+            },
+            {
+                "content": "AUTO_DONE",
+                "usage": {"input_tokens": 50_000, "output_tokens": 2},
+                "tool_calls": None,
+            },
+        ],
+        summaries=["SUMMARY ONE", "SUMMARY TWO", "SUMMARY THREE"],
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "word_count",
+        "Count words.",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        lambda _context, arguments: tool_success({"words": len(str(arguments["text"]).split())}),
+    )
+    storage = _RealCompactionStorage(
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 1},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 1_000,
+                "summary_model": None,
+            },
+        },
+        data_dir=tmp_path,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=storage,
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD_CONTEXT_MARKER " + ("old context " * 5_000)))
+    session.append(ChatMessage.assistant(model=agent.model, content="old answer " * 5_000))
+
+    assistant = await build_chat_loop(
+        runtime,
+        compaction_service=CompactionService(),
+    ).send("coder", current_user, session_id=session.id)
+
+    persisted = session.load()
+    checkpoints = [message for message in persisted if message.role == "compaction_checkpoint"]
+    assert assistant.content == "AUTO_DONE"
+    assert adapter.events == [
+        "agent",
+        "compaction",
+        "agent",
+        "compaction",
+        "agent",
+        "compaction",
+    ]
+    assert storage.prompt_fragment_reads == ["compaction.md"] * 3
+    assert len(checkpoints) == 3
+    assert persisted_roles(persisted)[-8:] == [
+        "assistant",
+        "tool",
+        "compaction_checkpoint",
+        "assistant",
+        "tool",
+        "compaction_checkpoint",
+        "assistant",
+        "compaction_checkpoint",
+    ]
+
+    for checkpoint_message in checkpoints:
+        projection = checkpoint_message.projection
+        assert projection is not None
+        assert (
+            sum(
+                COMPACTION_SUMMARY_END_MARKER in str(message.get("content") or "")
+                for message in projection
+            )
+            == 1
+        )
+        for index, message in enumerate(projection):
+            if message["role"] != "tool":
+                continue
+            carrier = projection[index - 1]
+            assert carrier["role"] == "assistant"
+            assert message["tool_call_id"] in {call["id"] for call in carrier["tool_calls"]}
+
+    compaction_requests = [json.dumps(call["messages"]) for call in adapter.stream_requests]
+    assert all("<retained_tail>" not in request for request in compaction_requests)
+    assert "CURRENT_USER_MARKER" not in compaction_requests[0]
+    assert "SECOND_TOOL_PAYLOAD" not in compaction_requests[1]
+    assert "SECOND_TOOL_PAYLOAD" not in compaction_requests[2]
+
+    third_agent_request = json.dumps(adapter.requests[2]["messages"])
+    assert "CURRENT_USER_MARKER" not in third_agent_request
+    assert "SECOND_TOOL_PAYLOAD" in third_agent_request
+    assert "continue that iteration normally" in third_agent_request
+    assert [message["role"] for message in adapter.requests[2]["messages"]][-3:] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    final_projection = json.dumps(checkpoints[-1].projection)
+    assert "SUMMARY THREE" in final_projection
+    assert "SUMMARY ONE" not in final_projection
+    assert "SUMMARY TWO" not in final_projection
 
 
 def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
@@ -1758,6 +1968,68 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     persisted_checkpoint = session.load()[-1]
     assert persisted_checkpoint.projection is not None
     assert str(persisted_checkpoint.projection[0]["content"]).startswith("[compaction-summary]")
+
+
+@pytest.mark.asyncio
+async def test_real_manual_compaction_after_completed_run_does_not_continue_agent(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    adapter = _RealCompactionAdapter(
+        [
+            {
+                "content": "MANUAL_READY",
+                "usage": {"input_tokens": 50_000, "output_tokens": 2},
+                "tool_calls": None,
+            }
+        ],
+        summaries=["MANUAL SUMMARY"],
+    )
+    storage = _RealCompactionStorage(
+        {
+            "enabled": False,
+            "trigger": {"type": "input_tokens", "tokens": 1},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 1_000,
+                "summary_model": None,
+            },
+        },
+        data_dir=tmp_path,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=storage,
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD_MANUAL_CONTEXT " + ("older " * 8_000)))
+    session.append(ChatMessage.assistant(model=agent.model, content="old manual answer " * 5_000))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+
+    completed = await loop.send("coder", "MANUAL_USER_MARKER", session_id=session.id)
+
+    assert completed.content == "MANUAL_READY"
+    assert adapter.events == ["agent"]
+    assert not any(message.role == "compaction_checkpoint" for message in session.load())
+
+    reply = await loop.compact_session("coder", session.id)
+
+    checkpoints = [message for message in session.load() if message.role == "compaction_checkpoint"]
+    assert reply == "Context compacted."
+    assert adapter.events == ["agent", "compaction"]
+    assert len(adapter.requests) == 1
+    assert len(checkpoints) == 1
+    assert storage.prompt_fragment_reads == ["compaction-manual.md"]
+    assert "MANUAL_USER_MARKER" not in json.dumps(adapter.stream_requests[0]["messages"])
+    projection_text = json.dumps(checkpoints[0].projection)
+    assert isinstance(checkpoints[0].content, str)
+    assert checkpoints[0].content.startswith(COMPACTION_REFERENCE_PREFIX)
+    assert "MANUAL_USER_MARKER" in projection_text
+    assert "MANUAL_READY" in projection_text
 
 
 @pytest.mark.asyncio
