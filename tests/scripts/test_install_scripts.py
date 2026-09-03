@@ -45,9 +45,7 @@ def test_server_setup_initializes_layout_before_writing_fresh_settings(
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
     layout_reference = (
-        "core\\storage\\layout.py"
-        if script_name.endswith(".ps1")
-        else "core/storage/layout.py"
+        "core\\storage\\layout.py" if script_name.endswith(".ps1") else "core/storage/layout.py"
     )
     fresh_settings_branch = (
         "if ($settingsWasMissing) {"
