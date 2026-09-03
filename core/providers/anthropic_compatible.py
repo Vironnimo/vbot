@@ -892,6 +892,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
+        request_headers = self._request_headers_from_kwargs(kwargs)
         # Built before the retry loop so the sampling fallback below can strip a
         # rejected parameter from the exact payload — provider ``defaults`` would
         # otherwise refill the key on a rebuild.
@@ -899,6 +900,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request_headers)
             try:
                 response = await self._client.post(
                     MESSAGES_ENDPOINT,
@@ -965,8 +967,14 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
+        request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
+
+        async def _build_headers() -> dict[str, str]:
+            headers = await self._build_headers()
+            headers.update(request_headers)
+            return headers
 
         def _handle_error_status(
             status_code: int,
@@ -984,7 +992,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 self._client,
                 MESSAGES_ENDPOINT,
                 payload,
-                build_headers=self._build_headers,
+                build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
             ),
             payload,

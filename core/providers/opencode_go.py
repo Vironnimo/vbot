@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -58,6 +60,8 @@ PROTOCOL_ANTHROPIC = "anthropic"
 PROTOCOL_OPENAI = "openai"
 PROTOCOL_RESPONSES = "responses"
 OPENCODE_GO_RESPONSES_ENDPOINT = "/responses"
+OPENCODE_SESSION_HEADER = "x-opencode-session"
+OPENCODE_SESSION_ID_KWARG = "_opencode_session_id"
 THINKING_KEEP_METADATA_KEY = "thinking_keep"
 THINKING_KEEP_ALL = "all"
 THINKING_CONTROL_METADATA_KEY = "thinking_control"
@@ -110,6 +114,13 @@ def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
         f"OpenCode Go subscription limit reached: {detail}",
         retryable=False,
     )
+
+
+def _opencode_request_headers(request_kwargs: dict[str, Any]) -> dict[str, str]:
+    session_id = request_kwargs.pop(OPENCODE_SESSION_ID_KWARG, None)
+    if not isinstance(session_id, str) or not session_id:
+        return {}
+    return {OPENCODE_SESSION_HEADER: session_id}
 
 
 @dataclass(frozen=True)
@@ -180,6 +191,12 @@ class OpenCodeGoResponsesPolicy:
 
 class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
+
+    def _request_headers_from_kwargs(
+        self,
+        request_kwargs: dict[str, Any],
+    ) -> dict[str, str]:
+        return _opencode_request_headers(request_kwargs)
 
     def _classify_http_status(
         self,
@@ -259,6 +276,33 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await self._messages.aclose()
         await super().aclose()
 
+    def request_context_kwargs(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+        prompt_cache_affinity_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Pin every wire request to one opaque prompt-cache lineage."""
+
+        if prompt_cache_affinity_id is not None:
+            routing_id = prompt_cache_affinity_id
+        else:
+            address = json.dumps(
+                [project_id, agent_id, session_id],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            routing_id = hashlib.sha256(address).hexdigest()[:32]
+        return {OPENCODE_SESSION_ID_KWARG: f"vbot-{routing_id}"}
+
+    def _request_headers_from_kwargs(
+        self,
+        request_kwargs: dict[str, Any],
+    ) -> dict[str, str]:
+        return _opencode_request_headers(request_kwargs)
+
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Declare the reasoning class accepted by the selected wire.
 
@@ -315,12 +359,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 **request_kwargs,
             )
         if protocol == PROTOCOL_RESPONSES:
+            request_headers = self._request_headers_from_kwargs(request_kwargs)
             payload = self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 **self._request_kwargs_with_defaults(request_kwargs),
             )
-            return await self._post_responses_json(payload)
+            return await self._post_responses_json(payload, request_headers=request_headers)
         return await super().send(messages, model_id=model_id, **request_kwargs)
 
     def stream(
@@ -339,13 +384,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 **request_kwargs,
             )
         if protocol == PROTOCOL_RESPONSES:
+            request_headers = self._request_headers_from_kwargs(request_kwargs)
             payload = self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 stream=True,
                 **self._request_kwargs_with_defaults(request_kwargs),
             )
-            return self._stream_responses(payload)
+            return self._stream_responses(payload, request_headers=request_headers)
         return super().stream(messages, model_id=model_id, **request_kwargs)
 
     def normalize_response(
@@ -436,8 +482,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
         Complete history every request, every original output item preserved,
         ``store: false`` — the same stateless Responses shape the OpenRouter
-        adapter uses. Session routing kwargs are dropped: the gateway publishes
-        no sticky-conversation contract.
+        adapter uses. Body-level session routing kwargs are dropped because
+        OpenCode Go receives its cache affinity through a request header.
         """
 
         kwargs.pop("session_id", None)
@@ -484,9 +530,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
-    async def _post_responses_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_responses_json(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
+    ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request_headers)
             try:
                 response = await self._client.post(
                     OPENCODE_GO_RESPONSES_ENDPOINT,
@@ -507,8 +559,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     async def _stream_responses(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> AsyncIterator[dict[str, Any]]:
-        response = await self._connect_responses_stream(payload)
+        response = await self._connect_responses_stream(
+            payload,
+            request_headers=request_headers,
+        )
         state = ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -539,9 +596,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     async def _connect_responses_stream(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> httpx.Response:
         async def _connect() -> httpx.Response:
             headers = await self._build_headers()
+            headers.update(request_headers)
             request = build_streaming_request(
                 self._client,
                 "POST",

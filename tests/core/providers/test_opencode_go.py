@@ -18,7 +18,11 @@ from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_responses import estimate_responses_input_tokens
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_go import (
+    OPENCODE_SESSION_HEADER,
+    OPENCODE_SESSION_ID_KWARG,
+    OpenCodeGoAdapter,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.utils.tokens import estimate_request_input_tokens
 
@@ -245,6 +249,159 @@ def model_with_output_limit(
 
 
 class TestOpenCodeGoAdapter:
+    def test_request_context_uses_opaque_prompt_cache_affinity(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        source = opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="source",
+            prompt_cache_affinity_id="shared-lineage",
+        )
+        fork = opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="fork",
+            prompt_cache_affinity_id="shared-lineage",
+        )
+        fallback = opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="source",
+        )
+
+        assert source == {OPENCODE_SESSION_ID_KWARG: "vbot-shared-lineage"}
+        assert fork == source
+        assert fallback == opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="source",
+        )
+        assert fallback[OPENCODE_SESSION_ID_KWARG].startswith("vbot-")
+        assert "source" not in fallback[OPENCODE_SESSION_ID_KWARG]
+
+    @pytest.mark.parametrize(
+        ("model_id", "url", "response_kind"),
+        [
+            ("deepseek-v4-flash", OPENCODE_GO_URL, "openai"),
+            ("minimax-m3", OPENCODE_GO_MESSAGES_URL, "anthropic"),
+            ("gpt-5.6-luna", OPENCODE_GO_RESPONSES_URL, "responses"),
+        ],
+    )
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_session_header_reaches_every_non_streaming_wire(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+        url: str,
+        response_kind: str,
+    ) -> None:
+        if response_kind == "openai":
+            response = httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        elif response_kind == "anthropic":
+            response = httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        else:
+            response = httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        route = respx.post(url).mock(return_value=response)
+        request_context = opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="session",
+            prompt_cache_affinity_id="cache-affinity",
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id=model_id,
+            **request_context,
+        )
+
+        request = route.calls.last.request
+        assert request.headers[OPENCODE_SESSION_HEADER] == "vbot-cache-affinity"
+        assert request.headers["user-agent"] == "vBot"
+        assert OPENCODE_SESSION_ID_KWARG not in json.loads(request.content)
+
+    @pytest.mark.parametrize(
+        ("model_id", "url", "response_kind"),
+        [
+            ("deepseek-v4-flash", OPENCODE_GO_URL, "openai"),
+            ("minimax-m3", OPENCODE_GO_MESSAGES_URL, "anthropic"),
+            ("gpt-5.6-luna", OPENCODE_GO_RESPONSES_URL, "responses"),
+        ],
+    )
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_session_header_reaches_every_streaming_wire(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+        url: str,
+        response_kind: str,
+    ) -> None:
+        if response_kind == "openai":
+            response_text = "data: [DONE]\n\n"
+        elif response_kind == "anthropic":
+            response_text = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        else:
+            completed = {
+                "id": "resp_stream",
+                "object": "response",
+                "status": "completed",
+                "output": RESPONSES_COMPLETED_RESPONSE["output"],
+                "usage": RESPONSES_COMPLETED_RESPONSE["usage"],
+            }
+            response_text = (
+                'event: response.output_text.delta\ndata: {"delta":"Done"}\n\n'
+                f"event: response.completed\ndata: {json.dumps({'response': completed})}\n\n"
+            )
+        route = respx.post(url).mock(
+            return_value=httpx.Response(
+                200,
+                text=response_text,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        request_context = opencode_go_adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id="session",
+            prompt_cache_affinity_id="cache-affinity",
+        )
+
+        _ = [
+            delta
+            async for delta in opencode_go_adapter.stream(
+                [{"role": "user", "content": "hello"}],
+                model_id=model_id,
+                **request_context,
+            )
+        ]
+
+        request = route.calls.last.request
+        assert request.headers[OPENCODE_SESSION_HEADER] == "vbot-cache-affinity"
+        assert request.headers["user-agent"] == "vBot"
+        assert OPENCODE_SESSION_ID_KWARG not in json.loads(request.content)
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1026,10 +1183,20 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             response = await opencode_go_adapter.send(
                 [{"role": "user", "content": "hello"}],
                 model_id="deepseek-v4-flash",
+                **opencode_go_adapter.request_context_kwargs(
+                    project_id="vbot",
+                    agent_id="builder",
+                    session_id="session",
+                    prompt_cache_affinity_id="retry-affinity",
+                ),
             )
 
         assert response["choices"][0]["message"]["content"] == "ok"
         assert chat_route.call_count == 2
+        assert all(
+            call.request.headers[OPENCODE_SESSION_HEADER] == "vbot-retry-affinity"
+            for call in chat_route.calls
+        )
 
     @respx.mock
     @pytest.mark.asyncio

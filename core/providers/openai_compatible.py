@@ -729,6 +729,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
+        request_headers = self._request_headers_from_kwargs(kwargs)
         # Capture the agent-selected effort before ``_build_payload`` consumes the
         # reasoning kwargs, so the observability signals below can name it.
         selected_effort = _selected_thinking_effort(kwargs)
@@ -739,6 +740,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_request_headers(messages, payload)
+            headers.update(request_headers)
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,
@@ -830,8 +832,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
+        request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         self._prepare_stream_payload(payload)
+
+        async def _build_headers() -> dict[str, str]:
+            headers = await self._build_request_headers(messages, payload)
+            headers.update(request_headers)
+            return headers
 
         def _handle_error_status(
             status_code: int,
@@ -849,7 +857,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 self._client,
                 CHAT_COMPLETIONS_ENDPOINT,
                 payload,
-                build_headers=lambda: self._build_request_headers(messages, payload),
+                build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
                 wrap_transport_error=self._wrap_transport_error,
             ),
