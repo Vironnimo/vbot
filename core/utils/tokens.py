@@ -67,6 +67,9 @@ REASONING_TEXT_DELTA_MERGE_MAX_CHARS = 256
 # stateless Responses reasoning items carry ``encrypted_content`` directly, and
 # Anthropic-family thinking blocks carry signatures.
 OPAQUE_REASONING_BLOB_KEYS = frozenset({"encrypted_content", "signature", "redacted_thinking"})
+REASONING_META_RESPONSE_OUTPUT_KEY = "response_output"
+REASONING_META_REASONING_ITEMS_KEY = "reasoning_items"
+REASONING_META_ENCRYPTED_CONTENT_KEY = "encrypted_content"
 
 
 def estimate_tokens(text: str) -> tuple[int, bool]:
@@ -124,7 +127,10 @@ def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:
     for field_name in MESSAGE_TOKEN_ESTIMATE_FIELDS:
         if field_name not in message:
             continue
-        normalized_value, field_blob_count = _normalize_opaque_reasoning_blobs(message[field_name])
+        field_value = message[field_name]
+        if field_name == "reasoning_meta":
+            field_value = _deduplicate_reasoning_meta_carriers(field_value)
+        normalized_value, field_blob_count = _normalize_opaque_reasoning_blobs(field_value)
         blob_count += field_blob_count
         rendered = _render_token_estimate_value(normalized_value)
         if rendered:
@@ -264,6 +270,22 @@ def _normalize_opaque_reasoning_blobs(value: Any) -> tuple[Any, int]:
             ):
                 normalized[str(key)] = "<opaque-reasoning>"
                 blob_count += 1
+            elif key in OPAQUE_REASONING_BLOB_KEYS and isinstance(item, (list, tuple)):
+                normalized_items: list[Any] = []
+                for nested_item in item:
+                    if (
+                        isinstance(nested_item, str)
+                        and len(nested_item) >= OPAQUE_REASONING_BLOB_MIN_CHARS
+                    ):
+                        normalized_items.append("<opaque-reasoning>")
+                        blob_count += 1
+                    else:
+                        normalized_item, nested_blob_count = _normalize_opaque_reasoning_blobs(
+                            nested_item
+                        )
+                        normalized_items.append(normalized_item)
+                        blob_count += nested_blob_count
+                normalized[str(key)] = normalized_items
             else:
                 normalized_item, nested_blob_count = _normalize_opaque_reasoning_blobs(item)
                 normalized[str(key)] = normalized_item
@@ -281,6 +303,27 @@ def _normalize_opaque_reasoning_blobs(value: Any) -> tuple[Any, int]:
         normalized_tuple, blob_count = _normalize_opaque_reasoning_blobs(list(value))
         return tuple(normalized_tuple), blob_count
     return value, 0
+
+
+def _deduplicate_reasoning_meta_carriers(value: Any) -> Any:
+    """Keep only the strongest copy of redundant Responses reasoning state.
+
+    Responses normalization retains the complete ordered ``response_output``
+    alongside two derived compatibility views: its reasoning-only item subset
+    and the encrypted-content scalar list. No Provider sends all three views as
+    separate Context, so the generic fallback estimator must not count them as
+    independent prompt material.
+    """
+
+    if not isinstance(value, Mapping):
+        return value
+    normalized = dict(value)
+    if isinstance(normalized.get(REASONING_META_RESPONSE_OUTPUT_KEY), list):
+        normalized.pop(REASONING_META_REASONING_ITEMS_KEY, None)
+        normalized.pop(REASONING_META_ENCRYPTED_CONTENT_KEY, None)
+    elif isinstance(normalized.get(REASONING_META_REASONING_ITEMS_KEY), list):
+        normalized.pop(REASONING_META_ENCRYPTED_CONTENT_KEY, None)
+    return normalized
 
 
 def _normalize_reasoning_detail(detail: Mapping[str, Any]) -> tuple[dict[str, Any], int]:

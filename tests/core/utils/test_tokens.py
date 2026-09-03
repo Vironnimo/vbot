@@ -402,6 +402,46 @@ def test_estimate_message_tokens_reserves_opaque_reasoning_blobs_without_countin
     assert is_estimate is True
 
 
+def test_estimate_message_tokens_deduplicates_responses_reasoning_meta_carriers():
+    """Derived Responses metadata views do not multiply one continuity item."""
+
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "encrypted_content": "S" * 5_000,
+    }
+    complete_meta = {
+        "response_output": [reasoning_item],
+        "reasoning_items": [reasoning_item],
+        "encrypted_content": [reasoning_item["encrypted_content"]],
+    }
+    response_output_only = {"response_output": [reasoning_item]}
+
+    complete_count, _ = estimate_message_tokens(
+        {"role": "assistant", "content": None, "reasoning_meta": complete_meta}
+    )
+    response_output_count, _ = estimate_message_tokens(
+        {"role": "assistant", "content": None, "reasoning_meta": response_output_only}
+    )
+
+    assert complete_count == response_output_count
+
+
+def test_estimate_message_tokens_reserves_opaque_reasoning_blob_lists():
+    """A scalar-list continuity carrier receives one reserve per opaque blob."""
+
+    count, _ = estimate_message_tokens(
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_meta": {"encrypted_content": ["S" * 5_000]},
+        }
+    )
+
+    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
+
+
 def test_estimate_message_tokens_counts_visible_reasoning_text_as_prose():
     """Visible reasoning text inside details keeps counting at text size."""
 

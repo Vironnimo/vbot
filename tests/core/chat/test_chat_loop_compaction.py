@@ -486,9 +486,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
-async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(
-    tmp_path: Path,
-) -> None:
+async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
 
     class HighEstimateAdapter(StubAdapter):
@@ -534,6 +532,133 @@ async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(
 
     assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
     assert compaction_service.estimate_calls == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_preflight_uses_durable_projection_instead_of_generic_request_estimate(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+
+    class WireEstimateAdapter(StubAdapter):
+        def estimate_request_input_tokens(
+            self,
+            _messages: list[JsonObject],
+            *,
+            model_id: str,
+            tools: list[JsonObject] | None = None,
+        ) -> int:
+            del model_id, tools
+            return 95
+
+    adapter = WireEstimateAdapter([])
+    compaction_service = StubCompactionService(should_auto=False)
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier"))
+    session.append(
+        ChatMessage.assistant(
+            model=agent.model,
+            content="x" * 50_000,
+            usage={"input_tokens": 20, "output_tokens": 0},
+        )
+    )
+    session.append(ChatMessage.user("Current"))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = await loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await _maybe_auto_compact(
+        loop,
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage=None,
+        run=run,
+    )
+
+    generic_tokens, _ = estimate_request_input_tokens(messages)
+    assert generic_tokens > 95
+    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
+
+
+@pytest.mark.asyncio
+async def test_compaction_records_post_projection_with_selected_wire_estimator(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+
+    class SequencedEstimateAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.estimates = iter((95, 37))
+
+        def estimate_request_input_tokens(
+            self,
+            _messages: list[JsonObject],
+            *,
+            model_id: str,
+            tools: list[JsonObject] | None = None,
+        ) -> int:
+            del model_id, tools
+            return next(self.estimates)
+
+    adapter = SequencedEstimateAdapter()
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted snapshot.",
+        projection=[ChatMessage.user("Tail")],
+        compacted_token_count=50,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Head"))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = await loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await _maybe_auto_compact(
+        loop,
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    persisted_checkpoint = session.load()[-1]
+    assert persisted_checkpoint.role == "compaction_checkpoint"
+    assert persisted_checkpoint.usage is not None
+    assert persisted_checkpoint.usage["context_tokens_before"] == 95
+    assert persisted_checkpoint.usage["context_tokens_after"] == 37
+    started_event = next(event for event in run.events if event.type == COMPACTION_STARTED_EVENT)
+    assert started_event.payload["context_tokens_before"] == 95
+    assert started_event.payload["context_usage"] == {
+        "tokens": 95,
+        "estimated": True,
+        "provider_input_tokens": 90,
+        "provider_output_tokens": 0,
+    }
 
 
 @pytest.mark.asyncio

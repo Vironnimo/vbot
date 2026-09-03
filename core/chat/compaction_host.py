@@ -47,8 +47,8 @@ from core.prompts.pinned_context import (
     stamp_prompt_files_read,
 )
 from core.providers.accounts import ConnectionRef
+from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import ChatSession, SessionAddress
-from core.utils.tokens import estimate_request_input_tokens
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -471,6 +471,8 @@ class ChatCompactionHost:
         context_tokens_before: int,
         request_inputs: object,
         prompt_refresh: object | None,
+        active_adapter: Any,
+        active_model_id: str,
         live_request_messages: list[JsonObject] | None = None,
         continuation_reminder: str | None = None,
     ) -> tuple[ChatMessage, RequestState]:
@@ -496,10 +498,12 @@ class ChatCompactionHost:
                 ),
                 live_request_messages,
             )
-        context_tokens_after, _ = await self.run_transform(
-            estimate_request_input_tokens,
+        context_tokens_after = await self.run_transform(
+            estimate_wire_request_input_tokens,
+            active_adapter,
             projected_messages,
-            projected_state.tools,
+            model_id=active_model_id,
+            tools=projected_state.tools,
         )
         stamped_checkpoint = checkpoint.with_compaction_context_tokens(
             context_tokens_before=context_tokens_before,
@@ -533,6 +537,8 @@ class ChatCompactionHost:
             context_tokens_before=context_tokens_before,
             request_inputs=RequestBuildInputs.from_context(context, target),
             prompt_refresh=prompt_refresh,
+            active_adapter=target.adapter,
+            active_model_id=target.model_id,
             live_request_messages=live_request_messages,
             continuation_reminder=continuation_reminder,
         )
