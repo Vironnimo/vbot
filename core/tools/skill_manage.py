@@ -31,7 +31,11 @@ from core.utils.logging import get_logger
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Create, edit, patch, or delete one private Skill, or write/remove one support "
     "file. Read an existing target with skill before changing it. Global, Project, "
-    "and bundled Skills are read-only here."
+    "and bundled Skills are read-only here. A new Skill needs a description of ONE "
+    "sentence with at most 60 characters, trigger first — COUNT before saving; the "
+    "Available Skills list shows every Skill by description, so anything past 60 "
+    "buries the trigger. Good Skills state trigger conditions, numbered steps with "
+    "exact commands, pitfalls, and verification."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
