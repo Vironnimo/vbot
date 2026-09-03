@@ -38,6 +38,22 @@ def test_server_setup_delegates_canonical_layout_and_has_no_env_template_body(
     assert "ANTHROPIC_API_KEY" not in script
 
 
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
+def test_server_setup_initializes_layout_before_writing_fresh_settings(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    layout_reference = "core\\storage\\layout.py" if script_name.endswith(".ps1") else "core/storage/layout.py"
+    fresh_settings_branch = (
+        "if ($settingsWasMissing) {"
+        if script_name.endswith(".ps1")
+        else 'if [ "$settings_was_missing" -eq 1 ]; then'
+    )
+
+    assert script.index(layout_reference) < script.index(fresh_settings_branch)
+
+
 def test_shell_lifecycle_scripts_parse() -> None:
     bash = shutil.which("bash")
     if bash is None:

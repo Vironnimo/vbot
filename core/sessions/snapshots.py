@@ -102,7 +102,8 @@ class _OperationLock:
                 import msvcrt
 
                 os.lseek(self.fd, 0, os.SEEK_SET)
-                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+                locking = getattr(msvcrt, "locking")
+                locking(self.fd, getattr(msvcrt, "LK_UNLCK"), 1)
             else:
                 import fcntl
 
@@ -234,7 +235,8 @@ def _acquire_lock(
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                locking = getattr(msvcrt, "locking")
+                locking(descriptor, getattr(msvcrt, "LK_NBLCK"), 1)
             else:
                 import fcntl
 
