@@ -47,10 +47,11 @@ dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "type
 packages = ["core", "server", "cli", "desktop"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto --timeout=30 --import-mode=importlib"
+addopts = "-n auto --dist=worksteal --timeout=30 --import-mode=importlib"
 testpaths = ["tests"]
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
 target-version = "py311"
@@ -67,6 +68,7 @@ quote-style = "double"
 # use `type` statements and cannot be parsed under 3.11. Floor syntax stays
 # guarded by ruff's py311 target and the real 3.11 test runs in CI.
 python_version = "3.12"
+mypy_path = "scripts"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

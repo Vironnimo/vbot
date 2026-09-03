@@ -718,31 +718,45 @@ async def test_iter_with_chunk_timeout_resets_after_each_delta() -> None:
     ]
 
 
-async def test_iter_with_chunk_timeout_counts_tool_call_fragments_as_progress() -> None:
+async def test_iter_with_chunk_timeout_counts_tool_call_fragments_as_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
     async def source() -> AsyncIteratorForTest:
+        nonlocal clock
         yield {
             "type": "tool_call_delta",
             "id": "call-write",
             "name_delta": "write",
             "arguments_delta": '{"path":"plan.md","content":"',
         }
-        await asyncio.sleep(0.03)
+        clock += 0.03
         yield {
             "type": "tool_call_delta",
             "id": "call-write",
             "name_delta": "",
             "arguments_delta": 'large plan"}',
         }
+        clock += 0.03
+        yield {"type": "heartbeat"}
+
+    monkeypatch.setattr(
+        streaming_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock),
+    )
 
     chunks = [
         chunk
         async for chunk in iter_with_chunk_timeout(
             source(),
-            timeout_seconds=0.05,
+            timeout_seconds=1.0,
+            progress_timeout_seconds=0.05,
         )
     ]
 
-    assert [chunk["arguments_delta"] for chunk in chunks] == [
+    assert [chunk["arguments_delta"] for chunk in chunks if chunk["type"] == "tool_call_delta"] == [
         '{"path":"plan.md","content":"',
         'large plan"}',
     ]

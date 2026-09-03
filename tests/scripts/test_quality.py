@@ -84,6 +84,25 @@ def test_filter_pytest_failure_output_removes_bare_nodeid_progress_lines():
     assert "1 failed, 1 passed in 0.12s" in filtered
 
 
+def test_extract_pytest_profile_output_returns_only_duration_section():
+    module = _load_quality_module()
+    output = "\n".join(
+        [
+            "============================= slowest 25 durations =============================",
+            "1.25s call     tests/example/test_demo.py::test_slow",
+            "0.40s setup    tests/example/test_demo.py::test_setup",
+            "============================== 2 passed in 1.70s ==============================",
+        ]
+    )
+
+    profile = module.extract_pytest_profile_output(output)
+
+    assert "slowest 25 durations" in profile
+    assert "test_slow" in profile
+    assert "test_setup" in profile
+    assert "2 passed" not in profile
+
+
 def test_main_runs_pytest_verbose(monkeypatch, capsys):
     module = _load_quality_module()
     commands: list[list[str]] = []
@@ -105,6 +124,39 @@ def test_main_runs_pytest_verbose(monkeypatch, capsys):
     capsys.readouterr()
     pytest_command = next(cmd for cmd in commands if cmd[2] == "pytest")
     assert pytest_command[:5] == [module.sys.executable, "-m", "pytest", "-v", "--tb=short"]
+
+
+def test_profile_mode_requests_and_prints_slowest_pytest_durations(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    pytest_output = "\n".join(
+        [
+            "============================= slowest 25 durations =============================",
+            "1.25s call     tests/example/test_demo.py::test_slow",
+            "============================== 1 passed in 1.25s ==============================",
+        ]
+    )
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        ["quality.py", "--profile", "tests/scripts/test_quality.py"],
+    )
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = f"{pytest_output}\n" if cmd[2] == "pytest" else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    pytest_command = next(cmd for cmd in commands if cmd[2] == "pytest")
+    assert f"--durations={module.PYTEST_PROFILE_COUNT}" in pytest_command
+    assert "--- pytest profile ---" in captured.out
+    assert "test_slow" in captured.out
+    assert "1 passed in 1.25s" not in captured.out
 
 
 def test_help_exits_successfully_without_running_tools(monkeypatch):

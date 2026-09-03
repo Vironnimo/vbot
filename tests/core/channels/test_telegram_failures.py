@@ -14,6 +14,7 @@ from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
     make_adapter,
     make_command_dispatcher,
+    make_completed_run,
     make_failed_run,
     make_update,
 )
@@ -134,7 +135,10 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
     storage = ChannelStorage(tmp_path)
     storage.save_update_offset("tg-assistant", 7)
 
-    trigger_mock = AsyncMock()
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
     adapter, _chat_sessions, _trigger, _bot = make_adapter(
         tmp_path,
         monkeypatch,
@@ -159,6 +163,7 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
 
     await adapter._await_offset_saves()
     assert storage.load_update_offset("tg-assistant") == 8
+    await adapter.stop()
 
 
 @pytest.mark.asyncio
@@ -166,7 +171,10 @@ async def test_duplicate_update_inside_one_session_is_claimed_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    trigger_mock = AsyncMock()
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
     adapter, _chat_sessions, _trigger, _bot = make_adapter(
         tmp_path,
         monkeypatch,

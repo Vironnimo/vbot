@@ -7,6 +7,7 @@ The short version:
 - Run the gate, not the raw tool: for Agent-scoped feedback use `python scripts/quality.py --check <paths...>` and `python scripts/quality-frontend.py --check <paths...>`.
 - No arguments checks the whole repo; one or more file/dir paths check just those targets (plus their mirrored tests).
 - A full gate auto-fixes what it can; a scoped Agent gate uses `--check`, maps each source file to its tests, filters tool noise, and prints one verdict without changing source files.
+- Add `--profile` to the backend gate to print pytest's 25 slowest setup/call/teardown durations while keeping the same path routing and pipeline.
 - Add `--check` to validate without changing source files; run either script with `--help` for its complete command reference.
 - Reach for raw `pytest`/`ruff`/`mypy`/`vitest`/`eslint`/`prettier` only when you genuinely suspect the gate withheld detail you need — and when it did, improve the gate (see [Improving the gate](#improving-the-gate)) instead of making hand-invocation the habit.
 
@@ -24,6 +25,7 @@ python scripts/quality.py --check                  # full backend scan, no sourc
 python scripts/quality.py --check core/runtime/            # one module, no source fixes
 python scripts/quality.py --check core/utils/config.py     # single file (+ its mirrored tests), no source fixes
 python scripts/quality.py --check core/utils/config.py core/utils/errors.py   # several targets, no source fixes
+python scripts/quality.py --check --profile                # full validation + 25 slowest tests
 ```
 
 ```bash
@@ -51,7 +53,7 @@ Every step is one external tool run. Steps are one of four kinds, which decides 
 - **test** — the test runner, with a `passed/total` count in the status, or `NO TESTS` when the selected scope has none (never a `PASS` — a run that tested nothing does not read as passed).
 - **build** — frontend full-project build; see below.
 
-Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test). In `--check` mode the first two steps become one `ruff format --check` gate.
+Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test). Pytest uses its physical-core worker count with the work-stealing scheduler so slow tests do not strand the final worker; `--profile` adds the 25 slowest setup/call/teardown durations to the gate report. In `--check` mode the first two steps become one `ruff format --check` gate.
 
 Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint --fix` (fix) → `eslint` (gate) → `vitest run --reporter=default --passWithNoTests` (test) → `npm run build` (build). The default reporter keeps failure details and the aggregate summary without paying to render every passing test name. In `--check` mode the first two steps become one `prettier --check` gate. All npm commands run with `cwd=webui/`.
 
@@ -121,6 +123,17 @@ This is why the changed-file list is reliable even across tools that print nothi
 - `0` — all gates passed.
 - `1` — at least one gate failed (or, frontend only, `npx`/`npm` was not found on `PATH`).
 - `2` — command-line usage was invalid, an input path did not exist, or a direct file had no registered quality capability; the run aborted before any quality tool ran.
+
+## Profiling test performance
+
+Pass `--profile` to any backend gate invocation to surface pytest's 25 slowest setup, call, or teardown durations. It preserves full/scoped path selection and every normal quality step, so a performance investigation does not need a separate raw pytest command:
+
+```bash
+python scripts/quality.py --check --profile
+python scripts/quality.py --check --profile tests/core/channels/
+```
+
+Profiling changes only the report; it does not change test scheduling, selection, or pass/fail behavior.
 
 ## Improving the gate
 

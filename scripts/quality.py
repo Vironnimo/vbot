@@ -64,6 +64,7 @@ PYTEST_RESULT_TOKENS = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS"
 PYTEST_PROGRESS_NODEID_PATTERN = re.compile(
     r"^(?:\[[^\]]+\]\s+)*(?:\[\s*\d+%\]\s+)?[^:\s][^\s]*::[^\s]+$"
 )
+PYTEST_PROFILE_COUNT = 25
 
 
 MIRRORED_TEST_PACKAGES = ("cli", "core", "desktop", "scripts", "server")
@@ -254,6 +255,24 @@ def filter_pytest_failure_output(output: str) -> str:
     return filtered_output or output.strip()
 
 
+def extract_pytest_profile_output(output: str) -> str:
+    """Return pytest's slowest-duration section without its summary footer."""
+
+    profile_lines: list[str] = []
+    in_profile = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not in_profile:
+            if stripped.startswith("=") and " slowest " in stripped and " durations " in stripped:
+                in_profile = True
+                profile_lines.append(line.rstrip())
+            continue
+        if stripped.startswith("=") and stripped.endswith("="):
+            break
+        profile_lines.append(line.rstrip())
+    return "\n".join(profile_lines).strip()
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=("Run the backend quality pipeline over the whole project or selected paths."),
@@ -274,6 +293,7 @@ Path behavior:
 Notes:
   The default mode keeps and reports every source-file change made by Ruff. --check
   does not modify source files, although underlying tools may still write caches.
+  --profile prints pytest's 25 slowest setup/call/teardown durations.
 
 Exit codes:
   0  All gates passed.
@@ -291,6 +311,11 @@ Examples:
         "--check",
         action="store_true",
         help="validate without applying formatter or linter fixes",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=f"show pytest's {PYTEST_PROFILE_COUNT} slowest test durations",
     )
     parser.add_argument(
         "paths",
@@ -377,6 +402,18 @@ def main() -> int:
                 ruff_fix_paths,
             ),
         ]
+    pytest_command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-v",
+        "--tb=short",
+        "--timeout=30",
+    ]
+    if args.profile:
+        pytest_command.append(f"--durations={PYTEST_PROFILE_COUNT}")
+    pytest_command.extend(test_paths)
+
     steps.extend(
         [
             (
@@ -388,7 +425,7 @@ def main() -> int:
             ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate", None),
             (
                 "pytest",
-                [sys.executable, "-m", "pytest", "-v", "--tb=short", "--timeout=30"] + test_paths,
+                pytest_command,
                 "pytest",
                 None,
             ),
@@ -476,6 +513,12 @@ def main() -> int:
         if kind == "pytest":
             for note in test_notes:
                 print(f"{'':<18}note: {note}")
+            if args.profile and result.returncode in {0, 5}:
+                profile_output = extract_pytest_profile_output(output)
+                if profile_output:
+                    print()
+                    print("--- pytest profile ---")
+                    print(profile_output)
 
     print()
 
