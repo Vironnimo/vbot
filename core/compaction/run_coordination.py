@@ -35,7 +35,6 @@ from core.runs import (
 from core.sessions import SessionAddress, active_session_messages
 from core.settings.normalizers import normalize_compaction_policy
 from core.utils.logging import get_logger
-from core.utils.tokens import estimate_request_input_tokens
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -152,6 +151,8 @@ class CompactionRunHost(Protocol):
         context_tokens_before: int,
         request_inputs: object,
         prompt_refresh: object | None,
+        active_adapter: Any,
+        active_model_id: str,
         live_request_messages: list[JsonObject] | None = None,
         continuation_reminder: str | None = None,
     ) -> tuple[ChatMessage, RequestState]: ...
@@ -257,18 +258,23 @@ class CompactionRunCoordinator:
                     messages,
                     settings,
                 )
-                estimated_context_tokens_before, _ = await self._host.run_transform(
-                    estimate_request_input_tokens,
+                wire_context_tokens_before = await self._host.run_transform(
+                    estimate_wire_request_input_tokens,
+                    request.active_adapter,
                     request.request_state.messages,
-                    request.request_state.tools,
+                    model_id=request.active_model_id,
+                    tools=request.request_state.tools,
                 )
                 if context_usage is None:
                     context_usage = {
-                        "tokens": estimated_context_tokens_before,
+                        "tokens": wire_context_tokens_before,
                         "estimated": True,
                     }
                     run.terminal_payload_extras["context_usage"] = context_usage
-                context_tokens_before = int(context_usage["tokens"])
+                context_tokens_before = max(
+                    int(context_usage["tokens"]),
+                    wire_context_tokens_before,
+                )
                 checkpoint = await compaction_service.compact(
                     messages,
                     agent=agent,
@@ -322,6 +328,8 @@ class CompactionRunCoordinator:
                 context_tokens_before=context_tokens_before,
                 request_inputs=request.request_inputs,
                 prompt_refresh=prompt_refresh,
+                active_adapter=request.active_adapter,
+                active_model_id=request.active_model_id,
             )
             await session.append_async(checkpoint)
             messages.append(checkpoint)
@@ -426,16 +434,6 @@ class CompactionRunCoordinator:
             return current_state
 
         current_request_messages = continuation_request_messages or messages
-        resolved_context_usage = context_usage
-        if resolved_context_usage is None:
-            resolved_context_usage = await self._host.run_transform(
-                build_model_step_context_usage,
-                usage,
-                current_request_messages,
-            )
-        context_tokens = resolved_context_usage.get("tokens")
-        if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
-            raise AssertionError("Context Usage must carry an integer token count")
         wire_context_tokens = await self._host.run_transform(
             estimate_wire_request_input_tokens,
             target.adapter,
@@ -443,8 +441,33 @@ class CompactionRunCoordinator:
             model_id=target.model_id,
             tools=tools,
         )
+        resolved_context_usage = context_usage
+        if resolved_context_usage is None:
+            if usage is None:
+                resolved_context_usage = await self._host.run_transform(
+                    latest_session_context_usage,
+                    context.session_snapshot.active_messages,
+                )
+                if resolved_context_usage is None:
+                    resolved_context_usage = {
+                        "tokens": wire_context_tokens,
+                        "estimated": True,
+                    }
+            else:
+                resolved_context_usage = await self._host.run_transform(
+                    build_model_step_context_usage,
+                    usage,
+                    current_request_messages,
+                )
+        context_tokens = resolved_context_usage.get("tokens")
+        if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
+            raise AssertionError("Context Usage must carry an integer token count")
         input_tokens = max(context_tokens, wire_context_tokens)
-        run.terminal_payload_extras["context_usage"] = dict(resolved_context_usage)
+        effective_context_usage = dict(resolved_context_usage)
+        if wire_context_tokens > context_tokens:
+            effective_context_usage["tokens"] = wire_context_tokens
+            effective_context_usage["estimated"] = True
+        run.terminal_payload_extras["context_usage"] = effective_context_usage
 
         should_compact = self._host.compaction_service.should_auto_compact(
             input_tokens,
@@ -497,7 +520,7 @@ class CompactionRunCoordinator:
             COMPACTION_STARTED_EVENT,
             {
                 "context_tokens_before": input_tokens,
-                "context_usage": dict(resolved_context_usage),
+                "context_usage": effective_context_usage,
             },
         )
         try:
