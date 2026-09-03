@@ -62,5 +62,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
     .getByRole("button", { name: /^Tool Restricted(?:\s|$)/ })
     .click();
   await agents.getByRole("button", { name: "Delete agent" }).click();
-  await expect(page.getByText("Agent deleted.", { exact: true })).toBeVisible();
+  await expect(
+    agentList.getByRole("button", { name: /^Tool Restricted(?:\s|$)/ }),
+  ).toHaveCount(0);
 });
