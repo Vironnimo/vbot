@@ -914,6 +914,21 @@ class ProviderAdapter(ABC):
         del agent_id, session_id, project_id, prompt_cache_affinity_id
         return {}
 
+    def _request_headers_from_kwargs(
+        self,
+        request_kwargs: JsonObject,
+    ) -> dict[str, str]:
+        """Extract concrete-Adapter header context before payload serialization.
+
+        The default leaves caller kwargs untouched. A concrete Adapter may pop
+        only its own private context keys and return the corresponding wire
+        headers. Compatible base Adapters call this once per request, then
+        rebuild auth headers and merge these stable values on every retry.
+        """
+
+        del request_kwargs
+        return {}
+
     @abstractmethod
     async def aclose(self) -> None:
         """Close the HTTP client and release resources.
