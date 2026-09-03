@@ -246,6 +246,58 @@ def test_worker_lifecycle_start_stop(fake_bridge: FakeBridge) -> None:
     assert not worker.is_running()
 
 
+def test_worker_does_not_reactivate_a_thread_that_timed_out_during_stop(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    class StuckThread:
+        def __init__(self) -> None:
+            self.join_timeouts: list[float] = []
+
+        @staticmethod
+        def is_alive() -> bool:
+            return True
+
+        def join(self, timeout: float) -> None:
+            self.join_timeouts.append(timeout)
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    thread = StuckThread()
+    worker._thread = cast("Any", thread)
+    worker._running.set()
+
+    worker.stop()
+    worker.start()
+
+    assert thread.join_timeouts == [3.0]
+    assert worker._thread is thread
+    assert not worker._running.is_set()
+    assert "starting" not in fake_bridge.states
+
+
+def test_unexpected_pipeline_failure_enters_stable_error(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._running.set()
+    worker._run_pipeline = MagicMock(side_effect=RuntimeError("unexpected"))  # type: ignore[method-assign]
+
+    worker._run()
+
+    assert fake_bridge.states == ["error"]
+    assert fake_bridge.errors == ["pipeline_failed"]
+    assert not worker._running.is_set()
+
+
 def test_worker_publishes_error_when_engine_start_fails(
     fake_bridge: FakeBridge,
 ) -> None:
@@ -472,6 +524,45 @@ def test_pre_roll_alone_does_not_become_a_command(
     worker._stream = EndlessSilenceStream()
 
     assert worker._record_until_silence(wake_phrase_audio) is None
+
+
+def test_recording_read_failure_discards_partial_command(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import MicrophoneCaptureError, WakewordWorker
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    class PartialThenFailStream:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def read_pcm16(self, _frame_size: int) -> bytes:
+            self.reads += 1
+            if self.reads > 1:
+                raise RuntimeError("device disconnected")
+            return _make_speech_chunk()
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    worker._stream = PartialThenFailStream()
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._upload_budget_pcm16_bytes = 1_000_000
+    transcribe = MagicMock(return_value="partial command")
+    worker._transcribe = transcribe  # type: ignore[method-assign]
+    worker._running.set()
+
+    with pytest.raises(MicrophoneCaptureError):
+        worker._handle_detection()
+
+    transcribe.assert_not_called()
 
 
 def test_recording_exceeds_15_seconds_when_speech_continues(
@@ -1192,6 +1283,63 @@ def test_resampling_stream_returns_exact_detection_length_every_read() -> None:
     lengths = {len(stream.read_capture_frame(1280).detection_pcm16) for _ in range(24)}
 
     assert lengths == {1280 * 2}
+
+
+@pytest.mark.parametrize("sample_rate", [32000, 44100, 48000])
+def test_resampling_stream_preserves_continuous_audio_across_mixed_reads(
+    sample_rate: int,
+) -> None:
+    pytest.importorskip("soxr")
+    from desktop.wakeword.worker import CaptureFormat, ResamplingInputStream
+
+    class ContinuousToneStream:
+        def __init__(self) -> None:
+            self.position = 0
+
+        def read(self, frame_count: int) -> tuple[object, bool]:
+            end = self.position + frame_count
+            samples = np.sin(2 * np.pi * 440 * np.arange(self.position, end) / sample_rate)
+            self.position = end
+            return samples.astype(np.float32)[:, None], False
+
+    native = ContinuousToneStream()
+    stream = ResamplingInputStream(
+        native,
+        CaptureFormat(device=4, name="Studio mic", sample_rate=sample_rate, dtype="float32"),
+    )
+    requested_frames = [1280, 512, 512, 1280, 512, 512, 1280]
+
+    frames = [stream.read_capture_frame(frame_count) for frame_count in requested_frames]
+
+    assert [len(frame.detection_pcm16) // 2 for frame in frames] == requested_frames
+    assert sum(len(frame.recording_pcm16) // 2 for frame in frames) == (
+        sum(requested_frames) * sample_rate // 16000
+    )
+    assert all(
+        np.max(np.abs(np.frombuffer(frame.detection_pcm16, dtype=np.int16))) > 1000
+        for frame in frames
+    )
+
+
+def test_resampling_stream_rejects_overflowed_audio() -> None:
+    from desktop.wakeword.worker import (
+        CaptureFormat,
+        MicrophoneCaptureError,
+        ResamplingInputStream,
+    )
+
+    class OverflowingStream:
+        @staticmethod
+        def read(frame_count: int) -> tuple[object, bool]:
+            return np.zeros((frame_count, 1), dtype=np.int16), True
+
+    stream = ResamplingInputStream(
+        OverflowingStream(),
+        CaptureFormat(device=0, name="Mic", sample_rate=16000, dtype="int16"),
+    )
+
+    with pytest.raises(MicrophoneCaptureError, match="overflowed"):
+        stream.read_capture_frame(512)
 
 
 def test_resample_pcm16_filters_out_of_band_audio() -> None:
@@ -2320,8 +2468,46 @@ def test_refresh_microphone_devices_reinitializes_portaudio_for_hotplug(monkeypa
         {
             "index": 0,
             "name": "USB microphone",
+            "host_api": "",
             "default_sample_rate": 48000,
             "supported": True,
             "capture_sample_rate": 16000,
         }
     ]
+
+
+def test_saved_microphone_identity_survives_device_reordering() -> None:
+    from desktop.wakeword.worker import _candidate_device_indices
+
+    class ReorderedSoundDevice:
+        @staticmethod
+        def query_devices() -> list[dict[str, object]]:
+            return [
+                {"name": "Webcam mic", "hostapi": 0, "max_input_channels": 1},
+                {"name": "Studio mic", "hostapi": 1, "max_input_channels": 1},
+            ]
+
+        @staticmethod
+        def query_hostapis(index: int) -> dict[str, object]:
+            return {"name": ["WASAPI", "ASIO"][index]}
+
+    requested = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
+
+    assert _candidate_device_indices(ReorderedSoundDevice(), requested) == [1]
+
+
+def test_saved_microphone_never_uses_recycled_index() -> None:
+    from desktop.wakeword.worker import _candidate_device_indices
+
+    class RecycledSoundDevice:
+        @staticmethod
+        def query_devices() -> list[dict[str, object]]:
+            return [{"name": "Webcam mic", "hostapi": 0, "max_input_channels": 1}]
+
+        @staticmethod
+        def query_hostapis(_index: int) -> dict[str, object]:
+            return {"name": "WASAPI"}
+
+    requested = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
+
+    assert _candidate_device_indices(RecycledSoundDevice(), requested) == []

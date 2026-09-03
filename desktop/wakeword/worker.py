@@ -78,6 +78,7 @@ _UPLOAD_BUDGET_SETTING_PATH = "speech.upload_max_size_bytes"
 # The wave container adds a canonical 44-byte header before the PCM data.
 _WAV_HEADER_BYTES = 44
 _MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
+_MAX_RESAMPLER_FILL_READS = 16
 _MICROPHONE_RECONNECT_INTERVAL_SECONDS = 30.0
 _POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
 _INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
@@ -101,7 +102,7 @@ _RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
 # Only RPC reads may be repeated after an ambiguous transport failure. Retrying
 # session.create or chat.stream can duplicate a committed Session or Run when
 # the server handled the first request but its response was lost.
-_RETRYABLE_RPC_METHODS = frozenset(["agent.get", "session.list"])
+_RETRYABLE_RPC_METHODS = frozenset(["agent.get", "session.list", "settings.get_path"])
 
 _VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
 _COMMON_CAPTURE_SAMPLE_RATES = (16000, 48000, 44100, 32000)
@@ -124,6 +125,10 @@ _ERROR_SPEECH_TO_TEXT_READINESS_FAILED = "speech_to_text_readiness_failed"
 
 class MicrophoneUnavailableError(RuntimeError):
     """No usable input-device format could supply wakeword-quality audio."""
+
+
+class MicrophoneCaptureError(RuntimeError):
+    """A live input stream could not provide trustworthy command audio."""
 
 
 class SpeechDetector:
@@ -254,6 +259,7 @@ class CaptureFormat:
     name: str
     sample_rate: int
     dtype: str
+    host_api: str = ""
 
 
 @dataclass(frozen=True)
@@ -331,6 +337,9 @@ class ResamplingInputStream:
         self._stream = stream
         self.capture_format = capture_format
         self._resampler = _create_soxr_resampler(capture_format.sample_rate)
+        self._detection_samples = np.empty(0, dtype=np.int16)
+        self._recording_samples = np.empty(0, dtype=np.int16)
+        self._native_frame_remainder = 0
 
     def start(self) -> None:
         self._stream.start()
@@ -341,33 +350,57 @@ class ResamplingInputStream:
     def read_capture_frame(self, target_frames: int) -> CapturedAudioFrame:
         """Read native command audio plus its 16 kHz detection projection."""
 
-        import numpy as np
-
-        native_frames = max(
-            1,
-            round(target_frames * self.capture_format.sample_rate / _SAMPLE_RATE),
+        if target_frames <= 0:
+            raise ValueError("target_frames must be positive")
+        native_numerator = (
+            target_frames * self.capture_format.sample_rate + self._native_frame_remainder
         )
-        audio, _overflowed = self._stream.read(native_frames)
-        samples = np.asarray(audio).reshape(-1)
-        if self.capture_format.dtype == "float32":
-            normalized = np.clip(samples.astype(np.float32), -1.0, 1.0)
-        else:
-            normalized = samples.astype(np.float32) / 32768.0
+        native_frames, self._native_frame_remainder = divmod(native_numerator, _SAMPLE_RATE)
+        native_frames = max(1, native_frames)
 
-        native_pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
-        if self._resampler is None:
-            detection_pcm = native_pcm
-        else:
-            detection_pcm = _fit_resampled_length(
-                self._resampler.resample_chunk(native_pcm),
-                target_frames,
-            )
+        fill_reads = 0
+        while (
+            len(self._detection_samples) < target_frames
+            or len(self._recording_samples) < native_frames
+        ):
+            fill_reads += 1
+            if fill_reads > _MAX_RESAMPLER_FILL_READS:
+                raise MicrophoneCaptureError("Audio resampler stopped producing output")
+            self._read_native_samples(native_frames)
+
+        detection_pcm = self._detection_samples[:target_frames]
+        native_pcm = self._recording_samples[:native_frames]
+        self._detection_samples = self._detection_samples[target_frames:]
+        self._recording_samples = self._recording_samples[native_frames:]
 
         return CapturedAudioFrame(
             detection_pcm16=bytes(detection_pcm.tobytes()),
             recording_pcm16=bytes(native_pcm.tobytes()),
             recording_sample_rate=self.capture_format.sample_rate,
         )
+
+    def _read_native_samples(self, frame_count: int) -> None:
+        """Append one native read and every resampler output sample to the FIFOs."""
+        audio, overflowed = self._stream.read(frame_count)
+        if overflowed:
+            raise MicrophoneCaptureError("Microphone input overflowed")
+        samples = np.asarray(audio).reshape(-1)
+        if len(samples) != frame_count:
+            raise MicrophoneCaptureError(
+                f"Microphone returned {len(samples)} samples instead of {frame_count}"
+            )
+        if self.capture_format.dtype == "float32":
+            normalized = np.clip(samples.astype(np.float32), -1.0, 1.0)
+            native_pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
+        else:
+            native_pcm = samples.astype(np.int16)
+        detection_pcm = (
+            native_pcm
+            if self._resampler is None
+            else np.asarray(self._resampler.resample_chunk(native_pcm), dtype=np.int16)
+        )
+        self._recording_samples = np.concatenate((self._recording_samples, native_pcm))
+        self._detection_samples = np.concatenate((self._detection_samples, detection_pcm))
 
     def stop(self) -> None:
         self._stream.stop()
@@ -408,6 +441,7 @@ class WakewordWorker:
         self._speech_detector_override = speech_detector
         self._speech_detector: SpeechDetector | None | object = _NO_SPEECH_DETECTOR_YET
         self._thread: threading.Thread | None = None
+        self._thread_lock = threading.Lock()
         self._running = threading.Event()
         self._stop_recording = threading.Event()
         self._state_publish_lock = threading.Lock()
@@ -438,7 +472,7 @@ class WakewordWorker:
             payload = int(raw_value - _WAV_HEADER_BYTES)
             budget = int(payload * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION)
             return max(budget, _WAV_HEADER_BYTES + 2)
-            logger.warning("Speech upload limit unavailable from server; using default budget")
+        logger.warning("Speech upload limit unavailable from server; using default budget")
         return int(_UPLOAD_BUDGET_FALLBACK_BYTES * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION)
 
     def _get_speech_detector(self) -> SpeechDetector | None:
@@ -456,31 +490,46 @@ class WakewordWorker:
 
     def start(self) -> None:
         """Launch startup and detection work without blocking the Desktop bridge."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-        with self._state_publish_lock:
-            self._running.set()
-            self._bridge.publish_state("starting")
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        with self._thread_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            with self._state_publish_lock:
+                self._running.set()
+                self._bridge.publish_state("starting")
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
         """Signal the detection loop to stop and release resources."""
         with self._state_publish_lock:
             self._running.clear()
-        if self._thread is not None:
-            self._thread.join(timeout=3.0)
-            self._thread = None
+        with self._thread_lock:
+            thread = self._thread
+            if thread is not None:
+                thread.join(timeout=3.0)
+                if not thread.is_alive() and self._thread is thread:
+                    self._thread = None
         self._stop_engine()
         self._close_stream()
 
     def is_running(self) -> bool:
         """True while the detection thread is alive."""
-        return self._thread is not None and self._thread.is_alive()
+        with self._thread_lock:
+            return self._thread is not None and self._thread.is_alive()
 
     # -- Detection loop ------------------------------------------------------
 
     def _run(self) -> None:
+        """Keep every unexpected pipeline failure visible and fully cleaned up."""
+        try:
+            self._run_pipeline()
+        except Exception:
+            logger.exception("Wakeword pipeline stopped unexpectedly")
+            self._fail("pipeline_failed")
+            self._close_stream()
+            self._stop_engine()
+
+    def _run_pipeline(self) -> None:
         """Validate routing, start the engine, then detect and handle commands."""
         config = self._read_config()
         agent_id = config.get("target_agent_id")
@@ -584,7 +633,21 @@ class WakewordWorker:
                     )
                     if not self._publish_state_if_running("wakeword_detected"):
                         break
-                    outcome = self._handle_detection(tuple(detection_pre_roll))
+                    try:
+                        outcome = self._handle_detection(tuple(detection_pre_roll))
+                    except MicrophoneCaptureError:
+                        logger.warning(
+                            "Microphone capture failed during command recording; discarding audio",
+                            exc_info=True,
+                        )
+                        detection_pre_roll.clear()
+                        if self._restart_stream():
+                            if not self._publish_state_if_running("listening"):
+                                break
+                            continue
+                        if not self._recover_microphone("microphone_read_failed"):
+                            break
+                        continue
                     detection_pre_roll.clear()
                     if not self._running.is_set():
                         break
@@ -612,7 +675,7 @@ class WakewordWorker:
 
         config = self._read_config()
         requested_device = config.get("microphone")
-        device = requested_device if isinstance(requested_device, int) else None
+        device = requested_device if isinstance(requested_device, dict) else None
         with _AUDIO_BACKEND_LOCK:
             capture_format = _select_capture_format(sd, device)
             native_stream = sd.InputStream(
@@ -628,6 +691,7 @@ class WakewordWorker:
             active_microphone={
                 "index": capture_format.device,
                 "name": capture_format.name,
+                "host_api": capture_format.host_api,
                 "sample_rate": capture_format.sample_rate,
             }
         )
@@ -861,9 +925,9 @@ class WakewordWorker:
                 break
             try:
                 frame = _read_capture_frame(self._stream, _VAD_FRAME_SIZE)
-            except Exception:
+            except Exception as exc:
                 logger.warning("Microphone read error during recording", exc_info=True)
-                break
+                raise MicrophoneCaptureError("Microphone failed during command recording") from exc
 
             is_speech = _frame_is_speech(frame, detector, fallback_vad)
             frame_bytes = len(frame.recording_pcm16)
@@ -1108,27 +1172,6 @@ def _create_soxr_resampler(source_rate: int) -> Any | None:
     return soxr.ResampleStream(source_rate, _SAMPLE_RATE, _CHANNELS, dtype="int16")
 
 
-def _fit_resampled_length(samples: Any, target_frames: int) -> Any:
-    """Pad or trim one resampler output to the exact requested frame count.
-
-    soxr's per-call output length wanders around the exact ratio by a sample
-    while its streaming state keeps the long-run rate exact, but downstream
-    contracts (1280-sample engine chunks, 512-sample VAD frames) need fixed
-    lengths, so the rare off-by-one is padded from the last sample.
-    """
-
-    import numpy as np
-
-    if len(samples) == target_frames:
-        return samples
-    if len(samples) > target_frames:
-        return samples[:target_frames]
-    if len(samples) == 0:
-        return np.zeros(target_frames, dtype=np.int16)
-    padding = np.repeat(samples[-1:], target_frames - len(samples))
-    return np.concatenate([samples, padding])
-
-
 def _encode_wav(raw_frames: bytes, *, sample_rate: int = _SAMPLE_RATE) -> bytes:
     """Wrap mono 16-bit PCM frames in a WAV container."""
     buffer = io.BytesIO()
@@ -1280,11 +1323,36 @@ def _is_voice_cancel_phrase(transcript: str) -> bool:
     )
 
 
-def _candidate_device_indices(sd: Any, requested_device: int | None) -> list[int]:
+def _host_api_name(sd: Any, info: Any) -> str:
+    """Return a stable host-API label for one sounddevice descriptor."""
+    host_api_index = info.get("hostapi")
+    if host_api_index is None:
+        return ""
+    try:
+        host_api = sd.query_hostapis(host_api_index)
+    except Exception:
+        return str(host_api_index)
+    name = host_api.get("name") if isinstance(host_api, dict) else None
+    return str(name) if name else str(host_api_index)
+
+
+def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) -> list[int]:
     """Return requested/default/fallback input devices in safe preference order."""
     devices = sd.query_devices()
     if requested_device is not None:
-        return [requested_device]
+        requested_index = requested_device["index"]
+        requested_name = requested_device["name"]
+        requested_host_api = requested_device["host_api"]
+        matches = [
+            index
+            for index, info in enumerate(devices)
+            if int(info.get("max_input_channels", 0)) > 0
+            and str(info.get("name", f"Device {index}")) == requested_name
+            and _host_api_name(sd, info) == requested_host_api
+        ]
+        if requested_index in matches:
+            return [requested_index]
+        return matches if len(matches) == 1 else []
 
     candidates: list[int] = []
     try:
@@ -1332,11 +1400,12 @@ def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
                 name=str(info.get("name", f"Device {device}")),
                 sample_rate=sample_rate,
                 dtype=dtype,
+                host_api=_host_api_name(sd, info),
             )
     return None
 
 
-def _select_capture_format(sd: Any, requested_device: int | None) -> CaptureFormat:
+def _select_capture_format(sd: Any, requested_device: dict[str, Any] | None) -> CaptureFormat:
     """Select a usable requested or automatic input format."""
     for device in _candidate_device_indices(sd, requested_device):
         capture_format = _capture_format_for_device(sd, device)
@@ -1362,6 +1431,7 @@ def list_microphones() -> list[dict[str, Any]]:
                         {
                             "index": i,
                             "name": info.get("name", f"Device {i}"),
+                            "host_api": _host_api_name(sd, info),
                             "default_sample_rate": int(
                                 info.get("default_samplerate", _SAMPLE_RATE)
                             ),

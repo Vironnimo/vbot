@@ -93,7 +93,7 @@ describe('applyWakewordStatus', () => {
   it('preserves editable values for missing keys and accepts explicit nulls', () => {
     const state = {
       ...createVoiceSettingsState(),
-      microphone: 3,
+      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
       target_agent_id: 'agent-1',
       model_sensitivities: { 'builtin/okay_nabu': 0.3 },
     };
@@ -215,6 +215,26 @@ describe('buildVoiceSettingsPayload', () => {
       active_model_ids: ['builtin/okay_nabu'],
       model_sensitivities: { 'builtin/okay_nabu': 0.9 },
     });
+  });
+
+  it('compares and clones stable microphone descriptors by value', () => {
+    const initial = {
+      ...createVoiceSettingsState(),
+      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
+    };
+    const lastSaved = snapshotVoiceSettings(initial);
+    const equivalent = {
+      ...initial,
+      microphone: { index: 3, name: 'Desk mic', host_api: 'WASAPI' },
+    };
+
+    expect(buildVoiceSettingsPayload(equivalent, lastSaved)).toEqual({});
+
+    equivalent.microphone.index = 4;
+    expect(buildVoiceSettingsPayload(equivalent, lastSaved)).toEqual({
+      microphone: { index: 4, name: 'Desk mic', host_api: 'WASAPI' },
+    });
+    expect(lastSaved.microphone.index).toBe(3);
   });
 
   it('ignores runtime-only changes', () => {

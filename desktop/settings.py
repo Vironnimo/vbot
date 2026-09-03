@@ -48,6 +48,8 @@ DEFAULT_WAKEWORD_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
 _IO_RETRY_BASE_DELAY_SECONDS = 0.05
+_MIN_WAKEWORD_SENSITIVITY = 0.05
+_MAX_WAKEWORD_SENSITIVITY = 0.95
 
 # pywebview may dispatch bridge calls on different threads. All sections share
 # one JSON document, so each section update must hold the same per-file lock for
@@ -286,14 +288,18 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
     for key in DEFAULT_WAKEWORD_SETTINGS:
         if key in wakeword_data:
             merged[key] = copy.deepcopy(wakeword_data[key])
+    if not isinstance(merged.get("enabled"), bool):
+        merged["enabled"] = False
+    merged["microphone"] = _normalize_microphone_descriptor(merged.get("microphone"))
     active_model_ids = merged.get("active_model_ids")
     if _valid_active_model_ids(active_model_ids) and isinstance(active_model_ids, list):
         merged["active_model_ids"] = [model_id.strip() for model_id in active_model_ids]
     else:
         merged["active_model_ids"] = list(DEFAULT_WAKEWORD_MODEL_IDS)
-    sensitivities = merged.get("model_sensitivities")
-    if not isinstance(sensitivities, dict):
-        merged["model_sensitivities"] = {}
+    merged["model_sensitivities"] = _normalize_model_sensitivities(
+        merged.get("model_sensitivities")
+    )
+    merged["server_profiles"] = _normalize_server_profiles(merged.get("server_profiles"))
     return merged
 
 
@@ -372,3 +378,75 @@ def _valid_active_model_ids(value: Any) -> bool:
     if any(not isinstance(model_id, str) or not model_id.strip() for model_id in value):
         return False
     return len({model_id.strip() for model_id in value}) == len(value)
+
+
+def _normalize_microphone_descriptor(value: Any) -> dict[str, Any] | None:
+    """Return the supported stable microphone identity, never a stale index."""
+    if not isinstance(value, dict):
+        return None
+    index = value.get("index")
+    name = value.get("name")
+    host_api = value.get("host_api")
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or index < 0
+        or not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(host_api, str)
+    ):
+        return None
+    return {"index": index, "name": name.strip(), "host_api": host_api.strip()}
+
+
+def _normalize_model_sensitivities(value: Any) -> dict[str, float]:
+    """Drop malformed persisted model sensitivity entries."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    for model_id, sensitivity in value.items():
+        if (
+            not isinstance(model_id, str)
+            or not model_id.strip()
+            or isinstance(sensitivity, bool)
+            or not isinstance(sensitivity, (int, float))
+        ):
+            continue
+        numeric = float(sensitivity)
+        if _MIN_WAKEWORD_SENSITIVITY <= numeric <= _MAX_WAKEWORD_SENSITIVITY:
+            normalized[model_id.strip()] = numeric
+    return normalized
+
+
+def _normalize_server_profiles(value: Any) -> dict[str, dict[str, Any]]:
+    """Keep only valid server-scoped Voice routing fields."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for server_url, profile in value.items():
+        if (
+            not isinstance(server_url, str)
+            or not server_url.strip()
+            or not isinstance(profile, dict)
+        ):
+            continue
+        target_agent_id = profile.get("target_agent_id")
+        session_behavior = profile.get("session_behavior")
+        if (
+            "target_agent_id" in profile
+            and target_agent_id is not None
+            and (not isinstance(target_agent_id, str) or not target_agent_id.strip())
+        ):
+            continue
+        if "session_behavior" in profile and session_behavior not in {"active", "new"}:
+            continue
+        normalized_profile: dict[str, Any] = {}
+        if "target_agent_id" in profile:
+            normalized_profile["target_agent_id"] = (
+                target_agent_id.strip() if isinstance(target_agent_id, str) else None
+            )
+        if "session_behavior" in profile:
+            normalized_profile["session_behavior"] = session_behavior
+        if normalized_profile:
+            normalized[server_url.strip()] = normalized_profile
+    return normalized

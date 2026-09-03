@@ -1942,6 +1942,9 @@ export const englishCatalog = Object.freeze({
     'Wakeword model imported and activated.',
   'settings.voice.importSuccessInactive':
     'Wakeword model imported. Deactivate another model to use it.',
+  'settings.voice.importTooLargeTitle': 'Wakeword model is too large.',
+  'settings.voice.importTooLargeMessage':
+    'Choose a TFLite model no larger than 20 MiB.',
   'settings.voice.deleteConfirmTitle': 'Remove wakeword model',
   'settings.voice.deleteConfirm':
     'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
@@ -1956,12 +1959,13 @@ export const englishCatalog = Object.freeze({
   'settings.voice.sessionBehaviorNew': 'New session each time',
   'settings.voice.state': 'Status',
   'settings.voice.privacyNote':
-    'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is saved or sent before the wake phrase matches; the following command recording is sent to your configured vBot speech backend for transcription.',
+    'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
   'settings.voice.saveSuccess': 'Voice settings updated.',
   'settings.voice.systemDefaultMic': 'System default',
   'settings.voice.systemAutomaticMic': 'Automatic selection',
   'settings.voice.compatibleMic': 'Compatible',
   'settings.voice.incompatibleMic': 'Unsupported format',
+  'settings.voice.configuredMicUnavailable': 'Configured device unavailable',
   'settings.voice.noAgent': '— (none)',
   'settings.voice.lessSensitive': 'Less sensitive',
   'settings.voice.moreSensitive': 'More sensitive',
@@ -2018,6 +2022,9 @@ export const englishCatalog = Object.freeze({
   'settings.voice.calibrationRetryModelFailed': 'Could not retry this phrase.',
   'settings.voice.desktopOnly':
     'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
+  'settings.voice.statusUnavailableTitle': 'Desktop Voice status unavailable',
+  'settings.voice.statusUnavailableMessage':
+    'The Desktop bridge did not return Voice settings. Retrying automatically…',
   'settings.voice.mockWarning':
     'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
   'settings.voice.cancelPhrases':
@@ -2030,6 +2037,8 @@ export const englishCatalog = Object.freeze({
     'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
   'settings.voice.error.speechToTextReadiness':
     'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
+  'settings.voice.error.pipeline':
+    'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
   'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
 
   'voice.state.off': 'Disabled',

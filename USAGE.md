@@ -507,7 +507,7 @@ Without explicit host and port, Desktop opens its Connection screen and auto-con
 
 Desktop loads the same server-served WebUI. A local folder picker would browse the client machine rather than a remote server, so Project paths remain server-side paths entered through the same WebUI field.
 
-Desktop Voice runs wakeword detection and microphone capture locally. After the phrase matches, the recorded command is sent to the active server's speech transcription endpoint and routed to the server-specific Personal/Identity Agent configured in Settings → Voice. Exactly one built-in or imported openWakeWord ONNX Model listens at a time. Imported Models are validated and stored on the Desktop machine; training happens outside vBot. Audio before the wake phrase is not uploaded, while the captured command is sent to the configured speech backend.
+Desktop Voice runs wakeword detection and microphone capture locally. One or two built-in or imported openWakeWord TFLite Models can listen at the same time. Imported Models are validated and stored on the Desktop machine; training happens outside vBot. Nothing is uploaded unless a wake phrase matches. After a match, the command recording, including up to 320 ms of locally buffered audio immediately before detection, is sent to the active server's speech transcription endpoint and routed to the server-specific Personal/Identity Agent configured in Settings → Voice.
 
 ## Agents, Projects, and Sessions
 

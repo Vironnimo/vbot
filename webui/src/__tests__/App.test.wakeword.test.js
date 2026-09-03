@@ -28,6 +28,37 @@ describe('App Desktop Wakeword feedback', () => {
     mountedComponent = await cleanupAppHarness(mountedComponent);
   });
 
+  it('initializes Wakeword after the Desktop bridge arrives late', async () => {
+    vi.useFakeTimers();
+    window.pywebview = undefined;
+    const getCapabilities = vi.fn().mockResolvedValue({
+      wakeword: true,
+      serverSelection: false,
+      contextMenu: false,
+    });
+    const getStatus = vi.fn().mockResolvedValue({
+      enabled: true,
+      state: 'listening',
+      events: [],
+    });
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    window.pywebview = {
+      api: {
+        getDesktopCapabilities: getCapabilities,
+        getWakewordStatus: getStatus,
+      },
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+    flushSync();
+
+    expect(getCapabilities).toHaveBeenCalledOnce();
+    expect(getStatus).toHaveBeenCalled();
+  });
+
   it('shows a sticky global Toast when Wakeword activation lacks STT', async () => {
     vi.useFakeTimers();
     const status = {

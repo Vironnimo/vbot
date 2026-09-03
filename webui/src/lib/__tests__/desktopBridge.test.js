@@ -153,6 +153,20 @@ describe('getDesktopCapabilities', () => {
       contextMenu: false,
     });
   });
+
+  it('propagates a transient capability failure so callers can retry', async () => {
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          getDesktopCapabilities: () =>
+            Promise.reject(new Error('bridge starting')),
+        },
+      },
+    };
+
+    await expect(getDesktopCapabilities()).rejects.toThrow('bridge starting');
+  });
 });
 
 describe('desktop context-menu actions', () => {
@@ -324,12 +338,12 @@ describe('getWakewordStatus', () => {
     expect(status.state).toBe('listening');
   });
 
-  it('returns disabled fallback when bridge absent', async () => {
+  it('propagates bridge absence instead of fabricating disabled state', async () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
-    const status = await getWakewordStatus();
-    expect(status.enabled).toBe(false);
-    expect(status.state).toBe('off');
+    await expect(getWakewordStatus()).rejects.toThrow(
+      'Desktop bridge not available',
+    );
   });
 });
 
@@ -483,10 +497,12 @@ describe('desktop wakeword models', () => {
     expect(deleteModel).toHaveBeenCalledWith('custom/model');
   });
 
-  it('returns an empty model list when the bridge is unavailable', async () => {
+  it('propagates model-list bridge failure so callers retain known state', async () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
-    await expect(listWakewordModels()).resolves.toEqual([]);
+    await expect(listWakewordModels()).rejects.toThrow(
+      'Desktop bridge not available',
+    );
   });
 });
 

@@ -65,12 +65,14 @@ describe('WakewordVoiceSettings', () => {
       {
         index: 4,
         name: 'Studio microphone',
+        host_api: 'WASAPI',
         supported: true,
         default_sample_rate: 48000,
       },
       {
         index: 5,
         name: 'Bluetooth hands-free',
+        host_api: 'WASAPI',
         supported: false,
         default_sample_rate: 8000,
       },
@@ -207,6 +209,42 @@ describe('WakewordVoiceSettings', () => {
     expect(desktopBridge.onWakewordStatusChange).not.toHaveBeenCalled();
   });
 
+  it('retries a transient initial bridge failure without accepting defaults', async () => {
+    vi.useFakeTimers();
+    desktopBridge.getWakewordStatus
+      .mockRejectedValueOnce(new Error('bridge starting'))
+      .mockResolvedValueOnce({
+        ...baseStatus(),
+        enabled: true,
+        target_agent_id: 'main',
+      });
+
+    try {
+      mountedComponent = mount(WakewordVoiceSettings, {
+        target: document.body,
+        props: { agents: [{ id: 'main', name: 'Main' }] },
+      });
+      flushSync();
+      await settle();
+      await settle();
+
+      expect(document.body.textContent).toContain(
+        'Desktop Voice status unavailable',
+      );
+      expect(switchByLabel('Enable wakeword listening').disabled).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await settle();
+
+      expect(desktopBridge.getWakewordStatus).toHaveBeenCalledTimes(2);
+      expect(
+        switchByLabel('Enable wakeword listening').getAttribute('aria-checked'),
+      ).toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a warning instead of an error when a running microphone disconnects', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
@@ -293,6 +331,23 @@ describe('WakewordVoiceSettings', () => {
           format: 'flac',
           sample_rate_hz: 16000,
         },
+      },
+    });
+  });
+
+  it('saves a stable microphone descriptor instead of a device index', async () => {
+    await mountPanel();
+
+    buttonByLabel('Microphone').click();
+    flushSync();
+    buttonContainingText('Studio microphone').click();
+    await settle();
+
+    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
+      microphone: {
+        index: 4,
+        name: 'Studio microphone',
+        host_api: 'WASAPI',
       },
     });
   });
@@ -567,6 +622,29 @@ describe('WakewordVoiceSettings', () => {
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized model files before reading or bridging them', async () => {
+    const onToast = vi.fn();
+    await mountPanel({ onToast });
+    const fileInput = document.body.querySelector('input[type="file"]');
+    const file = new File(['model'], 'too_large.tflite');
+    Object.defineProperty(file, 'size', { value: 20 * 1024 * 1024 + 1 });
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [file],
+    });
+
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+
+    expect(desktopBridge.importWakewordModel).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Wakeword model is too large.',
+        variant: 'error',
+      }),
+    );
+  });
+
   it('removes only an inactive imported model after confirmation', async () => {
     const customModel = {
       id: 'custom/computer',
@@ -601,6 +679,7 @@ describe('WakewordVoiceSettings', () => {
       props: { agents: [{ id: 'main', name: 'Main' }], ...props },
     });
     flushSync();
+    await settle();
     await settle();
   }
 });

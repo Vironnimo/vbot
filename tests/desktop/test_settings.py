@@ -461,6 +461,58 @@ def test_read_wakeword_settings_trims_active_model_ids(tmp_path: Path) -> None:
     assert config["active_model_ids"] == ["builtin/okay_nabu"]
 
 
+def test_read_wakeword_settings_normalizes_persisted_voice_fields(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "wakeword": {
+                    "enabled": "yes",
+                    "microphone": 4,
+                    "model_sensitivities": {
+                        " builtin/okay_nabu ": 0.7,
+                        "bad-high": 1.2,
+                        "bad-bool": True,
+                    },
+                    "server_profiles": {
+                        " http://127.0.0.1:8420 ": {
+                            "target_agent_id": " main ",
+                            "session_behavior": "new",
+                        },
+                        "bad": {"target_agent_id": 7},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["enabled"] is False
+    assert config["microphone"] is None
+    assert config["model_sensitivities"] == {"builtin/okay_nabu": 0.7}
+    assert config["server_profiles"] == {
+        "http://127.0.0.1:8420": {
+            "target_agent_id": "main",
+            "session_behavior": "new",
+        }
+    }
+
+
+def test_read_wakeword_settings_preserves_stable_microphone_identity(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    microphone = {"index": 4, "name": "Studio mic", "host_api": "WASAPI"}
+    settings_file.write_text(
+        json.dumps({"wakeword": {"microphone": microphone}}),
+        encoding="utf-8",
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["microphone"] == microphone
+
+
 def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(

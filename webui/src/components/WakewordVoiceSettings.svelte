@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import Badge from './ui/Badge.svelte';
@@ -43,6 +43,9 @@
   } from '$lib/wakewordSettings.js';
 
   const MAX_VOICE_FLUSH_PASSES = 10;
+  const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
+  const VOICE_STATUS_RETRY_MS = 3000;
+  const UNAVAILABLE_MICROPHONE_VALUE = '__configured_unavailable__';
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
@@ -68,12 +71,18 @@
   let loaded = $state(false);
   let cleanupStatusPoll = null;
   let destroyed = false;
+  let voiceRuntimeInitialized = false;
+  let voiceLoadInFlight = false;
+  let voiceLoadRetryTimer = null;
+  let previousDesktopMode = null;
+  let runtimeLoadError = $state(false);
   let microphones = $state([]);
   let wakewordModels = $state([]);
   let saveState = $state('idle');
   let saveChain = Promise.resolve();
   let modelFileInput = $state();
   let modelActionState = $state('idle');
+  let enableActionState = $state('idle');
   let deleteConfirmModel = $state(null);
   let calibrationBaselineSensitivities = $state(null);
   let calibrationActionState = $state('idle');
@@ -96,12 +105,32 @@
     })),
   );
   let selectedAgentValue = $derived(voiceState.target_agent_id || '');
+  let configuredMicrophoneDevice = $derived(
+    voiceState.microphone
+      ? microphones.find((device) =>
+          sameMicrophoneIdentity(device, voiceState.microphone),
+        ) || null
+      : null,
+  );
   let microphoneOptions = $derived([
     {
       value: '',
       label: t('settings.voice.systemAutomaticMic', 'Automatic selection'),
       secondaryLabel: voiceState.activeMicrophone?.name || '',
     },
+    ...(voiceState.microphone && !configuredMicrophoneDevice
+      ? [
+          {
+            value: UNAVAILABLE_MICROPHONE_VALUE,
+            label: voiceState.microphone.name,
+            secondaryLabel: t(
+              'settings.voice.configuredMicUnavailable',
+              'Configured device unavailable',
+            ),
+            disabled: true,
+          },
+        ]
+      : []),
     ...microphones.map((device) => ({
       value: String(device.index),
       label: device.name,
@@ -112,11 +141,14 @@
     })),
   ]);
   let selectedMicrophoneValue = $derived(
-    Number.isInteger(voiceState.microphone)
-      ? String(voiceState.microphone)
-      : '',
+    configuredMicrophoneDevice
+      ? String(configuredMicrophoneDevice.index)
+      : voiceState.microphone
+        ? UNAVAILABLE_MICROPHONE_VALUE
+        : '',
   );
   let modelActionBusy = $derived(modelActionState !== 'idle');
+  let enableActionBusy = $derived(enableActionState !== 'idle');
   let calibrationSessionActive = $derived(
     calibrationBaselineSensitivities !== null,
   );
@@ -136,6 +168,7 @@
       voiceState.liveState === 'listening' &&
       voiceState.mode === 'real' &&
       !modelActionBusy &&
+      !enableActionBusy &&
       !calibrationSessionActive,
   );
   let calibrationNoiseHigh = $derived(
@@ -199,6 +232,8 @@
   );
   let enableToggleDisabled = $derived(
     !loaded ||
+      enableActionBusy ||
+      modelActionBusy ||
       calibrationSessionActive ||
       (!voiceState.enabled &&
         (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
@@ -209,6 +244,7 @@
     hasPending: () =>
       saveState === 'saving' ||
       transcriptionSaveState === 'saving' ||
+      enableActionBusy ||
       calibrationActionBusy ||
       voiceConfigHasChanges() ||
       transcriptionAudioHasChanges(),
@@ -223,6 +259,10 @@
     }
     const key = `voice.state.${state}`;
     return t(key, state);
+  }
+
+  function sameMicrophoneIdentity(left, right) {
+    return left?.name === right?.name && left?.host_api === right?.host_api;
   }
 
   function errorMessage(code) {
@@ -279,6 +319,10 @@
         'settings.voice.error.detection',
         'Wakeword detection stopped unexpectedly. Retry listening.',
       ),
+      pipeline_failed: t(
+        'settings.voice.error.pipeline',
+        'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
+      ),
       session_resolution_failed: t(
         'settings.voice.error.session',
         'vBot could not open the target Agent session. Check the server connection and retry.',
@@ -330,21 +374,42 @@
   onDestroy(() => {
     destroyed = true;
     unregisterVoiceAutosave();
+    if (voiceLoadRetryTimer !== null) {
+      clearTimeout(voiceLoadRetryTimer);
+      voiceLoadRetryTimer = null;
+    }
     if (cleanupStatusPoll) {
       cleanupStatusPoll();
       cleanupStatusPoll = null;
     }
     if (voiceState.calibration?.active) {
-      void stopWakewordCalibration();
+      void stopWakewordCalibration().catch(() => {});
     }
   });
 
+  function scheduleVoiceStatusRetry() {
+    if (destroyed || !desktopMode || voiceLoadRetryTimer !== null) return;
+    voiceLoadRetryTimer = setTimeout(() => {
+      voiceLoadRetryTimer = null;
+      void loadStatus();
+    }, VOICE_STATUS_RETRY_MS);
+  }
+
   async function loadStatus() {
+    if (
+      destroyed ||
+      !desktopMode ||
+      voiceLoadInFlight ||
+      voiceRuntimeInitialized
+    ) {
+      return;
+    }
+    voiceLoadInFlight = true;
     try {
       const [status, availableMicrophones, availableModels] = await Promise.all(
         [getWakewordStatus(), listMicrophones(), listWakewordModels()],
       );
-      if (destroyed) {
+      if (destroyed || !desktopMode) {
         return;
       }
       voiceState = applyWakewordStatus(voiceState, status);
@@ -356,32 +421,64 @@
       microphones = availableMicrophones;
       wakewordModels = availableModels;
       lastSaved = snapshotVoiceSettings(voiceState);
+      runtimeLoadError = false;
+      voiceRuntimeInitialized = true;
+      loaded = true;
+      // The poll only carries observed runtime fields (live state, mock flag)
+      // into state — never editable config — so a poll firing during autosave
+      // cannot revert an unsaved edit.
+      cleanupStatusPoll = onWakewordStatusChange((nextStatus) => {
+        const wasCalibrating = Boolean(voiceState.calibration?.active);
+        voiceState = applyRuntimeStatus(voiceState, nextStatus);
+        if (
+          calibrationBaselineSensitivities &&
+          wasCalibrating &&
+          !voiceState.calibration.active &&
+          calibrationActionState === 'idle'
+        ) {
+          restoreCalibrationDraft();
+        }
+      });
     } catch {
-      // Bridge not available; keep defaults
-    }
-    if (destroyed) {
-      return;
-    }
-    loaded = true;
-    // The poll only carries observed runtime fields (live state, mock flag) into
-    // state — never the editable config — so a poll firing during the autosave
-    // debounce cannot revert an unsaved edit.
-    cleanupStatusPoll = onWakewordStatusChange((status) => {
-      const wasCalibrating = Boolean(voiceState.calibration?.active);
-      voiceState = applyRuntimeStatus(voiceState, status);
-      if (
-        calibrationBaselineSensitivities &&
-        wasCalibrating &&
-        !voiceState.calibration.active &&
-        calibrationActionState === 'idle'
-      ) {
-        restoreCalibrationDraft();
+      if (!destroyed && desktopMode) {
+        runtimeLoadError = true;
+        scheduleVoiceStatusRetry();
       }
-    });
+    } finally {
+      voiceLoadInFlight = false;
+    }
   }
 
+  $effect(() => {
+    const active = desktopMode;
+    untrack(() => {
+      if (active === previousDesktopMode) return;
+      previousDesktopMode = active;
+      if (active) {
+        loaded = false;
+        runtimeLoadError = false;
+        voiceRuntimeInitialized = false;
+        void loadStatus();
+        return;
+      }
+      if (voiceLoadRetryTimer !== null) {
+        clearTimeout(voiceLoadRetryTimer);
+        voiceLoadRetryTimer = null;
+      }
+      if (cleanupStatusPoll) {
+        cleanupStatusPoll();
+        cleanupStatusPoll = null;
+      }
+      voiceRuntimeInitialized = false;
+      runtimeLoadError = false;
+      loaded = true;
+    });
+  });
+
   async function handleEnabledChange() {
+    if (enableActionBusy) return;
     const enabled = !voiceState.enabled;
+    enableActionState = enabled ? 'enabling' : 'disabling';
     voiceState = { ...voiceState, enabled };
     try {
       const result = await setWakewordEnabled(enabled);
@@ -394,7 +491,9 @@
         state: errorCode ? 'error' : acceptedEnabled ? 'starting' : 'off',
         error_code: errorCode,
       });
-      lastSaved = snapshotVoiceSettings(voiceState);
+      lastSaved = lastSaved
+        ? { ...lastSaved, enabled: acceptedEnabled }
+        : snapshotVoiceSettings(voiceState);
     } catch (error) {
       voiceState = { ...voiceState, enabled: !enabled };
       onToast({
@@ -402,6 +501,8 @@
         message: error?.message || '',
         variant: 'error',
       });
+    } finally {
+      enableActionState = 'idle';
     }
   }
 
@@ -554,9 +655,18 @@
 
   function handleMicrophoneChange(value) {
     const parsed = Number.parseInt(value, 10);
+    const device = Number.isInteger(parsed)
+      ? microphones.find((candidate) => candidate.index === parsed)
+      : null;
     voiceState = {
       ...voiceState,
-      microphone: Number.isInteger(parsed) ? parsed : null,
+      microphone: device
+        ? {
+            index: device.index,
+            name: device.name,
+            host_api: device.host_api || '',
+          }
+        : null,
     };
     void saveConfig();
   }
@@ -586,6 +696,21 @@
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+
+    if (file.size > MAX_CUSTOM_WAKEWORD_MODEL_BYTES) {
+      onToast({
+        title: t(
+          'settings.voice.importTooLargeTitle',
+          'Wakeword model is too large.',
+        ),
+        message: t(
+          'settings.voice.importTooLargeMessage',
+          'Choose a TFLite model no larger than 20 MiB.',
+        ),
+        variant: 'error',
+      });
+      return;
+    }
 
     modelActionState = 'importing';
     try {
@@ -928,14 +1053,6 @@
       });
     }
   }
-
-  onMount(() => {
-    if (isDesktop() && wakewordAvailable) {
-      void loadStatus();
-    } else {
-      loaded = true;
-    }
-  });
 </script>
 
 <div class="voice-settings">
@@ -1038,6 +1155,25 @@
       </div>
     </div>
   {:else}
+    {#if runtimeLoadError && !loaded}
+      <Banner variant="error" class="voice-attention-banner" role="alert">
+        <div class="voice-attention-copy">
+          <strong>
+            {t(
+              'settings.voice.statusUnavailableTitle',
+              'Desktop Voice status unavailable',
+            )}
+          </strong>
+          <p>
+            {t(
+              'settings.voice.statusUnavailableMessage',
+              'The Desktop bridge did not return Voice settings. Retrying automatically…',
+            )}
+          </p>
+        </div>
+      </Banner>
+    {/if}
+
     <!-- Enable/disable toggle -->
     <div class="s-row">
       <div class="s-row-info">
@@ -1163,6 +1299,7 @@
                     handleWakewordModelToggle(model, checked)}
                   disabled={!loaded ||
                     modelActionBusy ||
+                    enableActionBusy ||
                     calibrationSessionActive ||
                     (active && voiceState.active_model_ids.length === 1) ||
                     (!active && voiceState.active_model_ids.length === 2)}
@@ -1192,6 +1329,7 @@
                     onchange={handleSensitivityChange}
                     disabled={!loaded ||
                       modelActionBusy ||
+                      enableActionBusy ||
                       calibrationActionBusy ||
                       calibrationSessionActive}
                   />
@@ -1217,6 +1355,7 @@
                     variant="tertiary"
                     disabled={!loaded ||
                       modelActionBusy ||
+                      enableActionBusy ||
                       calibrationSessionActive}
                     onClick={() => (deleteConfirmModel = model)}
                   >
@@ -1245,7 +1384,10 @@
           <Button
             variant="secondary"
             loading={modelActionState === 'importing'}
-            disabled={!loaded || modelActionBusy || calibrationSessionActive}
+            disabled={!loaded ||
+              modelActionBusy ||
+              enableActionBusy ||
+              calibrationSessionActive}
             onClick={chooseWakewordModelFile}
           >
             {t('settings.voice.importModel', 'Import TFLite model')}
@@ -1262,7 +1404,7 @@
         <div class="s-row-desc">
           {t(
             'settings.voice.calibrationDescription',
-            'Measure room noise and three natural repetitions per phrase to calculate a reliable sensitivity automatically.',
+            'Measure room noise and five natural repetitions per phrase to calculate a reliable sensitivity automatically.',
           )}
         </div>
       </div>
@@ -1521,7 +1663,7 @@
               {voiceState.enabled
                 ? t(
                     'settings.voice.calibrationReady',
-                    'Calibration takes about 15 seconds. Wakeword commands are paused while it runs.',
+                    'Calibration takes about 30–60 seconds. Wakeword commands are paused while it runs.',
                   )
                 : t(
                     'settings.voice.calibrationEnableFirst',
@@ -1565,6 +1707,7 @@
           onValueChange={handleAgentChange}
           disabled={!loaded ||
             agentOptions.length === 0 ||
+            enableActionBusy ||
             calibrationSessionActive}
         />
       </div>
@@ -1582,7 +1725,7 @@
           value={voiceState.session_behavior}
           options={SESSION_BEHAVIOR_OPTIONS}
           onValueChange={handleSessionBehaviorChange}
-          disabled={!loaded || calibrationSessionActive}
+          disabled={!loaded || enableActionBusy || calibrationSessionActive}
         />
       </div>
     </div>
@@ -1603,6 +1746,7 @@
           onValueChange={handleMicrophoneChange}
           disabled={!loaded ||
             microphones.length === 0 ||
+            enableActionBusy ||
             calibrationSessionActive}
         />
       </div>
@@ -1612,7 +1756,7 @@
     <div class="voice-privacy-note">
       {t(
         'settings.voice.privacyNote',
-        'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is saved or sent before the wake phrase matches; the following command recording is sent to your configured vBot speech backend for transcription.',
+        'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
       )}
       <p>
         {t(
