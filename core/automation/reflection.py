@@ -32,7 +32,7 @@ from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
-from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
+from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -120,11 +120,12 @@ class ReflectionService:
         ):
             return
         memory_tool_called = MEMORY_TOOL_NAME in run.tool_call_names
+        skill_manage_called = SKILL_MANAGE_TOOL_NAME in run.tool_call_names
         user_cancelled_after_model_step = (
             outcome == "cancelled" and run.cancel_reason == "user" and run.iteration_count > 0
         )
         count_run = outcome == "success" or user_cancelled_after_model_step
-        if not count_run and not memory_tool_called:
+        if not count_run and not memory_tool_called and not skill_manage_called:
             return
         task = asyncio.create_task(
             self._account_run_end(
@@ -133,6 +134,7 @@ class ReflectionService:
                 project_id=run.project_id,
                 iteration_count=run.iteration_count,
                 memory_tool_called=memory_tool_called,
+                skill_manage_called=skill_manage_called,
                 count_run=count_run,
             )
         )
@@ -166,10 +168,11 @@ class ReflectionService:
         project_id: str | None,
         iteration_count: int,
         memory_tool_called: bool,
+        skill_manage_called: bool,
         count_run: bool,
     ) -> None:
         settings = self._runtime.storage.load_reflection_settings()
-        if not settings["enabled"] and not memory_tool_called:
+        if not settings["enabled"] and not memory_tool_called and not skill_manage_called:
             return
         sessions = self._runtime.chat_sessions
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
@@ -187,8 +190,11 @@ class ReflectionService:
                 else _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
                 + (1 if count_run else 0)
             )
-            iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY)) + (
-                max(iteration_count, 0) if count_run else 0
+            iterations = (
+                0
+                if skill_manage_called
+                else _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY))
+                + (max(iteration_count, 0) if count_run else 0)
             )
             counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
             memory_due = turns >= settings["memory_turn_interval"]
