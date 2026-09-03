@@ -509,11 +509,16 @@ def test_search_scans_canonical_records_in_bounded_batches(
 ) -> None:
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
-    for index in range(300):
-        session.append(ChatMessage.user(f"ordinary record {index}"))
     needle = ChatMessage.user("needle")
-    session.append(needle)
-    session.append(_checkpoint())
+    # The search contract is about bounded reads, not one transaction per fixture
+    # message. Batch fixture construction keeps this focused under Windows xdist load.
+    session.append_many(
+        [
+            *(ChatMessage.user(f"ordinary record {index}") for index in range(300)),
+            needle,
+            _checkpoint(),
+        ]
+    )
     original = ChatSession.load_history_records
     limits: list[int] = []
 
