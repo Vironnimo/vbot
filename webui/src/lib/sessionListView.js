@@ -169,6 +169,30 @@ export function sessionDisplayName(session) {
   return t('sessions.newSession', 'New Session');
 }
 
+export function sessionParentReference(session) {
+  const subagentParent = normalizeSubagentParent(session?.subagent_parent);
+  if (subagentParent !== null) {
+    return {
+      kind: 'subagent',
+      agent_id: subagentParent.agent_id,
+      session_id: subagentParent.session_id,
+      project_id: subagentParent.project_id,
+    };
+  }
+
+  const forkSource = normalizeForkSource(session?.fork_source);
+  if (forkSource !== null) {
+    return {
+      kind: 'fork',
+      agent_id: forkSource.agent_id,
+      session_id: forkSource.session_id,
+      project_id: forkSource.project_id,
+    };
+  }
+
+  return null;
+}
+
 export function visibleSessionsForSelection(
   sessions,
   { filters = null, selectedSessionId = null } = {},
@@ -254,9 +278,7 @@ function normalizeSession(session) {
   const subagentParent = normalizeSubagentParent(session?.subagent_parent);
   const isSubagentSession =
     session?.is_subagent_session === true || subagentParent !== null;
-  const forkSource = isPlainObject(session?.fork_source)
-    ? session.fork_source
-    : null;
+  const forkSource = normalizeForkSource(session?.fork_source);
   const runKinds = normalizeRunKinds(session?.run_kinds);
 
   const normalizedSession = {
@@ -345,6 +367,25 @@ function normalizeSubagentParent(parent) {
     tool_call_index: Number.isSafeInteger(parent.tool_call_index)
       ? parent.tool_call_index
       : null,
+  };
+}
+
+function normalizeForkSource(source) {
+  if (!isPlainObject(source)) {
+    return null;
+  }
+
+  const agentId = asOptionalText(source.agent_id);
+  const sessionId = asOptionalText(source.session_id);
+  if (agentId === null || sessionId === null) {
+    return null;
+  }
+
+  return {
+    ...source,
+    agent_id: agentId,
+    session_id: sessionId,
+    project_id: asOptionalText(source.project_id),
   };
 }
 

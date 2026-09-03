@@ -417,16 +417,23 @@ describe('ChatView', () => {
   });
 
   it('returns from a sub-agent session to its parent session (item 4)', async () => {
-    listSessionsMock.mockResolvedValue({
-      sessions: [
-        {
-          id: 'sub-session-1',
-          subagent_parent: {
-            agent_id: 'alpha',
-            session_id: 'session-parent',
+    listSessionsMock.mockImplementation(async (_agentId, query = {}) => {
+      if (query.requiredSession?.sessionId === 'session-parent') {
+        return {
+          sessions: [{ id: 'session-parent', title: 'Parent planning' }],
+        };
+      }
+      return {
+        sessions: [
+          {
+            id: 'sub-session-1',
+            subagent_parent: {
+              agent_id: 'alpha',
+              session_id: 'session-parent',
+            },
           },
-        },
-      ],
+        ],
+      };
     });
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -466,7 +473,16 @@ describe('ChatView', () => {
       100,
     );
 
-    findButtonByText('Return to parent session').click();
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-activity__parent-link')
+          ?.textContent.trim() === 'Parent planning',
+      100,
+    );
+    document.querySelector('.chat-activity__parent-link').click();
     flushSync();
 
     await waitForCondition(

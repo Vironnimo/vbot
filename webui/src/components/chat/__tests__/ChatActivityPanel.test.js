@@ -294,6 +294,44 @@ describe('ChatActivityPanel', () => {
     flushSync();
 
     expect(document.querySelector('.chat-activity__empty')).toBeTruthy();
+    expect(document.querySelector('.chat-activity__parent-link')).toBeNull();
+  });
+
+  it('shows the resolved Parent Session as a navigation link', async () => {
+    const navigateToParent = vi.fn();
+    const target = {
+      agentAddress: 'alpha',
+      sessionId: 'source-session',
+      isSubAgentSession: false,
+    };
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: {
+        timelineItems: [],
+        parentSession: {
+          displayName: 'Original research',
+          target,
+        },
+        onNavigateToParentSession: navigateToParent,
+      },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    expect(
+      document.querySelector('#chat-activity-parent-title').textContent.trim(),
+    ).toBe('Parent Session');
+    const parentLink = document.querySelector('.chat-activity__parent-link');
+    expect(parentLink.textContent.trim()).toBe('Original research');
+    expect(parentLink.getAttribute('aria-label')).toBe(
+      'Open parent Session · Original research',
+    );
+
+    parentLink.click();
+    await Promise.resolve();
+    expect(navigateToParent).toHaveBeenCalledWith(target);
   });
 
   it('omits an empty Active group when every task is finished', () => {

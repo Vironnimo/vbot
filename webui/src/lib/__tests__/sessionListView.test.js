@@ -8,6 +8,7 @@ import {
   overlayLiveSessionActivity,
   selectSession,
   sessionDisplayName,
+  sessionParentReference,
   visibleSessionsForSelection,
 } from '../sessionListView.js';
 
@@ -176,6 +177,41 @@ describe('sessionListView helpers', () => {
     });
   });
 
+  it('resolves immediate parents for Subagent, Fork, and Reflection Sessions', () => {
+    expect(
+      sessionParentReference({
+        subagent_parent: {
+          agent_id: 'orchestrator',
+          session_id: 'parent-session',
+          project_id: 'vbot',
+        },
+      }),
+    ).toEqual({
+      kind: 'subagent',
+      agent_id: 'orchestrator',
+      session_id: 'parent-session',
+      project_id: 'vbot',
+    });
+
+    for (const runKinds of [[], ['reflection']]) {
+      expect(
+        sessionParentReference({
+          run_kinds: runKinds,
+          fork_source: {
+            agent_id: 'coder',
+            session_id: 'source-session',
+            project_id: null,
+          },
+        }),
+      ).toEqual({
+        kind: 'fork',
+        agent_id: 'coder',
+        session_id: 'source-session',
+        project_id: null,
+      });
+    }
+  });
+
   it('treats absent or non-object fork_source as not a fork', () => {
     const next = applySessionList(createSessionListState(), [
       { id: 'plain-session' },
@@ -186,6 +222,21 @@ describe('sessionListView helpers', () => {
       expect(session.is_fork).toBe(false);
       expect(session.fork_source).toBeNull();
     }
+  });
+
+  it('rejects incomplete parent provenance', () => {
+    expect(sessionParentReference({ subagent_parent: {} })).toBeNull();
+    expect(
+      sessionParentReference({ fork_source: { agent_id: 'coder' } }),
+    ).toBeNull();
+
+    const next = applySessionList(createSessionListState(), [
+      { id: 'bad-fork', fork_source: { agent_id: 'coder' } },
+    ]);
+    expect(next.sessions[0]).toMatchObject({
+      is_fork: false,
+      fork_source: null,
+    });
   });
 
   it('clears selected session when the session list no longer contains it', () => {

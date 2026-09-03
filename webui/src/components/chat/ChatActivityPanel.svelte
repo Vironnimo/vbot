@@ -20,7 +20,9 @@
     subAgentStatuses = {},
     backgroundBashStatuses = {},
     reflectionTasks = [],
+    parentSession = null,
     onNavigateToSubAgent = () => {},
+    onNavigateToParentSession = () => {},
     onOpenReflection = () => {},
     onCancelSubAgent = () => {},
     onCancelBackgroundProcess = () => {},
@@ -134,6 +136,11 @@
     t('chat.activity.reflectionOpenAria', 'Open {scope} Session · {status}', {
       scope: reflectionScopeLabel(row),
       status: statusLabel(row.status),
+    });
+
+  const parentSessionLabel = () =>
+    t('chat.activity.openParentSession', 'Open parent Session · {session}', {
+      session: parentSession?.displayName ?? '',
     });
 
   const taskLabel = (task) => {
@@ -360,6 +367,34 @@
         </h2>
       </header>
 
+      {#if parentSession}
+        <section
+          class="chat-activity__parent"
+          aria-labelledby="chat-activity-parent-title"
+        >
+          <h3
+            id="chat-activity-parent-title"
+            class="chat-activity__group-title"
+          >
+            {t('chat.activity.parentSession', 'Parent Session')}
+          </h3>
+          <Button
+            variant="tertiary"
+            class="chat-activity__parent-link"
+            ariaLabel={parentSessionLabel()}
+            onClick={() => onNavigateToParentSession(parentSession.target)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M6.5 4 2.5 8l4 4" />
+              <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
+            </svg>
+            <span class="chat-activity__parent-name">
+              {parentSession.displayName}
+            </span>
+          </Button>
+        </section>
+      {/if}
+
       <section
         class="chat-activity__stats"
         aria-labelledby="chat-activity-stats-title"
@@ -579,6 +614,57 @@
     flex: 1;
     overflow-y: auto;
     padding: 5px;
+  }
+
+  .chat-activity__parent {
+    flex: 0 0 auto;
+    padding: 5px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chat-activity__parent .chat-activity__group-title {
+    padding-bottom: 2px;
+  }
+
+  :global(.chat-activity__parent-link.btn-tertiary) {
+    width: 100%;
+    min-height: 30px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 5px 8px;
+    border-color: transparent;
+    border-radius: var(--r-sm);
+    color: var(--text-med);
+    text-align: left;
+  }
+
+  :global(.chat-activity__parent-link.btn-tertiary:hover) {
+    border-color: transparent;
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+
+  :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  :global(.chat-activity__parent-link svg) {
+    flex: 0 0 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+  }
+
+  .chat-activity__parent-name {
+    min-width: 0;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chat-activity__stats {
