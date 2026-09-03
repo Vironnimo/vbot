@@ -351,18 +351,18 @@ class TestDeleteAction:
 class TestFindFreeAction:
     def test_find_free_returns_slots_in_server_local_time(self, tmp_path: Path) -> None:
         registry, service = _registry(tmp_path)
-        service.create_event(title="Block", start="2026-09-03T15:00:00+02:00")
+        service.create_event(title="Block", start="2030-09-03T15:00:00+02:00")
 
         result = _run(
             registry,
             tmp_path,
-            {"action": "find_free", "when": "2026-09-03", "duration": 60},
+            {"action": "find_free", "when": "2030-09-03", "duration": 60},
         )
 
         assert result["ok"] is True
         slots = result["data"]["slots"]
         assert len(slots) >= 1
-        blocked_start = datetime(2026, 9, 3, 13, 0, tzinfo=UTC)
+        blocked_start = datetime(2030, 9, 3, 13, 0, tzinfo=UTC)
         blocked_end = blocked_start + timedelta(minutes=60)
         for slot in slots:
             start = datetime.fromisoformat(slot["start"]).replace(tzinfo=BERLIN)
