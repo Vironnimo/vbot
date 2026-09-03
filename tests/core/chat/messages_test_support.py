@@ -29,6 +29,7 @@ from core.chat.chat import (
 )
 from core.chat.content_blocks import FileBlock, TextBlock
 from core.chat.messages import (
+    COMPACTION_SUMMARY_END_MARKER,
     HISTORY_COMPACTION_GUIDANCE,
     _effective_compaction_messages,
     checkpoint_ordinal,
@@ -76,6 +77,7 @@ __all__ = [
     "error_kind_llm_visible",
     "FileBlock",
     "TextBlock",
+    "COMPACTION_SUMMARY_END_MARKER",
     "HISTORY_COMPACTION_GUIDANCE",
     "INTERRUPTED_TOOL_RESULT_CODE",
     "INTERRUPTED_TOOL_RESULT_MESSAGE",

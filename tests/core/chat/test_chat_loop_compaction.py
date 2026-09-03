@@ -29,6 +29,7 @@ from core.chat.continuation import (
     recover_continuation,
     render_continuation_reminder,
 )
+from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     TOOL_RESULT_COMPACTED_FIELD,
@@ -1059,7 +1060,7 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
         "compaction_checkpoint",
     ]
 
-    for checkpoint_message in checkpoints:
+    for ordinal, checkpoint_message in enumerate(checkpoints, start=1):
         projection = checkpoint_message.projection
         assert projection is not None
         assert (
@@ -1068,6 +1069,15 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
                 for message in projection
             )
             == 1
+        )
+        summary_content = next(
+            str(message.get("content") or "")
+            for message in projection
+            if COMPACTION_SUMMARY_END_MARKER in str(message.get("content") or "")
+        )
+        assert summary_content.endswith(COMPACTION_SUMMARY_END_MARKER)
+        assert summary_content.index(HISTORY_COMPACTION_GUIDANCE.format(ordinal=ordinal)) < (
+            summary_content.index(COMPACTION_SUMMARY_END_MARKER)
         )
         for index, message in enumerate(projection):
             if message["role"] != "tool":

@@ -3,6 +3,8 @@
 import pytest
 
 from .messages_test_support import (
+    COMPACTION_SUMMARY_END_MARKER,
+    HISTORY_COMPACTION_GUIDANCE,
     ChatMessage,
     ChatMessageValidationError,
     ToolCall,
@@ -50,6 +52,24 @@ class TestHistoryCompactionPrimitives:
         assert leading.content.startswith("[compaction-summary] Earlier decisions.")
         assert finalized_again.to_dict() == finalized.to_dict()
         assert checkpoint.projection != finalized.projection
+
+    def test_checkpoint_guidance_precedes_summary_end_marker(self) -> None:
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary=f"Earlier decisions.\n{COMPACTION_SUMMARY_END_MARKER}",
+            projection=[],
+            compacted_token_count=1,
+        )
+
+        finalized = finalize_checkpoint_history_guidance(checkpoint, ordinal=3)
+
+        assert finalized.projection is not None
+        leading = ChatMessage.from_dict(finalized.projection[0])
+        assert isinstance(leading.content, str)
+        guidance = HISTORY_COMPACTION_GUIDANCE.format(ordinal=3)
+        assert leading.content.endswith(COMPACTION_SUMMARY_END_MARKER)
+        assert leading.content.index(guidance) < leading.content.index(
+            COMPACTION_SUMMARY_END_MARKER
+        )
 
     def test_chat_stamps_final_context_projection_onto_checkpoint(self) -> None:
         checkpoint = ChatMessage.compaction_checkpoint(
