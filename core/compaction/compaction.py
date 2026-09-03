@@ -19,7 +19,11 @@ from core.chat.messages import (
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
 )
-from core.chat.wire_shaping import _notes_to_request_messages
+from core.chat.wire_shaping import (
+    SYSTEM_REMINDER_CLOSE_TAG,
+    SYSTEM_REMINDER_OPEN_TAG,
+    _notes_to_request_messages,
+)
 from core.debug.redaction import redact_json_body
 from core.sessions import current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
@@ -1048,12 +1052,24 @@ def _system_reminder_request_message(content: str) -> JsonObject:
 def _reference_summary(summary: str) -> str:
     """Wrap one plain summary as inert historical context with an explicit boundary."""
 
-    body = summary.strip()
+    body = _strip_outer_system_reminder_tags(summary)
     if body.startswith(COMPACTION_REFERENCE_PREFIX):
         body = body.removeprefix(COMPACTION_REFERENCE_PREFIX).lstrip()
     if body.endswith(COMPACTION_SUMMARY_END_MARKER):
         body = body.removesuffix(COMPACTION_SUMMARY_END_MARKER).rstrip()
+    body = _strip_outer_system_reminder_tags(body)
     return f"{COMPACTION_REFERENCE_PREFIX}\n{body}\n{COMPACTION_SUMMARY_END_MARKER}"
+
+
+def _strip_outer_system_reminder_tags(summary: str) -> str:
+    """Discard reminder delimiters copied from the summary request boundary."""
+
+    lines = summary.strip().splitlines()
+    while lines and lines[0].strip() == SYSTEM_REMINDER_OPEN_TAG:
+        lines.pop(0)
+    while lines and lines[-1].strip() == SYSTEM_REMINDER_CLOSE_TAG:
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:

@@ -31,6 +31,7 @@ from core.compaction.compaction import (
     COMPACTION_TRIGGER_MANUAL,
     CompactionPlan,
     _plan_working_tail,
+    _reference_summary,
     _tail_soft_limit,
     _tail_token_span,
 )
@@ -384,6 +385,42 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
     assert COMPACTION_REFERENCE_PREFIX in request_projection[0]["content"]
     assert COMPACTION_SUMMARY_END_MARKER in request_projection[0]["content"]
     assert request_projection[1]["content"] == "recent request"
+
+
+@pytest.mark.asyncio
+async def test_summary_tail_discards_copied_outer_system_reminder_tags() -> None:
+    summary_adapter = StubAdapter("<system-reminder>\nSUMMARY\n</system-reminder>")
+    messages = [
+        user("u1", "old request " * 100),
+        assistant("a1", "old response " * 100),
+        user("u2", "recent request"),
+        assistant("a2", "recent response"),
+    ]
+
+    result = await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=summary_adapter,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=_tail_token_span(messages[2:])),
+        request_messages=provider_request(messages),
+    )
+
+    assert result.content == (
+        f"{COMPACTION_REFERENCE_PREFIX}\nSUMMARY\n{COMPACTION_SUMMARY_END_MARKER}"
+    )
+    rendered = _embed_notes_into_request(_effective_compaction_messages([result]))[0]["content"]
+    assert rendered.count("<system-reminder>") == 1
+    assert rendered.count("</system-reminder>") == 1
+
+
+def test_reference_summary_keeps_non_boundary_reminder_tag_mentions() -> None:
+    summary = "Finding: an inline <system-reminder> example remains intact."
+
+    referenced = _reference_summary(summary)
+
+    assert summary in referenced
 
 
 @pytest.mark.asyncio
