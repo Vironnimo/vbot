@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -140,7 +141,12 @@ class _RealCompactionStorage(StubStorage):
 
     def read_prompt_fragment(self, name: str) -> str:
         self.prompt_fragment_reads.append(name)
-        assert name in {"compaction.md", "compaction-manual.md"}
+        assert name in {
+            "compaction.md",
+            "compaction-manual.md",
+            "compaction-continuation.md",
+            "compaction-continuation-manual.md",
+        }
         return "Summarize the earlier Context and preserve unfinished work."
 
 
@@ -160,7 +166,14 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
         adapter=StubAdapter([]),
         models=models,
     )
-    assert build_chat_loop(api_runtime).resolve_context_window(api_agent) == 1_050_000
+    api_loop = build_chat_loop(api_runtime)
+    assert api_loop.resolve_context_window(api_agent) == 1_050_000
+    subscription_target = SimpleNamespace(
+        provider_id="openai",
+        connection_id="openai:subscription",
+        model_id="gpt-5.4",
+    )
+    assert api_loop.resolve_context_window(api_agent, cast(Any, subscription_target)) == 272_000
 
     subscription_agent = StubAgent(
         id="subscription",
@@ -188,6 +201,7 @@ class _BlockingOnceCompactionService:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.attempted = False
+        self.checks = 0
 
     def has_new_compactable_context(
         self,
@@ -201,8 +215,10 @@ class _BlockingOnceCompactionService:
         _input_tokens: int,
         _context_window: int,
         _threshold: float,
+        **_kwargs: Any,
     ) -> bool:
-        return not self.attempted
+        self.checks += 1
+        return self.checks == 2 and not self.attempted
 
     async def compact(
         self,
@@ -992,7 +1008,7 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
     storage = _RealCompactionStorage(
         {
             "enabled": True,
-            "trigger": {"type": "input_tokens", "tokens": 1},
+            "trigger": {"type": "input_tokens", "tokens": 40_000},
             "strategy": {
                 "type": "summary_tail",
                 "tail_tokens": 1_000,
@@ -1081,6 +1097,87 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
     assert "SUMMARY TWO" not in final_projection
 
 
+@pytest.mark.asyncio
+async def test_continuation_compacts_before_first_request_and_after_complete_tool_results(
+    tmp_path: Path,
+) -> None:
+    current_user = "CURRENT_CONTINUATION_USER " + ("current work " * 5_000)
+    tool_payload = "alpha beta " * 5_000
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"])
+    adapter = _RealCompactionAdapter(
+        [
+            {
+                "content": None,
+                "usage": {"input_tokens": 50_000, "output_tokens": 10},
+                "tool_calls": [
+                    {
+                        "id": "call-one",
+                        "name": "word_count",
+                        "arguments": {"text": tool_payload},
+                    }
+                ],
+            },
+            {
+                "content": "CONTINUATION_DONE",
+                "usage": {"input_tokens": 50_000, "output_tokens": 2},
+                "tool_calls": None,
+            },
+        ],
+        summaries=["PREFLIGHT CHECKPOINT", "TOOL CHECKPOINT"],
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "word_count",
+        "Count words.",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        lambda _context, arguments: tool_success({"words": len(str(arguments["text"]).split())}),
+    )
+    storage = _RealCompactionStorage(
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 1},
+            "strategy": {"type": "continuation"},
+        },
+        data_dir=tmp_path,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=storage,
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD CONTEXT " + ("old work " * 5_000)))
+    session.append(ChatMessage.assistant(model=agent.model, content="old answer " * 5_000))
+
+    assistant = await build_chat_loop(
+        runtime,
+        compaction_service=CompactionService(),
+    ).send("coder", current_user, session_id=session.id)
+
+    assert assistant.content == "CONTINUATION_DONE"
+    assert adapter.events == ["compaction", "agent", "compaction", "agent"]
+    assert storage.prompt_fragment_reads == ["compaction-continuation.md"] * 2
+    assert len(adapter.stream_requests) == 2
+    assert current_user in json.dumps(adapter.stream_requests[0]["messages"])
+    second_compaction_roles = [
+        message["role"] for message in adapter.stream_requests[1]["messages"]
+    ]
+    assert second_compaction_roles[-3:] == ["assistant", "tool", "user"]
+    checkpoints = [message for message in session.load() if message.role == "compaction_checkpoint"]
+    assert [message.content for message in checkpoints] == [
+        "PREFLIGHT CHECKPOINT",
+        "TOOL CHECKPOINT",
+    ]
+
+
 def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
     call_id = "call-image"
     aged_content = json.dumps(
@@ -1111,6 +1208,7 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     class CompactOnce:
         def __init__(self) -> None:
             self.compacted = False
+            self.checks = 0
 
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
@@ -1127,8 +1225,10 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
             _input_tokens: int,
             _context_window: int,
             _threshold: float,
+            **_kwargs: Any,
         ) -> bool:
-            return not self.compacted
+            self.checks += 1
+            return self.checks == 2 and not self.compacted
 
         async def compact(self, messages: list[ChatMessage], **_kwargs: Any) -> ChatMessage:
             self.compacted = True

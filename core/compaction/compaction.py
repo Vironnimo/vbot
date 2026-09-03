@@ -83,6 +83,7 @@ class CompactionSettings:
     summary_model: str | None = None
     trigger: str = TRIGGER_CONTEXT_RATIO
     trigger_tokens: int = 100_000
+    max_input_tokens: int | None = None
     strategy: str = STRATEGY_SUMMARY_TAIL
 
 
@@ -104,14 +105,19 @@ class CompactionTrigger(Protocol):
 
 
 class ContextRatioTrigger:
-    """Trigger at a configured fraction of the Model Context window."""
+    """Trigger at a Model Context fraction or its optional absolute cap."""
 
     def should_compact(
         self, context: CompactionTriggerContext, settings: CompactionSettings
     ) -> bool:
         if context.context_window <= 0:
             return False
-        return (context.input_tokens / context.context_window) >= settings.threshold
+        ratio_reached = (context.input_tokens / context.context_window) >= settings.threshold
+        cap_reached = (
+            settings.max_input_tokens is not None
+            and context.input_tokens >= settings.max_input_tokens
+        )
+        return ratio_reached or cap_reached
 
 
 class InputTokensTrigger:

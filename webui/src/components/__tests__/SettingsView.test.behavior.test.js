@@ -152,6 +152,11 @@ describe('SettingsView', () => {
     await openCompactionPanel();
     await waitForModelCatalogs();
 
+    setInputValue(
+      'input[aria-label="Maximum input tokens (optional)"]',
+      '200000',
+    );
+
     await openSearchableDropdown('settings-compaction-summary-model');
     selectSearchableOption(
       'settings-compaction-summary-model',
@@ -164,7 +169,11 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()[0][1]).toEqual({
       compaction: {
         enabled: true,
-        trigger: { type: 'context_ratio', threshold: 0.8 },
+        trigger: {
+          type: 'context_ratio',
+          threshold: 0.8,
+          tokens: 200000,
+        },
         strategy: {
           type: 'summary_tail',
           tail_tokens: 15000,
@@ -185,7 +194,11 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()[1][1]).toEqual({
       compaction: {
         enabled: true,
-        trigger: { type: 'context_ratio', threshold: 0.8 },
+        trigger: {
+          type: 'context_ratio',
+          threshold: 0.8,
+          tokens: 200000,
+        },
         strategy: {
           type: 'summary_tail',
           tail_tokens: 15000,

@@ -35,7 +35,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             },
             "compaction": {
                 "enabled": False,
-                "trigger": {"type": "context_ratio", "threshold": 1},
+                "trigger": {"type": "context_ratio", "threshold": 1, "tokens": 200_000},
                 "strategy": {
                     "type": "summary_tail",
                     "tail_tokens": 12_000,
@@ -86,7 +86,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         },
         "compaction": {
             "enabled": False,
-            "trigger": {"type": "context_ratio", "threshold": 1.0},
+            "trigger": {"type": "context_ratio", "threshold": 1.0, "tokens": 200_000},
             "strategy": {
                 "type": "summary_tail",
                 "tail_tokens": 12_000,

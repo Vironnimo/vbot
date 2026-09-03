@@ -52,8 +52,14 @@
       ...policy,
       trigger:
         type === 'input_tokens'
-          ? { type, tokens: 100000 }
-          : { type, threshold: 0.8 },
+          ? { type, tokens: policy.trigger.tokens ?? 100000 }
+          : {
+              type,
+              threshold: 0.8,
+              ...(policy.trigger.tokens
+                ? { tokens: policy.trigger.tokens }
+                : {}),
+            },
     });
   }
 
@@ -85,7 +91,7 @@
       <div class="compaction-policy-editor__description">
         {t(
           'compaction.enabledDescription',
-          'Evaluate this Policy after safe, completed Model steps.',
+          'Compact before a Model request or after complete Tool Results when the configured ratio or token limit is reached.',
         )}
       </div>
     </div>
@@ -127,6 +133,24 @@
           {disabled}
           ariaLabel={t('compaction.trigger.threshold', 'Context ratio')}
           onInput={(next) => changeTriggerField('threshold', next)}
+        />
+      </FormField>
+      <FormField
+        label={t(
+          'compaction.trigger.maxTokens',
+          'Maximum input tokens (optional)',
+        )}
+      >
+        <TextField
+          type="number"
+          value={policy.trigger.tokens ?? ''}
+          {disabled}
+          placeholder={t('compaction.trigger.noTokenCap', 'No token cap')}
+          ariaLabel={t(
+            'compaction.trigger.maxTokens',
+            'Maximum input tokens (optional)',
+          )}
+          onInput={(next) => changeTriggerField('tokens', next)}
         />
       </FormField>
     {/if}

@@ -43,6 +43,28 @@ describe('Compaction Policy helpers', () => {
     });
   });
 
+  it('combines a context ratio with an optional absolute token cap', () => {
+    expect(
+      buildCompactionPolicyPayload({
+        enabled: true,
+        trigger: {
+          type: 'context_ratio',
+          threshold: '0,8',
+          tokens: '200000',
+        },
+        strategy: { type: 'continuation' },
+      }),
+    ).toEqual({
+      enabled: true,
+      trigger: {
+        type: 'context_ratio',
+        threshold: 0.8,
+        tokens: 200000,
+      },
+      strategy: { type: 'continuation' },
+    });
+  });
+
   it('compares normalized Policies rather than draft input types', () => {
     expect(
       compactionPoliciesEqual(

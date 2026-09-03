@@ -506,7 +506,11 @@ def _validate_compaction_trigger(diagnostics: list[JsonDiagnostic], value: Any, 
     trigger_type = value.get("type", "context_ratio")
     if trigger_type == "context_ratio":
         _warn_unknown_keys(
-            diagnostics, path, value, frozenset({"type", "threshold"}), "trigger field"
+            diagnostics,
+            path,
+            value,
+            frozenset({"type", "threshold", "tokens"}),
+            "trigger field",
         )
         if "threshold" in value:
             threshold = value["threshold"]
@@ -514,6 +518,10 @@ def _validate_compaction_trigger(diagnostics: list[JsonDiagnostic], value: Any, 
                 _error(diagnostics, f"{path}.threshold", "must be a number")
             elif not 0 < float(threshold) <= 1:
                 _error(diagnostics, f"{path}.threshold", "must be in (0, 1]")
+        if "tokens" in value:
+            _validate_positive_integer(
+                diagnostics, f"{path}.tokens", value["tokens"], required=True
+            )
         return
     if trigger_type == "input_tokens":
         _warn_unknown_keys(diagnostics, path, value, frozenset({"type", "tokens"}), "trigger field")

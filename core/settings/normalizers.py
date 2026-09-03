@@ -337,15 +337,20 @@ def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
     trigger = dict(value)
     trigger_type = trigger.get("type", "context_ratio")
     if trigger_type == "context_ratio":
-        unsupported = sorted(set(trigger) - {"type", "threshold"})
+        unsupported = sorted(set(trigger) - {"type", "threshold", "tokens"})
         if unsupported:
             raise StorageError(
                 f"Unsupported context-ratio Trigger fields: {', '.join(unsupported)}"
             )
-        return {
+        normalized = {
             "type": trigger_type,
             "threshold": _normalize_compaction_threshold(trigger.get("threshold")),
         }
+        if trigger.get("tokens") is not None:
+            normalized["tokens"] = _normalize_compaction_positive_integer(
+                trigger["tokens"], "tokens", 100_000
+            )
+        return normalized
     if trigger_type == "input_tokens":
         unsupported = sorted(set(trigger) - {"type", "tokens"})
         if unsupported:

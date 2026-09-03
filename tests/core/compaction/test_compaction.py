@@ -28,6 +28,7 @@ from core.compaction import (
 from core.compaction.compaction import (
     COMPACTION_REFERENCE_PREFIX,
     COMPACTION_SUMMARY_END_MARKER,
+    COMPACTION_TRIGGER_MANUAL,
     CompactionPlan,
     _plan_working_tail,
     _tail_soft_limit,
@@ -288,6 +289,11 @@ def test_context_ratio_and_absolute_token_triggers() -> None:
     settings = CompactionSettings(trigger="input_tokens", trigger_tokens=100_000)
     assert service.should_auto_compact(100_000, 1_000_000, 0.8, settings=settings)
     assert not service.should_auto_compact(99_999, 1_000_000, 0.8, settings=settings)
+
+    capped_ratio = CompactionSettings(threshold=0.8, max_input_tokens=200_000)
+    assert service.should_auto_compact(200_000, 1_000_000, 0.8, settings=capped_ratio)
+    assert not service.should_auto_compact(199_999, 1_000_000, 0.8, settings=capped_ratio)
+    assert service.should_auto_compact(80_000, 100_000, 0.8, settings=capped_ratio)
 
 
 def test_request_estimate_reserves_tool_result_media_without_counting_base64() -> None:
@@ -946,6 +952,7 @@ async def test_summary_target_uses_summary_temperature_not_active_temperature() 
 async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     active = StubAdapter("ACTIVE SUMMARY")
     summary = StubAdapter("must not be used")
+    storage = StubStorage()
     request = [
         {"role": "system", "content": "system"},
         {"role": "user", "content": "hello"},
@@ -958,7 +965,7 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
         agent=object(),
         summary_adapter=summary,
         summary_model_id="openai/summary",
-        storage=StubStorage(),
+        storage=storage,
         settings=CompactionSettings(strategy="continuation"),
         request_messages=request,
         active_adapter=active,
@@ -980,6 +987,28 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     assert result.content == "ACTIVE SUMMARY"
     assert result.projection is not None
     assert len(result.projection) == 1
+    assert storage.read_names == ["compaction-continuation.md"]
+
+
+@pytest.mark.asyncio
+async def test_manual_continuation_uses_the_non_continuing_prompt() -> None:
+    active = StubAdapter("MANUAL CHECKPOINT")
+    storage = StubStorage()
+
+    await CompactionService().compact(
+        [user("u1", "hello")],
+        agent=object(),
+        summary_adapter=StubAdapter("must not be used"),
+        summary_model_id="openai/summary",
+        storage=storage,
+        settings=CompactionSettings(strategy="continuation"),
+        request_messages=[{"role": "system", "content": "system"}],
+        trigger=COMPACTION_TRIGGER_MANUAL,
+        active_adapter=active,
+        active_model_id="openai/active",
+    )
+
+    assert storage.read_names == ["compaction-continuation-manual.md"]
 
 
 @pytest.mark.asyncio

@@ -701,6 +701,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             self.compacted = False
             self.compact_calls = 0
             self.request_messages: list[JsonObject] = []
+            self.checks = 0
 
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
@@ -717,8 +718,10 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             _input_tokens: int,
             _context_window: int,
             _threshold: float,
+            **_kwargs: Any,
         ) -> bool:
-            return not self.compacted
+            self.checks += 1
+            return self.checks == 2 and not self.compacted
 
         async def compact(
             self,

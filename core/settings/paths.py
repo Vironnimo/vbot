@@ -344,8 +344,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "compaction.trigger.tokens",
         "integer",
-        "Input-token count that triggers Compaction.",
-        default=100_000,
+        "Absolute input-token Trigger or optional cap for a context-ratio Trigger.",
         minimum=1,
     ),
     _static(

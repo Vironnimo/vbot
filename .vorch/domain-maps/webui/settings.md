@@ -6,6 +6,8 @@ Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, 
 
 `SettingsView.svelte` composes the Settings surface and keeps all sections mounted as one searchable document. Section navigation and search reveal or focus existing panels; they do not create independent settings routes with separate copies of server state.
 
+The Compaction Policy editor keeps the pure absolute Trigger and also exposes an optional maximum-input-token cap alongside the Context ratio. Its shared normalizer omits an empty cap and preserves a positive cap in every scope payload, so `0.8` plus `200000` means whichever boundary is reached first.
+
 The App shell retains the Settings document's reading anchor while another main view is active. `SettingsView` restores that section-relative anchor while its independently loaded panels settle; deliberate deep links replace the remembered position. Scrollspy and section navigation share a 32%-from-top reading line, and a scrollport-sized trailing spacer lets the final section reach that line.
 
 `settingsView.js` owns normalization and payload builders shared by the panels. Each panel loads and submits through `api.js`, keeps editable values local until save, and adopts server responses after mutation. Decimal settings remain strings during editing and are normalized only when building the payload.
