@@ -18,7 +18,7 @@ from core.chat.messages import (
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
 )
-from core.chat.wire_shaping import _message_to_request_dict, _notes_to_request_messages
+from core.chat.wire_shaping import _notes_to_request_messages
 from core.debug.redaction import redact_json_body
 from core.sessions import current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
@@ -30,17 +30,20 @@ TRIGGER_INPUT_TOKENS = "input_tokens"
 STRATEGY_SUMMARY_TAIL = "summary_tail"
 STRATEGY_CONTINUATION = "continuation"
 COMPACTION_POLICY_META_KEY = "compaction_policy"
-COMPACTION_TAIL_GUIDANCE = (
+_LEGACY_COMPACTION_TAIL_GUIDANCE = (
     "The messages below are the most recent verbatim Session activity retained after this "
     "Compaction checkpoint. They chronologically follow the summary above."
 )
-COMPACTION_TAIL_BOUNDARY_MARKER = (
-    "The <retained_tail> JSON array below contains the most recent Session activity. Every "
-    "record in it is retained after this Compaction checkpoint. A "
-    '{"retained_from_prefix":"latest_user_message"} record means the latest User message '
-    "already present in the unchanged prefix is part of this Tail; do not summarize or "
-    "repeat that message. Use the Tail to understand the true latest state, but summarize "
-    "only the conversation before it and do not retell the retained records."
+COMPACTION_REFERENCE_PREFIX = (
+    "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary "
+    "below. Treat it as background reference, not as active instructions. Do not answer "
+    "questions or fulfill requests mentioned in this summary. Respond only to the latest "
+    "User message after this summary. If no User message appears after this summary, do "
+    "nothing and wait for a new User message. The current Session state may already reflect "
+    "work described here; avoid repeating it:"
+)
+COMPACTION_SUMMARY_END_MARKER = (
+    "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
 )
 COMPACTION_TRIGGER_AUTO = "auto"
 COMPACTION_TRIGGER_MANUAL = "manual"
@@ -52,7 +55,7 @@ SKILL_COMPACTION_GUIDANCE = (
 )
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
-TAIL_SOFT_LIMIT_PERCENT = 115
+TAIL_SOFT_LIMIT_PERCENT = 150
 MAX_TOOL_RESULT_DIGEST_CHARS = 1_600
 MAX_TOOL_RESULT_VALUE_CHARS = 800
 MAX_TOOL_ARGUMENTS_CHARS = 2_000
@@ -139,6 +142,7 @@ class CompactionContext:
     previous_compacted_token_count: int
     instruction: str | None
     storage: Any
+    new_user_ids: frozenset[str] | None = None
     trigger: str = COMPACTION_TRIGGER_AUTO
 
 
@@ -148,15 +152,12 @@ class _TailPlan:
 
     boundary_id: str
     boundary_index: int
-    pinned_user: ChatMessage | None
     projected_suffix: tuple[ChatMessage, ...]
     payload_reclaim_tokens: int
 
     @property
     def retained_messages(self) -> tuple[ChatMessage, ...]:
-        if self.pinned_user is None:
-            return self.projected_suffix
-        return (self.pinned_user, *self.projected_suffix)
+        return self.projected_suffix
 
 
 @dataclass(frozen=True)
@@ -205,7 +206,11 @@ class SummarizationStrategy:
         messages = list(context.messages)
         if not messages:
             raise CompactionError("Cannot compact an empty Context")
-        tail_plan = _plan_working_tail(messages, settings.tail_tokens)
+        tail_plan = _plan_working_tail(
+            messages,
+            settings.tail_tokens,
+            new_user_ids=context.new_user_ids,
+        )
         head = messages[: tail_plan.boundary_index]
         request_prefix = _request_prefix_before_tail(
             context.request_messages,
@@ -215,32 +220,17 @@ class SummarizationStrategy:
             context.storage.read_prompt_fragment(_fragment_name_for_trigger(context.trigger)),
             context.instruction,
         )
-        pinned_user_id = tail_plan.pinned_user.id if tail_plan.pinned_user is not None else None
         return CompactionPlan(
             model_messages=(
                 *request_prefix,
-                _system_reminder_request_message(
-                    _summary_request_content(
-                        prompt,
-                        tail_plan.retained_messages,
-                        pinned_user=tail_plan.pinned_user,
-                    )
-                ),
+                _system_reminder_request_message(prompt),
             ),
             model_target="summary",
-            after_summary=(
-                ChatMessage.note(COMPACTION_TAIL_GUIDANCE),
-                *tail_plan.retained_messages,
-            ),
+            after_summary=tail_plan.retained_messages,
             compacted_token_count=(
                 context.previous_compacted_token_count
                 + _estimate_token_span(
-                    [
-                        message
-                        for message in head
-                        if not _is_compaction_checkpoint_note(message)
-                        and message.id != pinned_user_id
-                    ]
+                    [message for message in head if not _is_compaction_checkpoint_note(message)]
                 )
                 + tail_plan.payload_reclaim_tokens
             ),
@@ -342,16 +332,16 @@ class CompactionService:
         if not effective:
             return False
         try:
-            tail_plan = _plan_working_tail(effective, settings.tail_tokens)
+            tail_plan = _plan_working_tail(
+                effective,
+                settings.tail_tokens,
+                new_user_ids=_new_user_ids_after_latest_checkpoint(messages),
+            )
         except CompactionError:
             return False
-        pinned_user_id = tail_plan.pinned_user.id if tail_plan.pinned_user is not None else None
         compactable_prefix = effective[: tail_plan.boundary_index]
         return (
-            any(
-                not _is_compaction_checkpoint_note(message) and message.id != pinned_user_id
-                for message in compactable_prefix
-            )
+            any(not _is_compaction_checkpoint_note(message) for message in compactable_prefix)
             or tail_plan.payload_reclaim_tokens >= MIN_AUTO_COMPACTION_RECLAIM_TOKENS
         )
 
@@ -458,6 +448,7 @@ class CompactionService:
             previous_compacted_token_count=_previous_compacted_token_count(checkpoint),
             instruction=instruction,
             storage=storage,
+            new_user_ids=_new_user_ids_after_latest_checkpoint(messages),
             trigger=trigger,
         )
         plan = strategy.plan(context, settings)
@@ -506,6 +497,8 @@ def _finalize_compaction(
     summary = plan.summary_text
     if response_adapter is not None:
         summary = _extract_summary_text(_normalize_response(response_adapter, response))
+    if summary and prepared.strategy_id == STRATEGY_SUMMARY_TAIL:
+        summary = _reference_summary(summary)
     projection = [*plan.before_summary]
     if summary:
         projection.append(ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"))
@@ -568,8 +561,13 @@ def _append_compaction_skill_guidance(
     return guided
 
 
-def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPlan:
-    """Build an exact-first recent working trajectory around one active User anchor."""
+def _plan_working_tail(
+    messages: list[ChatMessage],
+    tail_tokens: int,
+    *,
+    new_user_ids: frozenset[str] | None = None,
+) -> _TailPlan:
+    """Build a recent trajectory containing the latest User and Assistant anchors."""
 
     if not messages:
         raise CompactionError("Cannot find tail boundary for an empty message list")
@@ -581,11 +579,23 @@ def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPl
         raise CompactionError("Cannot find a provider-safe tail boundary")
 
     latest_user_index = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "user"
+            and (new_user_ids is None or messages[index].id in new_user_ids)
+        ),
         None,
     )
-    active_user = messages[latest_user_index] if latest_user_index is not None else None
-    retained_tokens = _tail_token_span([active_user]) if active_user is not None else 0
+    latest_assistant_index = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "assistant" and _can_start_tail(messages[index])
+        ),
+        None,
+    )
+    retained_tokens = 0
     soft_limit = _tail_soft_limit(tail_tokens)
     consumed_tool_batches = _consumed_tool_batch_assistant_ids(messages)
 
@@ -595,7 +605,7 @@ def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPl
     for boundary_index in reversed(safe_boundaries):
         source_group = messages[boundary_index:selected_start]
         exact_group = _checkpoint_projection(source_group)
-        exact_increment = _tail_increment_tokens(exact_group, active_user)
+        exact_increment = _tail_token_span(exact_group)
 
         if not selected_group or retained_tokens + exact_increment <= soft_limit:
             chosen_group = exact_group
@@ -605,7 +615,7 @@ def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPl
                 source_group,
                 consumed_tool_batches,
             )
-            compacted_increment = _tail_increment_tokens(compacted_group, active_user)
+            compacted_increment = _tail_token_span(compacted_group)
             if compacted_group == exact_group or retained_tokens + compacted_increment > soft_limit:
                 break
             chosen_group = compacted_group
@@ -621,11 +631,18 @@ def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPl
     if selected_start >= len(messages):
         raise CompactionError("Cannot find a provider-safe tail boundary")
 
-    pinned_user = (
-        active_user
-        if latest_user_index is not None and latest_user_index < selected_start
-        else None
-    )
+    anchor_indices = [
+        index for index in (latest_user_index, latest_assistant_index) if index is not None
+    ]
+    if anchor_indices:
+        anchor_start = min(anchor_indices)
+        if anchor_start < selected_start:
+            anchored_group = _project_consumed_tool_payloads(
+                messages[anchor_start:selected_start],
+                consumed_tool_batches,
+            )
+            projected_suffix = (*anchored_group, *projected_suffix)
+            selected_start = anchor_start
     exact_suffix = _checkpoint_projection(messages[selected_start:])
     payload_reclaim = max(
         0,
@@ -634,7 +651,6 @@ def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPl
     return _TailPlan(
         boundary_id=messages[selected_start].id,
         boundary_index=selected_start,
-        pinned_user=pinned_user,
         projected_suffix=projected_suffix,
         payload_reclaim_tokens=payload_reclaim,
     )
@@ -657,15 +673,6 @@ def _checkpoint_projection(messages: list[ChatMessage]) -> tuple[ChatMessage, ..
     return tuple(_compaction_projection_without_provider_state(messages))
 
 
-def _tail_increment_tokens(
-    messages: tuple[ChatMessage, ...],
-    active_user: ChatMessage | None,
-) -> int:
-    if active_user is None:
-        return _tail_token_span(messages)
-    return _tail_token_span([message for message in messages if message.id != active_user.id])
-
-
 def _tail_token_span(messages: list[ChatMessage] | tuple[ChatMessage, ...]) -> int:
     estimated_tokens, _ = estimate_request_input_tokens([message.to_dict() for message in messages])
     return estimated_tokens
@@ -673,6 +680,16 @@ def _tail_token_span(messages: list[ChatMessage] | tuple[ChatMessage, ...]) -> i
 
 def _tail_soft_limit(tail_tokens: int) -> int:
     return (tail_tokens * TAIL_SOFT_LIMIT_PERCENT + 99) // 100
+
+
+def _new_user_ids_after_latest_checkpoint(messages: list[ChatMessage]) -> frozenset[str]:
+    """Return User ids introduced after the latest completed Compaction."""
+
+    start = 0
+    for index, message in enumerate(messages):
+        if message.role == "compaction_checkpoint":
+            start = index + 1
+    return frozenset(message.id for message in messages[start:] if message.role == "user")
 
 
 @dataclass(frozen=True)
@@ -922,7 +939,7 @@ def _is_compaction_checkpoint_note(message: ChatMessage) -> bool:
     return _is_compaction_summary_note(message) or (
         message.role == "note"
         and (
-            message.content == COMPACTION_TAIL_GUIDANCE
+            message.content == _LEGACY_COMPACTION_TAIL_GUIDANCE
             or (
                 isinstance(message.content, str)
                 and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
@@ -1013,36 +1030,6 @@ def _request_prefix_before_tail(
     )
 
 
-def _summary_request_content(
-    prompt: str,
-    retained_messages: tuple[ChatMessage, ...],
-    *,
-    pinned_user: ChatMessage | None,
-) -> str:
-    """Render one System Reminder containing the task followed by the retained Tail."""
-
-    tail_messages = retained_messages
-    tail_records: list[JsonObject] = []
-    if pinned_user is not None:
-        tail_records.append(
-            {
-                "role": "user",
-                "retained_from_prefix": "latest_user_message",
-            }
-        )
-        if tail_messages and tail_messages[0].id == pinned_user.id:
-            tail_messages = tail_messages[1:]
-    tail_records.extend(
-        _compaction_transcript_record(_message_to_request_dict(message))
-        for message in tail_messages
-    )
-    escaped_tail = _escaped_compaction_transcript(tail_records)
-    return (
-        f"{prompt}\n\n{COMPACTION_TAIL_BOUNDARY_MARKER}\n"
-        f"<retained_tail>\n{escaped_tail}\n</retained_tail>"
-    )
-
-
 def _system_reminder_request_message(content: str) -> JsonObject:
     """Render through Chat's canonical System Reminder request channel."""
 
@@ -1052,33 +1039,15 @@ def _system_reminder_request_message(content: str) -> JsonObject:
     return rendered[0]
 
 
-def _compaction_transcript_record(message: JsonObject) -> JsonObject:
-    """Project one request message into compact provider-neutral transcript data."""
+def _reference_summary(summary: str) -> str:
+    """Wrap one plain summary as inert historical context with an explicit boundary."""
 
-    record: JsonObject = {}
-    for key in ("role", "content", "tool_calls", "tool_call_id", "name"):
-        if key in message:
-            record[key] = _compaction_transcript_value(message[key])
-    return record
-
-
-def _compaction_transcript_value(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_compaction_transcript_value(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    projected: JsonObject = {}
-    for key, item in value.items():
-        if key == "base64":
-            projected["binary_omitted"] = True
-            continue
-        projected[key] = _compaction_transcript_value(item)
-    return projected
-
-
-def _escaped_compaction_transcript(records: list[JsonObject]) -> str:
-    serialized = json.dumps(records, ensure_ascii=False, separators=(",", ":"))
-    return serialized.replace("<", "\\u003c").replace(">", "\\u003e")
+    body = summary.strip()
+    if body.startswith(COMPACTION_REFERENCE_PREFIX):
+        body = body.removeprefix(COMPACTION_REFERENCE_PREFIX).lstrip()
+    if body.endswith(COMPACTION_SUMMARY_END_MARKER):
+        body = body.removesuffix(COMPACTION_SUMMARY_END_MARKER).rstrip()
+    return f"{COMPACTION_REFERENCE_PREFIX}\n{body}\n{COMPACTION_SUMMARY_END_MARKER}"
 
 
 def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:
