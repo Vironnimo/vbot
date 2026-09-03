@@ -44,7 +44,11 @@ def test_server_setup_initializes_layout_before_writing_fresh_settings(
 ) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
-    layout_reference = "core\\storage\\layout.py" if script_name.endswith(".ps1") else "core/storage/layout.py"
+    layout_reference = (
+        "core\\storage\\layout.py"
+        if script_name.endswith(".ps1")
+        else "core/storage/layout.py"
+    )
     fresh_settings_branch = (
         "if ($settingsWasMissing) {"
         if script_name.endswith(".ps1")
@@ -241,7 +245,7 @@ def test_fresh_server_install_seeds_global_agent_defaults(script_name: str) -> N
         assert "$DefaultAgentTemperature = 0.1" in script
         assert '$DefaultAgentThinkingEffort = "high"' in script
         creation = script[
-            script.index("if (-not (Test-Path $settingsPath))") : script.index(
+            script.index("if ($settingsWasMissing) {") : script.index(
                 "elseif ($SyncPortIntoSettings)"
             )
         ]

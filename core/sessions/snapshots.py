@@ -102,8 +102,8 @@ class _OperationLock:
                 import msvcrt
 
                 os.lseek(self.fd, 0, os.SEEK_SET)
-                locking = getattr(msvcrt, "locking")
-                locking(self.fd, getattr(msvcrt, "LK_UNLCK"), 1)
+                windows_console: Any = msvcrt
+                windows_console.locking(self.fd, windows_console.LK_UNLCK, 1)
             else:
                 import fcntl
 
@@ -235,8 +235,8 @@ def _acquire_lock(
             if os.name == "nt":
                 import msvcrt
 
-                locking = getattr(msvcrt, "locking")
-                locking(descriptor, getattr(msvcrt, "LK_NBLCK"), 1)
+                windows_console: Any = msvcrt
+                windows_console.locking(descriptor, windows_console.LK_NBLCK, 1)
             else:
                 import fcntl
 
