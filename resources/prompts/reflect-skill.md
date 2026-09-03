@@ -11,7 +11,7 @@ Prefer the smallest durable change in this order:
 1. Update a private Skill used in this Session. Read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
 2. Update another existing private Skill. Call `skill` with no arguments to list your Skills, inspect the best candidate with `skill`, and add the lesson where it naturally belongs.
 3. Add a focused support file to an existing Skill under `references/`, `scripts/`, or `assets/`, then point to it briefly from `SKILL.md`.
-4. Create a new private Skill only when no existing Skill owns this class of work. Name it for the reusable task class, never for today's ticket, error string, or codename.
+4. CREATE A NEW SKILL only when no existing Skill owns this class of work. Name it for the reusable task class, never for today's ticket, error string, or codename. Write its `description` as ONE sentence with at most 60 characters, trigger first — COUNT the characters before saving. Future Sessions decide from the description alone whether the Skill loads, and the catalog lists every Skill by description in every Session, so a long description costs context each time and buries the trigger.
 
 Make only the change supported by the reviewed evidence. Do not add unrelated improvements, helper scripts, templates, or completeness work. Because this Reflection Run cannot execute support scripts, create or change a script only when that exact script or procedure already ran successfully in the reviewed Session; otherwise save instructions or a reference.
 
