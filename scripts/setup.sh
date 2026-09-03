@@ -123,8 +123,6 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
         "~") DATA_DIR="$HOME" ;;
         "~/"*) DATA_DIR="${HOME}/${DATA_DIR#\~/}" ;;
     esac
-    mkdir -p "$DATA_DIR"
-    DATA_DIR="$(cd "$DATA_DIR" && pwd)"
 fi
 
 resolve_python() {
@@ -263,6 +261,17 @@ PYEOF
 # desktop-client mode, which connects to a remote server and owns no local one.
 if [ "$DESKTOP_CLIENT" -eq 0 ]; then
     SETTINGS_PATH="${DATA_DIR}/settings.json"
+    settings_was_missing=0
+    if [ ! -f "$SETTINGS_PATH" ]; then
+        settings_was_missing=1
+    fi
+
+    "$PYTHON" "${PROJECT_ROOT}/core/storage/layout.py" "$DATA_DIR" \
+        --resources-dir "${PROJECT_ROOT}/resources" \
+        || fail "Could not initialize the canonical data-directory layout: ${DATA_DIR}"
+    DATA_DIR="$(cd "$DATA_DIR" && pwd)"
+    SETTINGS_PATH="${DATA_DIR}/settings.json"
+
     if [ "$PORT_PROVIDED" -eq 0 ]; then
         configured_port="$(read_settings_port "$SETTINGS_PATH")" \
             || fail "Existing settings.json is not usable and was not overwritten: ${SETTINGS_PATH}"
@@ -279,7 +288,7 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
     fi
 
     step "Preparing data directory: ${DATA_DIR}"
-    if [ ! -f "$SETTINGS_PATH" ]; then
+    if [ "$settings_was_missing" -eq 1 ]; then
         printf '{\n    "server_port": %s,\n    "defaults": {\n        "agent": {\n            "temperature": %s,\n            "thinking_effort": "%s"\n        }\n    }\n}\n' \
             "$PORT" "$DEFAULT_AGENT_TEMPERATURE" "$DEFAULT_AGENT_THINKING_EFFORT" > "$SETTINGS_PATH"
         echo "Created settings.json with server_port ${PORT} and fresh-install Agent defaults."
@@ -295,10 +304,6 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
         # Validity was already checked while resolving the port.
         echo "Keeping existing valid settings.json."
     fi
-
-    "$PYTHON" "${PROJECT_ROOT}/core/storage/layout.py" "$DATA_DIR" \
-        --resources-dir "${PROJECT_ROOT}/resources" \
-        || fail "Could not initialize the canonical data-directory layout: ${DATA_DIR}"
 fi
 
 # --dev swaps the base groups; --desktop stays an add-on on top of either base,

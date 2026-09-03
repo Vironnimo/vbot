@@ -309,11 +309,18 @@ function Initialize-DataDirectory {
     )
 
     Write-Step "Preparing data directory: $ResolvedDataDir"
-    New-Item -ItemType Directory -Path $ResolvedDataDir -Force | Out-Null
-
     $settingsPath = Join-Path $ResolvedDataDir "settings.json"
+    $settingsWasMissing = -not (Test-Path -LiteralPath $settingsPath -PathType Leaf)
+
+    Invoke-External $Python @(
+        (Join-Path $ProjectRoot "core\storage\layout.py"),
+        $ResolvedDataDir,
+        "--resources-dir",
+        (Join-Path $ProjectRoot "resources")
+    )
+
     Assert-ValidSettingsJson $settingsPath
-    if (-not (Test-Path $settingsPath)) {
+    if ($settingsWasMissing) {
         $settings = [ordered]@{
             server_port = $ResolvedPort
             defaults = [ordered]@{
@@ -338,13 +345,6 @@ function Initialize-DataDirectory {
     else {
         Write-Host "Keeping existing valid settings.json."
     }
-
-    Invoke-External $Python @(
-        (Join-Path $ProjectRoot "core\storage\layout.py"),
-        $ResolvedDataDir,
-        "--resources-dir",
-        (Join-Path $ProjectRoot "resources")
-    )
 }
 
 function Install-PythonPackage {
