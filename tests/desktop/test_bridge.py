@@ -664,6 +664,71 @@ def test_parallel_wakeword_enable_disable_is_one_serialized_worker_lifecycle(
     assert bridge.getWakewordStatus()["enabled"] is False
 
 
+def test_disable_waits_for_inflight_readiness_and_wins(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": False})
+    readiness_entered = threading.Event()
+    release_readiness = threading.Event()
+    workers: list[FakeWorker] = []
+
+    def check_readiness(_server_url: str) -> None:
+        readiness_entered.set()
+        assert release_readiness.wait(timeout=1)
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker_factory=worker_factory,
+        server_url="http://127.0.0.1:8420",
+        speech_readiness_checker=check_readiness,
+    )
+    enable_thread = threading.Thread(target=bridge.setWakewordEnabled, args=(True,))
+    disable_thread = threading.Thread(target=bridge.setWakewordEnabled, args=(False,))
+
+    enable_thread.start()
+    assert readiness_entered.wait(timeout=1)
+    disable_thread.start()
+
+    assert disable_thread.is_alive()
+    release_readiness.set()
+    enable_thread.join(timeout=1)
+    disable_thread.join(timeout=1)
+
+    assert len(workers) == 1
+    assert workers[0].stopped is True
+    assert bridge.getWakewordStatus()["enabled"] is False
+
+
+def test_reenable_replaces_factory_worker_that_did_not_stop_in_time(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": False})
+
+    class StuckWorker(FakeWorker):
+        def stop(self) -> None:
+            self.stopped = True
+
+    workers: list[StuckWorker] = []
+
+    def worker_factory(_bridge: DesktopBridge) -> StuckWorker:
+        worker = StuckWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+
+    bridge.setWakewordEnabled(True)
+    bridge.setWakewordEnabled(False)
+    bridge.setWakewordEnabled(True)
+
+    assert len(workers) == 2
+    assert workers[0].stopped is True
+    assert workers[1].started is True
+
+
 def test_set_wakeword_config_recreates_running_worker(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file, {"enabled": True})
@@ -830,6 +895,69 @@ def test_model_import_validation_does_not_block_status_polling(tmp_path: Path) -
     assert not status_thread.is_alive()
     assert not import_thread.is_alive()
     assert errors == []
+
+
+def test_disable_during_import_is_applied_after_import_restart(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(
+        settings_file,
+        {
+            "enabled": True,
+            "active_model_ids": [DEFAULT_WAKEWORD_MODEL_IDS[0]],
+        },
+    )
+    restart_entered = threading.Event()
+    release_restart = threading.Event()
+    workers: list[FakeWorker] = []
+
+    class ImportCatalog:
+        @staticmethod
+        def import_model(_filename: str, _content: bytes) -> WakewordModelDescriptor:
+            return WakewordModelDescriptor(
+                id="custom/model",
+                label="Model",
+                source="imported",
+                format="tflite",
+                removable=True,
+                target="model.tflite",
+            )
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        model_catalog=ImportCatalog(),
+        worker_factory=worker_factory,
+    )
+    original_restart = bridge._restart_worker
+
+    def blocking_restart(enabled: bool) -> None:
+        restart_entered.set()
+        assert release_restart.wait(timeout=1)
+        original_restart(enabled)
+
+    bridge._restart_worker = blocking_restart  # type: ignore[method-assign]
+    import_thread = threading.Thread(
+        target=bridge.importWakewordModel,
+        args=("model.tflite", base64.b64encode(b"model").decode()),
+    )
+    disable_thread = threading.Thread(target=bridge.setWakewordEnabled, args=(False,))
+
+    import_thread.start()
+    assert restart_entered.wait(timeout=1)
+    disable_thread.start()
+
+    assert disable_thread.is_alive()
+    release_restart.set()
+    import_thread.join(timeout=1)
+    disable_thread.join(timeout=1)
+
+    assert len(workers) == 1
+    assert workers[0].stopped is True
+    assert bridge.getWakewordStatus()["enabled"] is False
 
 
 def test_sensitivity_is_preserved_per_wakeword_model(tmp_path: Path) -> None:

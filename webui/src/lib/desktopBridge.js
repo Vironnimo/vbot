@@ -93,18 +93,14 @@ export async function getDesktopCapabilities() {
   if (cachedCapabilities && cachedBridgeApi === window.pywebview.api) {
     return cachedCapabilities;
   }
-  try {
-    const caps = await callBridge('getDesktopCapabilities');
-    cachedCapabilities = {
-      wakeword: Boolean(caps?.wakeword),
-      serverSelection: Boolean(caps?.serverSelection),
-      contextMenu: Boolean(caps?.contextMenu),
-    };
-    cachedBridgeApi = window.pywebview.api;
-    return cachedCapabilities;
-  } catch {
-    return { ...DISABLED_DESKTOP_CAPABILITIES };
-  }
+  const caps = await callBridge('getDesktopCapabilities');
+  cachedCapabilities = {
+    wakeword: Boolean(caps?.wakeword),
+    serverSelection: Boolean(caps?.serverSelection),
+    contextMenu: Boolean(caps?.contextMenu),
+  };
+  cachedBridgeApi = window.pywebview.api;
+  return cachedCapabilities;
 }
 
 /** Replace the Desktop host clipboard with plain text. */
@@ -154,11 +150,7 @@ export async function selectDesktopServer(host, port) {
 
 /** Fetch the current wakeword status from the bridge. */
 export async function getWakewordStatus() {
-  try {
-    return await callBridge('getWakewordStatus');
-  } catch {
-    return { enabled: false, state: 'off' };
-  }
+  return callBridge('getWakewordStatus');
 }
 
 /** Enable or disable wakeword listening. */
@@ -173,22 +165,14 @@ export async function setWakewordConfig(config) {
 
 /** Enumerate Desktop-local microphone devices and compatibility. */
 export async function listMicrophones() {
-  try {
-    const devices = await callBridge('listMicrophones');
-    return Array.isArray(devices) ? devices : [];
-  } catch {
-    return [];
-  }
+  const devices = await callBridge('listMicrophones');
+  return Array.isArray(devices) ? devices : [];
 }
 
 /** Enumerate curated and imported Desktop-local wakeword models. */
 export async function listWakewordModels() {
-  try {
-    const models = await callBridge('listWakewordModels');
-    return Array.isArray(models) ? models : [];
-  } catch {
-    return [];
-  }
+  const models = await callBridge('listWakewordModels');
+  return Array.isArray(models) ? models : [];
 }
 
 /** Validate and install one user-selected TFLite wakeword model. */

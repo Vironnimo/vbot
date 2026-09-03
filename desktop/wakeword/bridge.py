@@ -270,17 +270,18 @@ class DesktopBridge:
         with self._model_lock:
             descriptor = self._model_catalog.import_model(filename, content)
         activated = False
-        with self._lock:
-            current = read_wakeword_settings(self._settings_path)
-            active_model_ids = list(current["active_model_ids"])
-            if len(active_model_ids) < MAX_ACTIVE_WAKEWORD_MODELS:
-                active_model_ids.append(descriptor.id)
-                current["active_model_ids"] = active_model_ids
-                write_wakeword_settings(current, self._settings_path)
-                activated = True
-            enabled = bool(current.get("enabled", False))
-        if activated:
-            self._restart_worker(enabled)
+        with self._worker_lifecycle_lock:
+            with self._lock:
+                current = read_wakeword_settings(self._settings_path)
+                active_model_ids = list(current["active_model_ids"])
+                if len(active_model_ids) < MAX_ACTIVE_WAKEWORD_MODELS:
+                    active_model_ids.append(descriptor.id)
+                    current["active_model_ids"] = active_model_ids
+                    write_wakeword_settings(current, self._settings_path)
+                    activated = True
+                enabled = bool(current.get("enabled", False))
+            if activated:
+                self._restart_worker(enabled)
         return {**descriptor.to_dict(), "activated": activated}
 
     def deleteWakewordModel(self, model_id: str) -> dict[str, bool]:  # noqa: N802
@@ -306,13 +307,20 @@ class DesktopBridge:
     def setWakewordEnabled(self, enabled: bool) -> dict[str, Any]:  # noqa: N802
         """Enable or disable wakeword listening."""
         enabled = bool(enabled)
-        if enabled and not self._mock and self._speech_readiness_checker is not None:
-            readiness_error = self._speech_readiness_checker(self.server_url)
-            if readiness_error is not None:
-                logger.warning("Wakeword activation rejected (reason=%s)", readiness_error)
-                self.publish_state(_WAKEWORD_STATE_ERROR, readiness_error)
-                return {"enabled": False, "error_code": readiness_error}
         with self._worker_lifecycle_lock:
+            if enabled and not self._mock and self._speech_readiness_checker is not None:
+                with self._lock:
+                    server_url = self._server_url
+                readiness_error = self._speech_readiness_checker(server_url)
+                if readiness_error is not None:
+                    logger.warning("Wakeword activation rejected (reason=%s)", readiness_error)
+                    with self._lock:
+                        config = read_wakeword_settings(self._settings_path)
+                        config["enabled"] = False
+                        write_wakeword_settings(config, self._settings_path)
+                    self._stop_worker()
+                    self.publish_state(_WAKEWORD_STATE_ERROR, readiness_error)
+                    return {"enabled": False, "error_code": readiness_error}
             with self._lock:
                 config = read_wakeword_settings(self._settings_path)
                 config["enabled"] = enabled
@@ -391,7 +399,6 @@ class DesktopBridge:
             if not enabled:
                 return
             self._stop_worker()
-            self._worker = None
             if self._mode == "real":
                 from desktop.wakeword.worker import refresh_microphone_devices
 
@@ -625,7 +632,6 @@ class DesktopBridge:
                 enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
             if enabled:
                 self._stop_worker()
-                self._worker = None
                 self._start_worker()
 
     # -- Internal ------------------------------------------------------------
@@ -651,8 +657,14 @@ class DesktopBridge:
     def _stop_worker(self) -> None:
         with self._worker_lifecycle_lock:
             self._end_calibration()
-            if self._worker:
-                self._worker.stop()
+            worker = self._worker
+            if worker is not None and self._worker_factory is not None:
+                # A real worker that times out during stop must retain its own
+                # cleared Event. Re-enabling constructs a fresh worker instead
+                # of reviving that old thread through shared state.
+                self._worker = None
+            if worker is not None:
+                worker.stop()
 
     def worker_config(self) -> dict[str, Any]:
         """Return the global Voice config plus this server's safe routing profile."""
@@ -701,13 +713,13 @@ class DesktopBridge:
     def _restart_worker(self, enabled: bool) -> None:
         """Rebuild a running worker or start a newly enabled configuration."""
         with self._worker_lifecycle_lock:
-            if self._worker and self._worker.is_running():
+            if self._worker is not None:
                 self._stop_worker()
-                self._worker = None
-                if enabled:
-                    self._start_worker()
-            elif enabled:
-                self._worker = None
+            if enabled:
+                # _stop_worker already detached factory-created workers. An
+                # injected worker has no factory and is intentionally reused.
+                if self._worker_factory is not None:
+                    self._worker = None
                 self._start_worker()
 
     def _calibration_status_locked(self) -> dict[str, Any]:
@@ -1035,9 +1047,27 @@ def _validated_config_value(key: str, value: Any) -> Any:
             )
         return numeric
     if key == "microphone":
-        if value is None or (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
+        if value is None:
             return value
-        raise ValueError("Voice microphone must be a non-negative device index or null")
+        if not isinstance(value, dict):
+            raise ValueError("Voice microphone must be a device descriptor or null")
+        index = value.get("index")
+        name = value.get("name")
+        host_api = value.get("host_api")
+        if (
+            isinstance(index, int)
+            and not isinstance(index, bool)
+            and index >= 0
+            and isinstance(name, str)
+            and name.strip()
+            and isinstance(host_api, str)
+        ):
+            return {
+                "index": index,
+                "name": name.strip(),
+                "host_api": host_api.strip(),
+            }
+        raise ValueError("Voice microphone descriptor is invalid")
     if key == "target_agent_id":
         if value is None:
             return None

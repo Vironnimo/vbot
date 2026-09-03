@@ -46,7 +46,13 @@ const sameMicrophone = (left, right) =>
   left === right ||
   (left?.index === right?.index &&
     left?.name === right?.name &&
+    left?.host_api === right?.host_api &&
     left?.sample_rate === right?.sample_rate);
+const sameMicrophoneSetting = (left, right) =>
+  left === right ||
+  (left?.index === right?.index &&
+    left?.name === right?.name &&
+    left?.host_api === right?.host_api);
 const sameArray = (left, right) =>
   Array.isArray(left) &&
   Array.isArray(right) &&
@@ -145,6 +151,8 @@ export function applyWakewordStatus(state, status) {
     enabled: hasKey(status, 'enabled') ? status.enabled : state.enabled,
     microphone: hasKey(status, 'microphone')
       ? status.microphone
+        ? { ...status.microphone }
+        : null
       : state.microphone,
     active_model_ids: hasKey(status, 'active_model_ids')
       ? [...status.active_model_ids]
@@ -238,6 +246,7 @@ export function snapshotVoiceSettings(state) {
     ...state,
     active_model_ids: [...state.active_model_ids],
     model_sensitivities: { ...state.model_sensitivities },
+    microphone: state.microphone ? { ...state.microphone } : null,
     activeMicrophone: state.activeMicrophone
       ? { ...state.activeMicrophone }
       : null,
@@ -256,11 +265,13 @@ function editableVoiceSettings(state) {
 function sameSetting(key, left, right) {
   if (key === 'active_model_ids') return sameArray(left, right);
   if (key === 'model_sensitivities') return sameObject(left, right);
+  if (key === 'microphone') return sameMicrophoneSetting(left, right);
   return left === right;
 }
 
 function cloneSetting(key, value) {
   if (key === 'active_model_ids') return [...value];
   if (key === 'model_sensitivities') return { ...value };
+  if (key === 'microphone') return value ? { ...value } : null;
   return value;
 }

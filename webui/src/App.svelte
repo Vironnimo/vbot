@@ -152,6 +152,8 @@
   // credential removal clears this flag and brings the wizard back on its own.
   const ONBOARDING_DISMISSED_KEY = 'vbot.onboardingDismissed';
   const TOAST_AUTO_DISMISS_MS = 3200;
+  const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
+  const DESKTOP_CAPABILITY_RETRY_MS = 1000;
 
   const readStoredSelectedAgentId = () => {
     try {
@@ -1009,6 +1011,7 @@
 
   onMount(() => {
     let cancelled = false;
+    let desktopCapabilityRetryTimer = null;
 
     appController.initializeNavigationHistory();
     connectServerEvents();
@@ -1026,43 +1029,41 @@
     // mounted first.
     void reloadAgentsFromServer();
 
-    // Detect desktop capabilities and start wakeword status polling
+    const scheduleDesktopCapabilityRetry = () => {
+      if (cancelled || desktopCapabilityRetryTimer !== null) return;
+      desktopCapabilityRetryTimer = setTimeout(() => {
+        desktopCapabilityRetryTimer = null;
+        void initializeDesktopCapabilities();
+      }, DESKTOP_CAPABILITY_RETRY_MS);
+    };
+
+    const initializeDesktopCapabilities = async () => {
+      try {
+        const ready = await waitForDesktopBridge(
+          DESKTOP_BRIDGE_PROBE_TIMEOUT_MS,
+        );
+        if (cancelled) return;
+        if (!ready) {
+          scheduleDesktopCapabilityRetry();
+          return;
+        }
+        const caps = await getDesktopCapabilities();
+        if (cancelled) return;
+        desktopCapabilities = caps;
+        if (caps?.wakeword && !cleanupWakewordPoll) {
+          cleanupWakewordPoll = onWakewordStatusChange((status) => {
+            applyDesktopWakewordStatus(status);
+          });
+        }
+      } catch {
+        scheduleDesktopCapabilityRetry();
+      }
+    };
+
+    // Detect desktop capabilities and keep probing while the asynchronously
+    // injected bridge is absent or temporarily rejects a capability call.
     if (isDesktopAccessor()) {
-      waitForDesktopBridge()
-        .then((ready) => {
-          if (cancelled) {
-            return null;
-          }
-          if (!ready) {
-            desktopCapabilities = {
-              wakeword: false,
-              serverSelection: false,
-              contextMenu: false,
-            };
-            return null;
-          }
-          return getDesktopCapabilities();
-        })
-        .then((caps) => {
-          if (cancelled || !caps) {
-            return;
-          }
-          desktopCapabilities = caps;
-          if (caps?.wakeword) {
-            cleanupWakewordPoll = onWakewordStatusChange((status) => {
-              applyDesktopWakewordStatus(status);
-            });
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            desktopCapabilities = {
-              wakeword: false,
-              serverSelection: false,
-              contextMenu: false,
-            };
-          }
-        });
+      void initializeDesktopCapabilities();
     } else {
       desktopCapabilities = {
         wakeword: false,
@@ -1094,6 +1095,10 @@
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
       clearToastDismissTimers();
+      if (desktopCapabilityRetryTimer !== null) {
+        clearTimeout(desktopCapabilityRetryTimer);
+        desktopCapabilityRetryTimer = null;
+      }
       if (cleanupWakewordPoll) {
         cleanupWakewordPoll();
         cleanupWakewordPoll = null;
