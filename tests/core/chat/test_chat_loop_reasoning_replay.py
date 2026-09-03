@@ -317,11 +317,12 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
             _input_tokens: int,
             _context_window: int,
             _threshold: float,
+            **_kwargs: Any,
         ) -> bool:
             if self.compacted:
                 return False
             self.checks += 1
-            return self.checks == 2
+            return self.checks == 3
 
         async def compact(
             self,

@@ -859,7 +859,7 @@ def test_load_compaction_settings_reads_and_normalizes_values(tmp_path: Path) ->
         {
             "compaction": {
                 "enabled": False,
-                "trigger": {"type": "context_ratio", "threshold": 1},
+                "trigger": {"type": "context_ratio", "threshold": 1, "tokens": 200_000},
                 "strategy": {
                     "type": "summary_tail",
                     "tail_tokens": 7_500,
@@ -873,7 +873,7 @@ def test_load_compaction_settings_reads_and_normalizes_values(tmp_path: Path) ->
 
     assert settings == {
         "enabled": False,
-        "trigger": {"type": "context_ratio", "threshold": 1.0},
+        "trigger": {"type": "context_ratio", "threshold": 1.0, "tokens": 200_000},
         "strategy": {
             "type": "summary_tail",
             "tail_tokens": 7_500,

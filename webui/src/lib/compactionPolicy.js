@@ -29,13 +29,7 @@ export function normalizeCompactionPolicy(value) {
     : 'summary_tail';
   return {
     enabled: policy.enabled !== false,
-    trigger:
-      triggerType === 'input_tokens'
-        ? { type: triggerType, tokens: positiveInteger(trigger.tokens, 100000) }
-        : {
-            type: triggerType,
-            threshold: ratio(trigger.threshold, 0.8),
-          },
+    trigger: normalizeTrigger(trigger, triggerType),
     strategy:
       strategyType === 'continuation'
         ? { type: strategyType }
@@ -45,6 +39,22 @@ export function normalizeCompactionPolicy(value) {
             summary_model: textOrNull(strategy.summary_model),
           },
   };
+}
+
+function normalizeTrigger(trigger, triggerType) {
+  if (triggerType === 'input_tokens') {
+    return {
+      type: triggerType,
+      tokens: positiveInteger(trigger.tokens, 100000),
+    };
+  }
+  const normalized = {
+    type: triggerType,
+    threshold: ratio(trigger.threshold, 0.8),
+  };
+  const maxTokens = optionalPositiveInteger(trigger.tokens);
+  if (maxTokens !== null) normalized.tokens = maxTokens;
+  return normalized;
 }
 
 export function compactionPoliciesEqual(left, right) {
@@ -61,6 +71,12 @@ export function buildCompactionPolicyPayload(value) {
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalPositiveInteger(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function ratio(value, fallback) {

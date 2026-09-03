@@ -1830,7 +1830,7 @@ class ChatLoop:
                 assert context.prior_continuation is not None
                 context.continuation_reminder = render_continuation_reminder(
                     context.prior_continuation,
-                    context_window=self.resolve_context_window(agent),
+                    context_window=self.resolve_context_window(agent, target),
                 )
                 context.request_state = _RequestState(
                     inject_continuation_reminder(
@@ -1841,6 +1841,14 @@ class ChatLoop:
                     context.request_state.allowed_tool_names,
                     context.request_state.session_tool_grants,
                     context.request_state.tool_contracts,
+                )
+
+            if self._compaction_service is not None:
+                context.request_state = await self._compaction_runs.maybe_auto_compact_state(
+                    context,
+                    target,
+                    usage=None,
+                    allow_continuation=True,
                 )
 
             try:
@@ -2142,6 +2150,10 @@ class ChatLoop:
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
+                context.continuation_reminder = render_continuation_reminder(
+                    context.prior_continuation,
+                    context_window=self.resolve_context_window(agent, candidate_target),
+                )
                 context.request_state = _RequestState(
                     inject_continuation_reminder(
                         context.request_state.messages,
@@ -2157,6 +2169,13 @@ class ChatLoop:
             # Provider-specific reasoning, which must never cross the Provider
             # boundary.
             _strip_assistant_reasoning_fields(context.request_state.messages)
+            if self._compaction_service is not None:
+                context.request_state = await self._compaction_runs.maybe_auto_compact_state(
+                    context,
+                    candidate_target,
+                    usage=None,
+                    allow_continuation=True,
+                )
             try:
                 completed = await self._send_until_final(context, candidate_target)
                 return completed, last_failure
@@ -2961,6 +2980,7 @@ class ChatLoop:
                     usage=assistant_message.usage,
                     continuation_request_messages=continuation_request_messages,
                     context_usage=tool_context_usage,
+                    allow_continuation=True,
                 )
                 context.request_state = compacted_state
                 state = compacted_state
@@ -2977,7 +2997,6 @@ class ChatLoop:
                     assistant_request_message,
                 ],
                 context_usage=assistant_context_usage,
-                allow_continuation=True,
                 continue_same_run=False,
             )
         return assistant_message
@@ -3040,8 +3059,12 @@ class ChatLoop:
             if isinstance(resolved_content, list):
                 tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = resolved_content
 
-    def resolve_context_window(self, agent: Any) -> int | None:
-        """Resolve the usable context window for the active agent model.
+    def resolve_context_window(
+        self,
+        agent: Any,
+        target: _ModelTarget | None = None,
+    ) -> int | None:
+        """Resolve the usable context window for the current Model target.
 
         Returns ``None`` only when the model string is unusable (no
         ``provider/model`` form). Otherwise the value always resolves through the
@@ -3051,13 +3074,23 @@ class ChatLoop:
         ``None`` still gets a usable budget and auto-compaction keeps working
         instead of silently disabling itself.
         """
-        bare_model = parse_bare_model(agent.model)
-        if "/" not in bare_model:
-            return None
-
-        provider_id, _, resolved_model_id = bare_model.partition("/")
-        if not provider_id or not resolved_model_id:
-            return None
+        if target is None:
+            bare_model = parse_bare_model(agent.model)
+            if "/" not in bare_model:
+                return None
+            provider_id, _, resolved_model_id = bare_model.partition("/")
+            if not provider_id or not resolved_model_id:
+                return None
+            try:
+                _resolved_provider_id, connection_id = _resolve_agent_connection(
+                    self._dependencies, agent
+                )
+            except (AttributeError, ChatError, ConfigError, KeyError):
+                connection_id = None
+        else:
+            provider_id = target.provider_id
+            resolved_model_id = target.model_id
+            connection_id = target.connection_id
 
         try:
             model_entry = self._dependencies.models.get(provider_id, resolved_model_id)
@@ -3066,9 +3099,8 @@ class ChatLoop:
 
         model_context_window = model_entry.context_window
         try:
-            _resolved_provider_id, connection_id = _resolve_agent_connection(
-                self._dependencies, agent
-            )
+            if connection_id is None:
+                raise ConfigError("Model target has no resolved Provider Connection")
             local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
             context_window_for = getattr(model_entry, "context_window_for", None)
             if callable(context_window_for):
@@ -3126,7 +3158,7 @@ class ChatLoop:
         System Prompt or Tool overhead a second time to a measured request.
         """
 
-        context_window = self.resolve_context_window(agent)
+        context_window = self.resolve_context_window(agent, target)
         if context_window is None:
             return
         projection = latest_session_context_usage(session_messages)

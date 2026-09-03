@@ -132,6 +132,31 @@ def test_setting_same_compaction_variant_preserves_sibling_overrides() -> None:
     assert changed == ()
 
 
+def test_context_ratio_trigger_accepts_and_unsets_an_absolute_cap() -> None:
+    original = {"compaction": {"trigger": {"type": "context_ratio", "threshold": 0.8}}}
+    capped, changed = apply_settings_patch(
+        original,
+        parse_patch_operations(
+            [{"op": "set", "path": "compaction.trigger.tokens", "value": 200_000}]
+        ),
+    )
+
+    assert capped["compaction"]["trigger"] == {
+        "type": "context_ratio",
+        "threshold": 0.8,
+        "tokens": 200_000,
+    }
+    assert changed == ("compaction.trigger.tokens",)
+
+    uncapped, changed = apply_settings_patch(
+        capped,
+        parse_patch_operations([{"op": "unset", "path": "compaction.trigger.tokens"}]),
+    )
+
+    assert uncapped == original
+    assert changed == ("compaction.trigger.tokens",)
+
+
 def test_compaction_leaf_patch_infers_default_variant() -> None:
     operations = parse_patch_operations(
         [

@@ -197,7 +197,7 @@ class CompactionRunHost(Protocol):
         active_provider_id: str,
     ) -> tuple[Any, str, str]: ...
 
-    def resolve_context_window(self, agent: Any) -> int | None: ...
+    def resolve_context_window(self, agent: Any, target: Any | None = None) -> int | None: ...
 
     def resolve_temperature(self, provider_id: str, model_id: str) -> float | None: ...
 
@@ -421,7 +421,7 @@ class CompactionRunCoordinator:
         if settings.strategy == "continuation" and not allow_continuation:
             return current_state
 
-        context_window = self._host.resolve_context_window(agent)
+        context_window = self._host.resolve_context_window(agent, target)
         if context_window is None:
             return current_state
 
@@ -446,19 +446,12 @@ class CompactionRunCoordinator:
         input_tokens = max(context_tokens, wire_context_tokens)
         run.terminal_payload_extras["context_usage"] = dict(resolved_context_usage)
 
-        if settings.trigger == "context_ratio":
-            should_compact = self._host.compaction_service.should_auto_compact(
-                input_tokens,
-                context_window,
-                settings.threshold,
-            )
-        else:
-            should_compact = self._host.compaction_service.should_auto_compact(
-                input_tokens,
-                context_window,
-                settings.threshold,
-                settings=settings,
-            )
+        should_compact = self._host.compaction_service.should_auto_compact(
+            input_tokens,
+            context_window,
+            settings.threshold,
+            settings=settings,
+        )
         if not should_compact:
             return current_state
         session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
@@ -474,15 +467,22 @@ class CompactionRunCoordinator:
         if not has_new_context:
             return current_state
 
+        token_limit = (
+            settings.trigger_tokens
+            if settings.trigger == "input_tokens"
+            else settings.max_input_tokens
+        )
         _LOGGER.info(
             "Auto-compaction triggered (run=%s agent=%s session=%s input_tokens=%d "
-            "context_window=%d threshold=%s)",
+            "context_window=%d trigger=%s ratio_threshold=%s token_limit=%s)",
             run.id,
             run.agent_id,
             run.session_id,
             input_tokens,
             context_window,
+            settings.trigger,
             settings.threshold,
+            token_limit,
         )
         summary_adapter, summary_model_id, summary_provider_id = self._host.resolve_summary_adapter(
             agent,
@@ -578,7 +578,7 @@ class CompactionRunCoordinator:
             if continue_same_run:
                 await self._host.refresh_continuation_reminder(
                     context,
-                    context_window=self._host.resolve_context_window(agent),
+                    context_window=self._host.resolve_context_window(agent, target),
                 )
             checkpoint, rebuilt_state = await self._host.project_automatic_compaction_request(
                 context=context,
@@ -711,11 +711,17 @@ class CompactionRunCoordinator:
         )
         trigger = raw_settings["trigger"]
         strategy = raw_settings["strategy"]
+        trigger_type = str(trigger["type"])
         return CompactionSettings(
             auto=bool(raw_settings["enabled"]),
-            trigger=str(trigger["type"]),
+            trigger=trigger_type,
             threshold=float(trigger.get("threshold", 0.8)),
             trigger_tokens=int(trigger.get("tokens", 100_000)),
+            max_input_tokens=(
+                int(trigger["tokens"])
+                if trigger_type == "context_ratio" and "tokens" in trigger
+                else None
+            ),
             strategy=str(strategy["type"]),
             tail_tokens=int(strategy.get("tail_tokens", 15_000)),
             summary_model=strategy.get("summary_model"),

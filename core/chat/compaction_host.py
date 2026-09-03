@@ -141,8 +141,8 @@ class ChatCompactionHost:
             active_provider_id=active_provider_id,
         )
 
-    def resolve_context_window(self, agent: Any) -> int | None:
-        return self._loop.resolve_context_window(agent)
+    def resolve_context_window(self, agent: Any, target: Any | None = None) -> int | None:
+        return self._loop.resolve_context_window(agent, target)
 
     def resolve_temperature(self, provider_id: str, model_id: str) -> float | None:
         return resolve_request_temperature(None, self.models, provider_id, model_id)

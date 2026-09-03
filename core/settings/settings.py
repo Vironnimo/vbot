@@ -818,9 +818,13 @@ def _parse_compaction_trigger(value: Any) -> JsonObject:
         raise SettingsValidationError("params.compaction.trigger must be an object")
     trigger_type = value.get("type")
     if trigger_type == "context_ratio":
-        if set(value) != {"type", "threshold"}:
+        if not {"type", "threshold"} <= set(value) or set(value) - {
+            "type",
+            "threshold",
+            "tokens",
+        }:
             raise SettingsValidationError(
-                "context_ratio trigger requires exactly type and threshold"
+                "context_ratio trigger requires type and threshold, with optional tokens"
             )
         threshold_value = value["threshold"]
         if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
@@ -828,7 +832,12 @@ def _parse_compaction_trigger(value: Any) -> JsonObject:
         threshold = float(threshold_value)
         if threshold <= 0 or threshold > 1:
             raise SettingsValidationError("params.compaction.trigger.threshold must be in (0, 1]")
-        return {"type": trigger_type, "threshold": threshold}
+        parsed: JsonObject = {"type": trigger_type, "threshold": threshold}
+        if "tokens" in value:
+            parsed["tokens"] = _positive_integer(
+                value["tokens"], "params.compaction.trigger.tokens"
+            )
+        return parsed
     if trigger_type == "input_tokens":
         if set(value) != {"type", "tokens"}:
             raise SettingsValidationError("input_tokens trigger requires exactly type and tokens")
