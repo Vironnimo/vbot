@@ -36,6 +36,10 @@
     projectTeam as normalizeProjectTeam,
     normalizeScanReport,
   } from '../lib/projectsView.js';
+  import {
+    sessionDisplayName,
+    sessionParentReference,
+  } from '../lib/sessionListView.js';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
@@ -307,30 +311,41 @@
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
   );
-  // The parent-session target of the displayed sub-agent session, resolved
-  // from the child's `subagent_parent` metadata (via session.list) when the
-  // sub-agent view opens — so the banner button can say "Return to parent
-  // session" only when the parent is actually reachable. `null` while
-  // unresolved or for child sessions without usable parent metadata.
+  // Every derived Session resolves its immediate parent from the authoritative
+  // Session-list projection: Sub-Agent Sessions use `subagent_parent`, while
+  // Fork and Reflection Sessions use `fork_source`. The navigation target is
+  // available from provenance alone; the Activity panel link waits for the
+  // parent row so it can show the real Session name instead of a raw id.
   let subAgentParentTarget = $state(null);
-  let subAgentParentFetchKey = '';
+  let sessionParentLink = $state(null);
+  let sessionParentFetchKey = '';
 
   $effect(() => {
-    if (!subAgentSessionActive) {
-      subAgentParentFetchKey = '';
+    const addressing = activeAddressing();
+    const displayKey = displayedSessionKey();
+    const fetchKey = `${displayKey}::${sessionsRefreshToken}`;
+    if (!displayKey || !addressing.agentAddress || !addressing.sessionId) {
+      sessionParentFetchKey = '';
       subAgentParentTarget = null;
+      sessionParentLink = null;
       return;
     }
-    const key = displayedSessionKey();
-    if (!key || key === subAgentParentFetchKey) {
+    if (fetchKey === sessionParentFetchKey) {
       return;
     }
-    subAgentParentFetchKey = key;
+    sessionParentFetchKey = fetchKey;
     subAgentParentTarget = null;
-    loadSubAgentParentTarget(key, overrideAgentAddress(), viewingSessionId);
+    sessionParentLink = null;
+    loadSessionParent(
+      fetchKey,
+      displayKey,
+      addressing.agentAddress,
+      addressing.sessionId,
+    );
   });
 
-  const loadSubAgentParentTarget = async (
+  const loadSessionParent = async (
+    fetchKey,
     displayKey,
     childAddress,
     childSessionId,
@@ -346,23 +361,24 @@
           sessionId: childSessionId,
         },
       });
-      // A newer navigation may have superseded this child view mid-flight.
-      if (displayedSessionKey() !== displayKey) {
+      // A newer navigation or Session invalidation may have superseded this
+      // request mid-flight.
+      if (
+        displayedSessionKey() !== displayKey ||
+        sessionParentFetchKey !== fetchKey
+      ) {
         return;
       }
       const childSession = (listed?.sessions ?? []).find(
         (session) => String(session?.id ?? '').trim() === childSessionId,
       );
-      const parent = childSession?.subagent_parent;
-      const parentAgentId =
-        typeof parent?.agent_id === 'string' ? parent.agent_id.trim() : '';
-      const parentSessionId =
-        typeof parent?.session_id === 'string' ? parent.session_id.trim() : '';
-      if (!parentAgentId || !parentSessionId) {
+      const parent = sessionParentReference(childSession);
+      if (!parent) {
         return;
       }
-      const parentProjectId =
-        typeof parent?.project_id === 'string' ? parent.project_id.trim() : '';
+      const parentAgentId = parent.agent_id;
+      const parentSessionId = parent.session_id;
+      const parentProjectId = parent.project_id ?? '';
       // A vanished identity parent cannot be opened — keep the
       // return-to-current fallback (a project parent is not roster-checkable
       // and surfaces a load error instead of dead-ending).
@@ -373,41 +389,55 @@
         parentAgentId,
         parentProjectId,
       );
-      let parentSession = null;
-      if (parentAgentAddress === childAddress) {
-        parentSession = (listed?.sessions ?? []).find(
-          (session) => String(session?.id ?? '').trim() === parentSessionId,
-        );
-      } else {
-        try {
-          const parentListed = await chatController.listSessions(
-            parentAgentAddress,
-            {
-              limit: 1,
-              requiredSession: {
-                agentId: parentAgentAddress,
-                sessionId: parentSessionId,
-              },
-            },
-          );
-          if (displayedSessionKey() !== displayKey) {
-            return;
-          }
-          parentSession = (parentListed?.sessions ?? []).find(
-            (session) => String(session?.id ?? '').trim() === parentSessionId,
-          );
-        } catch {
-          // Parent navigation remains usable when only its nesting metadata
-          // cannot be loaded; the destination history can still resolve.
-        }
-      }
-      subAgentParentTarget = {
+      const target = {
         agentAddress: parentAgentAddress,
         sessionId: parentSessionId,
-        isSubAgentSession:
-          parentSession?.is_subagent_session === true ||
-          (parentSession?.subagent_parent !== null &&
-            typeof parentSession?.subagent_parent === 'object'),
+        isSubAgentSession: false,
+      };
+      if (parent.kind === 'subagent') {
+        subAgentParentTarget = target;
+      }
+
+      // The exact Parent Session may be outside the child's first list page,
+      // including same-Agent forks, so resolve it through requiredSession.
+      let parentSession = null;
+      try {
+        const parentListed = await chatController.listSessions(
+          parentAgentAddress,
+          {
+            limit: 1,
+            requiredSession: {
+              agentId: parentAgentAddress,
+              sessionId: parentSessionId,
+            },
+          },
+        );
+        if (
+          displayedSessionKey() !== displayKey ||
+          sessionParentFetchKey !== fetchKey
+        ) {
+          return;
+        }
+        parentSession = (parentListed?.sessions ?? []).find(
+          (session) => String(session?.id ?? '').trim() === parentSessionId,
+        );
+      } catch {
+        // Provenance still supports the existing Sub-Agent return path, but
+        // Session info must not present an unresolved link.
+        return;
+      }
+      if (!parentSession) {
+        return;
+      }
+      target.isSubAgentSession =
+        parentSession?.is_subagent_session === true ||
+        sessionParentReference(parentSession)?.kind === 'subagent';
+      if (parent.kind === 'subagent') {
+        subAgentParentTarget = target;
+      }
+      sessionParentLink = {
+        displayName: sessionDisplayName(parentSession),
+        target,
       };
     } catch {
       // Best effort — the banner button falls back to return-to-current.
@@ -2275,7 +2305,9 @@
         subAgentStatuses={chatState.subAgentStatuses}
         backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
         reflectionTasks={reflectionTaskRows(activeSessionState)}
+        parentSession={sessionParentLink}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}
+        onNavigateToParentSession={navigateToParentSession}
         onOpenReflection={handleOpenReflection}
         onCancelSubAgent={handleCancelSubAgent}
         onCancelBackgroundProcess={handleCancelBackgroundProcess}

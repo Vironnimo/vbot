@@ -463,6 +463,8 @@ export const englishCatalog = Object.freeze({
   'chat.project.scanBannerCount':
     'This project’s scan found {count} issues. Some agents may not work as expected.',
   'chat.project.scanBannerLink': 'Review in Projects',
+  'chat.activity.parentSession': 'Parent Session',
+  'chat.activity.openParentSession': 'Open parent Session · {session}',
 
   'sessions.title': 'Sessions',
   'sessions.newSession': 'New Session',

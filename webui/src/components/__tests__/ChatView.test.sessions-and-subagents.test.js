@@ -627,6 +627,80 @@ describe('ChatView', () => {
     );
   });
 
+  it('opens the source Session from a Reflection Session info link', async () => {
+    listSessionsMock.mockImplementation(async (_agentId, query = {}) => {
+      const requiredSessionId = query.requiredSession?.sessionId;
+      if (requiredSessionId === 'session-1') {
+        return {
+          sessions: [
+            {
+              id: 'session-1',
+              run_kinds: ['reflection'],
+              fork_source: {
+                agent_id: 'alpha',
+                session_id: 'source-session',
+                project_id: null,
+              },
+            },
+          ],
+        };
+      }
+      if (requiredSessionId === 'source-session') {
+        return {
+          sessions: [
+            {
+              id: 'source-session',
+              title: 'Original research',
+            },
+          ],
+        };
+      }
+      return { sessions: [] };
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'source-session': [
+            {
+              id: 'source-reply',
+              role: 'assistant',
+              content: 'Original Session history',
+            },
+          ],
+        },
+      }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-activity__parent-link')
+          ?.textContent.trim() === 'Original research',
+      100,
+    );
+
+    document.querySelector('.chat-activity__parent-link').click();
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Original Session history'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'source-session',
+      limit: 100,
+    });
+  });
+
   it('applies a non-null connectionSnapshot prop to the run stream', async () => {
     const { createChatViewConnectionSnapshotHarness } =
       await import('./chatViewConnectionSnapshotHarness.svelte.js');
