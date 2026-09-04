@@ -215,6 +215,58 @@
   </div>
 {/if}
 
+{#if webSearchSettings.provider === 'tavily'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.tavilyKeyHint',
+          'Tavily requires an API key: set TAVILY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if webSearchSettings.provider === 'exa'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.exaKeyHint',
+          'Exa requires an API key: set EXA_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if webSearchSettings.provider === 'serper'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.serperKeyHint',
+          'Serper requires an API key: set SERPER_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if webSearchSettings.provider === 'firecrawl'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.firecrawlKeyHint',
+          'Firecrawl requires an API key: set FIRECRAWL_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if webSearchSettings.provider === 'searxng'}
   <div class="s-row">
     <div class="s-row-info">

@@ -483,7 +483,14 @@ describe('settingsView helpers', () => {
     );
     expect(getWebSearchSettings({})).toEqual({
       provider: 'brave',
-      available_providers: ['brave', 'searxng'],
+      available_providers: [
+        'brave',
+        'exa',
+        'firecrawl',
+        'searxng',
+        'serper',
+        'tavily',
+      ],
       default_count: 12,
       searxng: {
         base_url: 'http://localhost:8888',
@@ -534,7 +541,11 @@ describe('settingsView helpers', () => {
       buildWebSearchProviderOptions(getWebSearchSettings({}), translate),
     ).toEqual([
       { value: 'brave', label: 'Brave Search' },
+      { value: 'exa', label: 'Exa' },
+      { value: 'firecrawl', label: 'Firecrawl' },
       { value: 'searxng', label: 'SearXNG' },
+      { value: 'serper', label: 'Serper' },
+      { value: 'tavily', label: 'Tavily' },
     ]);
     expect(
       getDefaultSkillDirectoryValue(createSettingsPayload(), translate),

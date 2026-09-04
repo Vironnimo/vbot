@@ -131,13 +131,16 @@ def initialize_data_dir(data_dir: Path) -> None:
 
     # Load the layout from this checkout, not PROJECT_ROOT: a worktree may carry a
     # newer canonical layout than the linked main repository, and the checkout's
-    # own code defines the layout its server expects.
+    # own code defines the layout its server expects. The seed resources
+    # (.env.example and friends) come from the same checkout, otherwise a branch
+    # that changes a resource would seed the main copy and diverge from it.
+    checkout_root = Path(__file__).resolve().parent.parent
     layout_module = runpy.run_path(
-        str(Path(__file__).resolve().parent.parent / "core" / "storage" / "layout.py"),
+        str(checkout_root / "core" / "storage" / "layout.py"),
         run_name="vbot_data_directory_layout",
     )
     initializer = layout_module["initialize_data_directory"]
-    initializer(data_dir, resources_dir=PROJECT_ROOT / "resources")
+    initializer(data_dir, resources_dir=checkout_root / "resources")
 
 
 def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -> Path:
