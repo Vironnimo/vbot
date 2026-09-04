@@ -30,6 +30,7 @@ from server.app import (
     _is_reserved_server_path,
     _parse_query_string,
     _queues_snapshot,
+    _register_bash_process_change_bridge,
     _register_cron_change_bridge,
     _register_run_event_bridge,
     _register_session_completion_read_bridge,
@@ -40,6 +41,7 @@ from server.app import (
     create_app,
 )
 from server.clients import ClientRegistry
+from server.rpc.event_bridge import publish_bash_process_status_changed
 
 
 def test_create_app_does_not_mount_webui_when_build_is_absent(monkeypatch, tmp_path: Path) -> None:
@@ -623,6 +625,39 @@ def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path
         "kind": "sessions",
         "scope": {"agent_id": "coder"},
     }
+
+
+def test_bash_process_change_bridge_publishes_terminal_notification() -> None:
+    registered: list[Any] = []
+
+    def add_terminal_callback(callback: Any) -> Any:
+        registered.append(callback)
+        return lambda: None
+
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            process_manager=SimpleNamespace(add_terminal_callback=add_terminal_callback)
+        ),
+        event_bus=ServerEventBus(),
+    )
+    unsubscribe = _register_bash_process_change_bridge(state)
+
+    try:
+        registered[0]({"process_id": "process-one", "status": "completed"})
+    finally:
+        if callable(unsubscribe):
+            unsubscribe()
+
+    event = state.event_bus.events[-1]
+    assert event["type"] == "bash_process_status_changed"
+    assert event["payload"] == {"process_id": "process-one", "status": "completed"}
+
+
+def test_bash_process_status_publisher_ignores_missing_bus_and_bad_payload() -> None:
+    state = SimpleNamespace(event_bus=None)
+
+    publish_bash_process_status_changed(state, {"process_id": "process-one"})
+    publish_bash_process_status_changed(state, "not-a-dict")
 
 
 def test_cron_change_bridge_publishes_scheduler_invalidation(tmp_path: Path) -> None:

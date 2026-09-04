@@ -131,11 +131,31 @@ describe('App controller', () => {
 
     expect(state.connectionSnapshot).toBe(hello);
     expect(state.runServerEvents).toHaveLength(1);
+    expect(state.backgroundBashStatusEvents).toHaveLength(0);
     expect(state.queueInvalidation).toEqual({
       agentId: 'alpha',
       sessionId: 'session-one',
     });
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+  });
+
+  it('buffers background Bash status events as a bounded accessor list', async () => {
+    const { controller, state } = setup();
+
+    for (let index = 0; index < 55; index += 1) {
+      await controller.handleServerEvent({
+        type: 'bash_process_status_changed',
+        payload: { process_id: `process-${index}`, status: 'completed' },
+      });
+    }
+
+    expect(state.backgroundBashStatusEvents).toHaveLength(50);
+    expect(state.backgroundBashStatusEvents[0].payload.process_id).toBe(
+      'process-5',
+    );
+    expect(state.backgroundBashStatusEvents[49].payload.process_id).toBe(
+      'process-54',
+    );
   });
 
   it('reloads the Session-store projection on connect and invalidation', async () => {

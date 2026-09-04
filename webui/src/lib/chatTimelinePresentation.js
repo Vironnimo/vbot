@@ -711,6 +711,7 @@ export const subAgentRunStartedAt = (tool, subAgentStatuses = {}) => {
 export const assistantRunNeedsLiveClock = (
   assistantRun,
   subAgentStatuses = {},
+  backgroundBashProcesses = {},
 ) => {
   if (
     assistantRun?.status === 'running' &&
@@ -729,6 +730,17 @@ export const assistantRunNeedsLiveClock = (
         timestampToMs(subAgentRunStartedAt(tool, subAgentStatuses)) !== null
       );
     }
+    const bashRowState = backgroundBashRowState(
+      tool,
+      {},
+      backgroundBashProcesses,
+    );
+    if (bashRowState) {
+      return (
+        bashRowState.dotStatus === 'running' &&
+        timestampToMs(toolStartedTimestamp(tool)) !== null
+      );
+    }
     return (
       toolStatus(tool) === 'running' &&
       !isToolPreparing(tool) &&
@@ -741,6 +753,7 @@ export const liveClockCadenceMs = (
   timelineItems,
   subAgentStatuses = {},
   nowMs = Date.now(),
+  backgroundBashProcesses = {},
 ) => {
   const starts = [];
   for (const assistantRun of timelineItems ?? []) {
@@ -758,8 +771,22 @@ export const liveClockCadenceMs = (
         if (subAgentDotStatus(tool, subAgentStatuses) === 'running') {
           starts.push(subAgentRunStartedAt(tool, subAgentStatuses));
         }
-      } else if (toolStatus(tool) === 'running' && !isToolPreparing(tool)) {
-        starts.push(toolStartedTimestamp(tool));
+      } else {
+        const bashRowState = backgroundBashRowState(
+          tool,
+          {},
+          backgroundBashProcesses,
+        );
+        if (bashRowState) {
+          if (
+            bashRowState.dotStatus === 'running' &&
+            timestampToMs(toolStartedTimestamp(tool)) !== null
+          ) {
+            starts.push(toolStartedTimestamp(tool));
+          }
+        } else if (toolStatus(tool) === 'running' && !isToolPreparing(tool)) {
+          starts.push(toolStartedTimestamp(tool));
+        }
       }
     }
   }
@@ -1372,6 +1399,8 @@ export const backgroundTasks = (
   timelineItems,
   subAgentStatuses = {},
   backgroundBashStatuses = {},
+  backgroundBashProcesses = {},
+  nowMs = Date.now(),
 ) => {
   const tasks = [];
   let order = 0;
@@ -1408,19 +1437,24 @@ export const backgroundTasks = (
         order += 1;
         continue;
       }
-      const bashTask = backgroundBashTask(child, backgroundBashStatuses);
-      if (!bashTask) {
+      const bashRowState = backgroundBashRowState(
+        child,
+        backgroundBashStatuses,
+        backgroundBashProcesses,
+      );
+      if (!bashRowState) {
         continue;
       }
       tasks.push({
-        id: `bash:${bashTask.processId}`,
+        id: `bash:${bashRowState.processId}`,
         kind: 'bash',
         tool: child,
-        dotStatus: bashTask.dotStatus,
-        label: bashTask.command,
-        command: bashTask.command,
-        processId: bashTask.processId,
+        dotStatus: bashRowState.dotStatus,
+        label: bashRowState.command,
+        command: bashRowState.command,
+        processId: bashRowState.processId,
         target: null,
+        timeLabel: backgroundBashToolStatusLabel(child, bashRowState, nowMs),
         order,
       });
       order += 1;
@@ -1437,7 +1471,16 @@ export const backgroundTasks = (
     .map(({ order: _order, ...task }) => task);
 };
 
-function backgroundBashTask(tool, backgroundBashStatuses) {
+// A handed-off Bash Tool row represents the long-running process, not the
+// ~instant delegation call. The row state resolves the process id plus the
+// combined live/durable process status so the dot, the time label, and the
+// displayed result can all follow the process instead of the handoff
+// envelope. Returns null for every other Tool row.
+export const backgroundBashRowState = (
+  tool,
+  backgroundBashStatuses = {},
+  backgroundBashProcesses = {},
+) => {
   if (toolNameForRunTool(tool) !== 'bash') {
     return null;
   }
@@ -1447,20 +1490,103 @@ function backgroundBashTask(tool, backgroundBashStatuses) {
   if (data.delivery !== 'automatic' || !processId) {
     return null;
   }
+  const terminal = isPlainObject(backgroundBashProcesses?.[processId])
+    ? backgroundBashProcesses[processId]
+    : null;
+  const durableStatus = trimmedString(backgroundBashStatuses?.[processId]);
+  const status =
+    trimmedString(terminal?.status) ||
+    durableStatus ||
+    trimmedString(data.status) ||
+    'running';
+  return {
+    processId,
+    command: commandPreview(tool),
+    dotStatus: backgroundBashDotStatus(status),
+    terminal,
+  };
+};
+
+function commandPreview(tool) {
   const args = parseJsonValue(toolArguments(tool));
   const command = truncateToolLabel(
     trimmedString(isPlainObject(args) ? args.command : '').replace(/\s+/g, ' '),
     MAX_BACKGROUND_BASH_LABEL_LENGTH,
   );
-  const durableStatus = isPlainObject(backgroundBashStatuses)
-    ? backgroundBashStatuses[processId]
-    : '';
-  return {
-    command: command || t('chat.activity.bashFallback', 'Bash process'),
-    processId,
-    dotStatus: backgroundBashDotStatus(durableStatus || data.status),
-  };
+  return command || t('chat.activity.bashFallback', 'Bash process');
 }
+
+// Status label for a handed-off Bash row. While the process runs the label
+// ticks from the Tool call's own start timestamp (the command spawns at call
+// start, and this internal timing never reaches the Model). Once the process
+// is terminal the label becomes the real runtime measured by the terminal
+// notification; without known times the label stays empty rather than showing
+// the misleading ~0s delegation-call duration.
+export const backgroundBashToolStatusLabel = (
+  tool,
+  rowState,
+  nowMs = Date.now(),
+) => {
+  if (!isPlainObject(rowState)) {
+    return '';
+  }
+  if (rowState.dotStatus === 'running') {
+    return formatDurationMs(
+      elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
+      'chat.toolDurationSeconds',
+    );
+  }
+  const durationMs = backgroundBashDurationMs(rowState.terminal);
+  if (rowState.dotStatus === 'cancelled') {
+    return [
+      t('chat.toolCancelled', 'cancelled'),
+      durationMs !== null
+        ? formatDurationMs(durationMs, 'chat.toolDurationSeconds')
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  if (durationMs !== null) {
+    return formatDurationMs(durationMs, 'chat.toolDurationSeconds');
+  }
+  return '';
+};
+
+function backgroundBashDurationMs(terminal) {
+  if (!isPlainObject(terminal)) {
+    return null;
+  }
+  const startedMs = timestampToMs(terminal.startedAt);
+  const finishedMs = timestampToMs(terminal.finishedAt);
+  if (startedMs === null || finishedMs === null || finishedMs < startedMs) {
+    return null;
+  }
+  return finishedMs - startedMs;
+}
+
+// Returns the value to render in the Tool's Result row. With terminal process
+// data the handoff envelope is replaced by the actual completion result, the
+// same swap the Sub-Agent row makes once its final result was fetched.
+export const backgroundBashDisplayResult = (tool, rowState) => {
+  const terminal = rowState?.terminal;
+  if (!isPlainObject(terminal)) {
+    return tool.result;
+  }
+  const data = {
+    status: terminal.status,
+    exit_code: typeof terminal.exitCode === 'number' ? terminal.exitCode : null,
+    output: terminal.output ?? '',
+    truncated: terminal.truncated === true,
+  };
+  if (terminal.cancelledByUser) {
+    data.cancelled_by_user = true;
+  }
+  if (terminal.logFile) {
+    data.log_file = terminal.logFile;
+  }
+  return JSON.stringify({ ok: true, error: null, data });
+};
 
 function backgroundBashDotStatus(status) {
   if (status === 'completed' || status === 'success') {
