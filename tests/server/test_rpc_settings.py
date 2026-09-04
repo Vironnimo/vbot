@@ -373,7 +373,14 @@ async def test_settings_catalog_exposes_public_paths_and_lifecycle(tmp_path: Pat
     provider = entries["web_search.provider"]
     assert provider["value"] == "brave"
     assert provider["source"] == "default"
-    assert provider["allowed_values"] == ["brave", "exa", "firecrawl", "searxng", "serper", "tavily"]
+    assert provider["allowed_values"] == [
+        "brave",
+        "exa",
+        "firecrawl",
+        "searxng",
+        "serper",
+        "tavily",
+    ]
     assert provider["application"] == "live"
 
 

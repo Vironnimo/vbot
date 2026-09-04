@@ -483,7 +483,14 @@ describe('settingsView helpers', () => {
     );
     expect(getWebSearchSettings({})).toEqual({
       provider: 'brave',
-      available_providers: ['brave', 'exa', 'firecrawl', 'searxng', 'serper', 'tavily'],
+      available_providers: [
+        'brave',
+        'exa',
+        'firecrawl',
+        'searxng',
+        'serper',
+        'tavily',
+      ],
       default_count: 12,
       searxng: {
         base_url: 'http://localhost:8888',
