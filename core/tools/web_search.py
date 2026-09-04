@@ -21,6 +21,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_PAGE,
     MIN_WEB_SEARCH_COUNT,
     WEB_SEARCH_PROVIDER_EXA,
+    WEB_SEARCH_PROVIDER_FIRECRAWL,
     WEB_SEARCH_PROVIDER_SEARXNG,
     WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
@@ -44,6 +45,7 @@ _LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
+_FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v2/search"
 _SERPER_ENDPOINT = "https://google.serper.dev/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
@@ -79,6 +81,10 @@ _EXA_RECENCY_WARNING = (
     "exa recency filtering may exclude results without a published date"
 )
 _EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
+_FIRECRAWL_PAGINATION_WARNING = (
+    "firecrawl does not support result paging; results are always the first page"
+)
+_FIRECRAWL_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
 _SERPER_PAGE_SIZE = 10
 _SERPER_MAX_PAGES_PER_CALL = 5
 _SERPER_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
@@ -876,6 +882,91 @@ async def _search_exa(
     return envelope, None
 
 
+def _standardize_firecrawl_results(raw_results: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _clean_snippet(raw.get("title"))
+        url = _normalize_text(raw.get("url"))
+        description = _clean_snippet(raw.get("description"))
+        if not title and not url and not description:
+            continue
+
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        normalized.append(entry)
+
+    return normalized
+
+
+async def _search_firecrawl(
+    *,
+    api_key: str,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # Firecrawl filters domains natively, so the raw query is sent and the
+    # post-filter below only guarantees the contract.
+    payload: dict[str, Any] = {"query": query, "limit": count, "sources": ["web"]}
+    if domains:
+        payload["includeDomains"] = domains
+    if recency:
+        payload["tbs"] = _FIRECRAWL_RECENCY_MAP[recency]
+
+    response_payload, failure = await _post_json_bounded(
+        _FIRECRAWL_ENDPOINT,
+        payload=payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        provider_label="Firecrawl",
+        auth_key_hint="FIRECRAWL_API_KEY",
+        extra_retryable_statuses={408},
+    )
+    if failure is not None:
+        return None, failure
+
+    # Firecrawl reports request-level failures inside a 200 envelope.
+    if not isinstance(response_payload, dict) or response_payload.get("success") is not True:
+        detail = "search failed"
+        if isinstance(response_payload, dict):
+            error_text = _normalize_text(response_payload.get("error"))
+            if error_text:
+                detail = error_text
+        _LOGGER.warning("Firecrawl web search request failed: %s", detail)
+        return None, HttpRequestFailure(detail, retryable=False)
+
+    data = response_payload.get("data")
+    raw_results = data.get("web") if isinstance(data, dict) else None
+    results = _restrict_results_to_domains(
+        _standardize_firecrawl_results(raw_results), domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_FIRECRAWL,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if recency:
+        envelope["recency"] = recency
+    if page > 1:
+        envelope["warnings"] = [_FIRECRAWL_PAGINATION_WARNING]
+    return envelope, None
+
+
 def _standardize_serper_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
@@ -1110,7 +1201,23 @@ async def web_search_handler(
 
     provider = settings["provider"]
     try:
-        if provider == WEB_SEARCH_PROVIDER_SEARXNG:
+        if provider == WEB_SEARCH_PROVIDER_FIRECRAWL:
+            api_key = _normalize_text(credential_resolver("FIRECRAWL_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires FIRECRAWL_API_KEY to be configured",
+                    retryable=False,
+                )
+            payload, search_failure = await _search_firecrawl(
+                api_key=api_key,
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        elif provider == WEB_SEARCH_PROVIDER_SEARXNG:
             payload, search_failure = await _search_searxng(
                 base_url=settings["searxng"]["base_url"],
                 query=query,
