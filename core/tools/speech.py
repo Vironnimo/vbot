@@ -19,7 +19,7 @@ from core.utils.paths import model_path
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
 _TEXT_TO_SPEECH_ARGUMENTS = frozenset({"text"})
 TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
-    "Convert text to spoken audio using the configured model. The chat plays the "
+    "Convert text to spoken audio using the configured model. The web chat plays the "
     "returned audio artifact automatically."
 )
 TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
@@ -61,14 +61,7 @@ def make_text_to_speech_handler(speech_service: Any):
         artifact_payload = artifact.to_dict()
         file_path = model_path(artifact.file_path)
         return tool_success(
-            {
-                "message": (
-                    f"Speech audio created at {file_path}. It plays automatically "
-                    "in the web chat; to deliver it elsewhere, send this file "
-                    "(e.g. via channel_send)."
-                ),
-                "artifact": {**artifact_payload, "path": file_path},
-            },
+            {"artifact": {**artifact_payload, "path": file_path}},
             artifacts=[artifact_payload],
         )
 
@@ -85,7 +78,7 @@ def register_text_to_speech_tool(registry: ToolRegistry, speech_service: Any) ->
         make_text_to_speech_handler(speech_service),
         family="media",
         open_input_schema=True,
-        result_schema={"type": "object", "required": ["message", "artifact"]},
+        result_schema={"type": "object", "required": ["artifact"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("text", kind="text", quote=True),)
         ),

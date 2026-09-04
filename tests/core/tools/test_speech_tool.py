@@ -47,7 +47,7 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
     assert isinstance(data, dict)
     # The model-facing copy carries the absolute file path for out-of-chat delivery.
     assert data["artifact"] == {**_ARTIFACT_PAYLOAD, "path": model_path(audio_path)}
-    assert model_path(audio_path) in data["message"]
+    assert "message" not in data
 
 
 @pytest.mark.asyncio

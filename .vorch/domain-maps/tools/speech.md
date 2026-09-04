@@ -8,9 +8,9 @@ Built-in `text_to_speech` tool for creating speech artifacts through the central
 - Registration: `register_text_to_speech_tool(registry, speech_service)`
 - Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; the handler still rejects unknown or malformed arguments. The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
 - Display: summary field `text`.
-- Success data: `{ message, artifact }`; the artifact dict is also returned in the top-level `artifacts` list.
+- Success data: `{ artifact }`; the artifact dict is also returned in the top-level `artifacts` list.
 - Artifact shape: `{ id, kind: "speech", filename, media_type, size_bytes, url }`. `url` is a server-local speech artifact URL (`/api/speech/artifacts/<id>`), not an attachment URL.
-- The model-facing `data.artifact` copy additionally carries `path` (the audio file's absolute path, rendered with the shared forward-slash Model presentation and also named in `data.message`) so the agent can deliver the audio outside the web chat (e.g. via `channel_send`). The UI-facing `artifacts` payload stays path-free - the WebUI renders from `url`.
+- The model-facing `data.artifact` copy additionally carries `path` (the audio file's absolute path, rendered with the shared forward-slash Model presentation) so the agent can deliver the audio outside the web chat (e.g. via `channel_send`).
 - Invalid or empty `text` returns `invalid_arguments`. Expected speech failures return `speech_error` instead of crashing the Run.
 
 ## Runtime
