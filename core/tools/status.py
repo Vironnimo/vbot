@@ -174,10 +174,6 @@ def make_status_handler(
                 "text": text,
                 "agent_id": agent_id,
                 "session_id": session_id,
-                "activity": activity.activity,
-                "run_id": activity.run_id,
-                "created_at": activity.created_at,
-                "updated_at": activity.updated_at,
             }
         )
 

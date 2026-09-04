@@ -246,17 +246,9 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
         "text",
         "agent_id",
         "session_id",
-        "activity",
-        "run_id",
-        "created_at",
-        "updated_at",
     }
-    assert data["activity"] == "idle"
     assert data["agent_id"] == "coder"
     assert data["session_id"] == "session-one"
-    assert data["run_id"] is None
-    assert data["created_at"] is None
-    assert data["updated_at"] is None
 
 
 def test_status_tool_returns_failure_when_agent_not_found(tmp_path: Path) -> None:
@@ -405,12 +397,8 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
     assert "Activity: running" in text
     assert f"Run created at: {run.created_at}" in text
     assert f"Run updated at: {expected_updated_at}" in text
-    assert data["activity"] == "running"
     assert data["agent_id"] == "reviewer"
     assert data["session_id"] == "session-two"
-    assert data["run_id"] == run.id
-    assert data["created_at"] == run.created_at
-    assert data["updated_at"] == expected_updated_at
 
 
 def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path) -> None:

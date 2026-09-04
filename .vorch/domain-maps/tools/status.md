@@ -12,15 +12,15 @@ Reports current or targeted agent/session/runtime status through the same status
   - `session_id` checks that Session for the calling Agent.
   - `agent_id` plus `session_id` checks that exact Agent/Session pair.
   - Retired nested `request.operation`, operation-key, and `action` shapes are rejected.
-- Success data contains status text built from Agent, Session, project, model, runtime, run activity state, context usage, and cache usage, plus machine-readable `agent_id`, `session_id`, `activity`, `run_id`, `created_at`, and `updated_at`. Cache details are intentionally text-only in the existing `text` field: the tool does not add machine-readable cache fields.
+- Success data contains the status text built from Agent, Session, project, model, runtime, run activity state, context usage, and cache usage, plus machine-readable `agent_id` and `session_id`. All report content, including run activity and cache details, is text-only: the tool does not add machine-readable activity or cache fields.
 - The status text carries a `Project:` line: `<display name> (<id>)` for a project session, the placeholder for an identity session (and the bare id when the project can't be loaded). Resolved by the shared `resolve_status_project_label(projects, project_id)` helper, so the `/status` command and the tool agree.
 - The status text carries `Last request cache:` and `Session cache:` lines. They render provider-reported cache read/write tokens and hit rate only when cache fields are present on measured assistant usage; otherwise they render the placeholder, so providers without cache reporting do not look like a 0% hit.
-- `activity` is only `running` or `idle`; unknown/missing Agent or Session targets return failure envelopes.
+- The status text renders activity as `running` or `idle`; unknown/missing Agent or Session targets return failure envelopes.
 - Display: no summary. A status call must render as `status`, not `status ({})`.
 - Both surfaces consume the Sessions-owned `status_snapshot`: SQL supplies Session start, User-turn count, latest Assistant Usage, whole-Session Usage/cache aggregates, and no complete transcript. The Agent-callable Tool wraps its synchronous dependency gathering in the cancellation-safe Tool worker; `/status` uses the command worker path.
 
 ## Constraints & Gotchas
 
 - The `/status` command and status tool share the same status text builder. `/status` always reports the current Session; the tool may target another Session.
-- `created_at` and `updated_at` are active Run timestamps when `activity` is `running`; they are `null` in structured data and rendered as placeholders in text when the Session is idle.
+- Active Run timestamps render in the status text; an idle Session renders placeholders.
 - Expected target lookup problems are represented as tool failure envelopes (`agent_not_found`, `session_not_found`, or `invalid_arguments`) instead of an `unknown` status.
