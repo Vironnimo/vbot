@@ -28,6 +28,7 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
 _FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v2/search"
+_PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/search"
 _SERPER_ENDPOINT = "https://google.serper.dev/search"
 _SEARXNG_ENDPOINT = "http://localhost:8888/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
@@ -2467,3 +2468,137 @@ async def test_web_search_handler_duckduckgo_rate_limit_is_retryable(
     error = assert_failure_envelope(result, "provider_request_failed")
     assert "rate-limited" in error["message"]
     assert error["retryable"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_perplexity_success(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.post(_PERPLEXITY_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "vBot docs",
+                        "url": "https://example.com/vbot",
+                        "snippet": "vBot documentation",
+                        "date": "2026-08-20",
+                    },
+                    {
+                        "title": "vBot guide",
+                        "url": "https://example.com/guide",
+                        "snippet": "Getting started",
+                        "last_updated": "2026-09-01",
+                    },
+                ]
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {
+            "query": "vbot",
+            "count": 5,
+            "recency": "month",
+            "domains": ["example.com"],
+        },
+        _fake_credential_resolver,
+        lambda: {"provider": "perplexity"},
+    )
+
+    assert route.called is True
+    request = route.calls[0].request
+    assert request.headers["Authorization"] == "Bearer test-brave-api-key"
+    body = json.loads(request.content.decode("utf-8"))
+    assert body["query"] == "vbot"
+    assert body["max_results"] == 5
+    assert body["search_recency_filter"] == "month"
+    assert body["search_domain_filter"] == ["example.com"]
+
+    data = assert_success_envelope(result)
+    assert data["provider"] == "perplexity"
+    assert data["query"] == "vbot"
+    assert data["count"] == 5
+    assert data["page"] == 1
+    assert data["recency"] == "month"
+    assert data["applied_domains"] == ["example.com"]
+    assert data["result_count"] == 2
+    assert "warnings" not in data
+    results = data["results"]
+    assert isinstance(results, list)
+    assert len(results) == 2
+    first = results[0]
+    assert first["rank"] == 1
+    assert first["title"] == "vBot docs"
+    assert first["url"] == "https://example.com/vbot"
+    assert first["description"] == "vBot documentation"
+    assert first["page_age"] == "2026-08-20"
+    assert results[1]["page_age"] == "2026-09-01"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_perplexity_page_warns_without_paging(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.post(_PERPLEXITY_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": 2},
+        _fake_credential_resolver,
+        lambda: {"provider": "perplexity"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 0
+    assert data["warnings"] == [web_search_module._PERPLEXITY_PAGINATION_WARNING]
+
+
+@pytest.mark.asyncio
+async def test_web_search_handler_perplexity_missing_api_key(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        lambda key: "",
+        lambda: {"provider": "perplexity"},
+    )
+
+    error = assert_failure_envelope(result, "missing_api_key")
+    assert "PERPLEXITY_API_KEY" in error["message"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_perplexity_unauthorized_hints_at_api_key(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.post(_PERPLEXITY_ENDPOINT).mock(
+        return_value=httpx.Response(401, json={"error": "invalid key"})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "perplexity"},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert "PERPLEXITY_API_KEY" in error["message"]
+    assert error["retryable"] is False
