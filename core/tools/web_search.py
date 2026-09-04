@@ -23,6 +23,7 @@ from core.search_config import (
     WEB_SEARCH_PROVIDER_DUCKDUCKGO,
     WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_FIRECRAWL,
+    WEB_SEARCH_PROVIDER_PERPLEXITY,
     WEB_SEARCH_PROVIDER_SEARXNG,
     WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
@@ -48,6 +49,7 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
 _FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v2/search"
+_PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/search"
 _SERPER_ENDPOINT = "https://google.serper.dev/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
@@ -99,6 +101,9 @@ _EXA_RECENCY_WARNING = "exa recency filtering may exclude results without a publ
 _EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
 _FIRECRAWL_PAGINATION_WARNING = (
     "firecrawl does not support result paging; results are always the first page"
+)
+_PERPLEXITY_PAGINATION_WARNING = (
+    "perplexity does not support result paging; results are always the first page"
 )
 _FIRECRAWL_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
 _SERPER_PAGE_SIZE = 10
@@ -1372,6 +1377,88 @@ async def _search_tavily(
     return envelope, None
 
 
+def _standardize_perplexity_results(raw_results: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _clean_snippet(raw.get("title"))
+        url = _normalize_text(raw.get("url"))
+        description = _clean_snippet(raw.get("snippet"))
+        if not title and not url and not description:
+            continue
+
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("date")) or _normalize_text(
+            raw.get("last_updated")
+        )
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
+
+    return normalized
+
+
+async def _search_perplexity(
+    *,
+    api_key: str,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # Perplexity's Search API filters domains and recency natively, and its
+    # web-search maximum (20) matches the tool schema cap, so count, domains,
+    # and recency pass through directly; the post-filter only guarantees the
+    # contract.
+    payload: dict[str, Any] = {"query": query, "max_results": count}
+    if domains:
+        payload["search_domain_filter"] = domains
+    if recency:
+        payload["search_recency_filter"] = recency
+
+    response_payload, failure = await _post_json_bounded(
+        _PERPLEXITY_ENDPOINT,
+        payload=payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        provider_label="Perplexity",
+        auth_key_hint="PERPLEXITY_API_KEY",
+    )
+    if failure is not None:
+        return None, failure
+
+    raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
+    results = _restrict_results_to_domains(
+        _standardize_perplexity_results(raw_results), domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_PERPLEXITY,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if domains:
+        envelope["applied_domains"] = domains
+    if recency:
+        envelope["recency"] = recency
+    if page > 1:
+        envelope["warnings"] = [_PERPLEXITY_PAGINATION_WARNING]
+    return envelope, None
+
+
 async def web_search_handler(
     context: ToolContext,
     arguments: JsonObject,
@@ -1500,6 +1587,22 @@ async def web_search_handler(
                     retryable=False,
                 )
             payload, search_failure = await _search_tavily(
+                api_key=api_key,
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        elif provider == WEB_SEARCH_PROVIDER_PERPLEXITY:
+            api_key = _normalize_text(credential_resolver("PERPLEXITY_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires PERPLEXITY_API_KEY to be configured",
+                    retryable=False,
+                )
+            payload, search_failure = await _search_perplexity(
                 api_key=api_key,
                 query=query,
                 domains=domains,
