@@ -11,6 +11,9 @@
   } from '$lib/tooltip.js';
   import {
     avatarForItem,
+    backgroundBashDisplayResult,
+    backgroundBashRowState,
+    backgroundBashToolStatusLabel,
     changeStatsLabel,
     changeStatsParts,
     changeStatsTooltip,
@@ -58,6 +61,8 @@
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
+    backgroundBashStatuses = {},
+    backgroundBashProcesses = {},
     nowMs = Date.now(),
   } = $props();
 
@@ -524,15 +529,24 @@
           })}
           {@const preparing = isToolPreparing(child)}
           {@const rowPresentation = toolRowPresentation(child)}
+          {@const bashRowState = backgroundBashRowState(
+            child,
+            backgroundBashStatuses,
+            backgroundBashProcesses,
+          )}
+          {@const rowDotStatus = bashRowState?.dotStatus ?? toolStatus(child)}
+          {@const rowTimeLabel = bashRowState
+            ? backgroundBashToolStatusLabel(child, bashRowState, nowMs)
+            : toolStatusLabel(child, nowMs)}
           <details class="tool-event run-tool-event">
             <summary class="tool-event-line">
               <span
-                class:done={toolStatus(child) === 'success'}
-                class:error={toolStatus(child) === 'failed'}
-                class:partial={toolStatus(child) === 'partial'}
-                class:cancelled={toolStatus(child) === 'cancelled'}
+                class:done={rowDotStatus === 'success'}
+                class:error={rowDotStatus === 'failed'}
+                class:partial={rowDotStatus === 'partial'}
+                class:cancelled={rowDotStatus === 'cancelled'}
                 class:preparing
-                class:running={toolStatus(child) === 'running' && !preparing}
+                class:running={rowDotStatus === 'running' && !preparing}
                 class="te-dot">●</span
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
@@ -540,13 +554,13 @@
                 {@render toolPrimaryLine(rowPresentation.primary)}
               {/if}
               {@render toolFacts(rowPresentation.facts)}
-              {#if toolStatusLabel(child, nowMs)}
+              {#if rowTimeLabel}
                 <span
                   class="te-time"
-                  class:cancelled={toolStatus(child) === 'cancelled'}
-                  class:partial={toolStatus(child) === 'partial'}
+                  class:cancelled={rowDotStatus === 'cancelled'}
+                  class:partial={rowDotStatus === 'partial'}
                 >
-                  {toolStatusLabel(child, nowMs)}
+                  {rowTimeLabel}
                 </span>
               {/if}
               {#if isToolCancellable}
@@ -603,8 +617,10 @@
               {/if}
               {@render toolDetailSection(
                 t('chat.toolResultLabel', 'Result'),
-                child.result,
-                toolStatus(child) === 'failed',
+                bashRowState
+                  ? backgroundBashDisplayResult(child, bashRowState)
+                  : child.result,
+                rowDotStatus === 'failed',
                 true,
                 toolNameForRunTool(child),
                 child,

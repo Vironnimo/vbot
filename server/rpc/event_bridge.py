@@ -45,6 +45,7 @@ from core.subagents import (
 )
 from server.events import (
     ALLOWED_RESOURCE_KINDS,
+    BASH_PROCESS_STATUS_CHANGED_EVENT,
     PROVIDER_AUTH_COMPLETED_EVENT,
     RESOURCE_CHANGED_EVENT,
     RESOURCE_KIND_DEBUG_TRACES,
@@ -206,6 +207,23 @@ def _publish_provider_auth_completed_event(
             "account": account,
             "success": success,
         },
+    )
+
+
+def publish_bash_process_status_changed(state: Any, notification: Any) -> None:
+    """Forward one background-process terminal notification to accessors.
+
+    The notification is the ProcessManager's plain snapshot; it is pure
+    accessor-facing state (the Model never sees it) and carries the exact
+    start/end timestamps the WebUI needs to replace its live tick with the
+    real runtime.
+    """
+    event_bus = getattr(state, "event_bus", None)
+    if event_bus is None or not isinstance(notification, dict):
+        return
+    event_bus.publish(
+        BASH_PROCESS_STATUS_CHANGED_EVENT,
+        dict(notification),
     )
 
 

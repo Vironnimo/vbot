@@ -49,6 +49,7 @@ from server.file_delivery import FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
+    publish_bash_process_status_changed,
     publish_resource_changed,
     reflection_source_session_id,
 )
@@ -412,6 +413,7 @@ def create_app(
             _unregister_cron_change_bridge(app.state)
             _unregister_calendar_change_bridge(app.state)
             _unregister_terminal_change_bridge(app.state)
+            _unregister_bash_process_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
                 getattr(app.state, "device_flow_engine", None),
@@ -706,6 +708,9 @@ def _initialize_app_state(
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
     app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
+    app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
+        app.state
+    )
     app.state.chat_loop = runtime.chat_loop
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
@@ -849,6 +854,23 @@ def _unregister_terminal_change_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.terminal_change_bridge_unsubscribe = None
+
+
+def _register_bash_process_change_bridge(state: Any) -> Any:
+    manager = getattr(state.runtime, "process_manager", None)
+    add_callback = getattr(manager, "add_terminal_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(
+        lambda notification: publish_bash_process_status_changed(state, notification)
+    )
+
+
+def _unregister_bash_process_change_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "bash_process_change_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.bash_process_change_bridge_unsubscribe = None
 
 
 async def _read_upload_file_with_limit(
