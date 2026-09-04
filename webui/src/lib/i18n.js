@@ -1382,6 +1382,10 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.providerDescription':
     'Provider used whenever an agent calls web_search.',
   'settings.webSearch.providers.brave': 'Brave Search',
+  'settings.webSearch.providers.tavily': 'Tavily',
+  'settings.webSearch.providers.exa': 'Exa',
+  'settings.webSearch.providers.serper': 'Serper',
+  'settings.webSearch.providers.firecrawl': 'Firecrawl',
   'settings.webSearch.providers.searxng': 'SearXNG',
   'settings.webSearch.defaultCount': 'Default result count',
   'settings.webSearch.defaultCountDescription':
@@ -1392,6 +1396,14 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
   'settings.webSearch.braveKeyHint':
     'Brave Search requires an API key: set BRAVE_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.tavilyKeyHint':
+    'Tavily requires an API key: set TAVILY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.exaKeyHint':
+    'Exa requires an API key: set EXA_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.serperKeyHint':
+    'Serper requires an API key: set SERPER_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.firecrawlKeyHint':
+    'Firecrawl requires an API key: set FIRECRAWL_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':

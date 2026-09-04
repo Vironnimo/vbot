@@ -671,7 +671,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
             },
             "web_search": {
                 "provider": "brave",
-                "available_providers": ["brave", "searxng"],
+                "available_providers": ["brave", "exa", "firecrawl", "searxng", "serper", "tavily"],
                 "default_count": 12,
                 "searxng": {"base_url": "http://localhost:8888"},
             },
