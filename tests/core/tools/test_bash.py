@@ -832,16 +832,7 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
         assert data["status"] == "running"
         assert data["mode"] == "auto"
         assert data["delivery"] == "automatic"
-        assert data["process_note"] == bash_module.BASH_HANDOFF_PROCESS_NOTE
-        assert "Use process_id with the process Tool" in data["process_note"]
-        assert (
-            data["process_note"]
-            == "Use process_id with the process Tool for status, raw stdin input, or kill. "
-            "Process input writes to a pipe; it does not provide a terminal or TTY. output is "
-            "the newest capped snapshot collected before handoff. The result's log_file field "
-            "carries the path to the complete combined stdout/stderr stream, written live from "
-            "command start through exit."
-        )
+        assert "process_note" not in data
         process_id = data["process_id"]
         assert isinstance(process_id, str) and process_id
         assert data["truncated"] is True
