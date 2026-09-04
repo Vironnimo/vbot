@@ -227,7 +227,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         activation="session_grant",
         result_schema={
             "type": "object",
-            "required": ["action", "items", "has_more", "formatted_bytes"],
+            "required": ["items", "has_more", "formatted_bytes"],
         },
         session_scoped=True,
         parallel_safe=True,
@@ -878,7 +878,6 @@ def _page_data(
 ) -> JsonObject:
     selected = _checkpoint(snapshot, request.checkpoint)
     data: JsonObject = {
-        "action": request.action,
         "snapshot": {
             "checkpoint": snapshot.latest.ordinal,
             "checkpoint_id": snapshot.latest.message_id,
