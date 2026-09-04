@@ -33,9 +33,8 @@ _ANALYZE_IMAGE_RESULT_SCHEMA: JsonObject = {
     "type": "object",
     "properties": {
         "analysis": {"type": "string", "minLength": 1},
-        "image_count": {"type": "integer", "minimum": 1},
     },
-    "required": ["analysis", "image_count"],
+    "required": ["analysis"],
     "additionalProperties": False,
 }
 ANALYZE_IMAGE_TOOL_DESCRIPTION = (
@@ -252,12 +251,7 @@ def make_analyze_image_handler(image_service: Any):
                 retryable=exc.retryable,
                 attempts_made=exc.attempts_made,
             )
-        return tool_success(
-            {
-                "analysis": result.content,
-                "image_count": result.image_count,
-            }
-        )
+        return tool_success({"analysis": result.content})
 
     return handler
 
