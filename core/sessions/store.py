@@ -535,14 +535,18 @@ def _active_message_page_from_connection(
             str(row["role"]) == "run_summary" for row in rows
         )
         if should_expand:
-            page_floor = 0 if previous_summary is None else int(previous_summary["seq"]) + 1
+            segment_floor = 0 if previous_summary is None else int(previous_summary["seq"]) + 1
             rows = connection.execute(
                 _message_records_sql(
                     where=" AND ".join([*clauses, "m.seq >= ?", "m.seq < ?"]),
                     order_by="ORDER BY m.seq",
                 ),
-                (*params, page_floor, cutoff),
+                (*params, segment_floor, cutoff),
             ).fetchall()
+            # The Run boundary may land on an excluded Note or inactive Message.
+            # Cursors must anchor the first row accepted by the same visibility
+            # predicate so the next page can validate and resume from it.
+            page_floor = int(rows[0]["seq"])
 
     has_more = (
         connection.execute(

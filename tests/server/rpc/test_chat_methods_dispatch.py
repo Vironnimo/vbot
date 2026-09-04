@@ -475,6 +475,72 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_chat_history_expanded_page_cursor_skips_excluded_run_boundary(
+    tmp_path: Path,
+) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    timing = {
+        "started_at": "2026-07-24T10:00:00+00:00",
+        "completed_at": "2026-07-24T10:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    session.append_many(
+        [
+            replace(ChatMessage.user("first"), id="first-user"),
+            replace(
+                ChatMessage.run_summary(
+                    run_id="run-one",
+                    status="completed",
+                    timing=timing,
+                    iteration_count=1,
+                ),
+                id="first-summary",
+            ),
+            replace(ChatMessage.note("internal boundary"), id="boundary-note"),
+            replace(ChatMessage.user("second"), id="second-user"),
+            replace(
+                ChatMessage.run_summary(
+                    run_id="run-two",
+                    status="completed",
+                    timing=timing,
+                    iteration_count=1,
+                ),
+                id="second-summary",
+            ),
+        ]
+    )
+
+    newest = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 1}},
+    )
+    older = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {
+                "agent_id": "parent",
+                "limit": 1,
+                "before": newest["result"]["next_before"],
+            },
+        },
+    )
+
+    assert newest["ok"] is True
+    assert [message["id"] for message in newest["result"]["messages"]] == [
+        "second-user",
+        "second-summary",
+    ]
+    assert older["ok"] is True
+    assert [message["id"] for message in older["result"]["messages"]] == [
+        "first-user",
+        "first-summary",
+    ]
+    assert older["result"]["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_chat_history_keeps_the_active_tail_segment_together(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")
