@@ -36,4 +36,4 @@ Searches the public web through the configured first-party search provider and r
 - Provider response bodies are streamed into a 5 MB bounded buffer before status details or success JSON are decoded. A valid `Content-Length` over the limit is rejected before reading, while the byte counter catches missing or dishonest declarations; oversized responses return non-retryable `response_too_large`.
 - Transient-status retries honor a server `Retry-After` hint as a floor (parsed via `core/utils/http_status.parse_retry_after`, delay math via `core/utils/retry.compute_retry_delay`).
 - `recency` is the provider-adapter invariant for current and future providers: every adapter must translate `day`, `month`, and `year` into a real upstream request parameter and echo the canonical value on success. An adapter must never silently omit a requested window. DuckDuckGo is the documented exception: its endpoint has no age filter, so it warns, returns unfiltered results, and never echoes `recency`.
-- Result content is marked as untrusted web content.
+- The Tool description marks result text as untrusted web content, never instructions to follow; results carry no trust field.
