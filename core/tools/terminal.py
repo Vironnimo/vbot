@@ -660,7 +660,6 @@ def _terminal_summary(session: TerminalSession, *, current_attachment: TerminalO
         "name": session.name,
         "title": session.renderer.title,
         "workdir": model_path(session.cwd),
-        "pid": session.adapter.pid,
         "exit_code": session.exit_code,
         "started_at": session.started_at.isoformat(),
         "finished_at": session.finished_at.isoformat() if session.finished_at else None,
