@@ -408,10 +408,7 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     )
 
     assert result["ok"] is True
-    assert result["data"] == {
-        "analysis": "Visible details",
-        "image_count": 2,
-    }
+    assert result["data"] == {"analysis": "Visible details"}
     assert service.received_analysis_prompt == "Read the ingredients."
     assert service.received_analysis_paths == (first.resolve(), second.resolve())
     assert service.received_analysis_run_context == ImageUnderstandingRunContext(
@@ -430,6 +427,9 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
         {
             "analysis": "Visible details",
             "image_count": 1,
+        },
+        {
+            "analysis": "Visible details",
             "model": "vision-model",
         },
     ],
@@ -446,9 +446,8 @@ def test_analyze_image_tool_has_closed_result_contract(
         "type": "object",
         "properties": {
             "analysis": {"type": "string", "minLength": 1},
-            "image_count": {"type": "integer", "minimum": 1},
         },
-        "required": ["analysis", "image_count"],
+        "required": ["analysis"],
         "additionalProperties": False,
     }
     with pytest.raises(InvalidToolResultError):
