@@ -74,12 +74,8 @@ _BRAVE_DOMAIN_PAGING_WARNING = (
 _TAVILY_PAGINATION_WARNING = (
     "tavily does not support result paging; results are always the first page"
 )
-_EXA_PAGINATION_WARNING = (
-    "exa does not support result paging; results are always the first page"
-)
-_EXA_RECENCY_WARNING = (
-    "exa recency filtering may exclude results without a published date"
-)
+_EXA_PAGINATION_WARNING = "exa does not support result paging; results are always the first page"
+_EXA_RECENCY_WARNING = "exa recency filtering may exclude results without a published date"
 _EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
 _FIRECRAWL_PAGINATION_WARNING = (
     "firecrawl does not support result paging; results are always the first page"
@@ -859,9 +855,7 @@ async def _search_exa(
         return None, failure
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
-    results = _restrict_results_to_domains(
-        _standardize_exa_results(raw_results), domains, count
-    )
+    results = _restrict_results_to_domains(_standardize_exa_results(raw_results), domains, count)
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_EXA,
         "query": query,
@@ -1073,9 +1067,7 @@ async def _search_serper(
         )
         if failure is not None:
             return None, failure
-        organic = (
-            response_payload.get("organic") if isinstance(response_payload, dict) else None
-        )
+        organic = response_payload.get("organic") if isinstance(response_payload, dict) else None
         if not isinstance(organic, list) or not organic:
             break
         collected.extend(organic[skip : skip + (count - len(collected))])
@@ -1169,9 +1161,7 @@ async def _search_tavily(
         return None, failure
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
-    results = _restrict_results_to_domains(
-        _standardize_tavily_results(raw_results), domains, count
-    )
+    results = _restrict_results_to_domains(_standardize_tavily_results(raw_results), domains, count)
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_TAVILY,
         "query": query,

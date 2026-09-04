@@ -1354,9 +1354,7 @@ async def test_web_search_handler_tavily_success_maps_results(tmp_path: Path) ->
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recency", ["day", "month", "year"])
-async def test_web_search_handler_tavily_recency_and_domains(
-    tmp_path: Path, recency: str
-) -> None:
+async def test_web_search_handler_tavily_recency_and_domains(tmp_path: Path, recency: str) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -1604,9 +1602,7 @@ async def test_web_search_handler_exa_success_maps_results(tmp_path: Path) -> No
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("recency", "window_days"), [("day", 1), ("month", 30), ("year", 365)]
-)
+@pytest.mark.parametrize(("recency", "window_days"), [("day", 1), ("month", 30), ("year", 365)])
 async def test_web_search_handler_exa_recency_and_domains(
     tmp_path: Path, recency: str, window_days: int
 ) -> None:
@@ -1663,9 +1659,7 @@ async def test_web_search_handler_exa_page_warns_without_paging(tmp_path: Path) 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    route = respx.post(_EXA_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    route = respx.post(_EXA_ENDPOINT).mock(return_value=httpx.Response(200, json={"results": []}))
 
     result = await web_search_handler(
         make_context(workspace),
@@ -2221,9 +2215,7 @@ async def test_web_search_handler_firecrawl_accepts_alternate_envelopes(
     }
     key = "results" if "results" in envelope else "data"
     respx.post(_FIRECRAWL_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, **{key: [item]}}
-        )
+        return_value=httpx.Response(200, json={"success": True, **{key: [item]}})
     )
 
     result = await web_search_handler(
@@ -2290,9 +2282,7 @@ async def test_web_search_handler_firecrawl_failed_envelope_reads_message_field(
     workspace.mkdir()
 
     respx.post(_FIRECRAWL_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json={"success": False, "message": "too many requests"}
-        )
+        return_value=httpx.Response(200, json={"success": False, "message": "too many requests"})
     )
 
     result = await web_search_handler(
