@@ -17,7 +17,7 @@ Manages the local calendar through `CalendarService`: listing with expanded occu
 - `duration` is minutes for timed events and find_free slots, days for all-day events. Omitted on create it defaults to 60 minutes / 1 day; omitted on update it keeps the current length.
 - `rrule` accepts `freq` (daily/weekly/monthly/yearly), `interval`, an end as `count` or `until` (never both), and `by_weekday` for weekly rules. Explicit `null` on update stops repetition; `null` on create is rejected. The tool never exposes a timezone: recurring timed events anchor wall-clock in the server zone.
 - Agent-facing payloads render server-local naive ISO datetimes (or plain dates for all-day events) - never UTC instants. Occurrence payloads carry `occurrence_start` in the event's anchor form, which is exactly the EXDATE value `delete` + `start` consumes to remove one occurrence of a repeating event.
-- `list` returns events that have at least one occurrence in the window (with unified `start`/`end`/`duration` fields) plus their occurrences; `find_free` returns up to five earliest free slots and ignores cron jobs.
+- `list` returns events that have at least one occurrence in the window plus their occurrences; `find_free` returns up to five earliest free slots and ignores cron jobs. Timed event payloads carry `start`/`end` with no `duration` (it is end minus start); all-day payloads carry `start` and `duration` in days.
 
 ## Constraints & Gotchas
 

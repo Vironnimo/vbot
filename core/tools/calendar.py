@@ -374,7 +374,6 @@ def _event_payload(event: CalendarEvent, calendar_service: CalendarService) -> J
     start_local = _instant_to_local(event, zone)
     payload["start"] = start_local
     payload["end"] = _local_end(start_local, event.duration_minutes)
-    payload["duration"] = event.duration_minutes or _DEFAULT_EVENT_DURATION_MINUTES
     return payload
 
 

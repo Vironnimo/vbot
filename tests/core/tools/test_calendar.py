@@ -114,7 +114,7 @@ class TestListAction:
         by_title = {item["title"]: item for item in result["data"]["events"]}
         assert by_title["Weekly"]["start"] == f"{monday}T09:00:00"
         assert by_title["Weekly"]["end"] == f"{monday}T09:30:00"
-        assert by_title["Weekly"]["duration"] == 30
+        assert "duration" not in by_title["Weekly"]
         assert by_title["Trip"]["start"] == trip_day
         assert by_title["Trip"]["duration"] == 3
         assert by_title["Trip"]["all_day"] is True
@@ -143,7 +143,7 @@ class TestCreateAction:
         event = result["data"]["event"]
         assert event["start"] == "2026-09-10T15:00:00"
         assert event["end"] == "2026-09-10T16:00:00"
-        assert event["duration"] == 60
+        assert "duration" not in event
         assert event["all_day"] is False
 
     def test_create_all_day_event_with_duration_days(self, tmp_path: Path) -> None:
