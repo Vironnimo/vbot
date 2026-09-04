@@ -1092,7 +1092,6 @@ async def _run_foreground_phase(
                 process_manager,
                 context,
                 process_id,
-                mode=mode,
                 command=command,
             )
 
@@ -1102,7 +1101,6 @@ async def _run_foreground_phase(
                 process_manager,
                 context,
                 process_id,
-                mode=mode,
                 command=command,
             )
         if deadline is not None and asyncio.get_running_loop().time() >= deadline:
@@ -1171,7 +1169,6 @@ async def _background_result(
     result: JsonObject = {
         "status": "running",
         "process_id": process_id,
-        "mode": mode,
         **fields,
     }
     result["delivery"] = "automatic"
@@ -1277,7 +1274,6 @@ async def _completion_result(
     context: ToolContext,
     process_id: str,
     *,
-    mode: str,
     command: str,
 ) -> JsonObject:
     tracked = process_manager.get_process(
@@ -1287,7 +1283,6 @@ async def _completion_result(
     result: JsonObject = {
         "status": "completed",
         "exit_code": tracked.exit_code,
-        "mode": mode,
         **_shape_output_fields(tracked, output),
     }
     hint = annotate_failure(command, tracked.exit_code, output)

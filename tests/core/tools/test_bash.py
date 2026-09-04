@@ -282,7 +282,7 @@ async def test_background_mode_returns_running_process_with_clear_handoff(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    assert result["data"]["mode"] == "background"
+    assert "mode" not in result["data"]
     assert result["data"]["delivery"] == "automatic"
     assert isinstance(result["data"]["handoff_note"], str)
     assert result["data"]["handoff_note"]
@@ -797,7 +797,7 @@ async def test_background_after_expiry_backgrounds_running_process(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    assert result["data"]["mode"] == "auto"
+    assert "mode" not in result["data"]
     assert isinstance(result["data"]["handoff_note"], str)
     assert result["data"]["handoff_note"]
 
@@ -830,7 +830,7 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
         assert result["ok"] is True
         data = result["data"]
         assert data["status"] == "running"
-        assert data["mode"] == "auto"
+        assert "mode" not in data
         assert data["delivery"] == "automatic"
         assert "process_note" not in data
         process_id = data["process_id"]
@@ -898,7 +898,7 @@ async def test_foreground_mode_never_hands_off(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
-    assert result["data"]["mode"] == "foreground"
+    assert "mode" not in result["data"]
     assert "finished-inline" in result["data"]["output"]
     assert watcher_calls == []
 
@@ -943,7 +943,7 @@ async def test_omitted_execution_mode_defaults_to_foreground(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
-    assert result["data"]["mode"] == "foreground"
+    assert "mode" not in result["data"]
     assert result["data"]["output"].strip() == "default-foreground"
 
 
