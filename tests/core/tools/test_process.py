@@ -245,14 +245,7 @@ async def test_input_sends_one_line_by_default(
     )
     terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
 
-    assert result == tool_success(
-        {
-            "process_id": process_id,
-            "characters_sent": 5,
-            "newline": True,
-            "eof": False,
-        }
-    )
+    assert result == tool_success({})
     assert "got:value" in str(terminal["output"])
 
 
@@ -277,14 +270,7 @@ async def test_input_can_send_raw_text_and_close_stdin(
     )
     terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
 
-    assert result == tool_success(
-        {
-            "process_id": process_id,
-            "characters_sent": 7,
-            "newline": False,
-            "eof": True,
-        }
-    )
+    assert result == tool_success({})
     assert "read:payload" in str(terminal["output"])
 
 

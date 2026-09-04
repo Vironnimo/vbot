@@ -185,14 +185,11 @@ async def _handle_input(
         eof=eof,
         project_id=context.project_id,
     )
-    return tool_success(
-        {
-            "process_id": process_id,
-            "characters_sent": len(text),
-            "newline": newline,
-            "eof": eof,
-        }
-    )
+    # Success itself is the confirmation: every echo of the agent's own
+    # arguments (process_id, newline, eof, derived characters_sent) would be
+    # information the agent already has, and stdin state lives in the next
+    # status snapshot.
+    return tool_success({})
 
 
 async def _handle_kill(
