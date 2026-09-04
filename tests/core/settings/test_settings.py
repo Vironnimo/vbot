@@ -564,7 +564,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
             "unsupported defaults.agent setting: unknown",
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
-        ("error", "$.web_search.provider", "must be one of: brave, searxng"),
+        ("error", "$.web_search.provider", "must be one of: brave, exa, firecrawl, searxng, serper, tavily"),
         ("error", "$.web_search.default_count", "must be an integer between 1 and 20"),
         ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),

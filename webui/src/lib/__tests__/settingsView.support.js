@@ -137,6 +137,10 @@ export function translate(key, fallback, values) {
     'settings.recall.backends.canonical_scan': 'Canonical scan',
     'settings.recall.backends.sqlite_fts': 'SQLite FTS',
     'settings.webSearch.providers.brave': 'Brave Search',
+    'settings.webSearch.providers.tavily': 'Tavily',
+    'settings.webSearch.providers.exa': 'Exa',
+    'settings.webSearch.providers.serper': 'Serper',
+    'settings.webSearch.providers.firecrawl': 'Firecrawl',
     'settings.webSearch.providers.searxng': 'SearXNG',
   };
   const template = templates[key] ?? fallback ?? key;

@@ -170,7 +170,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "web_search": {
             "provider": "brave",
-            "available_providers": ["brave", "searxng"],
+            "available_providers": ["brave", "exa", "firecrawl", "searxng", "serper", "tavily"],
             "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
         },
@@ -373,7 +373,7 @@ async def test_settings_catalog_exposes_public_paths_and_lifecycle(tmp_path: Pat
     provider = entries["web_search.provider"]
     assert provider["value"] == "brave"
     assert provider["source"] == "default"
-    assert provider["allowed_values"] == ["brave", "searxng"]
+    assert provider["allowed_values"] == ["brave", "exa", "firecrawl", "searxng", "serper", "tavily"]
     assert provider["application"] == "live"
 
 
