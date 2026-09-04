@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -19,6 +20,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MAX_WEB_SEARCH_PAGE,
     MIN_WEB_SEARCH_COUNT,
+    WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_SEARXNG,
     WEB_SEARCH_PROVIDER_TAVILY,
 )
@@ -40,6 +42,7 @@ from core.utils.retry import MAX_RETRIES, sleep_for_retry
 _LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+_EXA_ENDPOINT = "https://api.exa.ai/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
@@ -67,6 +70,13 @@ _BRAVE_DOMAIN_PAGING_WARNING = (
 _TAVILY_PAGINATION_WARNING = (
     "tavily does not support result paging; results are always the first page"
 )
+_EXA_PAGINATION_WARNING = (
+    "exa does not support result paging; results are always the first page"
+)
+_EXA_RECENCY_WARNING = (
+    "exa recency filtering may exclude results without a published date"
+)
+_EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -760,6 +770,107 @@ def _resolve_web_search_settings(
     return _normalize_web_search_settings(raw_settings)
 
 
+def _exa_start_published_date(recency: str) -> str:
+    """Render a canonical recency window as Exa's ISO 8601 start date."""
+    cutoff = datetime.now(UTC) - timedelta(days=_EXA_RECENCY_WINDOW_DAYS[recency])
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _standardize_exa_results(raw_results: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _clean_snippet(raw.get("title"))
+        url = _normalize_text(raw.get("url"))
+        highlights = raw.get("highlights")
+        description = ""
+        if isinstance(highlights, list):
+            description = _clean_snippet(
+                " ".join(
+                    highlight
+                    for highlight in highlights
+                    if isinstance(highlight, str) and highlight.strip()
+                )
+            )
+        if not title and not url and not description:
+            continue
+
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("publishedDate"))
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
+
+    return normalized
+
+
+async def _search_exa(
+    *,
+    api_key: str,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # Exa filters domains natively (its docs prefer includeDomains over a
+    # site: operator), so the raw query is sent and the post-filter below
+    # only guarantees the contract.
+    payload: dict[str, Any] = {
+        "query": query,
+        "numResults": count,
+        "contents": {"highlights": True},
+    }
+    if domains:
+        payload["includeDomains"] = domains
+    if recency:
+        payload["startPublishedDate"] = _exa_start_published_date(recency)
+
+    response_payload, failure = await _post_json_bounded(
+        _EXA_ENDPOINT,
+        payload=payload,
+        headers={"x-api-key": api_key},
+        provider_label="Exa",
+        auth_key_hint="EXA_API_KEY",
+    )
+    if failure is not None:
+        return None, failure
+
+    raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
+    results = _restrict_results_to_domains(
+        _standardize_exa_results(raw_results), domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_EXA,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if recency:
+        envelope["recency"] = recency
+    warnings: list[str] = []
+    if recency:
+        warnings.append(_EXA_RECENCY_WARNING)
+    if page > 1:
+        warnings.append(_EXA_PAGINATION_WARNING)
+    if warnings:
+        envelope["warnings"] = warnings
+    return envelope, None
+
+
 def _standardize_tavily_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
@@ -904,6 +1015,22 @@ async def web_search_handler(
         if provider == WEB_SEARCH_PROVIDER_SEARXNG:
             payload, search_failure = await _search_searxng(
                 base_url=settings["searxng"]["base_url"],
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        elif provider == WEB_SEARCH_PROVIDER_EXA:
+            api_key = _normalize_text(credential_resolver("EXA_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires EXA_API_KEY to be configured",
+                    retryable=False,
+                )
+            payload, search_failure = await _search_exa(
+                api_key=api_key,
                 query=query,
                 domains=domains,
                 count=count,

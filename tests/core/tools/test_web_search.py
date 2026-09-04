@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from core.tools.web_search import (
 from core.utils.retry import MAX_RETRIES
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+_EXA_ENDPOINT = "https://api.exa.ai/search"
 _SEARXNG_ENDPOINT = "http://localhost:8888/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
@@ -1534,3 +1536,180 @@ async def test_web_search_handler_tavily_rejects_oversized_post_response(
 
     error = assert_failure_envelope(result, "response_too_large")
     assert "5 MB" in error["message"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_exa_success_maps_results(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.post(_EXA_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "vBot docs",
+                        "url": "https://example.com/vbot",
+                        "publishedDate": "2026-08-20T00:00:00.000Z",
+                        "highlights": ["vBot documentation", "agent harness"],
+                    },
+                    {
+                        "title": "vBot project",
+                        "url": "https://example.com/project",
+                    },
+                ]
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "count": 5},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["provider"] == "exa"
+    assert data["result_count"] == 2
+    assert "recency" not in data
+    assert "warnings" not in data
+    first, second = data["results"]
+    assert (first["rank"], second["rank"]) == (1, 2)
+    assert first["description"] == "vBot documentation agent harness"
+    assert first["page_age"] == "2026-08-20T00:00:00.000Z"
+    assert second["description"] == ""
+    assert "page_age" not in second
+
+    request = route.calls[0].request
+    assert request.headers["x-api-key"] == "test-brave-api-key"
+    body = _read_json_body(request)
+    assert body["query"] == "vbot"
+    assert body["numResults"] == 5
+    assert body["contents"] == {"highlights": True}
+    assert "startPublishedDate" not in body
+    assert "includeDomains" not in body
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recency", "window_days"), [("day", 1), ("month", 30), ("year", 365)]
+)
+async def test_web_search_handler_exa_recency_and_domains(
+    tmp_path: Path, recency: str, window_days: int
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.post(_EXA_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "On-domain result",
+                        "url": "https://example.com/vbot",
+                        "highlights": ["Matching"],
+                    },
+                    {
+                        "title": "Off-domain leak",
+                        "url": "https://other.test/vbot",
+                        "highlights": ["Must be removed"],
+                    },
+                ]
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "domains": ["example.com"], "recency": recency},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["recency"] == recency
+    assert data["result_count"] == 1
+    warnings = data.get("warnings", [])
+    assert any("published date" in warning for warning in warnings), (
+        f"expected a recency warning, got {warnings}"
+    )
+
+    body = _read_json_body(route.calls[0].request)
+    assert body["includeDomains"] == ["example.com"]
+    assert "site:" not in body["query"]
+    cutoff = datetime.strptime(body["startPublishedDate"], "%Y-%m-%dT%H:%M:%S.000Z")
+    cutoff = cutoff.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - cutoff
+    assert timedelta(days=window_days) <= age <= timedelta(days=window_days, minutes=5)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_exa_page_warns_without_paging(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.post(_EXA_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": 2},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["page"] == 2
+    warnings = data.get("warnings", [])
+    assert any("paging" in warning for warning in warnings), (
+        f"expected a pagination warning, got {warnings}"
+    )
+    assert len(route.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_web_search_handler_exa_missing_api_key(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        lambda key: "",
+        lambda: {"provider": "exa"},
+    )
+
+    error = assert_failure_envelope(result, "missing_api_key")
+    assert "EXA_API_KEY" in error["message"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_exa_unauthorized_hints_at_api_key(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.post(_EXA_ENDPOINT).mock(
+        return_value=httpx.Response(401, json={"error": "invalid api key"})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "exa"},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert "EXA_API_KEY" in error["message"]
+    assert error["retryable"] is False
+    assert len(route.calls) == 1
