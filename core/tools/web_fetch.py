@@ -56,6 +56,8 @@ _BINARY_DETECTION_BYTES = 8192
 # browser. Header-only spoofing does not fool fingerprint-based bot walls
 # (Cloudflare, Akamai, DataDome) — the request has to *look* like Chrome at the
 # transport layer, which is exactly what curl_cffi's impersonation provides.
+# "chrome" is a rolling alias for the newest profile, so it stays current
+# without pinning a version (pinning would silently go stale).
 _IMPERSONATE_TARGET: Literal["chrome"] = "chrome"
 
 _STRIP_TAGS: frozenset[str] = frozenset(
@@ -123,6 +125,19 @@ _TOTAL_TIMEOUT_SECONDS = 30.0
 _REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
 _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
+# Bot-wall signatures. Some hosts answer HTTP 200 with a challenge or login
+# page instead of content (Reddit's DataDome check, Reddit's login redirect,
+# Cloudflare's interstitial). Reporting those as success would hand the agent
+# useless boilerplate disguised as page text, so they map to request_error.
+# Rules stay narrow and host-scoped on purpose: a generic heuristic would flag
+# real pages that merely link to a login (X profiles and tweets do exactly
+# that while carrying readable content).
+_CHALLENGE_TITLE_MARKERS: frozenset[str] = frozenset({"just a moment..."})
+_REDDIT_HOST_SUFFIX = "reddit.com"
+_REDDIT_CHALLENGE_MARKER = "prove your humanity"
+_REDDIT_LOGIN_PATH_PREFIX = "/login"
+_WALL_GUIDANCE = "Try web_search for this topic instead."
 
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 WebFetchOutput = Literal["markdown", "text", "raw"]
@@ -902,8 +917,15 @@ async def _fetch_with_retry(
     hop's pin survives a same-host redirect.
     """
     current_url = url
+    seen_urls: set[str] = set()
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
+        if current_url in seen_urls:
+            # A redirect to an already-visited URL can never resolve (observed
+            # as a bot-deflection self-loop); fail fast instead of burning
+            # the whole hop budget one request at a time.
+            raise _RedirectLimitExceededError(f"redirect cycle detected while fetching URL: {url}")
+        seen_urls.add(current_url)
         parsed = urlparse(current_url)
         port = parsed.port if parsed.port is not None else _default_port_for_scheme(parsed.scheme)
         try:
@@ -1059,6 +1081,31 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
     return tool_success({"content": content})
 
 
+def _detect_bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
+    """Return a failure message when the page is a bot check or login wall.
+
+    ``None`` means the page carries real content (or claims to). Matching is
+    deliberately narrow — a host-scoped challenge marker, a host-scoped login
+    path, one exact well-known challenge title — so pages that merely link to
+    a login form are never flagged.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    title = metadata.get("title", "").strip().lower()
+
+    if title in _CHALLENGE_TITLE_MARKERS:
+        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
+
+    if host.endswith(_REDDIT_HOST_SUFFIX):
+        if path.startswith(_REDDIT_LOGIN_PATH_PREFIX):
+            return f"Blocked by a login wall at {url}; no readable content. {_WALL_GUIDANCE}"
+        if _REDDIT_CHALLENGE_MARKER in text.lower():
+            return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
+
+    return None
+
+
 def _shape_success(
     attachment_store: Any,
     result: _FetchResult,
@@ -1105,6 +1152,14 @@ def _shape_success(
         final_url,
         include_links=output_mode == "markdown",
     )
+
+    # Challenge and login-wall pages arrive as HTTP 200, so the status check
+    # above cannot catch them. Flagging happens here — after shaping, so the
+    # matchers see exactly what the agent would have received — and only for
+    # the content-consuming modes; raw stays an untouched inspection path.
+    wall = _detect_bot_wall(final_url, metadata, text)
+    if wall is not None:
+        return tool_failure("request_error", wall, retryable=False)
 
     output = _build_truncated_output(final_url, metadata, text, raw_size)
     return tool_success({"content": output})
