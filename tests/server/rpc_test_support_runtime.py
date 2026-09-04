@@ -170,7 +170,14 @@ class StubStorage:
             return defaults
 
         provider = stored.get("provider")
-        if not isinstance(provider, str) or provider not in {"brave", "searxng"}:
+        if not isinstance(provider, str) or provider not in {
+            "brave",
+            "exa",
+            "firecrawl",
+            "searxng",
+            "serper",
+            "tavily",
+        }:
             provider = "brave"
 
         default_count = stored.get("default_count")

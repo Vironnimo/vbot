@@ -1256,7 +1256,14 @@ async def test_web_search_handler_honors_retry_after_hint(
 
 def test_api_key_not_in_schema() -> None:
     all_strings = _collect_schema_strings(WEB_SEARCH_TOOL_PARAMETERS)
-    assert all("BRAVE_API_KEY" not in value for value in all_strings)
+    for credential_key in (
+        "BRAVE_API_KEY",
+        "TAVILY_API_KEY",
+        "EXA_API_KEY",
+        "SERPER_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        assert all(credential_key not in value for value in all_strings)
 
 
 def test_resolve_web_search_settings_logs_unexpected_resolver_failure(
