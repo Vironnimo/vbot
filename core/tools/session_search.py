@@ -289,7 +289,7 @@ async def session_search_handler(
             resolved_name,
             len(data.get("items", [])) if isinstance(data.get("items"), list) else 0,
             data.get("has_more", False),
-            data.get("formatted_bytes", 0),
+            _serialized_result_bytes(data),
             round((time.perf_counter() - started) * 1000),
         )
         return result
@@ -329,7 +329,7 @@ async def session_read_handler(
             "session_read count=%s has_more=%s formatted_bytes=%s duration_ms=%s",
             len(data.get("items", [])) if isinstance(data.get("items"), list) else 0,
             data.get("has_more", False),
-            data.get("formatted_bytes", 0),
+            _serialized_result_bytes(data),
             round((time.perf_counter() - started) * 1000),
         )
         return result
@@ -380,7 +380,7 @@ def register_session_search_tool(
         open_input_schema=True,
         result_schema={
             "type": "object",
-            "required": ["session_id", "session", "items", "has_more", "formatted_bytes"],
+            "required": ["session_id", "session", "items", "has_more"],
         },
         parallel_safe=True,
         display=ToolDisplay(
