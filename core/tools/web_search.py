@@ -669,10 +669,6 @@ async def _search_brave(
             )
             normalized_payload: dict[str, Any] = {
                 "provider": "brave",
-                "query": query,
-                "count_requested": count,
-                "page": page,
-                "result_count": len(results),
                 "results": results,
                 "content_trust": "untrusted_web_content",
             }
@@ -785,10 +781,6 @@ async def _search_searxng(
             )
             normalized_payload: dict[str, Any] = {
                 "provider": WEB_SEARCH_PROVIDER_SEARXNG,
-                "query": query,
-                "count_requested": count,
-                "page": page,
-                "result_count": len(results),
                 "results": results,
                 "content_trust": "untrusted_web_content",
             }
@@ -905,10 +897,6 @@ async def _search_duckduckgo(
     )
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_DUCKDUCKGO,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if domains:
@@ -1058,10 +1046,6 @@ async def _search_exa(
     results = _restrict_results_to_domains(_standardize_exa_results(raw_results), domains, count)
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_EXA,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if recency:
@@ -1188,10 +1172,6 @@ async def _search_firecrawl(
     )
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_FIRECRAWL,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if recency:
@@ -1281,10 +1261,6 @@ async def _search_serper(
     )
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_SERPER,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if recency:
@@ -1364,10 +1340,6 @@ async def _search_tavily(
     results = _restrict_results_to_domains(_standardize_tavily_results(raw_results), domains, count)
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_TAVILY,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if recency:
@@ -1442,10 +1414,6 @@ async def _search_perplexity(
     )
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_PERPLEXITY,
-        "query": query,
-        "count": count,
-        "page": page,
-        "result_count": len(results),
         "results": results,
     }
     if domains:
@@ -1670,13 +1638,13 @@ def register_web_search_tool(
         _handler,
         family="web",
         open_input_schema=True,
-        result_schema={"type": "object", "required": ["query", "results"]},
+        result_schema={"type": "object", "required": ["results"]},
         display=ToolDisplay(
             primary_candidates=(
                 ToolDisplayField("description", kind="description", quote=True),
                 ToolDisplayField("query", kind="query", quote=True),
             ),
-            fact_builder=result_count_fact_builder("result_count"),
+            fact_builder=result_count_fact_builder("results"),
         ),
         parallel_safe=True,
     )

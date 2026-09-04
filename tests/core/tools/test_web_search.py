@@ -126,7 +126,7 @@ def test_register_web_search_tool_schema() -> None:
         result={
             "ok": True,
             "error": None,
-            "data": {"result_count": 1},
+            "data": {"results": [{"url": "https://example.com/vbot"}]},
             "artifacts": [],
         },
     )
@@ -312,9 +312,9 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert data["provider"] == "brave"
-    assert data["query"] == "vbot"
-    assert data["count_requested"] == 5
-    assert data["result_count"] == 1
+    assert "query" not in data
+    assert "count_requested" not in data
+    assert len(data["results"]) == 1
     assert data["content_trust"] == "untrusted_web_content"
     results = data["results"]
     assert isinstance(results, list)
@@ -405,7 +405,7 @@ async def test_web_search_accepts_response_at_exact_limit(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 0
+    assert len(data["results"]) == 0
 
 
 @respx.mock
@@ -456,9 +456,9 @@ async def test_web_search_handler_brave_applies_and_enforces_domains(tmp_path: P
     )
 
     data = assert_success_envelope(result)
-    assert data["query"] == "vbot"
+    assert "query" not in data
     assert data["applied_domains"] == ["example.com", "docs.example.com"]
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
     assert [entry["url"] for entry in data["results"]] == [
         "https://example.com/docs",
         "https://docs.example.com/vbot",
@@ -539,7 +539,7 @@ async def test_web_search_handler_normalizes_internationalized_domain(tmp_path: 
 
     data = assert_success_envelope(result)
     assert data["applied_domains"] == ["xn--fa-hia.example"]
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert route.calls[0].request.url.params["q"] == "vbot site:xn--fa-hia.example"
 
 
@@ -563,7 +563,7 @@ async def test_web_search_handler_passes_query_operators_through_unchanged(
     )
 
     data = assert_success_envelope(result)
-    assert data["query"] == query
+    assert "query" not in data
     assert "applied_domains" not in data
     assert route.calls[0].request.url.params["q"] == query
 
@@ -661,7 +661,7 @@ async def test_web_search_handler_retries_transient_http_status(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 0
+    assert len(data["results"]) == 0
     assert len(route.calls) == 2
     assert sleep_attempts == [0]
 
@@ -787,7 +787,7 @@ async def test_web_search_handler_brave_maps_canonical_recency(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 0
+    assert len(data["results"]) == 0
     assert data["recency"] == recency
     assert "filters" not in data
     request = route.calls[0].request
@@ -836,9 +836,9 @@ async def test_web_search_handler_searxng_maps_canonical_recency_without_api_key
 
     data = assert_success_envelope(result)
     assert data["provider"] == "searxng"
-    assert data["query"] == "vbot"
-    assert data["count_requested"] == 1
-    assert data["result_count"] == 1
+    assert "query" not in data
+    assert "count_requested" not in data
+    assert len(data["results"]) == 1
     assert data["recency"] == recency
     assert "filters" not in data
     assert data["warnings"] == ["recency enforcement depends on the configured SearXNG engines"]
@@ -895,7 +895,7 @@ async def test_web_search_handler_searxng_enforces_domain_before_count(tmp_path:
 
     data = assert_success_envelope(result)
     assert data["applied_domains"] == ["example.com"]
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert data["results"][0]["url"] == "https://docs.example.com/vbot"
     assert data["warnings"] == [
         "domain-filter completeness depends on the configured SearXNG engines; "
@@ -936,8 +936,8 @@ async def test_web_search_handler_brave_default_count_and_no_offset(tmp_path: Pa
     )
 
     data = assert_success_envelope(result)
-    assert data["count_requested"] == 12
-    assert data["page"] == 1
+    assert "count_requested" not in data
+    assert "page" not in data
     request = route.calls[0].request
     assert request.url.params["count"] == "12"
     assert request.url.params["text_decorations"] == "false"
@@ -962,7 +962,7 @@ async def test_web_search_handler_uses_configured_default_count(tmp_path: Path) 
     )
 
     data = assert_success_envelope(result)
-    assert data["count_requested"] == 7
+    assert "count_requested" not in data
     assert route.calls[0].request.url.params["count"] == "7"
 
 
@@ -1001,7 +1001,7 @@ async def test_web_search_handler_brave_page_maps_to_offset(tmp_path: Path) -> N
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 3
+    assert "page" not in data
     assert route.calls[0].request.url.params["offset"] == "2"
 
 
@@ -1098,7 +1098,7 @@ async def test_web_search_handler_searxng_page_and_published_date(tmp_path: Path
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 2
+    assert "page" not in data
     assert data["results"][0]["page_age"] == "2026-04-30T12:00:00+00:00"
     assert route.calls[0].request.url.params["pageno"] == "2"
 
@@ -1330,10 +1330,10 @@ async def test_web_search_handler_tavily_success_maps_results(tmp_path: Path) ->
 
     data = assert_success_envelope(result)
     assert data["provider"] == "tavily"
-    assert data["query"] == "vbot"
-    assert data["count"] == 5
-    assert data["page"] == 1
-    assert data["result_count"] == 2
+    assert "query" not in data
+    assert "count" not in data
+    assert "page" not in data
+    assert len(data["results"]) == 2
     assert "recency" not in data
     assert "warnings" not in data
     first, second = data["results"]
@@ -1389,7 +1389,7 @@ async def test_web_search_handler_tavily_recency_and_domains(tmp_path: Path, rec
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert data["results"][0]["url"] == "https://example.com/vbot"
 
     body = _read_json_body(route.calls[0].request)
@@ -1417,7 +1417,7 @@ async def test_web_search_handler_tavily_page_warns_without_paging(tmp_path: Pat
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 2
+    assert "page" not in data
     warnings = data.get("warnings", [])
     assert any("paging" in warning for warning in warnings), (
         f"expected a pagination warning, got {warnings}"
@@ -1582,7 +1582,7 @@ async def test_web_search_handler_exa_success_maps_results(tmp_path: Path) -> No
 
     data = assert_success_envelope(result)
     assert data["provider"] == "exa"
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
     assert "recency" not in data
     assert "warnings" not in data
     first, second = data["results"]
@@ -1640,7 +1640,7 @@ async def test_web_search_handler_exa_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     warnings = data.get("warnings", [])
     assert any("published date" in warning for warning in warnings), (
         f"expected a recency warning, got {warnings}"
@@ -1671,7 +1671,7 @@ async def test_web_search_handler_exa_page_warns_without_paging(tmp_path: Path) 
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 2
+    assert "page" not in data
     warnings = data.get("warnings", [])
     assert any("paging" in warning for warning in warnings), (
         f"expected a pagination warning, got {warnings}"
@@ -1770,7 +1770,7 @@ async def test_web_search_handler_serper_success_maps_results(tmp_path: Path) ->
 
     data = assert_success_envelope(result)
     assert data["provider"] == "serper"
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
     assert "recency" not in data
     assert "warnings" not in data
     first, second = data["results"]
@@ -1829,7 +1829,7 @@ async def test_web_search_handler_serper_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert data["results"][0]["url"] == "https://example.com/vbot"
 
     body = _read_json_body(route.calls[0].request)
@@ -1860,7 +1860,7 @@ async def test_web_search_handler_serper_fans_out_over_ten_result_pages(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 12
+    assert len(data["results"]) == 12
     assert [entry["rank"] for entry in data["results"]] == list(range(1, 13))
     assert data["results"][0]["url"] == "https://example.com/1"
     assert data["results"][11]["url"] == "https://example.com/12"
@@ -1892,8 +1892,7 @@ async def test_web_search_handler_serper_page_skips_into_first_serper_page(
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 2
-    assert data["result_count"] == 5
+    assert len(data["results"]) == 5
     assert [entry["url"] for entry in data["results"]] == [
         f"https://example.com/{index}" for index in range(6, 11)
     ]
@@ -1921,7 +1920,7 @@ async def test_web_search_handler_serper_short_page_stops_fan_out(tmp_path: Path
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 3
+    assert len(data["results"]) == 3
     assert len(route.calls) == 1
 
 
@@ -2004,7 +2003,7 @@ async def test_web_search_handler_firecrawl_success_maps_results(tmp_path: Path)
 
     data = assert_success_envelope(result)
     assert data["provider"] == "firecrawl"
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
     assert "recency" not in data
     assert "warnings" not in data
     first, second = data["results"]
@@ -2065,7 +2064,7 @@ async def test_web_search_handler_firecrawl_recency_and_domains(
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert data["results"][0]["url"] == "https://example.com/vbot"
 
     body = _read_json_body(route.calls[0].request)
@@ -2094,7 +2093,7 @@ async def test_web_search_handler_firecrawl_page_warns_without_paging(
     )
 
     data = assert_success_envelope(result)
-    assert data["page"] == 2
+    assert "page" not in data
     warnings = data.get("warnings", [])
     assert any("paging" in warning for warning in warnings), (
         f"expected a pagination warning, got {warnings}"
@@ -2228,7 +2227,7 @@ async def test_web_search_handler_firecrawl_accepts_alternate_envelopes(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     assert data["results"][0]["url"] == "https://example.com/vbot"
 
 
@@ -2267,7 +2266,7 @@ async def test_web_search_handler_firecrawl_maps_fallback_item_fields(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     (entry,) = data["results"]
     assert entry["title"] == "vBot docs"
     assert entry["url"] == "https://example.com/vbot"
@@ -2349,10 +2348,10 @@ async def test_web_search_handler_duckduckgo_success(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert data["provider"] == "duckduckgo"
-    assert data["query"] == "vbot"
-    assert data["count"] == 5
-    assert data["page"] == 1
-    assert data["result_count"] == 3
+    assert "query" not in data
+    assert "count" not in data
+    assert "page" not in data
+    assert len(data["results"]) == 3
     assert "warnings" not in data
     assert "recency" not in data
     results = data["results"]
@@ -2388,7 +2387,7 @@ async def test_web_search_handler_duckduckgo_page_slices_client_side(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 1
+    assert len(data["results"]) == 1
     results = data["results"]
     assert isinstance(results, list)
     assert len(results) == 1
@@ -2423,7 +2422,7 @@ async def test_web_search_handler_duckduckgo_domains_use_site_operator(
     assert route.calls[0].request.url.params["q"] == "vbot site:example.com"
     data = assert_success_envelope(result)
     assert data["applied_domains"] == ["example.com"]
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
 
 
 @respx.mock
@@ -2523,12 +2522,12 @@ async def test_web_search_handler_perplexity_success(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert data["provider"] == "perplexity"
-    assert data["query"] == "vbot"
-    assert data["count"] == 5
-    assert data["page"] == 1
+    assert "query" not in data
+    assert "count" not in data
+    assert "page" not in data
     assert data["recency"] == "month"
     assert data["applied_domains"] == ["example.com"]
-    assert data["result_count"] == 2
+    assert len(data["results"]) == 2
     assert "warnings" not in data
     results = data["results"]
     assert isinstance(results, list)
@@ -2560,7 +2559,7 @@ async def test_web_search_handler_perplexity_page_warns_without_paging(
     )
 
     data = assert_success_envelope(result)
-    assert data["result_count"] == 0
+    assert len(data["results"]) == 0
     assert data["warnings"] == [web_search_module._PERPLEXITY_PAGINATION_WARNING]
 
 
