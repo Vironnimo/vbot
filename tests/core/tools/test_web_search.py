@@ -2301,12 +2301,16 @@ async def test_web_search_handler_firecrawl_failed_envelope_reads_message_field(
 
 _DUCKDUCKGO_HTML = """<html><body>
 <div class="result">
-<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvbot&amp;rut=abc">vBot <b>docs</b></a>
-<a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvbot">vBot &amp; documentation for agents</a>
+<a rel="nofollow" class="result__a"
+href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvbot">vBot <b>docs</b></a>
+<a class="result__snippet"
+href="https://example.com/vbot">vBot &amp; documentation for agents</a>
 </div>
 <div class="result">
-<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide&amp;rut=def">vBot guide</a>
-<a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">Getting started</a>
+<a rel="nofollow" class="result__a"
+href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">vBot guide</a>
+<a class="result__snippet"
+href="https://example.com/guide">Getting started</a>
 </div>
 <div class="result">
 <a rel="nofollow" class="result__a" href="https://example.org/direct">Direct link result</a>
@@ -2374,9 +2378,7 @@ async def test_web_search_handler_duckduckgo_page_slices_client_side(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    respx.get(_DUCKDUCKGO_ENDPOINT).mock(
-        return_value=httpx.Response(200, text=_DUCKDUCKGO_HTML)
-    )
+    respx.get(_DUCKDUCKGO_ENDPOINT).mock(return_value=httpx.Response(200, text=_DUCKDUCKGO_HTML))
 
     result = await web_search_handler(
         make_context(workspace),
@@ -2548,9 +2550,7 @@ async def test_web_search_handler_perplexity_page_warns_without_paging(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    respx.post(_PERPLEXITY_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    respx.post(_PERPLEXITY_ENDPOINT).mock(return_value=httpx.Response(200, json={"results": []}))
 
     result = await web_search_handler(
         make_context(workspace),
