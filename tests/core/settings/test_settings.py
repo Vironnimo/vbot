@@ -567,7 +567,8 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         (
             "error",
             "$.web_search.provider",
-            "must be one of: brave, duckduckgo, exa, firecrawl, perplexity, searxng, serper, tavily",
+            "must be one of: brave, duckduckgo, exa, firecrawl, "
+            "perplexity, searxng, serper, tavily",
         ),
         ("error", "$.web_search.default_count", "must be an integer between 1 and 20"),
         ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
