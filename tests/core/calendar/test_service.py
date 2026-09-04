@@ -239,7 +239,7 @@ class TestFindFreeSlots:
     def test_finds_gaps_around_events(self, service: CalendarService) -> None:
         service.create_event(title="Block", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-04")
-        slots = service.find_free_slots(window_start, window_end, 60)
+        slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
         assert len(slots) >= 1
         blocked_start = datetime(2026, 9, 3, 13, 0, tzinfo=UTC)
         blocked_end = datetime(2026, 9, 3, 14, 0, tzinfo=UTC)
@@ -250,7 +250,7 @@ class TestFindFreeSlots:
     def test_fully_booked_window_returns_no_slots(self, service: CalendarService) -> None:
         service.create_event(title="All day", start="2026-09-03", duration_days=1)
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-03")
-        slots = service.find_free_slots(window_start, window_end, 60)
+        slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
         assert slots == []
 
     def test_slots_respect_reference_now(self, service: CalendarService) -> None:
