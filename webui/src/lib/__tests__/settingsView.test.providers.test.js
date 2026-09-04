@@ -485,8 +485,10 @@ describe('settingsView helpers', () => {
       provider: 'brave',
       available_providers: [
         'brave',
+        'duckduckgo',
         'exa',
         'firecrawl',
+        'perplexity',
         'searxng',
         'serper',
         'tavily',
@@ -541,8 +543,10 @@ describe('settingsView helpers', () => {
       buildWebSearchProviderOptions(getWebSearchSettings({}), translate),
     ).toEqual([
       { value: 'brave', label: 'Brave Search' },
+      { value: 'duckduckgo', label: 'DuckDuckGo' },
       { value: 'exa', label: 'Exa' },
       { value: 'firecrawl', label: 'Firecrawl' },
+      { value: 'perplexity', label: 'Perplexity' },
       { value: 'searxng', label: 'SearXNG' },
       { value: 'serper', label: 'Serper' },
       { value: 'tavily', label: 'Tavily' },
