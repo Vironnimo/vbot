@@ -241,11 +241,9 @@ def write_handler(
     )
 
     byte_count = len(encoded)
-    message = f"OK: written {byte_count} bytes to {displayed_path}"
     data: JsonObject = {
         "path": displayed_path,
         "bytes": byte_count,
-        "message": message,
     }
     # Non-blocking: the file is already written. A syntax warning only tells the
     # model it just broke the file so it can fix it next turn.
@@ -272,7 +270,7 @@ def register_write_tool(registry: ToolRegistry, *, file_state: FileReadState) ->
         WRITE_TOOL_PARAMETERS,
         make_write_handler(file_state),
         family="files",
-        result_schema={"type": "object", "required": ["path", "bytes", "message"]},
+        result_schema={"type": "object", "required": ["path", "bytes"]},
         display=ToolDisplay(
             primary_candidates=(
                 ToolDisplayField(

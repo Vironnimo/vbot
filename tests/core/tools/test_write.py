@@ -50,10 +50,9 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
     assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
-    assert set(data) == {"path", "bytes", "message"}
+    assert set(data) == {"path", "bytes"}
     assert isinstance(data["path"], str)
     assert isinstance(data["bytes"], int)
-    assert isinstance(data["message"], str)
     return data
 
 
@@ -156,9 +155,6 @@ def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
     assert target.read_bytes() == b"hello\nworkspace\n"
     assert data["path"] == model_path(target.resolve())
     assert data["bytes"] == len(b"hello\nworkspace\n")
-    assert data["message"] == (
-        f"OK: written {data['bytes']} bytes to {model_path(target.resolve())}"
-    )
     assert context.presentation_facts == [
         {"kind": "line_change", "change": "added", "value": 2},
         {"kind": "line_change", "change": "removed", "value": 0},
