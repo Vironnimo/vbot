@@ -227,7 +227,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         activation="session_grant",
         result_schema={
             "type": "object",
-            "required": ["items", "has_more", "formatted_bytes"],
+            "required": ["items", "has_more"],
         },
         session_scoped=True,
         parallel_safe=True,
@@ -309,7 +309,7 @@ def make_history_handler(sessions: ChatSessionManager):
                 checkpoint=checkpoint,
                 direction=direction,
                 count=len(data["items"]),
-                formatted_bytes=int(data["formatted_bytes"]),
+                formatted_bytes=_serialized_result_bytes(data),
                 duration_ms=round((time.perf_counter() - started) * 1000),
                 error_code=None,
             )
@@ -889,7 +889,6 @@ def _page_data(
         },
         "items": items,
         "has_more": has_more,
-        "formatted_bytes": 0,
     }
     if has_more:
         data["next_cursor"] = _encode_cursor(
@@ -901,7 +900,7 @@ def _page_data(
                 within_offset=within_offset,
             )
         )
-    return _with_formatted_bytes(data)
+    return data
 
 
 def _cursor_for(
@@ -1131,29 +1130,10 @@ def _decode_cursor(token: str) -> JsonObject:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.") from error
 
 
-def _with_formatted_bytes(data: JsonObject) -> JsonObject:
-    result = dict(data)
-    previous = -1
-    for _ in range(4):
-        size = len(
-            json.dumps(
-                tool_success(result),
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-        result["formatted_bytes"] = size
-        if size == previous:
-            break
-        previous = size
-    return result
-
-
 def _serialized_result_bytes(data: JsonObject) -> int:
-    finalized = _with_formatted_bytes(data)
     return len(
         json.dumps(
-            tool_success(finalized),
+            tool_success(data),
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")

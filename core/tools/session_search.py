@@ -360,7 +360,7 @@ def register_session_search_tool(
         open_input_schema=True,
         result_schema={
             "type": "object",
-            "required": ["items", "has_more", "formatted_bytes"],
+            "required": ["items", "has_more"],
         },
         parallel_safe=True,
         display=ToolDisplay(
@@ -718,15 +718,13 @@ async def _legacy_search(
         raise _SessionSearchError(
             "invalid_backend_result", "Legacy Recall backend returned a non-object result."
         )
-    return _with_formatted_bytes(
-        {
-            "backend": backend_name,
-            "result_type": "backend_defined",
-            "ranking": "backend_defined",
-            "items": [{"backend_result": payload}],
-            "has_more": False,
-        }
-    )
+    return {
+        "backend": backend_name,
+        "result_type": "backend_defined",
+        "ranking": "backend_defined",
+        "items": [{"backend_result": payload}],
+        "has_more": False,
+    }
 
 
 def _render_search_page(
@@ -768,7 +766,7 @@ def _render_search_page(
         )
     selected = hits[:count]
     if not selected:
-        return _with_formatted_bytes(_search_data(page, backend_name, [], [], has_more=False))
+        return _search_data(page, backend_name, [], [], has_more=False)
 
     maximum = max(len(hit.text) for hit in selected)
     low = 1
@@ -802,7 +800,7 @@ def _render_search_page(
         raise _SessionSearchError(
             "session_search_error", "Search excerpts exceed the result safety limit."
         )
-    return _with_formatted_bytes(best)
+    return best
 
 
 def _search_data(
@@ -1064,7 +1062,7 @@ def _render_read_selection(
                 "invalid_continuation",
                 "Read continuation token is invalid for this selection.",
             )
-        return _with_formatted_bytes(complete)
+        return complete
 
     selection: JsonObject | list[JsonObject]
     selection = items if user_anchors is None else {"user_anchors": user_anchors, "items": items}
@@ -1080,7 +1078,7 @@ def _render_read_selection(
                 "invalid_continuation",
                 "Read continuation token is invalid for this selection.",
             )
-        return _with_formatted_bytes(complete)
+        return complete
     if offset >= len(selection_json):
         raise _SessionSearchError(
             "invalid_continuation",
@@ -1122,7 +1120,7 @@ def _render_read_selection(
         raise _SessionSearchError(
             "session_read_error", "Read metadata exceeds the result safety limit."
         )
-    return _with_formatted_bytes(best)
+    return best
 
 
 def _read_continuation_token(offset: int, selection_key: str, selection_json: str) -> str:
@@ -1193,13 +1191,13 @@ def _render_list_page(
         has_more = count < total_count
         data = _page_data(items[:count], has_more=has_more)
         if _serialized_result_bytes(data) <= SESSION_SEARCH_RESULT_MAX_BYTES:
-            return _with_formatted_bytes(data)
+            return data
         count -= 1
     if items:
         raise _SessionSearchError(
             "session_search_error", "Session metadata exceeds the result safety limit."
         )
-    return _with_formatted_bytes(_page_data([], has_more=False))
+    return _page_data([], has_more=False)
 
 
 def _session_summary_items(
@@ -1493,28 +1491,9 @@ def _validate_session_read_fields(arguments: JsonObject) -> None:
         )
 
 
-def _with_formatted_bytes(data: JsonObject) -> JsonObject:
-    result = dict(data)
-    previous = -1
-    for _ in range(4):
-        size = len(
-            json.dumps(tool_success(result), ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            )
-        )
-        result["formatted_bytes"] = size
-        if size == previous:
-            break
-        previous = size
-    return result
-
-
 def _serialized_result_bytes(data: JsonObject) -> int:
-    finalized = _with_formatted_bytes(data)
     return len(
-        json.dumps(tool_success(finalized), ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(tool_success(data), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     )
 
 
