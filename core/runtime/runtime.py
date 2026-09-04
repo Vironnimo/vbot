@@ -349,7 +349,6 @@ class Runtime:
         self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
-        self._recall_backend_name: str | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self._command_dispatcher: CommandDispatcher | None = None
         self.chat_runs: ChatRunManager | None = None
@@ -629,7 +628,6 @@ class Runtime:
                 self._tools,
                 self._recall_backend,
                 self._chat_sessions,
-                self._recall_backend_name,
             )
             self._chat_run_manager = ChatRunManager()
             self.chat_runs = self._chat_run_manager
@@ -971,7 +969,6 @@ class Runtime:
         self._agent_resolver = None
         self._recall_backend_registry = None
         self._recall_backend = None
-        self._recall_backend_name = None
         self._channel_service = None
         self._cron_service = None
         self._calendar_service = None
@@ -1355,7 +1352,6 @@ class Runtime:
         )
         try:
             backend = registry.create(backend_name, context)
-            self._recall_backend_name = backend_name
             return backend
         except KeyError:
             if self.logger is not None:
@@ -1364,7 +1360,6 @@ class Runtime:
                     backend_name,
                     DEFAULT_RECALL_BACKEND,
                 )
-            self._recall_backend_name = DEFAULT_RECALL_BACKEND
             return registry.create(DEFAULT_RECALL_BACKEND, context)
         except Exception as error:
             if backend_name == DEFAULT_RECALL_BACKEND:
@@ -1376,7 +1371,6 @@ class Runtime:
                     DEFAULT_RECALL_BACKEND,
                     error,
                 )
-            self._recall_backend_name = DEFAULT_RECALL_BACKEND
             return registry.create(DEFAULT_RECALL_BACKEND, context)
 
     def reload_channel_tool(self) -> None:
@@ -1426,7 +1420,6 @@ class Runtime:
                 self._tools,
                 self._recall_backend,
                 self._chat_sessions,
-                self._recall_backend_name,
             )
 
     def _set_extension_registry(self, registry: ExtensionRegistry) -> None:
