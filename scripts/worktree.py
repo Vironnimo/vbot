@@ -872,6 +872,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     npm_command = shutil.which("npm") or "npm"
+    print(
+        "installing webui dependencies "
+        "(cold npm cache: several minutes, no output until done)...",
+        flush=True,
+    )
     return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")
     if return_code != 0:
         cleanup_failed_create(
@@ -884,6 +889,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
         return 1
 
+    print("building webui (a few minutes, no output until done)...", flush=True)
     return_code, stderr = _run_command([npm_command, "run", "build"], cwd=worktree_path / "webui")
     if return_code != 0:
         cleanup_failed_create(

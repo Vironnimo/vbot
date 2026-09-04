@@ -26,6 +26,8 @@ For each created worktree it does all of the following:
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
 
+The two frontend steps print a progress line each and then stay silent until done: on a cold npm cache `create` takes several minutes with no intermediate output. Wait for the final `name:`/`path:`/`port:` block rather than cancelling — an aborted run typically dies mid-build and leaves a worktree without `webui/dist`.
+
 The Worktree utility does not seed an Agent or copy machine-local Workspace content. Runtime creates the bootstrap Identity Agent and first Session on the first server start. Once you are inside the worktree, `python scripts/test-env.py start` uses the Worktree's own data dir, starts its Settings-declared fake Provider, builds the WebUI, and starts vBot. Direct `python cli/main.py server start` starts only vBot and therefore leaves fake-Model calls unavailable.
 
 ## Basic model
