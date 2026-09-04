@@ -882,6 +882,26 @@ async def _search_exa(
     return envelope, None
 
 
+def _resolve_firecrawl_items(response_payload: dict[str, Any]) -> list[Any]:
+    """Return the first list-shaped result collection in a Firecrawl envelope."""
+    data = response_payload.get("data")
+    nested = data if isinstance(data, dict) else {}
+    web = response_payload.get("web")
+    web_results = web.get("results") if isinstance(web, dict) else None
+    candidates = [
+        data,
+        response_payload.get("results"),
+        nested.get("results"),
+        nested.get("data"),
+        nested.get("web"),
+        web_results,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return candidate
+    return []
+
+
 def _standardize_firecrawl_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
@@ -891,9 +911,19 @@ def _standardize_firecrawl_results(raw_results: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
 
-        title = _clean_snippet(raw.get("title"))
-        url = _normalize_text(raw.get("url"))
-        description = _clean_snippet(raw.get("description"))
+        metadata = raw.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        url = _normalize_text(
+            raw.get("url")
+            or raw.get("sourceURL")
+            or raw.get("sourceUrl")
+            or metadata.get("sourceURL")
+        )
+        title = _clean_snippet(raw.get("title") or metadata.get("title"))
+        description = _clean_snippet(
+            raw.get("description") or raw.get("snippet") or raw.get("summary")
+        )
         if not title and not url and not description:
             continue
 
@@ -904,6 +934,14 @@ def _standardize_firecrawl_results(raw_results: Any) -> list[dict[str, Any]]:
             "description": description,
             "content_trust": "untrusted_web_content",
         }
+        page_age = _normalize_text(
+            raw.get("publishedDate")
+            or raw.get("published")
+            or metadata.get("publishedTime")
+            or metadata.get("publishedDate")
+        )
+        if page_age:
+            entry["page_age"] = page_age
         normalized.append(entry)
 
     return normalized
@@ -941,16 +979,18 @@ async def _search_firecrawl(
     if not isinstance(response_payload, dict) or response_payload.get("success") is not True:
         detail = "search failed"
         if isinstance(response_payload, dict):
-            error_text = _normalize_text(response_payload.get("error"))
+            error_text = _normalize_text(response_payload.get("error")) or _normalize_text(
+                response_payload.get("message")
+            )
             if error_text:
                 detail = error_text
         _LOGGER.warning("Firecrawl web search request failed: %s", detail)
         return None, HttpRequestFailure(detail, retryable=False)
 
-    data = response_payload.get("data")
-    raw_results = data.get("web") if isinstance(data, dict) else None
     results = _restrict_results_to_domains(
-        _standardize_firecrawl_results(raw_results), domains, count
+        _standardize_firecrawl_results(_resolve_firecrawl_items(response_payload)),
+        domains,
+        count,
     )
     envelope: dict[str, Any] = {
         "provider": WEB_SEARCH_PROVIDER_FIRECRAWL,
