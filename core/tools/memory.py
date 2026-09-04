@@ -242,7 +242,6 @@ def _dispatch_memory_action(
 
 def _entries_result(*, scope: MemoryScope, entries: list[MemoryEntry]) -> JsonObject:
     return {
-        "content": _render_entries(scope, entries),
         "scope": scope,
         "entries": [entry.to_dict() for entry in entries],
     }
@@ -255,14 +254,6 @@ def _mutation_result(action: str, entry: MemoryEntry, entries: list[MemoryEntry]
         "entry": entry.to_dict(),
         "entries": [item.to_dict() for item in entries],
     }
-
-
-def _render_entries(scope: MemoryScope, entries: list[MemoryEntry]) -> str:
-    if not entries:
-        return f"No pinned memory entries recorded for {scope} scope."
-    lines = [f"Pinned memory entries for {scope} scope:"]
-    lines.extend(f"[{entry.id}] {entry.content}" for entry in entries)
-    return "\n".join(lines)
 
 
 def _required_enum(value: object, *, field_name: str, values: tuple[str, ...]) -> str:
@@ -300,7 +291,7 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         activation="memory_mode",
         constraints=("identity_agent",),
         open_input_schema=True,
-        result_schema={"type": "object", "required": ["content", "scope", "entries"]},
+        result_schema={"type": "object", "required": ["scope", "entries"]},
         display=ToolDisplay(
             parts_builder=_memory_display_parts,
             fact_builder=result_count_fact_builder("entries", when_arguments={"action": "list"}),

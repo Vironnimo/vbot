@@ -15,9 +15,9 @@ Pinned memory CRUD over `USER.md` and `MEMORY.md`.
 ## Result Contract
 
 - All responses use the stable tool result envelope.
-- Success data always includes `content` and `scope`.
+- Success data always includes `scope` and the current `entries` list.
 - `list` returns `entries` and derives an exact presentation-only `results` count from that array for the Tool row.
-- Mutations return the affected `entry` and the updated `entries` list.
+- Mutations return a one-line outcome `content`, the affected `entry`, and the updated `entries` list.
 - Mutations and failures do not publish a display count even though successful mutations carry the updated array.
 - Invalid schema-level values return `invalid_arguments`.
 - Expected memory validation or I/O failures return `memory_error`.
