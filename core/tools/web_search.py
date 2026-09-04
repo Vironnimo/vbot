@@ -1399,9 +1399,7 @@ def _standardize_perplexity_results(raw_results: Any) -> list[dict[str, Any]]:
             "description": description,
             "content_trust": "untrusted_web_content",
         }
-        page_age = _normalize_text(raw.get("date")) or _normalize_text(
-            raw.get("last_updated")
-        )
+        page_age = _normalize_text(raw.get("date")) or _normalize_text(raw.get("last_updated"))
         if page_age:
             entry["page_age"] = page_age
         normalized.append(entry)

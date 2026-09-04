@@ -876,8 +876,7 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     npm_command = shutil.which("npm") or "npm"
     print(
-        "installing webui dependencies "
-        "(cold npm cache: several minutes, no output until done)...",
+        "installing webui dependencies (cold npm cache: several minutes, no output until done)...",
         flush=True,
     )
     return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")

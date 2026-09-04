@@ -170,7 +170,16 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "web_search": {
             "provider": "brave",
-            "available_providers": ["brave", "duckduckgo", "exa", "firecrawl", "perplexity", "searxng", "serper", "tavily"],
+            "available_providers": [
+                "brave",
+                "duckduckgo",
+                "exa",
+                "firecrawl",
+                "perplexity",
+                "searxng",
+                "serper",
+                "tavily",
+            ],
             "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
         },
