@@ -172,8 +172,10 @@ class StubStorage:
         provider = stored.get("provider")
         if not isinstance(provider, str) or provider not in {
             "brave",
+            "duckduckgo",
             "exa",
             "firecrawl",
+            "perplexity",
             "searxng",
             "serper",
             "tavily",
