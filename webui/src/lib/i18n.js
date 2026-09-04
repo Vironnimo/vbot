@@ -1382,10 +1382,12 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.providerDescription':
     'Provider used whenever an agent calls web_search.',
   'settings.webSearch.providers.brave': 'Brave Search',
+  'settings.webSearch.providers.duckduckgo': 'DuckDuckGo',
   'settings.webSearch.providers.tavily': 'Tavily',
   'settings.webSearch.providers.exa': 'Exa',
   'settings.webSearch.providers.serper': 'Serper',
   'settings.webSearch.providers.firecrawl': 'Firecrawl',
+  'settings.webSearch.providers.perplexity': 'Perplexity',
   'settings.webSearch.providers.searxng': 'SearXNG',
   'settings.webSearch.defaultCount': 'Default result count',
   'settings.webSearch.defaultCountDescription':
@@ -1404,6 +1406,8 @@ export const englishCatalog = Object.freeze({
     'Serper requires an API key: set SERPER_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.firecrawlKeyHint':
     'Firecrawl requires an API key: set FIRECRAWL_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.perplexityKeyHint':
+    'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':

@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import httpx
 import idna
@@ -20,8 +20,10 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MAX_WEB_SEARCH_PAGE,
     MIN_WEB_SEARCH_COUNT,
+    WEB_SEARCH_PROVIDER_DUCKDUCKGO,
     WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_FIRECRAWL,
+    WEB_SEARCH_PROVIDER_PERPLEXITY,
     WEB_SEARCH_PROVIDER_SEARXNG,
     WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
@@ -44,8 +46,10 @@ from core.utils.retry import MAX_RETRIES, sleep_for_retry
 _LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+_DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
 _FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v2/search"
+_PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/search"
 _SERPER_ENDPOINT = "https://google.serper.dev/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
@@ -54,6 +58,24 @@ _MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 _MAX_RESPONSE_SIZE_LABEL = "5 MB"
 
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_DDG_RESULT_ANCHOR_PATTERN = re.compile(
+    r'<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)</a>',
+    re.IGNORECASE,
+)
+_DDG_NEXT_RESULT_PATTERN = re.compile(
+    r'<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>',
+    re.IGNORECASE,
+)
+_DDG_SNIPPET_PATTERN = re.compile(
+    r'<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>'
+    r"([\s\S]*?)</a>",
+    re.IGNORECASE,
+)
+_DDG_HREF_PATTERN = re.compile(r'\bhref="([^"]*)"', re.IGNORECASE)
+_DDG_CHALLENGE_PATTERN = re.compile(
+    r'g-recaptcha|are you a human|id="challenge-form"|name="challenge"',
+    re.IGNORECASE,
+)
 _DOMAIN_LABEL_PATTERN = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
 
 _MAX_DOMAIN_FILTERS = 10
@@ -80,8 +102,23 @@ _EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
 _FIRECRAWL_PAGINATION_WARNING = (
     "firecrawl does not support result paging; results are always the first page"
 )
+_PERPLEXITY_PAGINATION_WARNING = (
+    "perplexity does not support result paging; results are always the first page"
+)
 _FIRECRAWL_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
 _SERPER_PAGE_SIZE = 10
+# DuckDuckGo has no search API: the html endpoint is fetched with a browser
+# user agent and the result anchors are parsed (same approach as OpenClaw's
+# duckduckgo extension). Safe search stays on the documented moderate default.
+_DUCKDUCKGO_SAFE_SEARCH = "-1"
+# DuckDuckGo answers HTTP 202 with an empty page when it rate-limits.
+_DUCKDUCKGO_RATE_LIMIT_STATUS = 202
+_DUCKDUCKGO_RECENCY_WARNING = (
+    "duckduckgo does not support recency filtering; results are unfiltered by age"
+)
+_DUCKDUCKGO_PAGINATION_WARNING = (
+    "duckduckgo serves a single result page; pages beyond the fetched results are empty"
+)
 _SERPER_MAX_PAGES_PER_CALL = 5
 _SERPER_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
 
@@ -411,6 +448,55 @@ def _clean_snippet(raw: Any) -> str:
     return html.unescape(_HTML_TAG_PATTERN.sub("", text)).strip()
 
 
+def _decode_duckduckgo_url(raw_href: Any) -> str:
+    """Unwrap a DuckDuckGo redirect link to the direct target URL."""
+    href = html.unescape(_normalize_text(raw_href))
+    if not href:
+        return ""
+    prefixed = f"https:{href}" if href.startswith("//") else href
+    try:
+        pairs = parse_qsl(urlsplit(prefixed).query, keep_blank_values=True)
+    except ValueError:
+        return href
+    for name, value in pairs:
+        if name == "uddg" and value:
+            return value
+    return href
+
+
+def _is_duckduckgo_challenge(html_text: str) -> bool:
+    """Detect a bot-detection page, which carries no result anchors."""
+    if _DDG_RESULT_ANCHOR_PATTERN.search(html_text):
+        return False
+    return _DDG_CHALLENGE_PATTERN.search(html_text) is not None
+
+
+def _parse_duckduckgo_results(html_text: str) -> list[dict[str, str]]:
+    """Parse result anchors and their snippets from a DDG html response."""
+    results: list[dict[str, str]] = []
+    for match in _DDG_RESULT_ANCHOR_PATTERN.finditer(html_text):
+        raw_attributes = match.group(1) or ""
+        raw_title = match.group(2) or ""
+        href_match = _DDG_HREF_PATTERN.search(raw_attributes)
+        raw_href = href_match.group(1) if href_match else ""
+        trailing = html_text[match.end() :]
+        next_result = _DDG_NEXT_RESULT_PATTERN.search(trailing)
+        scope = trailing[: next_result.start()] if next_result else trailing
+        snippet_match = _DDG_SNIPPET_PATTERN.search(scope)
+        raw_snippet = snippet_match.group(1) if snippet_match else ""
+        title = _clean_snippet(raw_title)
+        url = _decode_duckduckgo_url(raw_href)
+        if title and url:
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "description": _clean_snippet(raw_snippet),
+                }
+            )
+    return results
+
+
 def _normalize_recency(raw: Any) -> tuple[str, str | None]:
     if raw is None:
         return "", None
@@ -722,6 +808,120 @@ async def _search_searxng(
             return normalized_payload, None
 
     return None, HttpRequestFailure("request failed")
+
+
+async def _get_bounded_with_retry(
+    url: str,
+    *,
+    params: Mapping[str, Any],
+    provider_label: str,
+) -> tuple[httpx.Response | None, HttpRequestFailure | None]:
+    """GET one bounded response through the shared idempotent retry policy."""
+    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await _bounded_get(client, url, params=params)
+            except httpx.RequestError as error:
+                if attempt >= MAX_RETRIES:
+                    _LOGGER.warning("%s web search request failed: %s", provider_label, error)
+                    return None, HttpRequestFailure(
+                        f"request failed: {error}",
+                        retryable=True,
+                        attempts_made=MAX_RETRIES + 1,
+                    )
+                await sleep_for_retry(attempt)
+                continue
+
+            if response.status_code >= 400:
+                # GET is idempotent — safe to repeat (includes a transient 500).
+                if (
+                    is_retryable_status(response.status_code, idempotent=True)
+                    and attempt < MAX_RETRIES
+                ):
+                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
+                    continue
+                detail = _extract_error_detail(response)
+                _LOGGER.warning(
+                    "%s web search request failed: HTTP %s: %s",
+                    provider_label,
+                    response.status_code,
+                    detail,
+                )
+                # A retryable status only reaches here after retries were exhausted.
+                retryable = is_retryable_status(response.status_code, idempotent=True)
+                return None, HttpRequestFailure(
+                    f"HTTP {response.status_code}: {detail}",
+                    retryable=retryable,
+                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
+                )
+
+            return response, None
+
+    return None, HttpRequestFailure("request failed")
+
+
+async def _search_duckduckgo(
+    *,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # DuckDuckGo has no search API: one html response is fetched and parsed,
+    # then sliced into count/page windows client-side. Like Brave, domain
+    # scoping rides on the site: operator with a post-filter guarantee.
+    search_query = _build_search_query(query, domains)
+    params: dict[str, Any] = {"q": search_query, "kp": _DUCKDUCKGO_SAFE_SEARCH}
+    response, failure = await _get_bounded_with_retry(
+        _DUCKDUCKGO_ENDPOINT,
+        params=params,
+        provider_label="DuckDuckGo",
+    )
+    if failure is not None or response is None:
+        return None, failure
+
+    if response.status_code == _DUCKDUCKGO_RATE_LIMIT_STATUS:
+        _LOGGER.warning("DuckDuckGo web search rate-limited: HTTP 202")
+        return None, HttpRequestFailure(
+            "DuckDuckGo rate-limited the request; "
+            "try again later or switch to a different search provider",
+            retryable=True,
+        )
+
+    html_text = response.text
+    parsed = _parse_duckduckgo_results(html_text)
+    if not parsed and _is_duckduckgo_challenge(html_text):
+        _LOGGER.warning("DuckDuckGo web search returned a bot-detection challenge")
+        return None, HttpRequestFailure(
+            "DuckDuckGo returned a bot-detection challenge; "
+            "try again later or switch to a different search provider",
+            retryable=True,
+        )
+
+    start = (page - 1) * count
+    results = _restrict_results_to_domains(
+        _standardize_results(parsed)[start : start + count], domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if domains:
+        envelope["applied_domains"] = domains
+    # recency is echoed nowhere: DuckDuckGo cannot filter by age at all.
+    warnings: list[str] = []
+    if recency:
+        warnings.append(_DUCKDUCKGO_RECENCY_WARNING)
+    if page > 1:
+        warnings.append(_DUCKDUCKGO_PAGINATION_WARNING)
+    if warnings:
+        envelope["warnings"] = warnings
+    return envelope, None
 
 
 def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -1177,6 +1377,86 @@ async def _search_tavily(
     return envelope, None
 
 
+def _standardize_perplexity_results(raw_results: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _clean_snippet(raw.get("title"))
+        url = _normalize_text(raw.get("url"))
+        description = _clean_snippet(raw.get("snippet"))
+        if not title and not url and not description:
+            continue
+
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("date")) or _normalize_text(raw.get("last_updated"))
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
+
+    return normalized
+
+
+async def _search_perplexity(
+    *,
+    api_key: str,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # Perplexity's Search API filters domains and recency natively, and its
+    # web-search maximum (20) matches the tool schema cap, so count, domains,
+    # and recency pass through directly; the post-filter only guarantees the
+    # contract.
+    payload: dict[str, Any] = {"query": query, "max_results": count}
+    if domains:
+        payload["search_domain_filter"] = domains
+    if recency:
+        payload["search_recency_filter"] = recency
+
+    response_payload, failure = await _post_json_bounded(
+        _PERPLEXITY_ENDPOINT,
+        payload=payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        provider_label="Perplexity",
+        auth_key_hint="PERPLEXITY_API_KEY",
+    )
+    if failure is not None:
+        return None, failure
+
+    raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
+    results = _restrict_results_to_domains(
+        _standardize_perplexity_results(raw_results), domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_PERPLEXITY,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if domains:
+        envelope["applied_domains"] = domains
+    if recency:
+        envelope["recency"] = recency
+    if page > 1:
+        envelope["warnings"] = [_PERPLEXITY_PAGINATION_WARNING]
+    return envelope, None
+
+
 async def web_search_handler(
     context: ToolContext,
     arguments: JsonObject,
@@ -1256,6 +1536,14 @@ async def web_search_handler(
                 page=page,
                 recency=recency,
             )
+        elif provider == WEB_SEARCH_PROVIDER_DUCKDUCKGO:
+            payload, search_failure = await _search_duckduckgo(
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
         elif provider == WEB_SEARCH_PROVIDER_EXA:
             api_key = _normalize_text(credential_resolver("EXA_API_KEY"))
             if not api_key:
@@ -1297,6 +1585,22 @@ async def web_search_handler(
                     retryable=False,
                 )
             payload, search_failure = await _search_tavily(
+                api_key=api_key,
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        elif provider == WEB_SEARCH_PROVIDER_PERPLEXITY:
+            api_key = _normalize_text(credential_resolver("PERPLEXITY_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires PERPLEXITY_API_KEY to be configured",
+                    retryable=False,
+                )
+            payload, search_failure = await _search_perplexity(
                 api_key=api_key,
                 query=query,
                 domains=domains,

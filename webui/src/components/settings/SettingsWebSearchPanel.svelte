@@ -267,6 +267,19 @@
   </div>
 {/if}
 
+{#if webSearchSettings.provider === 'perplexity'}
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.perplexityKeyHint',
+          'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+        )}
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if webSearchSettings.provider === 'searxng'}
   <div class="s-row">
     <div class="s-row-info">
