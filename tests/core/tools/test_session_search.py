@@ -656,7 +656,7 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
     )
 
     assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
-    assert data["ranking"] == "message_time_newest"
+    assert "ranking" not in data
 
 
 async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
@@ -790,7 +790,6 @@ async def test_unscoped_search_filters_internal_sessions_before_result_shaping(
             {"query": "needle"},
             _RankedBackend(),
             sessions=sessions,
-            backend_name="ranked_test",
         )
     )
 
@@ -927,7 +926,6 @@ async def test_passage_read_ref_expands_to_complete_conversation_block(
             {"query": "needle"},
             _PassageBackend(),
             sessions=sessions,
-            backend_name="passage_test",
         )
     )
 
@@ -1338,8 +1336,8 @@ async def test_fts_search_keeps_backend_relevance(tmp_path: Path) -> None:
         )
     )
 
-    assert data["backend"] == "sqlite_fts"
-    assert data["ranking"] == "bm25"
+    assert "backend" not in data
+    assert "ranking" not in data
     assert [item["session_id"] for item in data["items"]] == ["dense", "sparse"]
 
 

@@ -229,10 +229,8 @@ def build_session_search_description(recall_backend: Any) -> str:
 def make_session_search_handler(
     recall_backend: Any,
     sessions: ChatSessionManager | None = None,
-    backend_name: str | None = None,
 ):
     resolved_sessions = sessions or _backend_sessions(recall_backend)
-    resolved_name = backend_name or _backend_name(recall_backend)
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return await session_search_handler(
@@ -240,7 +238,6 @@ def make_session_search_handler(
             arguments,
             recall_backend,
             sessions=resolved_sessions,
-            backend_name=resolved_name,
         )
 
     return handler
@@ -252,12 +249,11 @@ async def session_search_handler(
     recall_backend: Any,
     *,
     sessions: ChatSessionManager | None = None,
-    backend_name: str | None = None,
 ) -> JsonObject:
     started = time.perf_counter()
     action = "list"
     resolved_sessions = sessions or _backend_sessions(recall_backend)
-    resolved_name = backend_name or _backend_name(recall_backend)
+    resolved_name = _backend_name(recall_backend)
     try:
         if not isinstance(arguments, dict):
             raise _SessionSearchError("invalid_arguments", "arguments must be an object")
@@ -277,7 +273,6 @@ async def session_search_handler(
                 context,
                 effective,
                 recall_backend,
-                resolved_name,
                 capabilities,
                 resolved_sessions,
             )
@@ -344,18 +339,16 @@ def register_session_search_tool(
     registry: ToolRegistry,
     recall_backend: Any,
     sessions: ChatSessionManager | None = None,
-    backend_name: str | None = None,
 ) -> None:
     if isinstance(recall_backend, ChatSessionManager):
         sessions = recall_backend
         recall_backend = CanonicalSessionRecallBackend(recall_backend)
-        backend_name = RECALL_BACKEND_CANONICAL_SCAN
     resolved_sessions = sessions or _backend_sessions(recall_backend)
     registry.register(
         SESSION_SEARCH_TOOL_NAME,
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
-        make_session_search_handler(recall_backend, sessions, backend_name),
+        make_session_search_handler(recall_backend, sessions),
         family="sessions",
         open_input_schema=True,
         result_schema={
@@ -558,7 +551,6 @@ async def _search_sessions(
     context: ToolContext,
     arguments: JsonObject,
     recall_backend: Any,
-    backend_name: str,
     capabilities: RecallSearchCapabilities,
     sessions: ChatSessionManager | None,
 ) -> JsonObject:
@@ -626,7 +618,6 @@ async def _search_sessions(
         )
         return _render_search_page(
             page,
-            backend_name,
             read_refs,
             session_contexts,
         )
@@ -639,7 +630,6 @@ async def _search_sessions(
         context,
         arguments,
         recall_backend,
-        backend_name,
         agent_id,
         query,
         roles,
@@ -680,7 +670,6 @@ async def _legacy_search(
     context: ToolContext,
     arguments: JsonObject,
     backend: Any,
-    backend_name: str,
     agent_id: str,
     query: str,
     roles: tuple[str, ...],
@@ -719,9 +708,7 @@ async def _legacy_search(
             "invalid_backend_result", "Legacy Recall backend returned a non-object result."
         )
     return {
-        "backend": backend_name,
         "result_type": "backend_defined",
-        "ranking": "backend_defined",
         "items": [{"backend_result": payload}],
         "has_more": False,
     }
@@ -729,7 +716,6 @@ async def _legacy_search(
 
 def _render_search_page(
     page: RecallSearchPage,
-    backend_name: str,
     read_refs: list[JsonObject],
     session_contexts: dict[str, _SearchSessionContext],
 ) -> JsonObject:
@@ -752,7 +738,6 @@ def _render_search_page(
         has_more = count < len(hits) or page.has_more
         data = _search_data(
             page,
-            backend_name,
             items,
             _session_descriptors_for_hits(hits[:count], session_contexts),
             has_more=has_more,
@@ -766,7 +751,7 @@ def _render_search_page(
         )
     selected = hits[:count]
     if not selected:
-        return _search_data(page, backend_name, [], [], has_more=False)
+        return _search_data(page, [], [], has_more=False)
 
     maximum = max(len(hit.text) for hit in selected)
     low = 1
@@ -786,7 +771,6 @@ def _render_search_page(
         has_more = count < len(hits) or page.has_more
         candidate = _search_data(
             page,
-            backend_name,
             items,
             _session_descriptors_for_hits(selected, session_contexts),
             has_more=has_more,
@@ -805,16 +789,13 @@ def _render_search_page(
 
 def _search_data(
     page: RecallSearchPage,
-    backend_name: str,
     items: list[JsonObject],
     session_descriptors: list[JsonObject],
     *,
     has_more: bool,
 ) -> JsonObject:
     data: JsonObject = {
-        "backend": backend_name,
         "result_type": page.result_type,
-        "ranking": page.ranking,
         "items": items,
         "sessions": session_descriptors,
         "has_more": has_more,
