@@ -25,6 +25,7 @@ from core.tools.web_search import (
 from core.utils.retry import MAX_RETRIES
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+_DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
 _FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v2/search"
 _SERPER_ENDPOINT = "https://google.serper.dev/search"
@@ -2295,3 +2296,174 @@ async def test_web_search_handler_firecrawl_failed_envelope_reads_message_field(
     error = assert_failure_envelope(result, "provider_request_failed")
     assert "too many requests" in error["message"]
     assert error["retryable"] is False
+
+
+_DUCKDUCKGO_HTML = """<html><body>
+<div class="result">
+<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvbot&amp;rut=abc">vBot <b>docs</b></a>
+<a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvbot">vBot &amp; documentation for agents</a>
+</div>
+<div class="result">
+<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide&amp;rut=def">vBot guide</a>
+<a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">Getting started</a>
+</div>
+<div class="result">
+<a rel="nofollow" class="result__a" href="https://example.org/direct">Direct link result</a>
+</div>
+</body></html>"""
+
+_DUCKDUCKGO_CHALLENGE_HTML = """<html><body>
+<form id="challenge-form" action="/challenge" method="post">
+<p>are you a human? complete the challenge below</p>
+<div class="g-recaptcha"></div>
+</form>
+</body></html>"""
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_duckduckgo_success(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_DUCKDUCKGO_ENDPOINT).mock(
+        return_value=httpx.Response(200, text=_DUCKDUCKGO_HTML)
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "count": 5},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+
+    assert route.called is True
+    request = route.calls[0].request
+    assert request.url.params["q"] == "vbot"
+    assert request.url.params["kp"] == "-1"
+
+    data = assert_success_envelope(result)
+    assert data["provider"] == "duckduckgo"
+    assert data["query"] == "vbot"
+    assert data["count"] == 5
+    assert data["page"] == 1
+    assert data["result_count"] == 3
+    assert "warnings" not in data
+    assert "recency" not in data
+    results = data["results"]
+    assert isinstance(results, list)
+    assert len(results) == 3
+    first = results[0]
+    assert first["rank"] == 1
+    assert first["title"] == "vBot docs"
+    assert first["url"] == "https://example.com/vbot"
+    assert first["description"] == "vBot & documentation for agents"
+    assert first["content_trust"] == "untrusted_web_content"
+    third = results[2]
+    assert third["rank"] == 3
+    assert third["url"] == "https://example.org/direct"
+    assert third["description"] == ""
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_duckduckgo_page_slices_client_side(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_DUCKDUCKGO_ENDPOINT).mock(
+        return_value=httpx.Response(200, text=_DUCKDUCKGO_HTML)
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "count": 2, "page": 2, "recency": "month"},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 1
+    results = data["results"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["rank"] == 3
+    assert results[0]["url"] == "https://example.org/direct"
+    assert "recency" not in data
+    assert data["warnings"] == [
+        web_search_module._DUCKDUCKGO_RECENCY_WARNING,
+        web_search_module._DUCKDUCKGO_PAGINATION_WARNING,
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_duckduckgo_domains_use_site_operator(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_DUCKDUCKGO_ENDPOINT).mock(
+        return_value=httpx.Response(200, text=_DUCKDUCKGO_HTML)
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "domains": ["example.com"]},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+
+    assert route.calls[0].request.url.params["q"] == "vbot site:example.com"
+    data = assert_success_envelope(result)
+    assert data["applied_domains"] == ["example.com"]
+    assert data["result_count"] == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_duckduckgo_challenge_is_retryable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_DUCKDUCKGO_ENDPOINT).mock(
+        return_value=httpx.Response(200, text=_DUCKDUCKGO_CHALLENGE_HTML)
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert "challenge" in error["message"]
+    assert error["retryable"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_duckduckgo_rate_limit_is_retryable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_DUCKDUCKGO_ENDPOINT).mock(return_value=httpx.Response(202, text=""))
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert "rate-limited" in error["message"]
+    assert error["retryable"] is True
