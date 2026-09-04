@@ -34,6 +34,9 @@ import {
 } from './resourceInvalidation.js';
 
 const MAX_RUN_SERVER_EVENTS = 500;
+// One bounded list feeds ChatView's merge; re-applying the whole list is
+// idempotent, so no per-event dedup bookkeeping is needed.
+const MAX_BACKGROUND_BASH_STATUS_EVENTS = 50;
 const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
 const SERVER_UNAVAILABLE_NOTICE_DELAY_MS = 1000;
 const SERVER_RESTORED_NOTICE_DURATION_MS = 1400;
@@ -67,6 +70,7 @@ export function createAppControllerState(activeViewId) {
     promptScopeTargetRequestId: 0,
     providerAuthEvent: null,
     queueInvalidation: null,
+    backgroundBashStatusEvents: [],
     runServerEvents: [],
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
@@ -419,6 +423,13 @@ export function createAppController({
       state.runServerEvents = [...state.runServerEvents, event].slice(
         -MAX_RUN_SERVER_EVENTS,
       );
+      return;
+    }
+    if (event.type === 'bash_process_status_changed') {
+      state.backgroundBashStatusEvents = [
+        ...state.backgroundBashStatusEvents,
+        event,
+      ].slice(-MAX_BACKGROUND_BASH_STATUS_EVENTS);
       return;
     }
     if (event.type !== 'resource_changed') {

@@ -595,4 +595,101 @@ describe('ChatActivityPanel', () => {
       document.querySelector('.chat-activity__group--finished'),
     ).toBeNull();
   });
+
+  it('shows Bash background runtimes from terminal data on panel rows', () => {
+    const finishedBash = {
+      type: 'tool_call',
+      id: 'bash-done',
+      name: 'bash',
+      status: 'success',
+      resultEvent: { type: 'tool_call_result' },
+      arguments: { command: 'npm run build', mode: 'background' },
+      timing: {
+        started_at: '2026-09-04T12:00:00+00:00',
+        completed_at: '2026-09-04T12:00:01+00:00',
+        duration_ms: 1000,
+      },
+      result: {
+        ok: true,
+        error: null,
+        data: {
+          process_id: 'process-done',
+          status: 'running',
+          delivery: 'automatic',
+        },
+        artifacts: [],
+      },
+    };
+    const runningBash = {
+      type: 'tool_call',
+      id: 'bash-ticking',
+      name: 'bash',
+      status: 'success',
+      resultEvent: { type: 'tool_call_result' },
+      arguments: { command: 'npm run dev', mode: 'background' },
+      timing: {
+        started_at: '2026-09-04T12:00:00+00:00',
+        completed_at: '2026-09-04T12:00:01+00:00',
+        duration_ms: 1000,
+      },
+      result: {
+        ok: true,
+        error: null,
+        data: {
+          process_id: 'process-ticking',
+          status: 'running',
+          delivery: 'automatic',
+        },
+        artifacts: [],
+      },
+    };
+
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: {
+        timelineItems: [
+          {
+            id: 'run-1',
+            type: 'assistant_run',
+            items: [finishedBash, runningBash],
+          },
+        ],
+        backgroundBashProcesses: {
+          'process-done': {
+            status: 'completed',
+            exitCode: 0,
+            cancelledByUser: false,
+            startedAt: '2026-09-04T12:00:00+00:00',
+            finishedAt: '2026-09-04T12:04:12+00:00',
+            output: 'built',
+            truncated: false,
+            logFile: '',
+          },
+        },
+        reflectionTasks: [],
+      },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    const finishedRow = [
+      ...document.querySelectorAll('.chat-activity__task-row'),
+    ].find((row) => row.textContent.includes('npm run build'));
+    expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
+    expect(
+      finishedRow.querySelector('.chat-activity__task-time')?.textContent,
+    ).toContain('4m 12s');
+
+    const runningRow = [
+      ...document.querySelectorAll('.chat-activity__task-row'),
+    ].find((row) => row.textContent.includes('npm run dev'));
+    expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
+    // The running row ticks from the panel's own clock, so only its presence
+    // is asserted; the finished row above asserts the exact runtime label.
+    expect(
+      runningRow.querySelector('.chat-activity__task-time'),
+    ).not.toBeNull();
+  });
 });

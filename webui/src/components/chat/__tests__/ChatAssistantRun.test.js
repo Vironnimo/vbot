@@ -1061,6 +1061,132 @@ describe('ChatAssistantRun run footer', () => {
   });
 });
 
+describe('ChatAssistantRun handed-off background Bash rows', () => {
+  let mountedComponent;
+
+  function createHandedOffBashChild() {
+    return {
+      type: 'tool_call',
+      id: 'tool-bash-bg',
+      name: 'bash',
+      toolCallId: 'call-bash-bg',
+      status: 'success',
+      arguments: { command: 'npm run dev', mode: 'background' },
+      timing: {
+        started_at: '2026-09-04T12:00:00+00:00',
+        completed_at: '2026-09-04T12:00:01+00:00',
+        duration_ms: 1000,
+      },
+      startedEvent: {
+        type: 'tool_call_started',
+        payload: { tool_call: { id: 'call-bash-bg', name: 'bash' } },
+      },
+      result: {
+        ok: true,
+        error: null,
+        data: {
+          status: 'running',
+          process_id: 'process-one',
+          mode: 'background',
+          delivery: 'automatic',
+          output: 'VITE ready in 830ms',
+          handoff_note:
+            'The command is still running and has been handed off to vBot.',
+        },
+        artifacts: [],
+      },
+    };
+  }
+
+  const terminalProcess = {
+    status: 'completed',
+    exitCode: 0,
+    cancelledByUser: false,
+    startedAt: '2026-09-04T12:00:00+00:00',
+    finishedAt: '2026-09-04T12:04:12+00:00',
+    output: 'build finished cleanly',
+    truncated: false,
+    logFile: 'C:/logs/bash/process-one.log',
+  };
+
+  function toolDot() {
+    return document.querySelector('.tool-event-line .te-dot');
+  }
+
+  function timeLabel() {
+    return (
+      document.querySelector('.tool-event-line .te-time')?.textContent ?? ''
+    );
+  }
+
+  function resultRows() {
+    return Array.from(document.querySelectorAll('.teb-row')).filter(
+      (row) => row.querySelector('.teb-label')?.textContent === 'Result',
+    );
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  it('keeps a handed-off row running and ticking while the process runs', () => {
+    const item = createAssistantRunItem({
+      items: [createHandedOffBashChild()],
+    });
+    mountedComponent = mountRun({
+      item,
+      nowMs: Date.parse('2026-09-04T12:30:00Z'),
+    });
+
+    expect(toolDot().classList.contains('running')).toBe(true);
+    expect(toolDot().classList.contains('done')).toBe(false);
+    expect(timeLabel()).toBe('30m 0s');
+  });
+
+  it('settles the row with the real runtime and the actual result once terminal data arrives', () => {
+    const item = createAssistantRunItem({
+      items: [createHandedOffBashChild()],
+    });
+    mountedComponent = mountRun({
+      item,
+      backgroundBashProcesses: { 'process-one': terminalProcess },
+      nowMs: Date.parse('2026-09-04T12:30:00Z'),
+    });
+
+    expect(toolDot().classList.contains('done')).toBe(true);
+    expect(timeLabel()).toBe('4m 12s');
+    const resultText = resultRows()
+      .map((row) => row.textContent)
+      .join('\n');
+    expect(resultText).toContain('build finished cleanly');
+    expect(resultText).not.toContain('handed off to vBot');
+  });
+
+  it('settles the dot from durable history without inventing a runtime', () => {
+    const item = createAssistantRunItem({
+      items: [createHandedOffBashChild()],
+    });
+    mountedComponent = mountRun({
+      item,
+      backgroundBashStatuses: { 'process-one': 'completed' },
+      nowMs: Date.parse('2026-09-04T12:30:00Z'),
+    });
+
+    expect(toolDot().classList.contains('done')).toBe(true);
+    expect(timeLabel()).toBe('');
+  });
+});
+
 async function flushAsync() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();

@@ -13,7 +13,7 @@ import sys
 import uuid
 from asyncio import StreamWriter
 from asyncio.subprocess import PIPE, Process
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,10 +23,15 @@ from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 _LOGGER = get_logger("tools.process_manager")
 
 PROCESS_BUFFER_CAP_BYTES = 500 * 1024
+# Accessor-facing terminal notifications carry the same output scale the Tool
+# result already shows, so the UI's final result mirrors the handed-off
+# snapshot instead of growing with the (much larger) in-memory buffer.
+PROCESS_TERMINAL_OUTPUT_CAP_CHARS = 30_000
 FINISHED_PROCESS_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
@@ -318,6 +323,8 @@ class TrackedProcess:
     completion_notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
     completion_acknowledged: bool = False
     cancelled_by_user: bool = False
+    backgrounded: bool = False
+    terminal_notified: bool = False
 
 
 class ProcessManager:
@@ -341,7 +348,26 @@ class ProcessManager:
         self._sweep_interval_seconds = sweep_interval_seconds
         self._temporary_files = temporary_files
         self._processes: dict[str, TrackedProcess] = {}
+        self._terminal_callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._sweeper_task: asyncio.Task[None] | None = None
+
+    def add_terminal_callback(
+        self, callback: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Subscribe to background-process terminal notifications.
+
+        The callback receives one plain snapshot dict per handed-off process
+        that reaches a terminal state. It runs synchronously on the event loop
+        and must stay fast; the server's event bridge uses this seam to forward
+        the notification to accessors.
+        """
+        self._terminal_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            with contextlib.suppress(ValueError):
+                self._terminal_callbacks.remove(callback)
+
+        return unsubscribe
 
     def start(self) -> None:
         """Start the TTL sweeper task."""
@@ -637,6 +663,7 @@ class ProcessManager:
     ) -> None:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
         tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
+        tracked.backgrounded = True
         tracked.foreground_capture_open = False
 
     def register_completion_notification(
@@ -812,6 +839,40 @@ class ProcessManager:
             tracked.stdin_open = False
             self._close_log_file(tracked)
         tracked.output_event.set()
+        self._notify_terminal(tracked)
+
+    def _notify_terminal(self, tracked: TrackedProcess) -> None:
+        """Publish one terminal notification for a handed-off process."""
+        if not tracked.backgrounded or tracked.terminal_notified:
+            return
+        tracked.terminal_notified = True
+        notification = self._terminal_notification(tracked)
+        for callback in list(self._terminal_callbacks):
+            try:
+                callback(notification)
+            except Exception:
+                _LOGGER.error(
+                    "Process terminal notification callback failed for process=%s",
+                    tracked.process_id,
+                )
+
+    def _terminal_notification(self, tracked: TrackedProcess) -> dict[str, Any]:
+        output = _decode(bytes(tracked.combined_buffer))
+        if len(output) > PROCESS_TERMINAL_OUTPUT_CAP_CHARS:
+            output = output[-PROCESS_TERMINAL_OUTPUT_CAP_CHARS:]
+        return {
+            "process_id": tracked.process_id,
+            "agent_id": tracked.agent_id,
+            "project_id": tracked.project_id,
+            "status": tracked.status,
+            "exit_code": tracked.exit_code,
+            "cancelled_by_user": tracked.cancelled_by_user,
+            "started_at": tracked.started_at.isoformat(),
+            "finished_at": (tracked.finished_at.isoformat() if tracked.finished_at else None),
+            "output": output,
+            "truncated": tracked.truncated,
+            "log_file": (model_path(tracked.log_file) if tracked.log_file is not None else None),
+        }
 
     async def _await_reader_tasks(self, tracked: TrackedProcess) -> None:
         tasks = [task for task in (tracked.stdout_task, tracked.stderr_task) if task is not None]

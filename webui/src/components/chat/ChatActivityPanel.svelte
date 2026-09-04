@@ -19,6 +19,7 @@
     timelineItems = [],
     subAgentStatuses = {},
     backgroundBashStatuses = {},
+    backgroundBashProcesses = {},
     reflectionTasks = [],
     parentSession = null,
     onNavigateToSubAgent = () => {},
@@ -31,7 +32,13 @@
   let open = $state(false);
   const cancellingTaskIds = new SvelteSet();
   let tasks = $derived(
-    backgroundTasks(timelineItems, subAgentStatuses, backgroundBashStatuses),
+    backgroundTasks(
+      timelineItems,
+      subAgentStatuses,
+      backgroundBashStatuses,
+      backgroundBashProcesses,
+      nowMs,
+    ),
   );
   let activeTasks = $derived(
     tasks.filter((task) => task.dotStatus === 'running'),
@@ -79,11 +86,15 @@
     }
   });
 
-  // Elapsed time for running reflections ticks only while the panel is open
-  // and at least one review is running; Svelte owns cleanup via this effect.
+  // Elapsed times tick only while the panel is open and something is actually
+  // running (background Bash rows or reflections). The effect depends on the
+  // value-stable `needsClock` boolean — depending on the task lists directly
+  // would re-fire on every tick because those lists recompute with `nowMs`.
+  let needsClock = $derived(
+    open && (activeTasks.length > 0 || activeReflections.length > 0),
+  );
   let nowMs = $state(Date.now());
   $effect(() => {
-    const needsClock = open && activeReflections.length > 0;
     if (!needsClock) {
       return;
     }
@@ -270,7 +281,12 @@
       aria-label={taskLabel(task)}
     >
       <span class="chat-activity__bash-mark" aria-hidden="true">$</span>
-      <span class="chat-activity__task-name">{task.command}</span>
+      <span class="chat-activity__task-name">
+        {task.command}
+        {#if task.timeLabel}
+          <span class="chat-activity__task-time">· {task.timeLabel}</span>
+        {/if}
+      </span>
       {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
@@ -761,6 +777,10 @@
   }
 
   .chat-activity__reflection-elapsed {
+    color: var(--text-lo);
+  }
+
+  .chat-activity__task-time {
     color: var(--text-lo);
   }
 

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  backgroundBashDisplayResult,
+  backgroundBashRowState,
+  backgroundBashToolStatusLabel,
   backgroundTasks,
   changeStatsLabel,
   changeStatsParts,
@@ -20,6 +23,7 @@ import {
   isReflectionRunKind,
   labelForEvent,
   labelForMessage,
+  liveClockCadenceMs,
   reflectionElapsedLabel,
   reflectionScopeForRunKind,
   reflectionTaskRows,
@@ -2306,5 +2310,206 @@ describe('groupTransientCards', () => {
     ]);
 
     expect(groups.leading).toHaveLength(1);
+  });
+  describe('background Bash rows', () => {
+    const nowMs = Date.parse('2026-09-04T12:30:00Z');
+    const terminalEntry = {
+      status: 'completed',
+      exitCode: 0,
+      cancelledByUser: false,
+      startedAt: '2026-09-04T12:00:00Z',
+      finishedAt: '2026-09-04T12:04:12Z',
+      output: 'build finished',
+      truncated: false,
+      logFile: 'C:/logs/bash/process-one.log',
+    };
+
+    it('detects handed-off Bash rows and resolves the dot from live, durable, then envelope status', () => {
+      const tool = backgroundBashTool();
+      const running = backgroundBashRowState(tool, {}, {});
+      expect(running).toEqual(
+        expect.objectContaining({
+          processId: 'process-one',
+          dotStatus: 'running',
+          terminal: null,
+        }),
+      );
+
+      const settled = backgroundBashRowState(
+        tool,
+        {},
+        { 'process-one': terminalEntry },
+      );
+      expect(settled.dotStatus).toBe('success');
+      expect(settled.terminal).toEqual(terminalEntry);
+
+      expect(
+        backgroundBashRowState(tool, { 'process-one': 'failed' }, {}).dotStatus,
+      ).toBe('failed');
+      expect(
+        backgroundBashRowState(
+          {
+            type: 'tool_call',
+            name: 'bash',
+            status: 'success',
+            arguments: { command: 'npm test', mode: 'foreground' },
+            result: {
+              ok: true,
+              data: { status: 'completed', mode: 'foreground' },
+              artifacts: [],
+            },
+          },
+          {},
+          {},
+        ),
+      ).toBeNull();
+    });
+
+    it('ticks the time label from the Tool call start while the process runs', () => {
+      const tool = backgroundBashTool({
+        timing: {
+          started_at: '2026-09-04T12:00:00Z',
+          completed_at: '2026-09-04T12:00:01Z',
+        },
+      });
+      const rowState = backgroundBashRowState(tool, {}, {});
+
+      expect(backgroundBashToolStatusLabel(tool, rowState, nowMs)).toBe(
+        '30m 0s',
+      );
+    });
+
+    it('replaces the tick with the real runtime once the process is terminal', () => {
+      const tool = backgroundBashTool({
+        timing: {
+          started_at: '2026-09-04T12:00:00Z',
+          completed_at: '2026-09-04T12:00:01Z',
+        },
+      });
+      const rowState = backgroundBashRowState(
+        tool,
+        {},
+        { 'process-one': terminalEntry },
+      );
+
+      expect(backgroundBashToolStatusLabel(tool, rowState, nowMs)).toBe(
+        '4m 12s',
+      );
+    });
+
+    it('shows no time label for terminal rows without known runtimes', () => {
+      const tool = backgroundBashTool({
+        timing: {
+          started_at: '2026-09-04T12:00:00Z',
+          completed_at: '2026-09-04T12:00:01Z',
+        },
+      });
+      const settledWithoutTimes = backgroundBashRowState(
+        tool,
+        { 'process-one': 'completed' },
+        {},
+      );
+
+      expect(
+        backgroundBashToolStatusLabel(tool, settledWithoutTimes, nowMs),
+      ).toBe('');
+    });
+
+    it('marks cancelled rows with the runtime when it is known', () => {
+      const tool = backgroundBashTool();
+      const rowState = backgroundBashRowState(
+        tool,
+        {},
+        {
+          'process-one': { ...terminalEntry, status: 'killed' },
+        },
+      );
+
+      expect(backgroundBashToolStatusLabel(tool, rowState, nowMs)).toBe(
+        'cancelled · 4m 12s',
+      );
+    });
+
+    it('replaces the handoff result with the actual completion result', () => {
+      const tool = backgroundBashTool();
+      const runningRow = backgroundBashRowState(tool, {}, {});
+      expect(backgroundBashDisplayResult(tool, runningRow)).toBe(tool.result);
+
+      const settledRow = backgroundBashRowState(
+        tool,
+        {},
+        { 'process-one': terminalEntry },
+      );
+      expect(JSON.parse(backgroundBashDisplayResult(tool, settledRow))).toEqual(
+        {
+          ok: true,
+          error: null,
+          data: {
+            status: 'completed',
+            exit_code: 0,
+            output: 'build finished',
+            truncated: false,
+            log_file: 'C:/logs/bash/process-one.log',
+          },
+        },
+      );
+    });
+
+    it('keeps the live clock running for a settled Bash row whose process still runs', () => {
+      const settledBash = backgroundBashTool({
+        timing: {
+          started_at: '2026-09-04T12:00:00Z',
+          completed_at: '2026-09-04T12:00:01Z',
+        },
+      });
+      const items = [
+        { id: 'run-1', type: 'assistant_run', items: [settledBash] },
+      ];
+
+      // The handoff envelope reports the process as running, so the row keeps
+      // ticking from the Tool call start until a terminal status arrives.
+      expect(liveClockCadenceMs(items, {}, nowMs, {})).toBe(1000);
+      // A terminal process settles the row and stops the clock.
+      expect(
+        liveClockCadenceMs(items, {}, nowMs, {
+          'process-one': { status: 'completed' },
+        }),
+      ).toBe(0);
+    });
+
+    it('surfaces the Bash time label on Activity panel tasks', () => {
+      const settledBash = backgroundBashTool();
+      const foregroundBash = backgroundBashTool({
+        id: 'bash-foreground',
+        arguments: { command: 'npm test', mode: 'foreground' },
+        result: {
+          ok: true,
+          data: { status: 'completed', mode: 'foreground' },
+          artifacts: [],
+        },
+      });
+      const tasks = backgroundTasks(
+        [
+          {
+            id: 'run-1',
+            type: 'assistant_run',
+            items: [settledBash, foregroundBash],
+          },
+        ],
+        {},
+        {},
+        { 'process-one': terminalEntry },
+        nowMs,
+      );
+
+      const bashTask = tasks.find((task) => task.kind === 'bash');
+      expect(bashTask).toEqual(
+        expect.objectContaining({
+          processId: 'process-one',
+          dotStatus: 'success',
+          timeLabel: '4m 12s',
+        }),
+      );
+    });
   });
 });
