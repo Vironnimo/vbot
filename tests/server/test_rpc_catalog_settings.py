@@ -432,7 +432,16 @@ async def test_settings_update_persists_web_search_provider(tmp_path: Path) -> N
     }
     assert response["result"]["web_search"] == {
         "provider": "searxng",
-        "available_providers": ["brave", "duckduckgo", "exa", "firecrawl", "perplexity", "searxng", "serper", "tavily"],
+        "available_providers": [
+            "brave",
+            "duckduckgo",
+            "exa",
+            "firecrawl",
+            "perplexity",
+            "searxng",
+            "serper",
+            "tavily",
+        ],
         "default_count": 12,
         "searxng": {"base_url": "http://localhost:9999"},
     }
