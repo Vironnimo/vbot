@@ -2203,3 +2203,105 @@ async def test_web_search_handler_firecrawl_unauthorized_hints_at_api_key(
     assert "FIRECRAWL_API_KEY" in error["message"]
     assert error["retryable"] is False
     assert len(route.calls) == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope", [{"results": []}, {"data": []}])
+async def test_web_search_handler_firecrawl_accepts_alternate_envelopes(
+    tmp_path: Path, envelope: dict[str, Any]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    item = {
+        "title": "vBot docs",
+        "url": "https://example.com/vbot",
+        "description": "vBot documentation",
+    }
+    key = "results" if "results" in envelope else "data"
+    respx.post(_FIRECRAWL_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, json={"success": True, **{key: [item]}}
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "firecrawl"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 1
+    assert data["results"][0]["url"] == "https://example.com/vbot"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_firecrawl_maps_fallback_item_fields(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.post(_FIRECRAWL_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "web": [
+                        {
+                            "sourceURL": "https://example.com/vbot",
+                            "snippet": "vBot documentation",
+                            "publishedDate": "2026-08-20",
+                            "metadata": {"title": "vBot docs"},
+                        }
+                    ]
+                },
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "firecrawl"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 1
+    (entry,) = data["results"]
+    assert entry["title"] == "vBot docs"
+    assert entry["url"] == "https://example.com/vbot"
+    assert entry["description"] == "vBot documentation"
+    assert entry["page_age"] == "2026-08-20"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_firecrawl_failed_envelope_reads_message_field(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.post(_FIRECRAWL_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, json={"success": False, "message": "too many requests"}
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "firecrawl"},
+    )
+
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert "too many requests" in error["message"]
+    assert error["retryable"] is False
