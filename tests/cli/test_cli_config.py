@@ -197,8 +197,10 @@ def test_config_describe_formats_source_default_and_lifecycle(
                         "type": "string",
                         "allowed_values": [
                             "brave",
+                            "duckduckgo",
                             "exa",
                             "firecrawl",
+                            "perplexity",
                             "searxng",
                             "serper",
                             "tavily",
