@@ -1422,6 +1422,73 @@ describe('chat controller', () => {
       'queueRun:queue-item-one': 'admitted-child-run',
     });
   });
+
+  it('merges background Bash status events into the bounded process map', () => {
+    const { chatState, controller } = setup();
+
+    controller.applyBackgroundBashStatusEvents([
+      {
+        type: 'bash_process_status_changed',
+        payload: {
+          process_id: 'process-one',
+          status: 'completed',
+          exit_code: 0,
+          cancelled_by_user: false,
+          started_at: '2026-09-04T12:00:00Z',
+          finished_at: '2026-09-04T12:04:12Z',
+          output: 'build finished',
+          truncated: false,
+          log_file: 'C:/logs/bash/process-one.log',
+        },
+      },
+    ]);
+    controller.applyBackgroundBashStatusEvents([
+      {
+        type: 'bash_process_status_changed',
+        payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
+      },
+    ]);
+    // Re-applying the same event is idempotent.
+    controller.applyBackgroundBashStatusEvents([
+      {
+        type: 'bash_process_status_changed',
+        payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
+      },
+    ]);
+
+    expect(chatState.backgroundBashProcesses['process-one']).toEqual({
+      status: 'completed',
+      exitCode: 0,
+      cancelledByUser: false,
+      startedAt: '2026-09-04T12:00:00Z',
+      finishedAt: '2026-09-04T12:04:12Z',
+      output: 'build finished',
+      truncated: false,
+      logFile: 'C:/logs/bash/process-one.log',
+    });
+    expect(chatState.backgroundBashProcesses['process-two']).toEqual({
+      status: 'failed',
+      exitCode: 1,
+      cancelledByUser: false,
+      startedAt: '',
+      finishedAt: '',
+      output: '',
+      truncated: false,
+      logFile: '',
+    });
+    expect(Object.keys(chatState.backgroundBashProcesses)).toHaveLength(2);
+  });
+
+  it('ignores background Bash status events without a process id', () => {
+    const { chatState, controller } = setup();
+
+    controller.applyBackgroundBashStatusEvents([
+      { type: 'bash_process_status_changed', payload: { status: 'completed' } },
+    ]);
+    controller.applyBackgroundBashStatusEvents([]);
+
+    expect(chatState.backgroundBashProcesses).toEqual({});
+  });
 });
 
 function deferred() {

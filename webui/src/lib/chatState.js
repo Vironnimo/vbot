@@ -92,6 +92,7 @@ const HISTORY_OLDER_LIMIT = 50;
 const QUEUE_DISPLAY_CONTENT_LIMIT = 500;
 const SUBAGENT_LEGACY_HISTORY_LIMIT = 20;
 const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
+const BACKGROUND_BASH_PROCESS_CACHE_LIMIT = 200;
 const SUBAGENT_RESULT_CACHE_LIMIT = 100;
 const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
@@ -116,6 +117,7 @@ export function createChatState() {
     availableSkills: [],
     subAgentStatuses: {},
     subAgentResults: {},
+    backgroundBashProcesses: {},
   };
 }
 
@@ -1233,6 +1235,39 @@ export function createChatController({
     return true;
   }
 
+  // Background Bash terminal notifications arrive as accessor events with the
+  // exact process start/end times. Applying the whole list is idempotent —
+  // entries merge by process id — so the View forwards the bounded list on
+  // every change and no per-event dedup bookkeeping is needed.
+  function applyBackgroundBashStatusEvents(events) {
+    if (!Array.isArray(events) || events.length === 0) {
+      return;
+    }
+    const updates = {};
+    for (const event of events) {
+      const data = event?.payload;
+      const processId = trimmedString(data?.process_id);
+      if (!processId) {
+        continue;
+      }
+      updates[processId] = {
+        status: trimmedString(data.status) || 'completed',
+        exitCode: typeof data.exit_code === 'number' ? data.exit_code : null,
+        cancelledByUser: data.cancelled_by_user === true,
+        startedAt: trimmedString(data.started_at),
+        finishedAt: trimmedString(data.finished_at),
+        output: typeof data.output === 'string' ? data.output : '',
+        truncated: data.truncated === true,
+        logFile: trimmedString(data.log_file),
+      };
+    }
+    chatState.backgroundBashProcesses = mergeBoundedEntries(
+      chatState.backgroundBashProcesses,
+      updates,
+      BACKGROUND_BASH_PROCESS_CACHE_LIMIT,
+    ).entries;
+  }
+
   function destroy() {
     runStream.closeSubscriptions();
     historyLoadVersions.clear();
@@ -1244,6 +1279,7 @@ export function createChatController({
   }
 
   return {
+    applyBackgroundBashStatusEvents,
     applyConnectionSnapshot,
     applyQueueInvalidation,
     applySubAgentStatusUpdates,

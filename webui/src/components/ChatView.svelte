@@ -88,6 +88,9 @@
     onSessionNavigation = () => {},
     runServerEvent = null,
     runServerEvents = [],
+    // Bounded list of `bash_process_status_changed` accessor events; the
+    // controller re-applies the whole list (idempotent merge by process id).
+    backgroundBashStatusEvents = [],
     connectionSnapshot = null,
     // Bumped by App on `resource_changed(kind:"sessions")`; forwarded to the
     // session drawer so a new/switched session in another window appears in the
@@ -834,6 +837,10 @@
 
   $effect(() => {
     chatController.handleServerEvents(runServerEvent, runServerEvents);
+  });
+
+  $effect(() => {
+    chatController.applyBackgroundBashStatusEvents(backgroundBashStatusEvents);
   });
 
   let lastActivityRefreshKey = '';
@@ -2160,6 +2167,8 @@
               true}
             subAgentStatuses={chatState.subAgentStatuses}
             subAgentResults={chatState.subAgentResults}
+            backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
+            backgroundBashProcesses={chatState.backgroundBashProcesses}
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={handleNavigateToSubAgentLink}
             onCancelToolCall={handleCancelToolCall}
@@ -2304,6 +2313,7 @@
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
         backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
+        backgroundBashProcesses={chatState.backgroundBashProcesses}
         reflectionTasks={reflectionTaskRows(activeSessionState)}
         parentSession={sessionParentLink}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}

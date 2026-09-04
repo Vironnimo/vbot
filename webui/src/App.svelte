@@ -321,6 +321,9 @@
   );
   let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
   let runServerEvents = $derived(appControllerState.runServerEvents);
+  let backgroundBashStatusEvents = $derived(
+    appControllerState.backgroundBashStatusEvents,
+  );
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
   let desktopCapabilities = $state(null);
   let serverSwitcherOpen = $state(false);
@@ -1195,6 +1198,7 @@
         {pendingSessionNavigation}
         onSessionNavigation={handleChatSessionNavigation}
         {runServerEvents}
+        {backgroundBashStatusEvents}
         {connectionSnapshot}
         {sessionsRefreshToken}
         {commandsRefreshToken}
