@@ -77,6 +77,7 @@ __all__ = [
     "FakeRunManager",
     "FakeChatLoop",
     "make_runtime",
+    "activity_path_from_note",
 ]
 
 
@@ -84,6 +85,14 @@ pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 BACKGROUND_TASK_SETTLE_TICKS = 5
+
+
+def activity_path_from_note(note: str) -> str:
+    """Extract the concrete activity path from an ``activity_note`` sentence."""
+    before, after = subagent_module.SUBAGENT_ACTIVITY_NOTE_TEMPLATE.split("{path}")
+    assert note.startswith(before), note
+    assert note.endswith(after), note
+    return note[len(before) : len(note) - len(after)]
 
 
 async def _handle_subagent(
