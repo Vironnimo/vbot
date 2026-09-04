@@ -315,7 +315,20 @@ def _handle_disable(cron_service: CronService, arguments: JsonObject) -> JsonObj
 
 
 def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
-    payload = dict(job.to_dict())
+    payload: JsonObject = {
+        "id": job.id,
+        "name": job.name,
+        "prompt": job.prompt,
+        "status": job.status,
+        "remaining_runs": job.remaining_runs,
+        "created_at": job.created_at,
+        "last_fired_at": job.last_fired_at,
+        "last_attempt_at": job.last_attempt_at,
+        "last_completed_at": job.last_completed_at,
+        "last_outcome": job.last_outcome,
+        "last_error": job.last_error,
+        "consecutive_failures": job.consecutive_failures,
+    }
     payload["target"] = format_agent_address(job.agent_id, job.project_id)
     payload["schedule"] = cron_service.format_schedule(job)
     payload["next_fire_at"] = cron_service.next_fire_at(job)
