@@ -22,6 +22,7 @@ from core.search_config import (
     MIN_WEB_SEARCH_COUNT,
     WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_SEARXNG,
+    WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
 )
 from core.tools.arguments import ToolArgumentError, optional_int
@@ -43,6 +44,7 @@ _LOGGER = get_logger("tools.web_search")
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _EXA_ENDPOINT = "https://api.exa.ai/search"
+_SERPER_ENDPOINT = "https://google.serper.dev/search"
 _TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
@@ -77,6 +79,9 @@ _EXA_RECENCY_WARNING = (
     "exa recency filtering may exclude results without a published date"
 )
 _EXA_RECENCY_WINDOW_DAYS = {"day": 1, "month": 30, "year": 365}
+_SERPER_PAGE_SIZE = 10
+_SERPER_MAX_PAGES_PER_CALL = 5
+_SERPER_RECENCY_MAP = {"day": "qdr:d", "month": "qdr:m", "year": "qdr:y"}
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -871,6 +876,99 @@ async def _search_exa(
     return envelope, None
 
 
+def _standardize_serper_results(raw_results: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _clean_snippet(raw.get("title"))
+        url = _normalize_text(raw.get("link"))
+        description = _clean_snippet(raw.get("snippet"))
+        if not title and not url and not description:
+            continue
+
+        entry: dict[str, Any] = {
+            "rank": len(normalized) + 1,
+            "title": title,
+            "url": url,
+            "description": description,
+            "content_trust": "untrusted_web_content",
+        }
+        page_age = _normalize_text(raw.get("date"))
+        if page_age:
+            entry["page_age"] = page_age
+        normalized.append(entry)
+
+    return normalized
+
+
+async def _search_serper(
+    *,
+    api_key: str,
+    query: str,
+    domains: list[str],
+    count: int,
+    page: int,
+    recency: str,
+) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
+    # Serper serves one 10-result Google page per request, so count/page
+    # slices are assembled by fanning out over the minimal covering pages.
+    # Like Brave, domain scoping rides on Google's site: operator.
+    search_query = _build_search_query(query, domains)
+    headers = {"X-API-KEY": api_key}
+    start = (page - 1) * count
+    collected: list[Any] = []
+    serper_page = start // _SERPER_PAGE_SIZE + 1
+    skip = start % _SERPER_PAGE_SIZE
+    fetched = 0
+    while len(collected) < count and fetched < _SERPER_MAX_PAGES_PER_CALL:
+        payload: dict[str, Any] = {
+            "q": search_query,
+            "num": min(_SERPER_PAGE_SIZE, count - len(collected) + skip),
+            "page": serper_page,
+        }
+        if recency:
+            payload["tbs"] = _SERPER_RECENCY_MAP[recency]
+        response_payload, failure = await _post_json_bounded(
+            _SERPER_ENDPOINT,
+            payload=payload,
+            headers=headers,
+            provider_label="Serper",
+            auth_key_hint="SERPER_API_KEY",
+        )
+        if failure is not None:
+            return None, failure
+        organic = (
+            response_payload.get("organic") if isinstance(response_payload, dict) else None
+        )
+        if not isinstance(organic, list) or not organic:
+            break
+        collected.extend(organic[skip : skip + (count - len(collected))])
+        skip = 0
+        fetched += 1
+        serper_page += 1
+        if len(organic) < _SERPER_PAGE_SIZE:
+            break
+    results = _restrict_results_to_domains(
+        _standardize_serper_results(collected[:count]), domains, count
+    )
+    envelope: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_SERPER,
+        "query": query,
+        "count": count,
+        "page": page,
+        "result_count": len(results),
+        "results": results,
+    }
+    if recency:
+        envelope["recency"] = recency
+    return envelope, None
+
+
 def _standardize_tavily_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
@@ -1030,6 +1128,22 @@ async def web_search_handler(
                     retryable=False,
                 )
             payload, search_failure = await _search_exa(
+                api_key=api_key,
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        elif provider == WEB_SEARCH_PROVIDER_SERPER:
+            api_key = _normalize_text(credential_resolver("SERPER_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires SERPER_API_KEY to be configured",
+                    retryable=False,
+                )
+            payload, search_failure = await _search_serper(
                 api_key=api_key,
                 query=query,
                 domains=domains,
