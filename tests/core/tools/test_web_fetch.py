@@ -694,11 +694,16 @@ async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
     workspace.mkdir()
     url = "https://example.com/loop"
 
-    # A same-host redirect that never terminates exhausts the hop budget.
+    # A redirect chain of ever-new URLs exhausts the hop budget (a repeating
+    # URL instead trips the faster cycle guard covered by its own tests).
+    calls = 0
+
     def responder(request_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
         return make_result(
             status_code=302,
-            headers={"Location": "https://example.com/loop-next"},
+            headers={"Location": f"https://example.com/loop-{calls}"},
             url=request_url,
         )
 
@@ -709,6 +714,297 @@ async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is False
     assert "too many redirects" in error["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_redirect_cycle_fails_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/self"
+    calls = 0
+
+    # A bot-deflection self-loop redirects to the identical URL forever.
+    def responder(request_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
+        return make_result(
+            status_code=302,
+            headers={"Location": request_url},
+            url=request_url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "cycle" in error["message"].lower()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_alternating_redirect_cycle_fails_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first = "https://example.com/first"
+    second = "https://example.com/second"
+    calls = 0
+
+    def responder(request_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
+        other = second if request_url == first else first
+        return make_result(
+            status_code=302,
+            headers={"Location": other},
+            url=request_url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(first))
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "cycle" in error["message"].lower()
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_reddit_challenge_page_signals_not_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://www.reddit.com/r/Python/"
+    html = """
+    <html>
+      <head><title>Reddit - Prove your humanity</title></head>
+      <body>
+        <h1>Prove your humanity</h1>
+        <p>Complete the challenge below and let us know you're a real person.</p>
+      </body>
+    </html>
+    """
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=html,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "web_search" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_reddit_login_wall_signals_not_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    requested = "https://old.reddit.com/r/Python/"
+    login_url = (
+        "https://old.reddit.com/login/?reason=lor2"
+        "&dest=https%3A%2F%2Fold.reddit.com%2Fr%2FPython%2F"
+    )
+    login_html = """
+    <html>
+      <head><title>Welcome to Reddit</title></head>
+      <body>
+        <p>Log in or sign up to personalize your feed.</p>
+      </body>
+    </html>
+    """
+
+    def responder(request_url: str) -> _FetchResult:
+        if request_url == requested:
+            return make_result(
+                status_code=302,
+                headers={"Location": login_url},
+                url=request_url,
+            )
+        return make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=login_html,
+            url=login_url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(requested))
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+    assert "web_search" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_challenge_title_signals_not_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/guarded"
+    html = """
+    <html>
+      <head><title>Just a moment...</title></head>
+      <body><p>Verifying you are human.</p></body>
+    </html>
+    """
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=html,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    error = assert_failure_envelope(result, "request_error")
+    assert error["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_challenge_page_raw_output_returns_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://www.reddit.com/r/Python/"
+    html = "<html><head><title>Reddit - Prove your humanity</title></head></html>"
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200, headers={"Content-Type": "text/html"}, text=html, url=url
+        ),
+    )
+
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments(url, "raw"),
+    )
+
+    data = assert_success_envelope(result)
+    assert data["content"] == html
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_similar_title_is_not_a_challenge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/essay"
+    html = """
+    <html>
+      <head><title>Just a moment of joy</title></head>
+      <body><p>An essay about patience.</p></body>
+    </html>
+    """
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=html,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    data = assert_success_envelope(result)
+    assert isinstance(data["content"], str)
+    assert "An essay about patience." in data["content"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_login_path_on_other_hosts_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/login/"
+    html = """
+    <html>
+      <head><title>Sign in</title></head>
+      <body><p>Welcome back. Enter your credentials.</p></body>
+    </html>
+    """
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=html,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    data = assert_success_envelope(result)
+    assert isinstance(data["content"], str)
+    assert "Welcome back." in data["content"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_tweet_shaped_page_with_login_links_stays_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://x.com/ThePSF/status/2090064027216998893"
+    html = """
+    <html>
+      <head>
+        <title>Python Software Foundation on X: "#PyPI runs on zero cost" / X</title>
+        <meta property="og:description" content="#PyPI runs on zero cost" />
+      </head>
+      <body>
+        <a href="/i/jf/onboarding/web?mode=login">Log in</a>
+        <a href="/i/jf/onboarding/web?mode=signup">Sign up</a>
+        <p>#PyPI runs on zero cost</p>
+      </body>
+    </html>
+    """
+
+    install_http_get(
+        monkeypatch,
+        lambda _url: make_result(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text=html,
+            url=url,
+        ),
+    )
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    data = assert_success_envelope(result)
+    assert isinstance(data["content"], str)
+    assert "#PyPI runs on zero cost" in data["content"]
 
 
 @pytest.mark.asyncio
