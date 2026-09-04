@@ -50,7 +50,6 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
     data = result["data"]
     assert isinstance(data, dict)
     assert set(data) == {
-        "message",
         "path",
         "first_changed_line",
         "last_changed_line",
@@ -170,8 +169,6 @@ def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
     assert data["last_changed_line"] == 1
     assert data["preview"] == [{"before": ["1| hello workspace"], "after": ["1| hello agent"]}]
     assert data["path"] == model_path(target.resolve())
-    assert isinstance(data["message"], str)
-    assert "OK: updated" in data["message"]
 
 
 def test_edit_replaces_text_in_absolute_path(tmp_path: Path) -> None:
@@ -1467,7 +1464,6 @@ def test_multi_edit_applies_items_in_order_across_files(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert isinstance(data, dict)
     assert data["status"] == "success"
-    assert data["message"] == "Applied 3 edits."
     assert data["succeeded"] == 3
     assert data["failed"] == 0
     assert [item["index"] for item in data["results"]] == [0, 1, 2]
@@ -1780,7 +1776,6 @@ def test_multi_edit_retry_reports_precise_already_applied_noop(tmp_path: Path) -
     data = second["data"]
     assert second["ok"] is True
     assert isinstance(data, dict)
-    assert data["message"] == "Applied 1 edit."
     assert data["results"] == [
         {
             "index": 0,
