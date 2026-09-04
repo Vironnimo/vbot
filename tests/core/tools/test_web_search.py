@@ -315,7 +315,7 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
     assert "query" not in data
     assert "count_requested" not in data
     assert len(data["results"]) == 1
-    assert data["content_trust"] == "untrusted_web_content"
+    assert "content_trust" not in data
     results = data["results"]
     assert isinstance(results, list)
     assert len(results) == 1
@@ -324,7 +324,7 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
     assert first["title"] == "vBot docs"
     assert first["url"] == "https://example.com/vbot"
     assert first["description"] == "vBot documentation"
-    assert first["content_trust"] == "untrusted_web_content"
+    assert "content_trust" not in first
 
 
 @respx.mock
@@ -2362,7 +2362,7 @@ async def test_web_search_handler_duckduckgo_success(tmp_path: Path) -> None:
     assert first["title"] == "vBot docs"
     assert first["url"] == "https://example.com/vbot"
     assert first["description"] == "vBot & documentation for agents"
-    assert first["content_trust"] == "untrusted_web_content"
+    assert "content_trust" not in first
     third = results[2]
     assert third["rank"] == 3
     assert third["url"] == "https://example.org/direct"
