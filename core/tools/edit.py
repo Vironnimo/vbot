@@ -402,12 +402,7 @@ def _build_success_data(
     normalization_warning: str | None,
 ) -> JsonObject:
     displayed_path = model_path(resolved)
-    message = (
-        f"OK: updated {displayed_path} (first changed line: {first_line_number}, "
-        f"replacements: {replaced_count})"
-    )
     data: JsonObject = {
-        "message": message,
         "path": displayed_path,
         "first_changed_line": first_line_number,
         "last_changed_line": last_line_number,
@@ -596,7 +591,6 @@ def _edit_one(
                 if file_state is not None:
                     file_state.record_read(context.session_id, resolved)
                 data: JsonObject = {
-                    "message": f"OK: replacement already applied in {displayed_path}",
                     "path": displayed_path,
                     "replacements": 0,
                     "already_applied": True,
@@ -728,9 +722,7 @@ def _successful_item(index: int, result: JsonObject) -> JsonObject:
     data = result.get("data")
     assert isinstance(data, dict)
     visible_data = {
-        key: value
-        for key, value in data.items()
-        if key not in {"added_lines", "message", "removed_lines"}
+        key: value for key, value in data.items() if key not in {"added_lines", "removed_lines"}
     }
     return {"index": index, "ok": True, **visible_data}
 
@@ -807,15 +799,8 @@ def _edit_batch(
     if added_lines or removed_lines:
         context.add_display_line_changes(added=added_lines, removed=removed_lines)
     status = "partial" if failed else "success"
-    if failed:
-        message = f"Applied {succeeded} of {len(outcomes)} edits; {failed} failed."
-    elif succeeded == 1:
-        message = "Applied 1 edit."
-    else:
-        message = f"Applied {succeeded} edits."
     return tool_success(
         {
-            "message": message,
             "status": status,
             "total": len(outcomes),
             "succeeded": succeeded,
@@ -892,7 +877,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         handler_validates_arguments=True,
         result_schema={
             "type": "object",
-            "required": ["message", "status", "total", "succeeded", "failed", "results"],
+            "required": ["status", "total", "succeeded", "failed", "results"],
         },
         display=ToolDisplay(
             parts_builder=_edit_display_parts,
