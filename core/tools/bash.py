@@ -51,12 +51,6 @@ BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
 # Failure messages (timeout, sub-agent kill) carry a shorter tail: enough to
 # diagnose, small enough not to bloat an error envelope.
 FAILURE_OUTPUT_TAIL_CHARS = 10_000
-BASH_HANDOFF_PROCESS_NOTE = (
-    "Use process_id with the process Tool for status, raw stdin input, or kill. Process input "
-    "writes to a pipe; it does not provide a terminal or TTY. output is the newest capped "
-    "snapshot collected before handoff. The result's log_file field carries the path to the "
-    "complete combined stdout/stderr stream, written live from command start through exit."
-)
 DEFAULT_BACKGROUND_AFTER_SECONDS = 30.0
 # Inside a Sub-Agent auto mode cannot hand off, so its background_after_seconds
 # threshold doubles as the kill deadline. Default it generously there: a 30s
@@ -1182,7 +1176,6 @@ async def _background_result(
     }
     result["delivery"] = "automatic"
     result["handoff_note"] = _handoff_note(mode, handoff_after)
-    result["process_note"] = BASH_HANDOFF_PROCESS_NOTE
     return tool_success(result)
 
 
@@ -1404,7 +1397,6 @@ async def _combined_output(
 
 __all__ = [
     "BASH_MODEL_OUTPUT_CAP_CHARS",
-    "BASH_HANDOFF_PROCESS_NOTE",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
     "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",
