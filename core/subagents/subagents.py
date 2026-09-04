@@ -1331,44 +1331,6 @@ def _add_interruption_details(data: JsonObject, message: ChatMessage) -> None:
     )
 
 
-def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
-    return _with_target_project(
-        {
-            "agent_id": entry.agent_id,
-            "session_id": entry.session_id,
-            "run_id": None,
-            "queue_item_id": entry.queue_item_id,
-            "status": SUBAGENT_STATUS_QUEUED,
-            "result": None,
-            "usage": None,
-            "activity_file": entry.activity_file,
-        },
-        entry.project_id,
-    )
-
-
-def _queued_manager_result_dict(
-    agent_id: str,
-    session_id: str,
-    item: Any,
-    project_id: str | None,
-    activity_file: str | None,
-) -> JsonObject:
-    return _with_target_project(
-        {
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "run_id": None,
-            "queue_item_id": item.item_id,
-            "status": SUBAGENT_STATUS_QUEUED,
-            "result": None,
-            "usage": None,
-            "activity_file": activity_file,
-        },
-        project_id,
-    )
-
-
 def _should_poll_session_result(result: JsonObject) -> bool:
     return result.get("status") in {
         RunStatus.FAILED.value,
@@ -1684,6 +1646,14 @@ def _activity_file(activity: SubAgentActivity | None) -> str | None:
 
 
 def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObject:
+    """Project one spawn result's activity reference onto its single carrier.
+
+    The note is the only spawn-result carrier of the path: the bare
+    ``activity_file`` field rides along in the internal result dicts (status
+    snapshots keep it as their documented contract), so it is removed here to
+    keep one path from appearing twice in one result.
+    """
+    data.pop("activity_file", None)
     if activity_file is not None:
         data["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
     return data

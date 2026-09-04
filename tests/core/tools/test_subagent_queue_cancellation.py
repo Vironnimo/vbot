@@ -14,6 +14,7 @@ from .subagent_test_support import (
     SubAgentBatchTracker,
     _handle_subagent,
     _handle_subagent_result,
+    activity_path_from_note,
     asyncio,
     make_context,
     make_runtime,
@@ -131,9 +132,8 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
     assert task.done() is True
     result = await task
     assert result["ok"] is True
-    activity_file = result["data"]["activity_file"]
-    assert isinstance(activity_file, str)
-    assert Path(activity_file).exists()
+    assert Path(activity_path_from_note(result["data"]["activity_note"])).exists()
+    assert "activity_file" not in result["data"]
     assert result["data"]["id"].startswith("sub_")
     assert result["data"]["agent_id"] == "parent"
     assert result["data"]["session_id"] == "waiting-sub-session"
@@ -141,7 +141,6 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
     assert result["data"]["delivery"] == "automatic"
     assert "run_id" not in result["data"]
     assert "queue_item_id" not in result["data"]
-    assert result["data"]["activity_file"] == activity_file
     manager.remove_queued("parent", "waiting-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
@@ -316,7 +315,7 @@ async def test_subagent_status_reports_queued_work(tmp_path: Path) -> None:
     # Assert
     assert spawn_result["ok"] is True
     assert result["ok"] is True
-    activity_file = spawn_result["data"]["activity_file"]
+    activity_file = activity_path_from_note(spawn_result["data"]["activity_note"])
     assert "activity_note" not in result["data"]
     data = result["data"]
     # The behavioral note's presence is the contract; its wording is not.
@@ -374,7 +373,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     assert spawn_result["data"]["project_id"] == "vbot"
     assert manager.enqueued[0]["project_id"] == "vbot"
     assert result["ok"] is True
-    activity_file = spawn_result["data"]["activity_file"]
+    activity_file = activity_path_from_note(spawn_result["data"]["activity_note"])
     data = result["data"]
     # The behavioral note's presence is the contract; its wording is not.
     assert data["note"]

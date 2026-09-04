@@ -26,6 +26,7 @@ from .subagent_test_support import (
     SubAgentCoordinator,
     ToolRegistry,
     _handle_subagent,
+    activity_path_from_note,
     asyncio,
     make_context,
     make_runtime,
@@ -508,8 +509,8 @@ async def test_reused_session_gets_a_distinct_activity_file_per_run(tmp_path: Pa
         batch_tracker=tracker,
     )
 
-    first_path = Path(first["data"]["activity_file"])
-    second_path = Path(second["data"]["activity_file"])
+    first_path = Path(activity_path_from_note(first["data"]["activity_note"]))
+    second_path = Path(activity_path_from_note(second["data"]["activity_note"]))
     assert first_path != second_path
     assert first_path.exists()
     assert second_path.exists()
@@ -540,7 +541,7 @@ async def test_activity_allocation_failure_does_not_block_subagent_run(
     )
 
     assert result["ok"] is True
-    assert result["data"]["activity_file"] is None
+    assert "activity_file" not in result["data"]
     assert "activity_note" not in result["data"]
     manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
     await asyncio.sleep(0)
