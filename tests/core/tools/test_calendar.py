@@ -405,3 +405,58 @@ class TestActionValidation:
 
         assert result["ok"] is False
         assert "action" in result["error"]["message"]
+
+
+class TestScheduledActions:
+    def test_flat_actions_default_to_current_agent_and_fresh_session(self, tmp_path):
+        registry, service = _registry(tmp_path)
+        event = service.create_event(title="Meeting", start="2027-01-01T12:00")
+        added = _run(
+            registry,
+            tmp_path,
+            {"action": "add_action", "id": event.id, "when": "start - 1h", "prompt": "prepare"},
+        )
+        assert added["ok"]
+        action = added["data"]["action"]
+        assert action["target"] == "agent-one"
+        assert action["session"] is None
+        changed = _run(
+            registry, tmp_path, {"action": "update_action", "id": action["id"], "when": "end + 30m"}
+        )
+        assert changed["ok"]
+        assert changed["data"]["action"]["prompt"] == "prepare"
+        assert changed["data"]["action"]["id"] == action["id"]
+        deleted = _run(registry, tmp_path, {"action": "delete_action", "id": action["id"]})
+        assert deleted["ok"]
+        assert service.actions.list_actions() == []
+
+    def test_explicit_target_and_session_and_unknown_fields(self, tmp_path):
+        registry, service = _registry(tmp_path)
+        event = service.create_event(title="Meeting", start="2027-01-01T12:00")
+        args = {
+            "action": "add_action",
+            "id": event.id,
+            "when": "start",
+            "prompt": "prepare",
+            "target": "builder@project",
+            "session": "chosen",
+        }
+        result = _run(registry, tmp_path, args)
+        assert result["ok"]
+        assert result["data"]["action"]["target"] == "builder@project"
+        assert result["data"]["action"]["session"] == "chosen"
+        invalid = _run(registry, tmp_path, {**args, "catch_up_minutes": 60})
+        assert invalid["ok"] is False
+        assert len(service.actions.list_actions()) == 1
+
+    def test_list_exposes_action_ids_and_execution_times(self, tmp_path):
+        registry, service = _registry(tmp_path)
+        today, _ = service.resolve_when("today")
+        event = service.create_event(
+            title="Meeting", start=(today + timedelta(hours=12)).isoformat()
+        )
+        action = service.actions.add(event.id, when="start", prompt="prepare", target="agent-one")
+        result = _run(registry, tmp_path, {"action": "list", "when": "today"})
+        assert result["data"]["actions"][0]["id"] == action["id"]
+        assert result["data"]["executions"][0]["action_id"] == action["id"]
+        assert result["data"]["executions"][0]["expires_at"]

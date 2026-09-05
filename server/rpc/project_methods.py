@@ -521,6 +521,21 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
     so it never blocks a project removal even when its bare ``agent_id`` happens
     to match a same-named Team member.
     """
+    from core.calendar import CalendarService
+    from core.projects.address import parse_agent_address
+
+    calendar = getattr(state.runtime, "calendar_service", None)
+    if isinstance(calendar, CalendarService):
+        references = [
+            f"calendar:{action['id']}"
+            for action in calendar.actions.list_actions()
+            if parse_agent_address(action["target"])[1] == project_id
+        ]
+        if references:
+            raise RpcError(
+                RPC_ERROR_PROJECT_IN_USE,
+                f"cannot remove project referenced by {', '.join(references)}",
+            )
     cron_service = getattr(state.runtime, "cron_service", None)
     if cron_service is None:
         return

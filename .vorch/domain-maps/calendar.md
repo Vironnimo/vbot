@@ -4,9 +4,9 @@ Local-first calendar: a persisted event store with iCalendar (RFC 5545) semantic
 
 ## Overview
 
-`core/calendar/` owns calendar events end to end: storage, recurrence expansion, single-occurrence exclusion, and free-slot search. `core/automation` projects cron jobs into windows on the fly (nothing persisted, never written anywhere else). The WebUI tab and the `calendar` tool are consumers of the same service; the server publishes invalidation events so every accessor refreshes when anything mutates the store.
+`core/calendar/` owns calendar events end to end: storage, recurrence expansion, single-occurrence exclusion, free-slot search, and event-relative Agent actions. `core/automation` projects cron jobs into windows on the fly (nothing persisted, never written anywhere else). The WebUI tab and the `calendar` tool are consumers of the same service; the server publishes invalidation events so every accessor refreshes when anything mutates the store.
 
-Not owned here: scheduling itself (Automation owns cron), application timezone configuration (Settings owns it), external calendar sync. CalDAV is a future Extension (user decision 2026-08-27); the store's standard iCalendar semantics exist so that extension becomes a thin adapter. The user explicitly removed `location` and any timezone parameter from the agent surface - events anchor in the configured application timezone.
+Automation owns independent Cron schedules and shared Run admission; Calendar owns event-relative scheduling. Settings owns application timezone configuration. External calendar sync is absent: CalDAV is a future Extension (user decision 2026-08-27); the store's standard iCalendar semantics exist so that extension becomes a thin adapter. The user explicitly removed `location` and any timezone parameter from the agent surface - events anchor in the configured application timezone.
 
 ## Terms
 
@@ -31,14 +31,16 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 ## Data Model
 
 - Storage: `<data_dir>/calendar/events.json`, a JSON array written atomically. Invalid entries are preserved and skipped on load; if the file is unreadable the service degrades (reads return empty, mutations raise) rather than destroying data.
+- `CalendarService.actions` (`core/calendar/actions.py`) owns action definitions and execution claims in `<data_dir>/calendar/actions.json`. Malformed action storage disables action scheduling and mutation, exposes `action_error` to readers, and leaves event CRUD available. Event deletion withdraws pending admission; reconciliation removes orphan definitions. Runs already admitted keep their Session history.
 - `CalendarEvent` carries exactly one start shape, enforced by validation: `start_utc` for single timed events (absolute instant), `start_local` + `tz_name` for recurring timed events (wall-clock anchor; `tz_name` is always the server zone), `start_date` for all-day events. `exdates` exist only on recurring events.
 - Caps (module constants in `service.py`): 2000 events, 62-day window span, 500 occurrences per event per query, 1000 exdates per event, title 200 / notes 5000 chars.
 
 ## Interfaces
 
 - `CalendarService` (`core/calendar/service.py`): `create_event`, `update_event` (roundtrips the stored event through the create shape; omitted fields keep), `delete_event`, `add_exdate`, `occurrences_in_window` (half-open UTC window), `find_free_slots` (timed events block their span, all-day events block whole local days, slots start no earlier than now, 5-minute alignment, max 5), `parse_window` / `resolve_when`, and the live `set_timezone` seam owned by Runtime Settings application.
-- RPC (`server/rpc/calendar_methods.py`): `calendar.window` returns `occurrences` + `events` + `cron` + `system_timezone`; `calendar.create/update/delete` and `calendar.add_exdate` (params `id` + `occurrence_start`) publish `RESOURCE_KIND_CALENDAR` invalidations. Mutations from any accessor (including the agent tool) reach the UI through this invalidation path.
-- Agent tool `calendar` (`core/tools/calendar.py`): one flat action tool (`list`, `create`, `update`, `delete`, `find_free`) with 8 parameters (`action`, `when`, `id`, `title`, `start`, `duration`, `rrule`, `notes`); only `action` is required, the handler validates per-action fields and rejects action-foreign fields with a recommendation. All agent-facing times are server-local naive ISO strings (or plain dates). Its detailed contract lives in the per-tool spec (see References).
+- RPC (`server/rpc/calendar_methods.py`): `calendar.window` returns event/Cron projections, action definitions and executions, action storage health, and `system_timezone`. Event CRUD, `calendar.add_exdate`, and action CRUD share `RESOURCE_KIND_CALENDAR` invalidations. Mutations from any accessor (including the agent tool) reach the UI through this path. Action RPCs accept a nullable Session to restore fresh Sessions; the Tool uses omission for defaults and updates.
+- Agent tool `calendar` (`core/tools/calendar.py`): one flat action Tool; only `action` is universally required. The handler validates per-action fields and rejects action-foreign fields with a recommendation. Event payloads use local naive ISO strings or dates; action execution timestamps carry UTC offsets. Its detailed contract lives in `tools/calendar.md`.
+- Runtime configures, starts, stops, and awaits the action scheduler. It admits ordinary visible `RunKind.CALENDAR` Runs through `TriggerService`, with a new Session per execution unless an owned Session is selected. Identity rename retargets action references; Identity/Project removal checks them under the server reference lock.
 - Cron projection: `CronService.project_occurrences(window_start, window_end)` returns `CronOccurrence` dataclasses (read-only; respects `remaining_runs` budget, capped per job). The calendar tool's `list`/`find_free` ignore cron jobs - cron is a UI layer only.
 
 ## Conventions
@@ -47,6 +49,7 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 - The application zone is injected at construction (`CalendarService(data_root, tz=...)`) from `server.timezone`, defaults to the host zone when the setting is absent, and changes live through `set_timezone`; tests pass `tz="Europe/Berlin"` explicitly for determinism. Never call `tzlocal` per operation.
 - The tool layer maps `duration` to `duration_minutes`/`duration_days` by the event's kind (the start form decides: date = all-day, datetime = timed) and passes `all_day` explicitly on update so kind switches work without exposing an `all_day` parameter.
 - Window bounds are inclusive days: a date bound selects its whole local day (`to` includes that day).
+- Relative actions use canonical event occurrences, so event edits, EXDATEs, and all-day DST boundaries affect pending executions together. Preparation actions expire at event start, actions due during an event at its end, and actions due at/after its end one hour after their due time. Claimed execution is persisted before Run admission; uncertain admissions after restart are not replayed. Known Run claims recover their exact terminal summary from Sessions. Tests: `tests/core/calendar/test_actions.py`.
 
 ## External Dependencies
 
@@ -56,7 +59,7 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 ## Constraints & Gotchas
 
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
-- `update_event` rebuilds the candidate via the create path: an update that clears `rrule` re-anchors from `start_local`, drops exdates, and re-resolves the anchor zone from the current application zone. Existing recurring timed events retain their persisted `tz_name`; changing the application zone never silently rewrites stored event anchors.
+- `update_event` rebuilds the candidate via the create path while retaining its stable id: an update that clears `rrule` re-anchors from `start_local`, drops exdates, and re-resolves the anchor zone from the current application zone. Existing recurring timed events retain their persisted `tz_name` unless their start is explicitly changed; changing the application zone never silently rewrites stored event anchors.
 - Tool tests must build fixtures relative to `service.resolve_when(...)` - the tool resolves `when` against the real clock, so hard-coded dates silently break when the month rolls over.
 - In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The UI's occurrence exclusion consumes the server-provided `occurrence_start` via the additive `calendar.add_exdate` RPC (a read-modify-write of the whole `exdates` array through `calendar.update` would risk losing a concurrent tab's exclusion). Do not reconstruct the anchor client-side; the previous anchor-start reconstruction was a real bug. The edit form renders a single timed event's start in the server zone (not the raw UTC value), so a save without edits keeps the wall clock.
 - The WebUI's current day, Today navigation, default event date, and agenda window use `calendar.window.system_timezone`, never the browser zone or UTC. Before the first response establishes that zone, it may make a provisional UTC-window request; when the server day differs it corrects the untouched initial anchor and reloads before rendering the projection. Agenda navigation always derives its window from the displayed anchor.
