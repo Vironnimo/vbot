@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from core.attachments import AttachmentError, AttachmentStore
 from core.model_tasks import ImageError, ImageOutcomeUnknownError, ImageUnderstandingRunContext
-from core.model_tasks.image_types import ImageInput
 from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
@@ -20,14 +17,10 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolRegistry,
     result_count_fact_builder,
-    run_tool_worker,
     tool_failure,
     tool_success,
 )
-from core.utils.logging import get_logger
 from core.utils.paths import model_path
-
-_LOGGER = get_logger("tools.image")
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
@@ -223,7 +216,7 @@ def _collect_analysis_paths(context: ToolContext, arguments: JsonObject) -> tupl
     return tuple(resolved_paths)
 
 
-def make_analyze_image_handler(image_service: Any, *, attachment_store: AttachmentStore):
+def make_analyze_image_handler(image_service: Any):
     """Create an image-understanding handler bound to the runtime image service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -240,31 +233,14 @@ def make_analyze_image_handler(image_service: Any, *, attachment_store: Attachme
         except ValueError as exc:
             return tool_failure("invalid_arguments", str(exc))
 
-        async def retain_images(images: Sequence[ImageInput]) -> None:
-            def store_images() -> None:
-                for image in images:
-                    try:
-                        record = attachment_store.store(image.filename, image.data)
-                    except (AttachmentError, OSError) as exc:
-                        _LOGGER.warning(
-                            "Image preview could not be stored error_type=%s", type(exc).__name__
-                        )
-                        continue
-                    context.presentation_images.append(
-                        {
-                            "attachment_id": record.id,
-                            "filename": record.filename,
-                            "media_type": record.media_type,
-                        }
-                    )
-
-            await run_tool_worker(store_images)
+        context.presentation_images.extend(
+            {"path": str(path), "filename": path.name} for path in image_paths
+        )
 
         try:
             result = await image_service.analyze(
                 prompt,
                 image_paths=image_paths,
-                on_images_loaded=retain_images,
                 run_context=ImageUnderstandingRunContext(
                     run_id=context.run_id,
                     agent_id=context.agent_id,
@@ -284,16 +260,14 @@ def make_analyze_image_handler(image_service: Any, *, attachment_store: Attachme
     return handler
 
 
-def register_analyze_image_tool(
-    registry: ToolRegistry, image_service: Any, *, attachment_store: AttachmentStore
-) -> None:
+def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> None:
     """Register the route-gated image-understanding Tool."""
 
     registry.register(
         ANALYZE_IMAGE_TOOL_NAME,
         ANALYZE_IMAGE_TOOL_DESCRIPTION,
         ANALYZE_IMAGE_TOOL_PARAMETERS,
-        make_analyze_image_handler(image_service, attachment_store=attachment_store),
+        make_analyze_image_handler(image_service),
         family="media",
         constraints=("image_fallback_route",),
         open_input_schema=True,

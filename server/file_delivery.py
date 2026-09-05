@@ -47,6 +47,9 @@ class FileDelivery:
     def project_message(self, message: JsonObject) -> JsonObject:
         """Replace recognized Assistant file markers with fresh public Markdown URLs."""
         projected = dict(message)
+        image_files = projected.pop("image_files", None)
+        if isinstance(image_files, list):
+            projected["images"] = self._project_image_files(image_files)
         content = projected.get("content")
         references = projected.pop("output_files", None)
         if (
@@ -105,6 +108,27 @@ class FileDelivery:
             lines[line_index] = _apply_line_replacements(lines[line_index], replacements)
         projected["content"] = "".join(lines)
         return projected
+
+    def _project_image_files(self, references: list[Any]) -> list[JsonObject]:
+        """Expose original Tool image paths without probing or copying their bytes.
+
+        Missing originals still get URLs: the ordinary 404 lets the UI render
+        its unavailable-image placeholder, including after a server restart.
+        """
+        images: list[JsonObject] = []
+        for reference in references:
+            if not isinstance(reference, dict):
+                continue
+            path_value = reference.get("path")
+            if not isinstance(path_value, str) or "\0" in path_value:
+                continue
+            path = Path(path_value)
+            if not path.is_absolute():
+                continue
+            images.append(
+                {"url": f"{FILE_URL_PREFIX}{self._mint_token(path)}", "filename": path.name}
+            )
+        return images
 
     def resolve_token(self, token: str) -> DeliveredFile | None:
         """Verify one capability and return the original file's current facts."""

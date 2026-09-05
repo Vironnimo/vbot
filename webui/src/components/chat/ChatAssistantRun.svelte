@@ -239,6 +239,20 @@
                 event.currentTarget.hidden = true;
               }}
             />
+            <span
+              class="image-unavailable"
+              role="img"
+              aria-label={t('chat.image.unavailable', 'Image not available')}
+            >
+              <svg viewBox="0 0 32 24" aria-hidden="true"
+                ><rect x="1" y="1" width="30" height="22" rx="2" /><circle
+                  cx="10"
+                  cy="8"
+                  r="2"
+                /><path d="m3 20 8-8 6 6 4-4 8 6M3 2l26 20" /></svg
+              >
+              <span>{t('chat.image.unavailable', 'Image not available')}</span>
+            </span>
             <span>{image.filename}</span>
           </a>
         {/each}
