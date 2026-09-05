@@ -99,6 +99,35 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
+  it('switches detail topics with keyboard navigation without replacing edited fields', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('#agent-name'));
+    const name = document.querySelector('#agent-name');
+    name.value = 'Draft name';
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const overview = document.querySelector('#agent-detail-tab-overview');
+    overview.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+    );
+    flushSync();
+    expect(document.querySelector('#agent-detail-panel-behavior').hidden).toBe(
+      false,
+    );
+    expect(document.querySelector('#agent-detail-panel-overview').hidden).toBe(
+      true,
+    );
+    overview.click();
+    flushSync();
+    expect(document.querySelector('#agent-name')).toBe(name);
+    expect(name.value).toBe('Draft name');
+    expect(document.querySelector('#agent-detail-panel-overview').hidden).toBe(
+      false,
+    );
+  });
+
   it('opens Add as a compact modal and sends selected create payload', async () => {
     const agents = [baseAgent()];
 
@@ -210,8 +239,8 @@ describe('AgentsView', () => {
     expect(
       document.body.querySelector('button.agent-item.active'),
     ).toBeTruthy();
-    expect(textInputValue(0)).toBe('alpha');
-    expect(textInputValue(1)).toBe('Alpha');
+    expect(textInputValue('agent-id')).toBe('alpha');
+    expect(textInputValue('agent-name')).toBe('Alpha');
   });
 
   it('shows only the model name in the inset agent list row', async () => {
@@ -383,10 +412,10 @@ describe('AgentsView', () => {
     bravoButton.click();
     flushSync();
 
-    await waitForCondition(() => textInputValue(0) === 'bravo', 100);
+    await waitForCondition(() => textInputValue('agent-id') === 'bravo', 100);
 
-    expect(textInputValue(0)).toBe('bravo');
-    expect(textInputValue(1)).toBe('Bravo');
+    expect(textInputValue('agent-id')).toBe('bravo');
+    expect(textInputValue('agent-name')).toBe('Bravo');
   });
 
   it('matches dropdown open and close interaction expected by the design artifact', async () => {

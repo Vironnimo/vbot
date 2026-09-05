@@ -70,7 +70,7 @@ describe('AgentsView', () => {
       props: { onAgentSelected, onAgentsChanged },
     });
     flushSync();
-    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
     onAgentSelected.mockClear();
     onAgentsChanged.mockClear();
 
@@ -87,7 +87,7 @@ describe('AgentsView', () => {
       id: 'alpha',
       new_id: 'researcher',
     });
-    expect(textInputValue(0)).toBe('researcher');
+    expect(textInputValue('agent-id')).toBe('researcher');
     expect(onAgentSelected).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'researcher' }),
     );
@@ -165,11 +165,11 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
 
     vi.useFakeTimers();
 
-    setTextInputValue(1, 'Alpha Manual');
+    setTextInputValue('agent-name', 'Alpha Manual');
     submitAgentForm();
     await flushAsyncUpdates();
 
@@ -212,11 +212,11 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
 
     vi.useFakeTimers();
 
-    setTextInputValue(1, 'Alpha Autosaved');
+    setTextInputValue('agent-name', 'Alpha Autosaved');
 
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
@@ -226,12 +226,12 @@ describe('AgentsView', () => {
     getAgentButton('Bravo').click();
     flushSync();
 
-    expect(textInputValue(1)).toBe('Bravo');
+    expect(textInputValue('agent-name')).toBe('Bravo');
 
     resolveAgentUpdate();
     await flushAsyncUpdates();
 
-    expect(textInputValue(1)).toBe('Bravo');
+    expect(textInputValue('agent-name')).toBe('Bravo');
   });
 
   it('sends null for cleared temperature and thinking effort', async () => {
