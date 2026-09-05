@@ -1597,3 +1597,37 @@ class TestDispatchToolRestriction:
 
         assert ran == ["read_file"]
         assert _decode_tool_result(messages[0].content) == tool_success({"tool": "read_file"})
+
+
+@pytest.mark.asyncio
+async def test_delegated_tools_receive_run_restrictions_and_live_denials(tmp_path: Path) -> None:
+    observed: list[ToolContext] = []
+
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        observed.append(context)
+        return tool_success({"ran": True})
+
+    def deny_remote(name: str) -> str | None:
+        return "test-owned-denial" if name == "remote" else None
+
+    tools = ToolRegistry()
+    tools.register("connection", "Test-owned connection.", {"type": "object"}, handler)
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="call-1", name="connection", arguments={})],
+        session,
+        run,
+        nesting_depth=0,
+        tool_restriction=("connection",),
+        tool_denial_resolver=deny_remote,
+    )
+
+    assert len(observed) == 1
+    assert observed[0].tool_restriction == ("connection",)
+    assert observed[0].tool_denial_resolver is deny_remote
+    assert observed[0].tool_denial_resolver("remote") == "test-owned-denial"

@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -119,12 +119,14 @@ class _EmittingToolRegistry(ToolRegistry):
         note_hook: Callable[[str], None] | None = None,
         denial_resolver: Callable[[str], str | None] | None = None,
         rejections: Mapping[int, ToolCallRejection] | None = None,
+        tool_restriction: Sequence[str] | None = None,
     ) -> None:
         self._registry = registry
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
         self._denial_resolver = denial_resolver
+        self._tool_restriction = tool_restriction
         self._rejections = dict(rejections or {})
         self._tool_timings: dict[str, JsonObject] = {}
         self._tool_displays: dict[str, JsonObject] = {}
@@ -164,6 +166,11 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         self._run.raise_if_cancelled()
+        context = replace(
+            context,
+            tool_restriction=self._tool_restriction,
+            tool_denial_resolver=self._denial_resolver,
+        )
         # Publish cancellation readiness before the started event reaches an
         # accessor. Tool-owned cleanup can register a moment later; Run retains
         # an early user request and fires that callback as soon as it arrives.
@@ -478,6 +485,7 @@ async def _dispatch_tool_calls(
         context.extension_registry,
         note_hook=session.add_note,
         denial_resolver=context.tool_denial_resolver,
+        tool_restriction=context.tool_restriction,
         rejections={
             index: tool_call.rejection
             for index, tool_call in enumerate(tool_calls)
