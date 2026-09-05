@@ -1,10 +1,10 @@
 # Attachments
 
-Blob-backed file attachment storage and attachment-specific message shaping. Owns persisted blobs under the data directory plus the metadata resolving them into chat content.
+Blob-backed original-file storage, attachment-specific message shaping, and shared image format conversion. Owns persisted blobs under the data directory plus the metadata resolving them into chat content.
 
 ## Overview
 
-`core/attachments/` is storage-focused: blobs under `<data_dir>/artifacts/attachments/`, one JSON sidecar per attachment, server-side MIME sniffing/validation, configured size limits. It knows nothing about providers, wire formats, or transport; Chat and channels decide how records become `TextBlock`/`MediaBlock`/`FileBlock`.
+`core/attachments/` is storage-focused: blobs under `<data_dir>/artifacts/attachments/`, one JSON sidecar per attachment, server-side MIME sniffing/validation, configured size limits. It knows nothing about Provider identities or wire serialization; Chat and channels decide how records become `TextBlock`/`MediaBlock`/`FileBlock`.
 
 ## Data Model
 
@@ -20,6 +20,7 @@ Blob-backed file attachment storage and attachment-specific message shaping. Own
 
 ## Sniffing & conventions
 
+- Accepted raster originals are JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF; AVIF brands are checked before the shared ISO-BMFF video fallback.
 - MIME comes from bounded magic-bytes only - never client-supplied content types, no libmagic. Signature matches: images, PDF, OOXML, Ogg/MP3/WAVE/FLAC/M4A, MP4/QuickTime/WebM/AVI; UTF-8-decodable input becomes `text/plain`; everything else `application/octet-stream` then allowlist-rejected. Known simplifications: Ogg always classifies audio, EBML always webm.
 - Every accepted type has one canonical storage extension; blobs always carry it so filesystem consumers get typed paths even without source filenames, while meaningful original display suffixes survive.
 - Legacy OLE Office files disambiguate Word/Excel/PowerPoint via filename extension on top of container magic - the sanctioned client-metadata exception.
@@ -34,3 +35,7 @@ Blob-backed file attachment storage and attachment-specific message shaping. Own
 - Tool-produced images use the same resolver without becoming user content: `web_fetch` and remote Tool media persist compact artifacts resolved into request-only content for the active Run. Local `read` images bypass blob storage and transfer loaded pixels in memory; file mentions are not attachment-backed either.
 - Text attachments persist as one `FileBlock`; request build reads the blob rendering through the shared capped text renderer, omitting a following duplicate TextBlock. The Model-facing path note rides natively-sent media too by design - agents open blobs with `read`.
 - Cleanup of orphaned attachments is explicitly out of scope: no index, GC, or reference counting. Local image reads create no new attachments.
+
+## Image conversion
+
+`core/attachments/images.py::ImageConverter` is the shared byte-to-byte format compatibility service used by Chat and isolated image understanding. It accepts source bytes/MIME plus the caller's target MIME set; no Provider facts live here. Native formats pass unchanged. Necessary conversion prefers PNG, then lossless WebP, then JPEG quality 95 without chroma subsampling; JPEG composites transparency onto white. Orientation is applied without resizing, ICC profiles are preserved (profiled CMYK is transformed to sRGB), and original blobs are never rewritten. One bounded worker owns decoding and per-instance 32 MiB output caches keyed by source-content hash and destination MIME. Conversion refuses more than 32 million pixels, malformed inputs, unsupported destinations, and multi-frame/multi-page inputs rather than silently taking a first frame. Structured ImageConversionError reasons let each caller author its existing path-note/Tool-error response. Pillow is a core dependency. Source and pixel-preservation/target-switch/cache tests: `tests/core/attachments/test_images.py`; full Chat read routing is exercised in `tests/core/chat/test_chat_integration.py`.
