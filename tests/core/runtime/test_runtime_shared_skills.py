@@ -198,3 +198,50 @@ def test_disabled_shared_skill_is_hidden_from_receivers_too(config: Config, tmp_
         assert "deploy" not in _names(runtime.skills_for(None, "two"))
     finally:
         runtime.stop()
+
+
+def test_manager_inspects_exact_original_and_projects_write_scope(
+    config: Config, tmp_path: Path
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        runtime.agents.create("two", "Two")
+        for owner in ("main", "two"):
+            _write_agent_skill(config.data_dir, owner, "duplicate", f"sentinel-{owner}")
+        _write_test_skill(runtime.global_skills_dir, "duplicate", "sentinel-global")
+        extra = tmp_path / "external"
+        _write_test_skill(extra, "duplicate", "sentinel-external")
+        runtime.storage.save_settings(
+            {**runtime.storage.load_settings(), "skill_directories": [str(extra)]}
+        )
+        runtime.skill_policy.set_shared("main", "duplicate", shared=True, receivers=["two"])
+        entries = [
+            entry for entry in runtime.skill_inventory()["skills"] if entry["name"] == "duplicate"
+        ]
+        assert len(entries) == 4
+        assert len({entry["id"] for entry in entries}) == 4
+        for entry in entries:
+            inspection = runtime.inspect_skill(entry["id"])
+            assert inspection["id"] == entry["id"]
+            assert entry["description"] in inspection["content"]
+            if entry["description"] == "sentinel-external":
+                assert entry["editable_scope"] is None
+            else:
+                assert entry["editable_scope"] == (
+                    f"agent:{entry['owner_id']}" if entry["owner_id"] else "global"
+                )
+        assert {entry["id"] for entry in entries} == {
+            entry["id"]
+            for entry in runtime.skill_inventory()["skills"]
+            if entry["name"] == "duplicate"
+        }
+        removed = next(entry for entry in entries if entry["owner_id"] == "two")
+        (runtime.agent_skills_dir("two") / "duplicate" / "SKILL.md").unlink()
+        with pytest.raises(ValueError):
+            runtime.inspect_skill(removed["id"])
+        with pytest.raises(ValueError):
+            runtime.inspect_skill(str(tmp_path / "external" / "duplicate" / "SKILL.md"))
+    finally:
+        runtime.stop()

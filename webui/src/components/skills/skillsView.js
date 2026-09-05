@@ -1,158 +1,119 @@
-// Pure presentation helpers for the Skills management view.
-//
-// The backend's `skill.inventory` returns one flat list of entries, each
-// annotated with its origin tag, owner (for private homes), and share/disable
-// state. This module owns the view-only projections: ordering the origin
-// groups, deriving a group label from an entry, mapping a status to a
-// StatusChip variant, and the by-agent grouping. No Svelte, no transport.
+// Presentation only: the server owns availability, identity, and write scopes.
+export const SKILL_PAGE_SIZE = 50;
 
-// Group order mirrors the prompt catalog: Bundled / Global / per-Project /
-// per-Agent private — Shared is appended as the manager-only extra group.
-export const SKILL_GROUP_ORDER = Object.freeze([
-  'bundled',
-  'global',
-  'project',
-  'private',
-  'shared',
-]);
-
-const PROJECT_ORIGIN_PREFIX = 'project:';
-const AGENT_ORIGIN = 'agent';
-
-function projectDisplayName(origin) {
-  return origin.slice(PROJECT_ORIGIN_PREFIX.length);
-}
-
-// Resolve an agent id to a display name from the agents list.
 export function agentDisplayName(agentId, agents) {
-  const agent = (agents ?? []).find((a) => a.id === agentId);
-  return agent?.name || agentId;
+  return agents.find((agent) => agent.id === agentId)?.name || agentId;
 }
 
-// Which display group an inventory entry belongs to. Extension Skills carry the
-// `global` origin tag, so they naturally appear under Global. A shared entry is
-// shown once in the Shared group (with its owner), not hidden inside the
-// owner's private list twice.
-export function skillGroupKey(entry) {
-  if (entry.shared) {
-    return 'shared';
-  }
-  const { origin } = entry;
-  if (origin === 'bundled') {
-    return 'bundled';
-  }
-  if (origin === 'global' || origin === null || origin === undefined) {
-    return 'global';
-  }
-  if (typeof origin === 'string' && origin.startsWith(PROJECT_ORIGIN_PREFIX)) {
-    return 'project';
-  }
-  if (origin === AGENT_ORIGIN) {
-    return 'private';
-  }
-  return 'global';
-}
-
-export function skillGroupLabel(entry, translate, agents) {
-  const key = skillGroupKey(entry);
-  if (key === 'project') {
-    return translate('skills.group.project', "Project '{name}'", {
-      name: projectDisplayName(entry.origin),
-    });
-  }
-  if (key === 'private') {
-    return translate('skills.group.private', '{name} (private)', {
-      name: agentDisplayName(entry.owner_id, agents),
-    });
-  }
-  if (key === 'shared') {
-    return translate('skills.group.shared', 'Shared by {name}', {
-      name: agentDisplayName(entry.owner_id, agents),
-    });
-  }
-  if (key === 'bundled') {
-    return translate('skills.group.bundled', 'Bundled');
-  }
-  return translate('skills.group.global', 'Global');
-}
-
-// Group the flat inventory into ordered `{ key, label, skills }` groups.
-// Within a group, skills keep their server order (sorted by name/origin).
-export function groupInventorySkills(entries, translate, agents) {
-  const groups = new Map();
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    const key = skillGroupKey(entry);
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        label: skillGroupLabel(entry, translate, agents),
-        skills: [],
-      });
-    }
-    groups.get(key).skills.push(entry);
-  }
-  return SKILL_GROUP_ORDER.filter((key) => groups.has(key)).map((key) =>
-    groups.get(key),
+export function skillSourceLabel(entry, translate, agents) {
+  if (entry.owner_id) return agentDisplayName(entry.owner_id, agents);
+  if (entry.origin?.startsWith('project:')) return entry.origin.slice(8);
+  if (entry.origin === 'bundled')
+    return translate('skills.library.bundled', 'Included with vBot');
+  return (
+    entry.source_label || translate('skills.library.global', 'Global skills')
   );
 }
 
-// Group skills by agent for the agent-centric view mode. Each identity agent
-// gets a group with their private skills (shared or not). Skills without an
-// owner (bundled, global, project) keep their origin grouping.
-export function groupInventoryByAgent(entries, translate, agents) {
-  const agentGroups = new Map();
-  const sourceGroups = new Map();
+export function matchesSkillScope(entry, scope) {
+  if (scope === 'all') return true;
+  if (scope === 'shared') return Boolean(entry.shared);
+  if (scope.startsWith('agent:')) return entry.owner_id === scope.slice(6);
+  return entry.origin === scope;
+}
 
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    if (entry.owner_id) {
-      if (!agentGroups.has(entry.owner_id)) {
-        agentGroups.set(entry.owner_id, {
-          key: `agent:${entry.owner_id}`,
-          label: agentDisplayName(entry.owner_id, agents),
-          skills: [],
-        });
-      }
-      agentGroups.get(entry.owner_id).skills.push(entry);
-    } else {
-      const key = skillGroupKey(entry);
-      if (!sourceGroups.has(key)) {
-        sourceGroups.set(key, {
-          key,
-          label: skillGroupLabel(entry, translate, agents),
-          skills: [],
-        });
-      }
-      sourceGroups.get(key).skills.push(entry);
-    }
-  }
+export function skillCollections(entries, agents, translate) {
+  const items = [
+    {
+      key: 'all',
+      label: translate('skills.library.all', 'All skills'),
+      section: 'library',
+    },
+    {
+      key: 'shared',
+      label: translate('skills.library.shared', 'Shared skills'),
+      section: 'library',
+    },
+    ...agents.map((agent) => ({
+      key: `agent:${agent.id}`,
+      label: agent.name || agent.id,
+      section: 'agents',
+    })),
+    {
+      key: 'global',
+      label: translate('skills.library.global', 'Global skills'),
+      section: 'sources',
+    },
+    {
+      key: 'bundled',
+      label: translate('skills.library.bundled', 'Included with vBot'),
+      section: 'sources',
+    },
+    ...[
+      ...new Set(
+        entries
+          .map((entry) => entry.origin)
+          .filter((origin) => origin?.startsWith('project:')),
+      ),
+    ]
+      .sort()
+      .map((origin) => ({
+        key: origin,
+        label: origin.slice(8),
+        section: 'projects',
+      })),
+  ];
+  return items.map((item) => ({
+    ...item,
+    count: entries.filter((entry) => matchesSkillScope(entry, item.key)).length,
+  }));
+}
 
-  // Agent groups first (sorted by agent display name), then source groups in
-  // catalog order.
-  const agentResult = [...agentGroups.values()].sort((a, b) =>
-    a.label.localeCompare(b.label),
+export function filterSkills(
+  entries,
+  query,
+  scope = 'all',
+  status = 'all',
+  agents = [],
+) {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return entries
+    .filter((entry) => {
+      if (!matchesSkillScope(entry, scope)) return false;
+      if (status === 'attention') {
+        if (
+          !skillDiagnosticLines(entry).length &&
+          !['unavailable', 'invalid'].includes(entry.status)
+        )
+          return false;
+      } else if (status !== 'all' && entry.status !== status) return false;
+      const text = [
+        entry.name,
+        entry.description,
+        entry.origin,
+        entry.source_label,
+        entry.owner_id,
+        agentDisplayName(entry.owner_id, agents),
+      ]
+        .join(' ')
+        .toLocaleLowerCase();
+      return words.every((word) => text.includes(word));
+    })
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        (left.id || '').localeCompare(right.id || ''),
+    );
+}
+
+// Only the presentation omits YAML; the Original text tab and editor retain it.
+export function skillInstructionBody(content) {
+  return content.replace(
+    /^\uFEFF?---[^\S\r\n]*\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(?:\r?\n|$)/,
+    '',
   );
-  const sourceResult = SKILL_GROUP_ORDER.filter((key) =>
-    sourceGroups.has(key),
-  ).map((key) => sourceGroups.get(key));
-  return [...agentResult, ...sourceResult];
 }
 
-// Filter entries by a search query against name and description.
-export function filterSkills(entries, query) {
-  const trimmed = (query ?? '').trim().toLowerCase();
-  if (!trimmed) {
-    return entries;
-  }
-  return entries.filter((entry) => {
-    const name = (entry.name ?? '').toLowerCase();
-    const desc = (entry.description ?? '').toLowerCase();
-    return name.includes(trimmed) || desc.includes(trimmed);
-  });
-}
-
-// Status → StatusChip variant. Disabled outranks everything (the server already
-// collapses the status to `disabled`); invalid/unavailable are warnings/errors,
-// available is success.
 export function skillStatusVariant(entry) {
   switch (entry.status) {
     case 'available':
@@ -190,14 +151,6 @@ export function skillDiagnosticLines(entry) {
   return [...missing, ...optional, ...warnings];
 }
 
-// Whether this row can be edited/deleted through the existing write scopes:
-// only the data-dir global pool and an agent's private home are writable.
-// Extension Skills are also tagged `global` and appear under Global; the
-// backend editor scope (`skill.read`) only returns real scope directories, so
-// an extension row would fail its content load — but keeping the simple origin
-// rule here matches how every other surface treats the tag, and a failed edit
-// surfaces a meaningful server error rather than a hidden control.
-export function skillSupportsEditAndDelete(entry) {
-  const key = skillGroupKey(entry);
-  return key === 'global' || key === 'private';
+export function createSkillDocument(name, description, instructions) {
+  return `---\nname: ${JSON.stringify(name.trim())}\ndescription: ${JSON.stringify(description.trim())}\n---\n\n${instructions}`;
 }

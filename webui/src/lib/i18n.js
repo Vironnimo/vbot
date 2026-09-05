@@ -1,6 +1,92 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'skills.descriptionLabel': 'When to use this skill',
+  'skills.descriptionHelp':
+    'Agents use this description to decide when this playbook is relevant.',
+  'skills.descriptionPlaceholder': 'Describe the task this skill helps with.',
+  'skills.instructionsPlaceholder':
+    'Explain the steps, conventions, and checks.',
+  'skills.library': 'Library',
+  'skills.library.all': 'All skills',
+  'skills.library.shared': 'Shared skills',
+  'skills.library.global': 'Global skills',
+  'skills.library.bundled': 'Included with vBot',
+  'skills.section.agents': 'Agents',
+  'skills.section.sources': 'Other sources',
+  'skills.section.projects': 'Projects',
+  'skills.collections': 'Skill collections',
+  'skills.locations': 'Skill locations',
+  'skills.locationsSubtitle':
+    'Choose additional folders for vBot to discover skills.',
+  'skills.agentSubtitle':
+    'Skills owned by {name}, including any shared with other Agents.',
+  'skills.sharedSubtitle':
+    'Original skills shared by their owners with other Agents.',
+  'skills.librarySubtitle':
+    'Find a playbook, read its instructions, and manage who can use it.',
+  'skills.searchLibrary': 'Search names, descriptions, or owners…',
+  'skills.filter.label': 'Filter by status',
+  'skills.filter.all': 'All statuses',
+  'skills.filter.attention': 'Needs attention',
+  'skills.results': 'Skills',
+  'skills.resultCount': '{count} skills',
+  'skills.refreshing': 'Refreshing…',
+  'skills.clearFilters': 'Clear filters',
+  'skills.noMatches': 'No matching skills',
+  'skills.noMatchesHelp':
+    'Try fewer words or clear the status filter. Choose All skills to search every collection.',
+  'skills.noCollectionSkills': 'No skills in this collection',
+  'skills.noCollectionSkillsHelp':
+    'New skills can be created globally or in an Agent’s private collection.',
+  'skills.notes': 'Notes',
+  'skills.previousPage': 'Previous page',
+  'skills.nextPage': 'Next page',
+  'skills.page': 'Page {page} of {pages}',
+  'skills.backToList': 'Back to list',
+  'skills.ownedSkill': 'Agent skill',
+  'skills.editInstructions': 'Edit instructions',
+  'skills.sharing': 'Sharing',
+  'skills.readOnly': 'Read only',
+  'skills.access': 'Who can use this skill',
+  'skills.ownerAccess':
+    'Owner: {name}. Their own skills are automatically allowed unless disabled everywhere or a requirement is missing.',
+  'skills.receivers': 'Shared with: {names}.',
+  'skills.privateAccess': 'Private. No other Agent receives this skill.',
+  'skills.sharedAccessHelp':
+    'Recipients use and can edit this same original. Their Skill selection still applies; sharing does not automatically enable it for them.',
+  'skills.projectAccess':
+    'Available in this Project’s context, according to its Skill settings and requirements. The Project owns these instructions.',
+  'skills.poolAccess':
+    'Available to Agents whose Skill selection allows it, when requirements are met. Available here does not mean enabled for every Agent.',
+  'skills.disabledEffect':
+    'Disabled everywhere, including for its owner and recipients.',
+  'skills.diagnostics': 'Requirements & notes ({count})',
+  'skills.instructions': 'Instructions',
+  'skills.original': 'Original text',
+  'skills.contentView': 'Skill content view',
+  'skills.copyContent': 'Copy original text',
+  'skills.loadingContent': 'Loading instructions…',
+  'skills.availabilityAndRemoval': 'Availability & removal',
+  'skills.disableHelp':
+    'This is a master switch. It disables every skill with this name across all Agents and sources, including private copies. Instructions are kept.',
+  'skills.enableEverywhere': 'Enable everywhere',
+  'skills.disableEverywhere': 'Disable everywhere',
+  'skills.deleteHelp':
+    'Permanently remove this original and its bundled files. Recipients also lose access.',
+  'skills.deletePackageConfirm':
+    'Permanently delete skill "{name}" and its package files? Any Agents sharing this original will lose access.',
+  'skills.createGlobalHelp':
+    'Stored in the global collection. Each Agent’s Skill selection decides whether it can use this skill.',
+  'skills.createPrivateHelp':
+    'Stored privately for the selected Agent and automatically allowed for its owner when requirements are met. You can share it later.',
+  'skills.editSharedHelp':
+    'You are editing the shared original. These changes also apply to its recipients.',
+  'skills.shareExplanation':
+    'Choose which Agents receive this original. They can use and edit it if their Skill selection allows it. The owner keeps it. Deselect everyone to stop sharing.',
+  'skills.policyAttention': 'Sharing & policy need attention ({count})',
+  'skills.agentsError': 'Agents could not be loaded.',
+
   'mcp.accessAllowed': 'Tool access allowed: {count} Tools',
   'mcp.accessBlocked': 'Blocked by Agent Tool settings',
   'mcp.accessUnresolved': 'Agent unavailable',
