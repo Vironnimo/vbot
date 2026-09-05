@@ -1290,3 +1290,15 @@ def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
 
     assert runtime.started is True
     assert runtime.background_starts == 0
+
+
+def test_mcp_probe_uses_the_production_definition_for_every_case():
+    from resources.extensions.mcp.extension import MCP_DESCRIPTION, MCP_PARAMETERS
+
+    for name, arguments in PROBE.MCP_CASE_ARGUMENTS.items():
+        scenario = PROBE._mcp_scenario(name)
+        assert scenario.tools == [
+            {"name": "mcp_example", "description": MCP_DESCRIPTION, "parameters": MCP_PARAMETERS}
+        ]
+        assert scenario.expected_arguments == arguments
+        assert scenario.require_closed_input is False

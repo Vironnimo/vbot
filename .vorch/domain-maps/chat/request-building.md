@@ -76,4 +76,4 @@ After Chat completes canonical history shaping and dangling-cycle repair, an Ada
 
 ## Live Tool catalogs
 
-Between Provider cycles, Chat compares the shared ToolRegistry revision and rebuilds Tool definitions, allowed names, and pinned input contracts when it changes. This preserves the existing message list and System Prompt epoch while allowing an Extension installed during a Run to expose Tools in that same Run. A finalization-only cycle does not regain Tools. Regression: `tests/core/chat/test_live_extension_tools.py`.
+Between Provider cycles, Chat compares the shared ToolRegistry revision and rebuilds Tool definitions, allowed names, and pinned input contracts when it changes. This preserves the existing message list and System Prompt epoch while allowing an Extension installed during a Run to expose Tools in that same Run. A finalization-only cycle does not regain Tools. Deferred MCP Tools remain outside these definitions; their search, describe, and call results append through ordinary history without rewriting earlier messages or Tool definitions. Regressions: `tests/core/chat/test_live_extension_tools.py`, `tests/resources/extensions/test_mcp.py`.

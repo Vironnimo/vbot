@@ -453,10 +453,6 @@ class ConnectionRunner:
             if capability is not None:
                 catalog[field] = await self._all(method, field)
         catalog["pages"] = dict(self._catalog_pages)
-        catalog["operation_schemas"] = {
-            name: operation_schema(name)
-            for name in (*OPERATION_MODELS, "catalog", "events", "ping")
-        }
         self.publish(self, catalog)
         self.catalog = catalog
         return catalog

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import mcp_types as types
 import pytest
+import pytest_asyncio
 import uvicorn
 from mcp.server import MCPServer, Server
 from mcp.shared.auth import OAuthToken
@@ -19,6 +20,7 @@ from core.attachments import AttachmentTooLargeError
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.tools.availability import ToolAccess, resolve_tool_access
+from core.tools.contracts import ToolContractError
 from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
 from resources.extensions.mcp.client import ConnectionRunner, OAuthStorage, sampling_messages
 from resources.extensions.mcp.config import ConnectionStore, validate_connection
@@ -684,3 +686,415 @@ async def test_owner_cancellation_exits_an_active_request(host):
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(owner, 1)
     assert result.cancelled()
+
+
+@pytest_asyncio.fixture
+async def context_service(host, monkeypatch):
+    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
+    registry = ToolRegistry()
+    api.operations.bind(registry)
+    service = MCPService(api)
+    await service.start(host)
+    service.connections["example"] = validate_connection(
+        {"id": "example", "transport": "stdio", "command": "unused", "agents": ["alice"]}
+    )
+    runner = service._runner(service.connections["example"])
+    runner.state = "connected"
+    runner.catalog = {
+        "tools": [
+            {
+                "name": "inspect",
+                "description": "test-owned-inspection",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+            }
+        ],
+        "resources": [],
+        "resource_templates": [],
+        "prompts": [],
+        "instructions": "test-owned-guidance",
+    }
+    service._publish(runner, runner.catalog)
+    calls = []
+
+    async def invoke(operation, arguments, invocation_context=None):
+        calls.append((operation, arguments))
+        if operation == "catalog":
+            return runner.catalog
+        return {
+            "content": [
+                {"type": "text", "text": arguments.get("arguments", {}).get("value", "done")}
+            ],
+            "structuredContent": {"sentinel": True},
+            "_meta": {"retained": True},
+        }
+
+    monkeypatch.setattr(runner, "invoke", invoke)
+    yield service, registry, runner, calls
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_deferred_catalog_keeps_definitions_identical(context_service, host):
+    service, registry, runner, calls = context_service
+    profile = ToolDefinitionProfileContext(agent_id="alice")
+    before = registry.provider_definitions(profile_context=profile)
+    runner.catalog["tools"].extend(
+        {
+            "name": f"tool_{index}",
+            "description": "long external description " * 100,
+            "inputSchema": {"type": "object", "properties": {"field": {"type": "string"}}},
+        }
+        for index in range(500)
+    )
+    service._publish(runner, runner.catalog)
+    after = registry.provider_definitions(profile_context=profile)
+
+    assert after == before
+    assert [entry["name"] for entry in after] == ["mcp_example"]
+    assert len(registry.list_tools()) == 502
+    assert registry.prompt_definitions(profile_context=profile) == [
+        {"name": before[0]["name"], "description": before[0]["description"]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_and_describe_load_only_the_requested_definition(context_service, host):
+    service, registry, runner, calls = context_service
+    result = await service._browse(
+        runner, context(host), {"action": "search", "query": "inspection", "kind": "tool"}
+    )
+    match = result["data"]["preview"]["matches"][0]
+    detail = await service._browse(runner, context(host), match["describe"])
+
+    assert detail["data"]["value"]["arguments_schema"] == runner.catalog["tools"][0]["inputSchema"]
+    assert "inputSchema" not in detail["data"]["value"]["definition"]
+    assert "resources/read" not in json.dumps(detail)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_discovered_call_uses_validated_remote_tool(context_service, host):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+    )
+
+    assert result["ok"]
+    assert result["data"]["value"]["content"][0]["text"] == "sentinel"
+    assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restriction", ["agent", "run", "live"])
+async def test_discovered_calls_respect_all_denial_layers(context_service, host, restriction):
+    service, registry, runner, calls = context_service
+    original_context = context(host)
+    target = service._entries(runner, service._allowed(original_context))[-1]["target"]
+    remote = remote_tool_name("example", "inspect")
+    if restriction == "agent":
+        host.resolve_agent(None, "alice").tool_access = ToolAccess(denied=(remote,))
+    elif restriction == "run":
+        original_context = replace(original_context, tool_restriction=("mcp_example",))
+    else:
+        original_context = replace(
+            original_context, tool_denial_resolver=lambda name: "denied" if name == remote else None
+        )
+
+    result = await registry.dispatch(
+        original_context, {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+    )
+
+    assert not result["ok"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_old_target_cannot_call_changed_schema(context_service, host):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    runner.catalog["tools"][0]["inputSchema"]["properties"]["value"] = {"type": "integer"}
+    service._publish(runner, runner.catalog)
+
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+    )
+
+    assert not result["ok"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_large_result_is_durable_and_exactly_readable_in_chunks(host):
+    from resources.extensions.mcp.content import RESULT_VIEW_CHARACTERS
+
+    store = ContentStore(host, host.data_dir / "content")
+    payload = {
+        "content": [{"type": "text", "text": "test-owned-text-ä" * 2000}],
+        "_meta": {"keep": True},
+    }
+    receipt, _ = await store.present(payload, context(host), "example")
+    restored = ContentStore(host, host.data_dir / "content")
+    document = await restored.load_result(receipt["result_id"], context(host), "example")
+    arguments = {
+        "action": "read",
+        "result_id": receipt["result_id"],
+        "pointer": "/content/0/text",
+        "limit": 997,
+    }
+    pieces = []
+    while True:
+        page = restored.read_result(document, arguments)
+        pieces.append(page["value"])
+        if "next" not in page:
+            break
+        arguments = page["next"]
+
+    assert not receipt["complete"]
+    assert len(json.dumps(receipt)) < RESULT_VIEW_CHARACTERS
+    assert "".join(pieces) == payload["content"][0]["text"]
+    assert document["payload"]["_meta"] == payload["_meta"]
+
+
+@pytest.mark.asyncio
+async def test_result_reader_preserves_agent_and_project_ownership(host):
+    store = ContentStore(host, host.data_dir / "content")
+    receipt, _ = await store.present({"sentinel": True}, context(host), "example")
+
+    with pytest.raises(ValueError):
+        await store.load_result(receipt["result_id"], context(host, "bob"), "example")
+    with pytest.raises(ValueError):
+        await store.load_result(receipt["result_id"], context(host, project="other"), "example")
+    with pytest.raises(ValueError):
+        await store.load_result("../outside", context(host), "example")
+
+
+@pytest.mark.asyncio
+async def test_result_reader_filters_rows_and_paginates_without_losing_values(host):
+    store = ContentStore(host, host.data_dir / "content")
+    receipt, _ = await store.present(
+        {"rows": [{"id": index, "private": "unused"} for index in range(31)]},
+        context(host),
+        "example",
+    )
+    document = await store.load_result(receipt["result_id"], context(host), "example")
+    first = store.read_result(
+        document,
+        {"action": "read", "result_id": receipt["result_id"], "pointer": "/rows", "fields": ["id"]},
+    )
+    second = store.read_result(document, first["next"])
+
+    assert [entry["value"] for entry in first["entries"] + second["entries"]] == [
+        {"id": index} for index in range(31)
+    ]
+    assert "next" not in second
+
+
+@pytest.mark.asyncio
+async def test_revoke_prevents_reading_a_saved_remote_result(context_service, host):
+    service, registry, runner, calls = context_service
+    receipt, _ = await service.content.present(
+        {"sentinel": True}, context(host), "example", source="inspect"
+    )
+    host.resolve_agent(None, "alice").tool_access = ToolAccess(
+        denied=(remote_tool_name("example", "inspect"),)
+    )
+
+    result = await registry.dispatch(context(host), receipt["read"])
+
+    assert not result["ok"]
+
+
+@pytest.mark.asyncio
+async def test_connection_disconnect_keeps_the_fixed_model_definition(context_service):
+    service, registry, runner, calls = context_service
+    profile = ToolDefinitionProfileContext(agent_id="alice")
+    before = registry.provider_definitions(profile_context=profile)
+
+    await service.manage("disconnect", {"id": "example"})
+
+    assert registry.provider_definitions(profile_context=profile) == before
+
+
+@pytest.mark.asyncio
+async def test_mcp_discovery_preserves_the_chat_prefix(context_service, host):
+    from tests.core.chat.chat_loop_support import (
+        StubAdapter,
+        StubAgent,
+        StubRuntime,
+        build_chat_loop,
+    )
+
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "search",
+                        "name": "mcp_example",
+                        "arguments": {"action": "search", "query": "inspect"},
+                    }
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "describe",
+                        "name": "mcp_example",
+                        "arguments": {"action": "describe", "target": target},
+                    }
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call",
+                        "name": "mcp_example",
+                        "arguments": {
+                            "action": "call",
+                            "target": target,
+                            "arguments": {"value": "sentinel"},
+                        },
+                    }
+                ],
+            },
+            {"content": "finished"},
+        ]
+    )
+    agent = StubAgent(id="alice", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime = StubRuntime(data_dir=host.data_dir, agent=agent, adapter=adapter, tools=registry)
+    runtime.chat_sessions.create("alice", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("alice", "inspect", session_id="session-one")
+    await run.wait()
+
+    assert len(calls) == 1
+    assert len(adapter.requests) == 4
+    for previous, current in zip(adapter.requests, adapter.requests[1:], strict=False):
+        assert current["kwargs"]["tools"] == previous["kwargs"]["tools"]
+        assert current["messages"][: len(previous["messages"])] == previous["messages"]
+
+
+@pytest.mark.asyncio
+async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, server, monkeypatch):
+    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
+    registry = ToolRegistry()
+    api.operations.bind(registry)
+    service = MCPService(api)
+    await service.start(host)
+    runner = runner_for(host, server, monkeypatch)
+    service.connections[runner.id] = runner.config
+    service.runners[runner.id] = runner
+    runner.publish = service._publish
+    try:
+        await runner.invoke("catalog", {})
+        before = registry.provider_definitions(
+            profile_context=ToolDefinitionProfileContext(agent_id="alice")
+        )
+        for kind, inputs in (
+            ("tool", {"value": "sentinel"}),
+            ("resource", {}),
+            ("prompt", {"subject": "scene"}),
+        ):
+            search = await service._browse(
+                runner, context(host), {"action": "search", "kind": kind}
+            )
+            target = search["data"]["preview"]["matches"][0]["target"]
+            detail = await service._browse(
+                runner, context(host), {"action": "describe", "target": target}
+            )
+            result = await service._browse(
+                runner, context(host), {"action": "call", "target": target, "arguments": inputs}
+            )
+            assert detail["ok"] and result["ok"]
+            assert result["data"]["complete"]
+        after = registry.provider_definitions(
+            profile_context=ToolDefinitionProfileContext(agent_id="alice")
+        )
+        assert before == after
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "search", "unknown": True},
+        {"action": "call"},
+        {"action": "describe", "target": "connection", "query": "wrong"},
+        {"action": "read", "result_id": "../invalid"},
+    ],
+)
+async def test_browse_rejects_invalid_arguments_without_calling_server(
+    context_service, host, arguments
+):
+    service, registry, runner, calls = context_service
+
+    result = await registry.dispatch(context(host), arguments)
+
+    assert not result["ok"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_negative_page_limit_fails_contract_before_server_call(context_service, host):
+    service, registry, runner, calls = context_service
+
+    with pytest.raises(ToolContractError, match="minimum"):
+        await registry.dispatch(context(host), {"action": "search", "limit": -1})
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_cli_reads_saved_discovery_without_reconnecting(context_service, host):
+    service, registry, runner, calls = context_service
+    receipt, _ = await service.content.present({"items": [1, 2]}, context(host), "example")
+    runner.state = "disconnected"
+
+    result = await service._invoke_for_agent(
+        runner,
+        {"id": "example", "agent": "alice", "action": "read", "result_id": receipt["result_id"]},
+    )
+
+    assert result["ok"]
+    assert result["data"]["entries"][0]["value"] == [1, 2]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_large_error_keeps_full_payload_and_bounded_receipt(context_service, host):
+    service, registry, runner, calls = context_service
+    payload = {"isError": True, "content": [{"type": "text", "text": "failure" * 3000}]}
+
+    result = await service._present(runner, context(host), payload)
+    receipt = json.loads(result["error"]["message"])
+    saved = await service.content.load_result(receipt["result_id"], context(host), "example")
+
+    assert not result["ok"]
+    assert len(result["error"]["message"]) < 6000
+    assert saved["payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_oversized_object_keys_return_file_without_unbounded_context(host):
+    store = ContentStore(host, host.data_dir)
+    payload = {"key" * 3000: "retained"}
+    receipt, _ = await store.present(payload, context(host), "example")
+    saved = await store.load_result(receipt["result_id"], context(host), "example")
+
+    result = store.read_result(saved, receipt["read"])
+
+    assert len(json.dumps(result)) < 6000
+    assert result["result_file"] == receipt["result_file"]
+    assert saved["payload"] == payload

@@ -180,7 +180,48 @@ DEFAULT_LINES = 8
 DEFAULT_IDLE_TIMEOUT_SECONDS = 180.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 900.0
 PROBE_TOOL_NAME = "inspect_probe"
+MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
+    "search": {"action": "search"},
+    "query": {"action": "search", "query": "scene material"},
+    "offset": {"action": "search", "offset": 10},
+    "limit": {"action": "search", "limit": 2},
+    "describe": {"action": "describe", "target": "tool:inspect:test-owned-target"},
+    "call_empty": {"action": "call", "target": "operation:ping:test-owned-target"},
+    "call_arguments": {
+        "action": "call",
+        "target": "tool:inspect:test-owned-target",
+        "arguments": {"value": "test-owned-value", "nested": {"number": 4}},
+    },
+    "read": {"action": "read", "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "pointer": {
+        "action": "read",
+        "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pointer": "/content/0/text",
+    },
+    "read_offset": {"action": "read", "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "offset": 5},
+    "read_limit": {"action": "read", "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "limit": 12},
+    "fields": {
+        "action": "read",
+        "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pointer": "/rows",
+        "fields": ["name", "id"],
+    },
+    "fields_empty": {
+        "action": "read",
+        "result_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fields": [],
+    },
+    "invalid_extra": {"action": "search", "unknown": True},
+    "invalid_combination": {"action": "describe", "target": "connection", "query": "wrong"},
+    "kind_tool": {"action": "search", "kind": "tool"},
+    "kind_resource": {"action": "search", "kind": "resource"},
+    "kind_template": {"action": "search", "kind": "template"},
+    "kind_prompt": {"action": "search", "kind": "prompt"},
+    "kind_operation": {"action": "search", "kind": "operation"},
+    "kind_connection": {"action": "search", "kind": "connection"},
+}
 PROBE_SCENARIOS = (
+    "mcp",
     "direct_required",
     "nested_operation",
     "optional_null",
@@ -530,6 +571,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
     parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
+    parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
         "--optional-case",
         choices=OPTIONAL_BOOLEAN_CASES,
@@ -827,6 +869,24 @@ def _optional_boolean_scenario(
         [tool],
         _probe_messages(instructions[case_name]),
         PROBE_TOOL_NAME,
+    )
+
+
+def _mcp_scenario(case_name: str) -> ProbeScenario:
+    from resources.extensions.mcp.extension import MCP_DESCRIPTION, MCP_PARAMETERS
+
+    expected_arguments = MCP_CASE_ARGUMENTS[case_name]
+    rendered = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
+    return ProbeScenario(
+        "mcp",
+        [{"name": "mcp_example", "description": MCP_DESCRIPTION, "parameters": MCP_PARAMETERS}],
+        _probe_messages(
+            f"Call mcp_example exactly once with exactly these arguments: {rendered}. "
+            "Preserve every value and omit all other fields. This is a test-owned fixture."
+        ),
+        "mcp_example",
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
     )
 
 
@@ -2656,6 +2716,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _history_scenario(str(args.history_case))
     if name == "image_generation":
         return _image_generation_scenario(str(args.image_generation_case))
+    if name == "mcp":
+        return _mcp_scenario(str(args.mcp_case))
     if name == "memory":
         return _memory_scenario(str(args.memory_case))
     if name == "process":
