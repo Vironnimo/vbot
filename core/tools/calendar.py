@@ -13,6 +13,7 @@ from core.calendar.errors import (
     CalendarValidationError,
 )
 from core.calendar.when import looks_like_date
+from core.projects.address import format_agent_address
 from core.tools.arguments import optional_int, optional_string, required_string
 from core.tools.tools import (
     JsonObject,
@@ -31,11 +32,23 @@ if TYPE_CHECKING:
 
 CALENDAR_TOOL_NAME = "calendar"
 CALENDAR_TOOL_DESCRIPTION = (
-    "Manage the calendar: list events with their occurrences, create single or repeating "
-    "events, update or delete them, and find free slots."
+    "Manage single or repeating calendar events and find free time. Attach instructions "
+    "for an agent to execute automatically before, at, or after an event. Moving or "
+    "cancelling the event updates its pending actions."
 )
 
-CALENDAR_ACTIONS = frozenset(("list", "create", "update", "delete", "find_free"))
+CALENDAR_ACTIONS = frozenset(
+    (
+        "list",
+        "create",
+        "update",
+        "delete",
+        "find_free",
+        "add_action",
+        "update_action",
+        "delete_action",
+    )
+)
 
 _LIST_ARGUMENTS = frozenset({"when"})
 _CREATE_ARGUMENTS = frozenset({"title", "start", "duration", "rrule", "notes"})
@@ -48,6 +61,9 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "update": _UPDATE_ARGUMENTS,
     "delete": _DELETE_ARGUMENTS,
     "find_free": _FIND_FREE_ARGUMENTS,
+    "add_action": frozenset({"id", "when", "prompt", "target", "session"}),
+    "update_action": frozenset({"id", "when", "prompt", "target", "session"}),
+    "delete_action": frozenset({"id"}),
 }
 _ACTION_RECOMMENDATIONS = {
     "list": 'Use {"action":"list","when":"this week"}',
@@ -65,6 +81,11 @@ _ACTION_RECOMMENDATIONS = {
         '"start" from list to remove one occurrence of a repeating event'
     ),
     "find_free": 'Use {"action":"find_free","when":"next week","duration":60}',
+    "add_action": (
+        'Use {"action":"add_action","id":"<event-id>","when":"start - 1h","prompt":"<instruction>"}'
+    ),
+    "update_action": 'Use {"action":"update_action","id":"<action-id>","when":"start - 30m"}',
+    "delete_action": 'Use {"action":"delete_action","id":"<action-id>"}',
 }
 
 _DEFAULT_EVENT_DURATION_MINUTES = 60
@@ -79,13 +100,18 @@ _CALENDAR_WHEN_PARAMETER: JsonObject = {
     "description": (
         "Time window for list and find_free: today, tomorrow, this week, next week, "
         "this month, next month, a date, a year-month, or 'start..end'. Omit for the "
-        "current month on list and the next 7 days on find_free."
+        "current month on list and the next 7 days on find_free. For add_action, use start "
+        "or end, optionally followed by + or - and a duration, e.g. 'start - 1h'. "
+        "Durations use m, h, or d. Omit on update_action to keep the time."
     ),
 }
 _CALENDAR_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Event id from a previous list. Required for update and delete.",
+    "description": (
+        "Event id from a previous list. Required for update, delete, and add_action. "
+        "For update_action and delete_action, use the action id returned by list or add_action."
+    ),
 }
 _CALENDAR_TITLE_PARAMETER: JsonObject = {
     "type": "string",
@@ -131,7 +157,16 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["list", "create", "update", "delete", "find_free"],
+            "enum": [
+                "list",
+                "create",
+                "update",
+                "delete",
+                "find_free",
+                "add_action",
+                "update_action",
+                "delete_action",
+            ],
             "description": "Calendar action to perform.",
         },
         "when": _CALENDAR_WHEN_PARAMETER,
@@ -141,6 +176,27 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
         "duration": _CALENDAR_DURATION_PARAMETER,
         "rrule": _CALENDAR_RRULE_PARAMETER,
         "notes": _CALENDAR_NOTES_PARAMETER,
+        "prompt": {
+            "type": "string",
+            "description": (
+                "Self-contained instruction for the scheduled agent. Required for add_action; "
+                "omit on update_action to keep the instruction."
+            ),
+        },
+        "target": {
+            "type": "string",
+            "description": (
+                "Agent address: agent or agent@project. Omit on add_action to use the current "
+                "agent; omit on update_action to keep the target."
+            ),
+        },
+        "session": {
+            "type": "string",
+            "description": (
+                "Existing session owned by the target agent. Omit on add_action for a fresh "
+                "session each time; omit on update_action to keep the selection."
+            ),
+        },
     },
     "required": ["action"],
 }
@@ -151,8 +207,8 @@ _LOGGER = get_logger("tools.calendar")
 def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarService) -> None:
     """Register the calendar tool with a vBot tool registry."""
 
-    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return _handle_calendar_tool(calendar_service, arguments)
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return _handle_calendar_tool(calendar_service, arguments, context)
 
     registry.register(
         CALENDAR_TOOL_NAME,
@@ -170,7 +226,9 @@ def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarSer
     )
 
 
-def _handle_calendar_tool(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+def _handle_calendar_tool(
+    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None = None
+) -> JsonObject:
     raw_action = arguments.get("action")
     if not isinstance(raw_action, str) or raw_action not in CALENDAR_ACTIONS:
         options = ", ".join(sorted(CALENDAR_ACTIONS))
@@ -197,6 +255,33 @@ def _handle_calendar_tool(calendar_service: CalendarService, arguments: JsonObje
         )
 
     try:
+        if action in {"add_action", "update_action", "delete_action"}:
+            action_id = required_string(operation_arguments.pop("id", None), field_name="id")
+            if action == "delete_action":
+                calendar_service.actions.delete(action_id)
+                return tool_success({"id": action_id, "deleted": True})
+            if action == "update_action":
+                return tool_success(
+                    {"action": calendar_service.actions.update(action_id, **operation_arguments)}
+                )
+            target = optional_string(operation_arguments.get("target"), field_name="target")
+            if target is None and context is not None:
+                target = format_agent_address(context.agent_id, context.project_id)
+            return tool_success(
+                {
+                    "action": calendar_service.actions.add(
+                        action_id,
+                        when=required_string(operation_arguments.get("when"), field_name="when"),
+                        prompt=required_string(
+                            operation_arguments.get("prompt"), field_name="prompt"
+                        ),
+                        target=required_string(target, field_name="target"),
+                        session=optional_string(
+                            operation_arguments.get("session"), field_name="session"
+                        ),
+                    )
+                }
+            )
         if action == "list":
             return _handle_list(calendar_service, operation_arguments)
         if action == "create":
@@ -247,6 +332,11 @@ def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> Js
         {
             "events": events,
             "occurrences": [_occurrence_payload(occurrence) for occurrence in occurrences],
+            "actions": [
+                a for a in calendar_service.actions.list_actions() if a["event_id"] in listed_ids
+            ],
+            "executions": calendar_service.actions.project(occurrences),
+            "action_error": calendar_service.actions.storage_error,
             "system_timezone": calendar_service.system_timezone_name(),
         }
     )

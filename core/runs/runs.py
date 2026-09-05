@@ -98,6 +98,7 @@ class RunKind(StrEnum):
     USER = "user"
     CHANNEL = "channel"
     CRON = "cron"
+    CALENDAR = "calendar"
     REFLECTION = "reflection"
     MEMORY_REFLECTION = "memory_reflection"
     SKILL_REFLECTION = "skill_reflection"

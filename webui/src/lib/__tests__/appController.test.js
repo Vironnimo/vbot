@@ -53,6 +53,17 @@ afterEach(() => {
 });
 
 describe('App controller', () => {
+  it('opens calendar results as ordinary Sessions', () => {
+    const { controller, state } = setup();
+    expect(
+      controller.navigateToSession('builder@project', 'calendar-result'),
+    ).toBe(true);
+    expect(state.pendingSessionNavigation).toMatchObject({
+      agentId: 'builder@project',
+      sessionId: 'calendar-result',
+      subAgent: false,
+    });
+  });
   it('owns view navigation and its browser-history entry', () => {
     const onSetOnboardingAside = vi.fn();
     const { browserHistory, controller, state } = setup({

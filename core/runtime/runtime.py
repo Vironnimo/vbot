@@ -764,6 +764,10 @@ class Runtime:
             )
             self._start_cron_service()
             self._calendar_service = CalendarService(self._storage.data_dir, tz=timezone_name)
+            self._calendar_service.actions.configure(
+                self._trigger_service, self._agent_resolver, self._chat_sessions
+            )
+            self._start_calendar_service()
             register_cron_tool(self._tools, self._cron_service)
             register_calendar_tool(self._tools, self._calendar_service)
             register_bash_tool(
@@ -913,6 +917,8 @@ class Runtime:
             self._channel_service.stop()
         if self._cron_service is not None:
             self._cron_service.stop()
+        if self._calendar_service is not None:
+            self._calendar_service.actions.stop()
         if self._bootstrap_service is not None:
             self._bootstrap_service.stop()
         if self._provider_usage is not None:
@@ -942,6 +948,8 @@ class Runtime:
             await self._channel_service.aclose()
         if self._cron_service is not None:
             await self._cron_service.aclose()
+        if self._calendar_service is not None:
+            await self._calendar_service.actions.aclose()
         if self._bootstrap_service is not None:
             await self._bootstrap_service.aclose()
         if self._trigger_service is not None:
@@ -974,6 +982,8 @@ class Runtime:
 
     def _cleanup_failed_startup(self) -> None:
         """Release every started resource after a failed synchronous bootstrap."""
+        if self._calendar_service is not None:
+            self._calendar_service.actions.stop()
         cleanup_actions = (
             (self._extensions, "fire_shutdown_blocking"),
             (self._channel_service, "stop"),
@@ -1239,6 +1249,10 @@ class Runtime:
         except RuntimeError:
             return
         self._cron_service.start()
+
+    def _start_calendar_service(self) -> None:
+        assert self._calendar_service is not None
+        self._calendar_service.actions.start()
 
     def _start_provider_usage_service(self) -> None:
         if self._provider_usage is None:
