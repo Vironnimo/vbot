@@ -59,19 +59,6 @@ Runtime Agent-facing text must be self-contained for a fresh Agent that has not 
 
 Write tests **together with the feature** — never skip.
 
-| Type | When | How |
-|---|---|---|
-| **Unit** | Business logic, validation, calculations | Isolated, deps mocked |
-| **Integration** | DB queries, API endpoints | Real test DB / real HTTP server |
-
-**What to test:** happy path · edge cases (null, empty, boundary) · error cases. One logical assertion per test — multiple `assert` calls that verify the same behavior are fine.
-
-**Structure (AAA):** Arrange → Act → Assert.
-
-**Rules:** Tests are independent (no shared state) and deterministic (no random, no real timestamps). If a bug is fixed, add a test that would have caught it.
-
-For project-specific test framework, file naming, fixtures, and coverage targets → `.vorch/PROJECT.md` (Testing section).
-
 ## Dependencies
 
 If a task requires a new dependency, **check first** that no existing dependency already covers the need. Then install it, add it to `pyproject.toml` (or `webui/package.json` for frontend), and commit the lock file changes. Do not install packages speculatively — only what the current task requires.
@@ -116,6 +103,6 @@ Only project-specific terms — never standard programming terms or anything sel
 - **Worktrees are the default for every task** — create one with the project's worktree tooling (`python scripts/worktree.py create <task-name>` — see PROJECT.md → Development) and work and commit inside it. When the quality gates are green and everything is committed, merge yourself: `python scripts/worktree.py merge <task-name>` lands the branch on `main`, removes the worktree, and serializes safely against other sessions' merges — on conflict it walks you through the protected repair window (see `.vorch/workflows/worktree-workflow.md`). No user confirmation is needed before merging.
 - Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
 - One logical unit per commit; never batch unrelated changes; never commit broken code.
-- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped, non-mutating** gate on what you changed for fast feedback — `python scripts/quality.py --check <paths>` for backend files, `python scripts/quality-frontend.py --check <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. `--check` prevents formatter and linter edits, so a reported failure still refers to the code the Agent just read. Write tests together with the feature.
+- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped, non-mutating** gate on what you changed for fast feedback — `python scripts/quality.py --check <paths>` for backend files, `python scripts/quality-frontend.py --check <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. `--check` prevents formatter and linter edits, so a reported failure still refers to the code the Agent just read.
 - **Before the final commit that closes the task, run the full gate (no args) once for each side you actually touched — and only those.** Pick by what the task changed: backend code (Python, `pyproject.toml`, `scripts/`, `tests/` — anything the backend gate lints or tests) → `python scripts/quality.py`; frontend (anything under `webui/`) → `python scripts/quality-frontend.py`; both sides touched → both gates; a docs-only task (only Markdown / `.vorch/` / other files neither gate touches) → neither, no gate needed. Use the full no-args form, not a scoped one, so it sweeps the whole side; a code task isn't done until its side's gate has run once over the repo. **Don't run a scoped pass right before it — the full run already covers everything a scoped pass would check.** Keep every auto-fix. Any real failure the full run surfaces is now yours to handle: caused by your change or trivially related → fix it, then re-run only the scoped gate over the fixed paths — not the full gate again; genuinely pre-existing and unrelated → you may **not** silently dismiss it ("it was already broken") — report it to the user in your summary **and** append it to `.vorch/FLAGGED.md`.
 - **The quality gates auto-fix (ruff format, prettier, eslint --fix). KEEP every change they make — never revert a gate's auto-fix, even on files you did not touch. Letting the tools do their work across the repo is the whole point of running the full gates. Reverting their output is forbidden.** When a gate reports a real failure (test/type/lint error it cannot auto-fix), fix the underlying problem rather than working around it.
