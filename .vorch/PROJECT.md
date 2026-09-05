@@ -75,7 +75,7 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 
 **Dependency injection:** Constructor injection via `__init__`. Interfaces via `typing.Protocol`. No service locator, no global singletons.
 
-**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors -> handle locally, log `warn`; unexpected errors -> rethrow, log `error`. Transient HTTP errors retry up to 3 times with exponential backoff + jitter, honoring `Retry-After` as a capped floor; retryable statuses are defined once in `core/utils/http_status.py` (idempotency-aware). Provider errors classify as `retryable` vs `fatal`. Never silently swallow.
+**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors -> handle locally, log `warn`; unexpected errors -> rethrow, log `error`. Transient HTTP errors retry under the shared backoff policy in `core/utils/retry.py`; retryable statuses are defined once in `core/utils/http_status.py` (idempotency-aware). Provider errors classify as `retryable` vs `fatal`. Never silently swallow.
 
 **Logging:** Structured logging through `LogManager` (`core/utils/logging`) with per-module `vbot.<domain>` loggers under `<data_dir>/logs/`; the standalone Desktop process attaches the same format without importing core logging. No `print()`, no `logging.basicConfig()`. A material control-plane mutation emits one `INFO` event after the state change (operation, stable target ids, changed fields); never log credentials, token values, Provider Account ids, Prompt/Skill/Cron content, or external conversation ids. Reads, polls, appearance changes, acknowledgements, routine traffic, and effective no-ops stay silent; operational failures and health transitions use `WARNING`/`ERROR`.
 
@@ -115,7 +115,7 @@ This checkout carries a git-ignored marker selecting the dev data directory (`~/
 
 ## Testing
 
-pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Rendered-component tests may use jsdom via Vitest when helper-level assertions are not enough. Pattern AAA; independent, deterministic, no shared state.
+pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Rendered-component tests may use jsdom via Vitest when helper-level assertions are not enough.
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (protocol token, persisted format, accessibility name, forbidden internal value) or a test-owned sentinel proves transport unchanged. Do not lock editable prose, error wording, or help copy - prefer exception types, error codes, structured fields, DOM roles, and security invariants. Wording quality belongs in scenario evals, not substring tests.
 
