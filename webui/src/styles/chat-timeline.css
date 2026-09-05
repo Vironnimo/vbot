@@ -1035,3 +1035,46 @@ a.inline-attachment:focus-visible {
     pointer-events: auto;
   }
 }
+
+/* Tool media stays compact within the existing detail rail. */
+.tool-image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 4px 0 8px;
+}
+
+.tool-image-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 128px;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-med);
+  text-decoration: none;
+  cursor: zoom-in;
+}
+
+.tool-image-preview:hover {
+  border-color: var(--accent);
+  color: var(--text-hi);
+}
+
+.tool-image-preview img {
+  width: 100%;
+  height: 88px;
+  object-fit: contain;
+}
+
+.tool-image-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
