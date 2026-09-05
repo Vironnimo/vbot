@@ -1,6 +1,90 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'mcp.accessHelp':
+    'Select who may use this connection. Existing Tool restrictions and Project limits still apply.',
+  'mcp.add': 'Add MCP connection',
+  'mcp.addArgument': 'Add argument',
+  'mcp.addEntry': 'Add {group}',
+  'mcp.advanced': 'Advanced settings',
+  'mcp.agentAccess': 'Agent access',
+  'mcp.allowAgent': 'Allow {agent}',
+  'mcp.argument': 'Argument {number}',
+  'mcp.arguments': 'Arguments',
+  'mcp.cancelTest': 'Cancel test',
+  'mcp.changed':
+    'This connection changed elsewhere. Close the editor and reopen it before saving.',
+  'mcp.clearCredential': 'Clear credential',
+  'mcp.connected': 'Connected',
+  'mcp.connecting': 'Connecting',
+  'mcp.connectionType': 'Connection type',
+  'mcp.credentialCleared': 'Credential cleared.',
+  'mcp.credentialEnvironment': 'Credentials for environment variables',
+  'mcp.credentialHeaders': 'Credentials for HTTP headers',
+  'mcp.credentialName': 'Credential name',
+  'mcp.credentialSaved': 'Credential saved.',
+  'mcp.credentials': 'Credentials',
+  'mcp.credentialsFor': 'Credentials for {name}',
+  'mcp.directory': 'Working directory',
+  'mcp.disabled': 'Disabled',
+  'mcp.disconnected': 'Disconnected',
+  'mcp.duplicate':
+    'This connection already exists. Choose another name or edit the existing connection.',
+  'mcp.edit': 'Edit MCP connection',
+  'mcp.empty': 'No MCP connections yet',
+  'mcp.emptyHint':
+    'Add a local program or a server URL from your MCP setup instructions.',
+  'mcp.enabled': 'Enabled',
+  'mcp.enabledFor': 'Enable {name}',
+  'mcp.entryName': 'Name',
+  'mcp.environment': 'Environment variables',
+  'mcp.failed': 'Connection failed',
+  'mcp.granted': 'Agents: {agents}',
+  'mcp.host':
+    'Programs and application add-ons run on the machine hosting vBot.',
+  'mcp.http': 'Server URL (HTTP)',
+  'mcp.local': 'Local program',
+  'mcp.mappingInvalid': 'Each entry needs a unique, non-empty name.',
+  'mcp.name': 'Connection name',
+  'mcp.nameHelp':
+    'Lowercase letters, numbers and underscores; start with a letter.',
+  'mcp.noAgents': 'No Agents available yet. You can grant access later.',
+  'mcp.noGrants': 'No Agents have access.',
+  'mcp.oauth': 'Sign in with OAuth',
+  'mcp.program': 'Program',
+  'mcp.programHelp':
+    'Executable on the vBot host, for example uvx, npx or an absolute path.',
+  'mcp.redirect': 'OAuth redirect URL (optional)',
+  'mcp.removeArgument': 'Remove argument {number}',
+  'mcp.removeBody':
+    'Agents will lose access to this connection. The external application and installed software will remain.',
+  'mcp.removeEntry': 'Remove {group} entry {number}',
+  'mcp.removeTitle': 'Remove {name}?',
+  'mcp.save': 'Save connection',
+  'mcp.saveCredential': 'Save credential',
+  'mcp.saveHelp':
+    'Saving applies the connection on the vBot host. Editing its settings interrupts the current connection.',
+  'mcp.saved': 'Connection saved. Test it to verify access to the server.',
+  'mcp.savedGrant': 'Saved grant',
+  'mcp.secretHelp':
+    'Saved values are never displayed. This named credential may also be used by other connections.',
+  'mcp.secretValue': 'New secret value',
+  'mcp.secretsHelp':
+    'Use credential names here, not secret values. After saving, open Credentials to set their values.',
+  'mcp.sse': 'Server URL (legacy SSE)',
+  'mcp.targetsPartial':
+    'Some Project Agents could not be loaded. Existing grants are preserved.',
+  'mcp.test': 'Test connection',
+  'mcp.testCancelled': 'Connection test cancelled.',
+  'mcp.testFailed': 'Connection test failed.',
+  'mcp.testPassed': 'Connection test passed: {checks}.',
+  'mcp.testing':
+    'Testing {name}. Complete any sign-in or question shown by vBot.',
+  'mcp.timeout': 'Timeout (seconds)',
+  'mcp.title': 'MCP connections',
+  'mcp.url': 'Server URL',
+  'mcp.value': 'Value (non-secret)',
+
   'app.title': 'vBot',
 
   'navigation.primary': 'Primary navigation',
