@@ -645,8 +645,8 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
             assert [base64.b64decode(part["base64"]) for part in images] == [
                 frames[index] for index in expected_indices
             ]
-            assert sum(len(part["base64"]) for part in images) <= 8 * 1024 * 1024
-            assert len(json.dumps(request.messages).encode()) < 8 * 1024 * 1024
+            assert sum(len(part["base64"]) for part in images) <= 14 * 1024 * 1024
+            assert len(json.dumps(request.messages).encode()) < 14 * 1024 * 1024
             for index in range(iteration):
                 if index < 14:
                     assert any(

@@ -82,7 +82,7 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
 # Harness policy, not a claim about any Provider's transport limit. Count encoded
 # image payloads, independently of visual token estimates and text compaction.
 RECENT_TOOL_IMAGE_LIMIT = 3
-REQUEST_IMAGE_BYTES_LIMIT = 8 * 1024 * 1024
+REQUEST_IMAGE_BYTES_LIMIT = 14 * 1024 * 1024
 _IMAGE_WINDOW_NOTE = (
     "[Image omitted from this request to keep recent inspection images available. "
     "Its file path follows; use the read Tool to inspect it again if needed.]"
