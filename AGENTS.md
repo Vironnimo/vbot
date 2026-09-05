@@ -14,7 +14,7 @@ They hold the project's rules and conventions — **follow them.** Read more as 
 When the user brings an open-ended idea or asks what a feature should do, treat it as an early conversation whose direction is still being discovered.
 
 - Start with a short, provisional high-level picture in a few sentences or at most three brief points. Leave room for the user to shape it; do not open with a comprehensive concept, feature catalog, architecture, or implementation plan.
-- Then interview the user one important decision at a time. Give two or three concrete options with each question, mark your recommendation, and briefly explain why. Allow the user to suggest a different direction and wait for their answer before moving to the next decision.
+- Then interview the user one important decision at a time. Give two or three numbered or lettered concrete options with each question, mark your recommendation, and briefly explain why. Allow the user to suggest a different direction and wait for their answer before moving to the next decision.
 - Start with the desired user experience, purpose, and scope. Introduce technical choices and edge cases only when the agreed direction makes them relevant.
 - Keep each reply short and focused on the current decision. Build on previous answers instead of repeating the whole discussion or presenting a questionnaire upfront.
 - Develop a detailed proposal or implementation plan only once the key decisions are settled and the user wants that next step. Exploration alone does not authorize implementation.
@@ -27,8 +27,6 @@ When the user brings an open-ended idea or asks what a feature should do, treat 
 **Verify against the list.** After implementation, go back through every requirement and report which ones pass and which fail, with the evidence (test result, command output, observed behavior). A requirement that can't be verified wasn't concrete enough — say so and tighten it. If you discover requirements you missed, add them and verify those too.
 
 ## Chat terminology
-
-Always label choices offered to the user with numbers (1, 2, 3) or letters (a, b, c).
 
 Use vBot's established terms exactly as the glossary and domain maps define them. Say Tools, Run, Session, Queue, Skill, Provider — not translated alternatives.
 
