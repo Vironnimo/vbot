@@ -53,15 +53,6 @@ Runtime Agent-facing text must be self-contained for a fresh Agent that has not 
 
 **Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
 
-**Code quality** — no magic numbers or strings (name the constant: `MAX_RETRIES = 3`, not `3`); comments explain *why*, not *what*; no commented-out code (git keeps history).
-
-- **Naming:** descriptive — `getUserById`, not `getU`. No abbreviations except standards (`id`, `url`, `db`). One human language, never mixed.
-- **Functions:** one thing per function. Max 3 levels of nesting.
-- **Imports:** stdlib → third-party → local. Blank line between groups. Remove unused.
-- **Separation of concerns:** UI displays and takes input only — no business logic. Business logic has no UI, no direct DB queries. Data access owns its I/O. API endpoints route only.
-
-**Security** — never put user input straight into SQL, HTML, shell, or file paths; parameterized queries always; no credentials or secrets in code or logs (env vars only, never commit `.env`); no `innerHTML` with user data (use `textContent`); validate all input server-side.
-
 **Technical Decisions** — when making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long-term maintainability.
 
 ## Error Handling
