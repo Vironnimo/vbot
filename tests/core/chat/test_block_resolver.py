@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -15,7 +16,9 @@ from core.attachments import AttachmentStore
 from core.chat import ChatMessage
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
+from core.chat.wire_shaping import REQUEST_IMAGE_BYTES_LIMIT, limit_request_images
 from core.model_tasks import SpeechExecutionError
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.sessions import ChatSessionManager
 from core.tools import ToolRegistry
 from core.tools.file_state import FileReadState
@@ -44,6 +47,98 @@ PDF_BYTES = b"%PDF-1.7\n1 0 obj\n"
 WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt wav-payload"
 OGG_BYTES = b"OggS\x00\x02voice-payload"
 MP4_BYTES = b"\x00\x00\x00\x18ftypisomvideo-payload"
+
+
+def _resolved_image_result(index: int, size: int = 4) -> dict:
+    return {
+        "role": "tool",
+        "tool_call_id": f"call-{index}",
+        "content": f"result-{index}",
+        TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+            {"type": "media", "media_type": "image/png", "base64": "A" * size},
+            {"type": "text", "text": f"path-{index}"},
+        ],
+    }
+
+
+def _native_image_calls(messages: list[dict]) -> list[str]:
+    return [
+        message["tool_call_id"]
+        for message in messages
+        if any(
+            block.get("type") == "media" and block.get("media_type") == "image/png"
+            for block in message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD, [])
+        )
+    ]
+
+
+def test_image_window_preserves_text_correlation_and_original_request() -> None:
+    source = [_resolved_image_result(index) for index in range(14)]
+    source.insert(2, {"role": "assistant", "content": "inspection findings"})
+    before = deepcopy(source)
+    bounded = limit_request_images(source)
+    assert _native_image_calls(bounded) == ["call-11", "call-12", "call-13"]
+    assert source == before
+    assert limit_request_images(bounded) == bounded
+    for original, projected in zip(source, bounded, strict=True):
+        assert projected["content"] == original["content"]
+        assert projected.get("tool_call_id") == original.get("tool_call_id")
+        if original.get("role") == "tool":
+            assert (
+                projected[TOOL_RESULT_CONTENT_BLOCKS_FIELD][-1]
+                == original[TOOL_RESULT_CONTENT_BLOCKS_FIELD][-1]
+            )
+    reopened = limit_request_images([*bounded, _resolved_image_result(0)])
+    assert _native_image_calls(reopened) == ["call-12", "call-13", "call-0"]
+
+
+def test_image_window_counts_individual_images_in_sibling_results() -> None:
+    first = _resolved_image_result(0)
+    second = _resolved_image_result(1)
+    second[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= 4
+    bounded = limit_request_images([first, second])
+    assert _native_image_calls(bounded) == ["call-1"]
+    parts = bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+    assert sum(part["type"] == "media" for part in parts) == 3
+    assert len(parts) == 8
+    assert parts[0]["type"] == "text"
+
+
+def test_image_byte_budget_reserves_user_references_before_recent_tools() -> None:
+    reference = {
+        "role": "user",
+        "content": [
+            {"type": "media", "media_type": "image/png", "base64": "A" * 4},
+            {"type": "text", "text": "reference-path"},
+        ],
+    }
+    messages = [
+        reference,
+        _resolved_image_result(0, 4),
+        _resolved_image_result(1, REQUEST_IMAGE_BYTES_LIMIT - 4),
+    ]
+    bounded = limit_request_images(messages)
+    assert bounded[0] == reference
+    assert _native_image_calls(bounded) == ["call-1"]
+    assert bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD][0]["type"] == "text"
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_single_oversized_image_degrades_explicitly_without_dropping_other_media(role: str) -> None:
+    message = _resolved_image_result(0, REQUEST_IMAGE_BYTES_LIMIT + 4)
+    field = TOOL_RESULT_CONTENT_BLOCKS_FIELD
+    if role == "user":
+        message["role"] = role
+        message["content"] = message.pop(field)
+        field = "content"
+    audio = {"type": "media", "media_type": "audio/wav", "base64": "audio-sentinel"}
+    document = {"type": "document", "media_type": "application/pdf", "base64": "pdf-sentinel"}
+    message[field].extend([audio, document])
+    bounded = limit_request_images([message])[0]
+    assert bounded[field][0]["type"] == "text"
+    assert bounded[field][0]["text"]
+    assert bounded[field][1:] == message[field][1:]
+    assert message[field][0]["type"] == "media"
 
 
 class _StubPrompts:

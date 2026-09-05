@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningRep
 from core.runs import RUN_CHANGE_STATS_EVENT
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
-from core.tools import tool_success
+from core.tools import read_media_artifact, tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, session_address
@@ -531,6 +532,143 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         next_run_messages = adapter.requests[2].messages
         assert all(TOOL_RESULT_CONTENT_BLOCKS_FIELD not in message for message in next_run_messages)
         assert "base64" not in json.dumps(next_run_messages)
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frames = [_PNG_BYTES + bytes([index]) * 1_400_000 for index in range(14)]
+    responses: list[JsonObject] = [
+        {
+            "content": f"inspection-{index}",
+            "tool_calls": [
+                {
+                    "id": f"call-{index}",
+                    "name": "read" if index % 2 == 0 else "mcp_capture",
+                    "arguments": {"path": f"frame-{index}.png"}
+                    if index % 2 == 0
+                    else {"index": index},
+                }
+            ],
+        }
+        for index in range(14)
+    ]
+    responses.extend(
+        [
+            {
+                "content": "compare original",
+                "tool_calls": [
+                    {
+                        "id": "reopen",
+                        "name": "read",
+                        "arguments": {"path": "frame-0.png"},
+                    }
+                ],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    rebuilt_requests: list[list[JsonObject]] = []
+
+    class RebuildingAdapter(FakeAdapter):
+        async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            if len(self.requests) == 10:
+                session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+                rebuilt_requests.append(
+                    await runtime.chat_loop._build_request_messages(
+                        agent,
+                        session,
+                        input_modalities=frozenset({"text", "image"}),
+                        wire_media_types=IMAGE_WIRE_MEDIA_TYPES,
+                    )
+                )
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = RebuildingAdapter(responses)
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
+    runtime.start()
+    try:
+        # Exercise the exact shared artifact contract used by MCP binary results,
+        # alternating with the real read Tool; no external Blender process needed.
+        def capture(_context: Any, arguments: JsonObject) -> JsonObject:
+            index = arguments["index"]
+            record = runtime.attachment_store.store(f"frame-{index}.png", frames[index])
+            return tool_success(
+                {"frame": index},
+                artifacts=[
+                    read_media_artifact(
+                        attachment_id=record.id,
+                        filename=record.filename,
+                        media_type=record.media_type,
+                    )
+                ],
+            )
+
+        runtime.tools.register(
+            "mcp_capture",
+            "Capture a test frame.",
+            {
+                "type": "object",
+                "properties": {"index": {"type": "integer"}},
+                "required": ["index"],
+                "additionalProperties": False,
+            },
+            capture,
+        )
+        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        for index, frame in enumerate(frames):
+            Path(agent.workspace).joinpath(f"frame-{index}.png").write_bytes(frame)
+        assistant = await runtime.chat_loop.send(
+            "coder", "Inspect successive frames", session_id="session-one"
+        )
+        assert assistant.content == "done"
+        assert len(adapter.requests) == 16
+        for iteration, request in enumerate(adapter.requests):
+            images = [
+                part
+                for part in _tool_result_content_parts(request.messages)
+                if part["type"] == "media"
+            ]
+            expected_indices = (
+                list(range(max(0, iteration - 3), iteration)) if iteration <= 14 else [12, 13, 0]
+            )
+            assert [base64.b64decode(part["base64"]) for part in images] == [
+                frames[index] for index in expected_indices
+            ]
+            assert sum(len(part["base64"]) for part in images) <= 8 * 1024 * 1024
+            assert len(json.dumps(request.messages).encode()) < 8 * 1024 * 1024
+            for index in range(iteration):
+                if index < 14:
+                    assert any(
+                        message.get("content") == f"inspection-{index}"
+                        for message in request.messages
+                    )
+        rebuilt_images = [
+            part
+            for part in _tool_result_content_parts(rebuilt_requests[0])
+            if part["type"] == "media"
+        ]
+        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == frames[7:10]
+        session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+        persisted = session.load()
+        assert "base64" not in json.dumps([message.to_dict() for message in persisted])
+        assert len([message for message in persisted if message.role == "tool"]) == 15
+        for message in persisted:
+            if message.role == "tool":
+                assert isinstance(message.content, str)
+                artifact = json.loads(message.content)["artifacts"][0]
+                record = runtime.attachment_store.get(artifact["attachment_id"])
+                assert Path(record.file_path).read_bytes() in frames
     finally:
         runtime.stop()
 
