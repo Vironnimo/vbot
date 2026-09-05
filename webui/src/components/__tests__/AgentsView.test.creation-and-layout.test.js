@@ -99,6 +99,106 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
+  it('opens the selected Agent with Model before identity and returns from shared defaults to the same editor', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('#agent-name'));
+    const model = document.querySelector('#agent-model');
+    const name = document.querySelector('#agent-name');
+    expect(
+      model.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    document.querySelector('.agent-list-defaults button').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('#settings-defaults-model'),
+    );
+    expect(document.querySelector('.agent-editor-host').hidden).toBe(true);
+    expect(document.querySelector('.agent-shared-pane').hidden).toBe(false);
+    document.querySelector('.agent-item').click();
+    flushSync();
+    expect(document.querySelector('.agent-editor-host').hidden).toBe(false);
+    expect(document.querySelector('#agent-model')).toBe(model);
+  });
+
+  it('reloads authoritative inherited values after saving shared defaults without changing Agent overrides', async () => {
+    const handler = createAgentsRpcMock();
+    let savedTemperature = 0.4;
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'settings.get')
+        return { defaults: { agent: { temperature: savedTemperature } } };
+      if (method === 'settings.update') {
+        savedTemperature = params.defaults.agent.temperature;
+        return { defaults: { agent: params.defaults.agent } };
+      }
+      if (method === 'agent.list')
+        return {
+          agents: [
+            {
+              ...baseAgent(),
+              temperature: null,
+              effective: {
+                temperature: {
+                  value: savedTemperature,
+                  source: 'global_default',
+                },
+              },
+            },
+          ],
+        };
+      return handler(method, params);
+    });
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('#agent-name'));
+    document.querySelector('.agent-list-defaults button').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('#settings-defaults-temperature'),
+    );
+    const temperature = document.querySelector(
+      '#settings-defaults-temperature',
+    );
+    temperature.value = '0.73';
+    temperature.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    document
+      .querySelector('[data-settings-section="defaults"] .s-save-button')
+      .click();
+    await waitForCondition(() => savedTemperature === 0.73);
+    await flushAsyncUpdates();
+    document.querySelector('.agent-item').click();
+    flushSync();
+    expect(document.querySelector('#agent-temperature').value).toBe('');
+    expect(
+      document.querySelector('.agents-view__model-group').textContent,
+    ).toContain('0.73');
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.update'),
+    ).toHaveLength(0);
+  });
+
+  it('opens an explicit Compaction target inside shared Agent defaults', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    const consumed = vi.fn();
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: {
+        targetDefaultsPanel: 'compaction',
+        onDefaultsTargetHandled: consumed,
+      },
+    });
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('#agent-shared-compaction'),
+    );
+    expect(document.querySelector('#agent-shared-compaction').hidden).toBe(
+      false,
+    );
+    expect(consumed).toHaveBeenCalledOnce();
+  });
+
   it('switches detail topics with keyboard navigation without replacing edited fields', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
     mountedComponent = mount(AgentsView, { target: document.body });

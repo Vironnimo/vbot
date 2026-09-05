@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
 
   import {
     getSettings,
@@ -27,6 +27,10 @@
 
   import AgentCreateModal from './agents/AgentCreateModal.svelte';
   import AgentEditor from './agents/AgentEditor.svelte';
+  import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
+  import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
+  import Banner from './ui/Banner.svelte';
+  import Button from './ui/Button.svelte';
   import AgentListPane from './agents/AgentListPane.svelte';
 
   const noop = () => {};
@@ -35,9 +39,10 @@
     listModels,
     listConnections,
   });
-
   let {
     sharedSelectedAgentId = '',
+    targetDefaultsPanel = '',
+    onDefaultsTargetHandled = noop,
     onAgentsChanged,
     onAgentSelected,
     onToast = noop,
@@ -48,6 +53,67 @@
     agentsRefreshToken = 0,
     memoriesRefreshToken = 0,
   } = $props();
+  let sharedDefaultsOpen = $state(false);
+  let sharedSettings = $state(null);
+  let sharedSettingsError = $state('');
+  let sharedSettingsLoading = $state(false);
+  let sharedCompactionOpen = $state(false);
+  let defaultsRequestId = 0;
+  let destroyed = false;
+  $effect(() => {
+    if (targetDefaultsPanel) {
+      const target = targetDefaultsPanel;
+      onDefaultsTargetHandled();
+      untrack(() => void openSharedDefaults(target));
+    }
+  });
+  function openSharedDefaults(panelId = 'defaults') {
+    return autosaveContext.requestTransition(async () => {
+      sharedDefaultsOpen = true;
+      sharedCompactionOpen = panelId === 'compaction';
+      if (!sharedSettings) await loadSharedSettings();
+    });
+  }
+
+  async function loadSharedSettings() {
+    const requestId = ++defaultsRequestId;
+    sharedSettingsLoading = true;
+    sharedSettingsError = '';
+    try {
+      const result = await getSettings();
+      if (!destroyed && requestId === defaultsRequestId)
+        sharedSettings = result;
+    } catch (error) {
+      if (!destroyed && requestId === defaultsRequestId)
+        sharedSettingsError = viewErrorMessage(
+          error,
+          t('settings.loadError', 'Settings could not be loaded.'),
+        );
+    } finally {
+      if (!destroyed && requestId === defaultsRequestId)
+        sharedSettingsLoading = false;
+    }
+  }
+
+  function commitSharedSettings(nextSettings) {
+    sharedSettings = nextSettings;
+    void loadAgents({ showLoading: false });
+  }
+
+  function sharedSettingsFailure(message) {
+    if (message)
+      onToast({
+        title: t('errors.appError', 'Error'),
+        message,
+        variant: 'error',
+      });
+  }
+
+  function navigateFromAgent(panelId) {
+    if (panelId === 'defaults' || panelId === 'compaction')
+      return openSharedDefaults(panelId);
+    return onNavigateToSettingsPanel(panelId);
+  }
 
   let agents = $state([]);
   let selectedAgentId = $state('');
@@ -116,6 +182,8 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
+
     modelCatalogLoader.invalidate();
   });
 
@@ -372,12 +440,15 @@
   }
 
   function selectAgent(agentId) {
-    if (agentId === selectedAgentId) {
+    if (agentId === selectedAgentId && !sharedDefaultsOpen) {
       return false;
     }
-    return autosaveContext.requestTransition(() =>
-      applyAgentSelection(agentId),
-    );
+
+    return autosaveContext.requestTransition(() => {
+      sharedDefaultsOpen = false;
+
+      return applyAgentSelection(agentId);
+    });
   }
 
   function applyAgentSelection(agentId) {
@@ -418,6 +489,9 @@
     // Best-effort: an empty object (fetch failure) makes the modal render the
     // absent-case labels.
     createModalAgentDefaults = {};
+
+    sharedDefaultsOpen = false;
+
     isCreateModalOpen = true;
     try {
       const result = await getSettings();
@@ -459,7 +533,9 @@
   <div class="agents-layout">
     <AgentListPane
       {agents}
-      {selectedAgentId}
+      selectedAgentId={sharedDefaultsOpen ? '' : selectedAgentId}
+      {sharedDefaultsOpen}
+      onOpenSharedDefaults={() => openSharedDefaults()}
       {isLoading}
       {isReordering}
       onSelect={selectAgent}
@@ -468,31 +544,143 @@
       onReorderInteractionChange={handleReorderInteractionChange}
     />
 
-    {#key selectedAgent?.id ?? 'new-agent'}
-      <AgentEditor
-        agent={selectedAgent}
-        agentsCount={agents.length}
-        {availableModels}
-        {availableConnections}
-        {availableTools}
-        {availableSkills}
-        {invalidSkills}
-        {availableAgentTargets}
-        {agentTargetCatalogError}
-        projectOptions={availableProjects}
-        {projectCatalogError}
-        {loadError}
-        onAgentUpdated={handleAgentUpdated}
-        onAgentRenamed={handleAgentRenamed}
-        onAgentCreated={handleAgentCreated}
-        onAgentDeleted={handleAgentDeleted}
-        {onToast}
-        {onNavigateToSettingsPanel}
-        {onNavigateToAgentPrompt}
-        {memoriesRefreshToken}
-        onModelDropdownOpenChange={trackModelDropdownOpen}
-      />
-    {/key}
+    <div class="agent-editor-host" hidden={sharedDefaultsOpen}>
+      {#key selectedAgent?.id ?? 'new-agent'}
+        <AgentEditor
+          agent={selectedAgent}
+          agentsCount={agents.length}
+          {availableModels}
+          {availableConnections}
+          {availableTools}
+          {availableSkills}
+          {invalidSkills}
+          {availableAgentTargets}
+          {agentTargetCatalogError}
+          projectOptions={availableProjects}
+          {projectCatalogError}
+          {loadError}
+          onAgentUpdated={handleAgentUpdated}
+          onAgentRenamed={handleAgentRenamed}
+          onAgentCreated={handleAgentCreated}
+          onAgentDeleted={handleAgentDeleted}
+          {onToast}
+          onNavigateToSettingsPanel={navigateFromAgent}
+          {onNavigateToAgentPrompt}
+          {memoriesRefreshToken}
+          onModelDropdownOpenChange={trackModelDropdownOpen}
+        />
+      {/key}
+    </div>
+
+    {#if sharedDefaultsOpen || sharedSettings}
+      <div class="agent-shared-pane" hidden={!sharedDefaultsOpen}>
+        <header class="management-header">
+          <div class="settings-page-eyebrow">{t('agents.title', 'Agents')}</div>
+
+          <div class="agent-shared-title">
+            <h2>{t('agents.shared.title', 'Shared defaults')}</h2>
+
+            <Button
+              variant="secondary"
+              onClick={() => selectAgent(selectedAgentId)}
+              >{t('agents.shared.back', 'Back to Agent')}</Button
+            >
+          </div>
+
+          <p class="agent-shared-scope">
+            {t(
+              'agents.shared.scope',
+              'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
+            )}
+          </p>
+        </header>
+
+        <div class="agent-detail-scroll agent-shared-content">
+          {#if sharedSettingsLoading}
+            <Banner variant="neutral"
+              >{t('settings.loading', 'Loading settings…')}</Banner
+            >
+          {:else if sharedSettingsError}
+            <Banner variant="error"
+              >{sharedSettingsError}<Button
+                variant="secondary"
+                onClick={loadSharedSettings}
+                >{t('common.retry', 'Retry')}</Button
+              ></Banner
+            >
+          {:else if sharedSettings}
+            <section
+              class="agent-defaults-card"
+              data-settings-section="defaults"
+            >
+              <header>
+                <h3>{t('agents.shared.modelTitle', 'Model & Thinking')}</h3>
+                <p>
+                  {t(
+                    'agents.shared.modelDescription',
+                    'Choose the common starting point. Individual Agents can override it.',
+                  )}
+                </p>
+              </header>
+
+              <div class="agent-defaults-form">
+                <SettingsDefaultsPanel
+                  settings={sharedSettings}
+                  onCommit={commitSharedSettings}
+                  {onToast}
+                  onError={sharedSettingsFailure}
+                  {modelsRefreshToken}
+                />
+              </div>
+            </section>
+
+            <section
+              class="agent-defaults-card"
+              data-settings-section="compaction"
+            >
+              <header class="agent-shared-disclosure">
+                <div>
+                  <h3>{t('settings.compaction.title', 'Compaction')}</h3>
+                  <p>
+                    {t(
+                      'agents.shared.compactionDescription',
+                      'The inherited policy for keeping long conversations within the Model context.',
+                    )}
+                  </p>
+                </div>
+
+                <Button
+                  variant="secondary"
+                  aria-expanded={sharedCompactionOpen}
+                  aria-controls="agent-shared-compaction"
+                  onClick={() => {
+                    sharedCompactionOpen = !sharedCompactionOpen;
+                  }}
+                  >{t(
+                    'agents.shared.configureCompaction',
+                    'Configure Compaction',
+                  )}</Button
+                >
+              </header>
+
+              <div
+                id="agent-shared-compaction"
+                class="agent-defaults-form"
+                hidden={!sharedCompactionOpen}
+              >
+                <SettingsCompactionPanel
+                  settings={sharedSettings}
+                  onCommit={commitSharedSettings}
+                  {onToast}
+                  onError={sharedSettingsFailure}
+                  {modelsRefreshToken}
+                />
+              </div>
+            </section>
+          {/if}
+        </div>
+      </div>
+    {/if}
   </div>
 
   {#if isCreateModalOpen}
