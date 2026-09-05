@@ -544,6 +544,11 @@ class ToolContext:
     # Bash combines these transient grants with the Agent's permanent Tool settings.
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
+    # Delegated capabilities must inherit the same Run restrictions as direct calls.
+    tool_restriction: Sequence[str] | None = None
+    tool_denial_resolver: Callable[[str], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
     # Grants for Session-scoped tools whose authority is derived while building
     # the Session request state. Chat adds ``history`` only after a persisted
     # Compaction checkpoint.
@@ -728,6 +733,8 @@ class Tool:
     result_schema: JsonObject | None = field(default=None, repr=False)
     contract: ToolContract = field(init=False, repr=False, compare=False)
     internal: bool = False
+    # Discoverable through a stable routing Tool; still registered for policy and dispatch.
+    deferred: bool = False
     # A Session-scoped tool is configurable nowhere and model-visible only when
     # the current Session supplies a matching persisted-state grant.
     session_scoped: bool = False
@@ -928,6 +935,7 @@ class ToolRegistry:
         handler: ToolHandler,
         *,
         internal: bool = False,
+        deferred: bool = False,
         session_scoped: bool = False,
         family: str | None = None,
         activation: str = TOOL_ACTIVATION_CONFIGURABLE,
@@ -975,6 +983,7 @@ class ToolRegistry:
             handler=handler,
             result_schema=result_schema,
             internal=internal,
+            deferred=deferred,
             session_scoped=session_scoped,
             family=family,
             family_label=family_definition.label if family_definition is not None else None,
@@ -1173,6 +1182,8 @@ class ToolRegistry:
             session_grants=session_grants,
             ready_only=ready_only,
         ):
+            if tool.deferred:
+                continue
             definition = self._to_provider_definition(tool, profile_context)
             if definition is not None:
                 definitions.append(definition)
@@ -1200,6 +1211,8 @@ class ToolRegistry:
             session_grants=session_grants,
             ready_only=ready_only,
         ):
+            if tool.deferred:
+                continue
             resolved = self._resolve_definition_profile(tool, profile_context)
             if resolved is None:
                 continue
