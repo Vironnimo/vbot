@@ -7,6 +7,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import TabList from './ui/TabList.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
@@ -172,6 +173,20 @@
   );
 
   let selectedProject = $derived(projectsController.selectedProject());
+  let activeDetail = $state('overview');
+  let detailScroll = $state(null);
+  let detailTabs = $derived([
+    { id: 'overview', label: t('management.overview', 'Overview') },
+    { id: 'team', label: t('projects.detail.sectionTeam', 'Team') },
+    { id: 'context', label: t('management.context', 'Context') },
+    { id: 'access', label: t('management.access', 'Tools & Skills') },
+  ]);
+  function selectDetail(id) {
+    return autosaveContext.requestTransition(() => {
+      activeDetail = id;
+      if (detailScroll) detailScroll.scrollTop = 0;
+    });
+  }
 
   let allModelOptions = $derived(
     buildModelSelectOptions({
@@ -761,7 +776,7 @@
             title={t('projects.emptyTitle', 'No projectsState.projects yet')}
             description={t(
               'projects.emptySubtitle',
-              'Add a repository path below to create your first project.',
+              'Choose Add to connect your first repository.',
             )}
           />
         {:else}
@@ -812,7 +827,7 @@
           class="project-detail-pane"
           data-testid={`project-panel-${selectedProject.project_id}`}
         >
-          <div class="project-detail-scroll">
+          <div class="management-header">
             <div class="detail-top">
               <div>
                 <div class="detail-heading-row">
@@ -861,759 +876,488 @@
               </div>
             </div>
 
+            <TabList
+              items={detailTabs}
+              value={activeDetail}
+              idPrefix="project-detail"
+              ariaLabel={t('management.sections', 'Detail sections')}
+              onChange={selectDetail}
+            />
+          </div>
+          <div class="project-detail-scroll" bind:this={detailScroll}>
             {#if projectsState.editError}
               <Banner variant="error" role="alert">
                 {projectsState.editError}
               </Banner>
             {/if}
 
-            <!-- Section 1: Project settings -->
-            <form
-              class="detail-section detail-section--overflow"
-              onsubmit={handleManualSave}
+            <div
+              class="management-topic"
+              role="tabpanel"
+              id="project-detail-panel-overview"
+              aria-labelledby="project-detail-tab-overview"
+              hidden={activeDetail !== 'overview'}
+              tabindex="0"
             >
-              <div class="detail-section-title">
-                {t('projects.detail.sectionSettings', 'Project settings')}
-              </div>
-              <div class="detail-section-body">
-                <div class="projects-field-grid">
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t('projects.manage.displayName', 'Display name')}
-                    </span>
-                    <TextField
-                      id="project-edit-name"
-                      value={projectsState.editForm.display_name}
-                      disabled={projectsState.editSaving}
-                      onInput={(next) => updateEditField('display_name', next)}
-                    />
-                  </label>
-
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t('projects.manage.sourceFormat', 'Source format')}
-                      <InfoHint
-                        text={t(
-                          'projects.manage.sourceFormatHelp',
-                          'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
-                        )}
-                      />
-                    </span>
-                    <Dropdown
-                      id="project-edit-source-format"
-                      value={projectsState.editForm.source_format}
-                      options={sourceFormatOptions}
-                      ariaLabel={t(
-                        'projects.manage.sourceFormat',
-                        'Source format',
-                      )}
-                      disabled={projectsState.editSaving}
-                      triggerClass="projects-dropdown"
-                      onValueChange={(value) =>
-                        updateEditField('source_format', value)}
-                    />
-                  </label>
-
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t('projects.manage.defaultAgent', 'Default agent')}
-                      <InfoHint
-                        text={t(
-                          'projects.manage.defaultAgentHelp',
-                          'The team agent preselected when you open this project in Chat.',
-                        )}
-                      />
-                    </span>
-                    <Dropdown
-                      id="project-edit-agent"
-                      value={projectsState.editForm.default_agent}
-                      options={agentOptions}
-                      placeholder={t(
-                        'projects.manage.defaultAgentEmpty',
-                        'No project default',
-                      )}
-                      ariaLabel={t(
-                        'projects.manage.defaultAgent',
-                        'Default agent',
-                      )}
-                      disabled={projectsState.editSaving}
-                      triggerClass="projects-dropdown"
-                      onValueChange={(value) =>
-                        updateEditField('default_agent', value)}
-                    />
-                  </label>
-
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t('projects.manage.defaultModel', 'Default model')}
-                      <InfoHint
-                        text={t(
-                          'projects.manage.defaultModelHelp',
-                          'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
-                        )}
-                      />
-                    </span>
-                    <SearchableDropdown
-                      id="project-edit-model"
-                      value={modelSelectValue}
-                      options={modelOptions}
-                      placeholder={defaultModelInheritLabel()}
-                      searchPlaceholder={t(
-                        'projects.manage.modelSearchPlaceholder',
-                        'Filter models…',
-                      )}
-                      emptyLabel={t(
-                        'projects.manage.modelSearchEmpty',
-                        'No models match',
-                      )}
-                      ariaLabel={t(
-                        'projects.manage.defaultModel',
-                        'Default model',
-                      )}
-                      disabled={projectsState.editSaving}
-                      triggerClass="projects-dropdown"
-                      panelClass="projects-view__search-panel"
-                      footerActionLabel={modelFilterFooter}
-                      onFooterAction={() =>
-                        (projectsState.showAllModels =
-                          !projectsState.showAllModels)}
-                      onOpenChange={trackModelDropdownOpen}
-                      onValueChange={updateModelSelection}
-                    />
-                    <Button
-                      variant="tertiary"
-                      class="projects-inherit-link"
-                      onClick={navigateToAgentDefaults}
-                    >
-                      {t('inherit.editGlobalDefaults', 'Edit global defaults')}
-                    </Button>
-                  </label>
-
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t(
-                        'projects.manage.defaultTemperature',
-                        'Default temperature',
-                      )}
-                      <InfoHint
-                        text={t(
-                          'projects.manage.defaultTemperatureHelp',
-                          'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
-                        )}
-                      />
-                    </span>
-                    <div class="projects-override-controls">
+              <!-- Section 1: Project settings -->
+              <form
+                class="detail-section detail-section--overflow"
+                id="project-settings-form"
+                onsubmit={handleManualSave}
+              >
+                <div class="detail-section-title">
+                  {t('projects.detail.sectionSettings', 'Project settings')}
+                </div>
+                <div class="detail-section-body">
+                  <div class="projects-field-grid">
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t('projects.manage.displayName', 'Display name')}
+                      </span>
                       <TextField
-                        id="project-edit-temperature"
-                        class="projects-override-input"
-                        inputmode="decimal"
-                        value={projectsState.editForm.default_temperature}
+                        id="project-edit-name"
+                        value={projectsState.editForm.display_name}
                         disabled={projectsState.editSaving}
+                        onInput={(next) =>
+                          updateEditField('display_name', next)}
+                      />
+                    </label>
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t('projects.manage.sourceFormat', 'Source format')}
+                        <InfoHint
+                          text={t(
+                            'projects.manage.sourceFormatHelp',
+                            'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
+                          )}
+                        />
+                      </span>
+                      <Dropdown
+                        id="project-edit-source-format"
+                        value={projectsState.editForm.source_format}
+                        options={sourceFormatOptions}
                         ariaLabel={t(
+                          'projects.manage.sourceFormat',
+                          'Source format',
+                        )}
+                        disabled={projectsState.editSaving}
+                        triggerClass="projects-dropdown"
+                        onValueChange={(value) =>
+                          updateEditField('source_format', value)}
+                      />
+                    </label>
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t('projects.manage.defaultAgent', 'Default agent')}
+                        <InfoHint
+                          text={t(
+                            'projects.manage.defaultAgentHelp',
+                            'The team agent preselected when you open this project in Chat.',
+                          )}
+                        />
+                      </span>
+                      <Dropdown
+                        id="project-edit-agent"
+                        value={projectsState.editForm.default_agent}
+                        options={agentOptions}
+                        placeholder={t(
+                          'projects.manage.defaultAgentEmpty',
+                          'No project default',
+                        )}
+                        ariaLabel={t(
+                          'projects.manage.defaultAgent',
+                          'Default agent',
+                        )}
+                        disabled={projectsState.editSaving}
+                        triggerClass="projects-dropdown"
+                        onValueChange={(value) =>
+                          updateEditField('default_agent', value)}
+                      />
+                    </label>
+                  </div>
+                  <div class="projects-field-grid projects-field-grid--models">
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t('projects.manage.defaultModel', 'Default model')}
+                        <InfoHint
+                          text={t(
+                            'projects.manage.defaultModelHelp',
+                            'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
+                          )}
+                        />
+                      </span>
+                      <SearchableDropdown
+                        id="project-edit-model"
+                        value={modelSelectValue}
+                        options={modelOptions}
+                        placeholder={defaultModelInheritLabel()}
+                        searchPlaceholder={t(
+                          'projects.manage.modelSearchPlaceholder',
+                          'Filter models…',
+                        )}
+                        emptyLabel={t(
+                          'projects.manage.modelSearchEmpty',
+                          'No models match',
+                        )}
+                        ariaLabel={t(
+                          'projects.manage.defaultModel',
+                          'Default model',
+                        )}
+                        disabled={projectsState.editSaving}
+                        triggerClass="projects-dropdown"
+                        panelClass="projects-view__search-panel"
+                        footerActionLabel={modelFilterFooter}
+                        onFooterAction={() =>
+                          (projectsState.showAllModels =
+                            !projectsState.showAllModels)}
+                        onOpenChange={trackModelDropdownOpen}
+                        onValueChange={updateModelSelection}
+                      />
+                      <Button
+                        variant="tertiary"
+                        class="projects-inherit-link"
+                        onClick={navigateToAgentDefaults}
+                      >
+                        {t(
+                          'inherit.editGlobalDefaults',
+                          'Edit global defaults',
+                        )}
+                      </Button>
+                    </label>
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t(
+                          'projects.manage.defaultThinkingEffort',
+                          'Default thinking effort',
+                        )}
+                        <InfoHint
+                          text={t(
+                            'projects.manage.defaultThinkingEffortHelp',
+                            'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
+                          )}
+                        />
+                      </span>
+                      <Dropdown
+                        id="project-edit-thinking-effort"
+                        value={projectsState.editForm.default_thinking_effort}
+                        options={thinkingEffortOptions}
+                        ariaLabel={t(
+                          'projects.manage.defaultThinkingEffort',
+                          'Default thinking effort',
+                        )}
+                        disabled={projectsState.editSaving}
+                        triggerClass="projects-dropdown"
+                        onValueChange={(value) =>
+                          updateEditField('default_thinking_effort', value)}
+                      />
+                    </label>
+                    <label class="projects-field">
+                      <span class="projects-label">
+                        {t(
                           'projects.manage.defaultTemperature',
                           'Default temperature',
                         )}
-                        onInput={(next) =>
-                          updateEditField('default_temperature', next)}
-                      />
-                      {#if !temperatureIsInherit}
+                        <InfoHint
+                          text={t(
+                            'projects.manage.defaultTemperatureHelp',
+                            'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
+                          )}
+                        />
+                      </span>
+                      <div class="projects-override-controls">
+                        <TextField
+                          id="project-edit-temperature"
+                          class="projects-override-input"
+                          inputmode="decimal"
+                          value={projectsState.editForm.default_temperature}
+                          disabled={projectsState.editSaving}
+                          ariaLabel={t(
+                            'projects.manage.defaultTemperature',
+                            'Default temperature',
+                          )}
+                          onInput={(next) =>
+                            updateEditField('default_temperature', next)}
+                        />
+                        {#if !temperatureIsInherit}
+                          <Button
+                            variant="tertiary"
+                            tooltip={t(
+                              'inherit.resetToInherit',
+                              'Reset to inherited value',
+                            )}
+                            ariaLabel={t(
+                              'inherit.resetToInherit',
+                              'Reset to inherited value',
+                            )}
+                            onClick={clearDefaultTemperature}
+                          >
+                            —
+                          </Button>
+                        {/if}
+                      </div>
+                      {#if temperatureIsInherit}
+                        {#if globalDefaultText('temperature')}
+                          <small class="projects-inherit-hint">
+                            {t(
+                              'inherit.hint',
+                              'Inherited: {value} (global default)',
+                              { value: globalDefaultText('temperature') },
+                            )}
+                          </small>
+                        {:else}
+                          <small class="projects-inherit-hint">
+                            {t(
+                              'inherit.hintProviderDefault',
+                              'Provider default — nothing is set here or in the global defaults.',
+                            )}
+                          </small>
+                        {/if}
+                      {/if}
+                    </label>
+                  </div>
+                </div>
+              </form>
+            </div>
+            <div
+              class="management-topic"
+              role="tabpanel"
+              id="project-detail-panel-team"
+              aria-labelledby="project-detail-tab-team"
+              hidden={activeDetail !== 'team'}
+              tabindex="0"
+            >
+              <!-- Section 3: Team -->
+              <div class="detail-section">
+                <div class="detail-section-title">
+                  <span class="projects-section-title-copy">
+                    {t('projects.detail.sectionTeam', 'Team')}
+                    <InfoHint
+                      text={t(
+                        'projects.detail.teamInfo',
+                        'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
+                      )}
+                    />
+                  </span>
+                </div>
+                <div class="detail-section-body">
+                  {#if projectsState.activeReport && !projectsState.activeReport.clean}
+                    <div class="projects-field">
+                      <Banner variant="warn" role="status">
+                        <span>
+                          {t(
+                            'projects.report.findingCount',
+                            '{count} issues found',
+                            {
+                              count: projectsState.activeReport.findingCount,
+                            },
+                          )}
+                        </span>
                         <Button
                           variant="tertiary"
-                          tooltip={t(
-                            'inherit.resetToInherit',
-                            'Reset to inherited value',
-                          )}
-                          ariaLabel={t(
-                            'inherit.resetToInherit',
-                            'Reset to inherited value',
-                          )}
-                          onClick={clearDefaultTemperature}
+                          aria-expanded={findingsExpanded}
+                          onClick={toggleFindings}
                         >
-                          —
+                          {findingsExpanded
+                            ? t('projects.report.hideDetails', 'Hide details')
+                            : t('projects.report.showDetails', 'Show details')}
                         </Button>
-                      {/if}
-                    </div>
-                    {#if temperatureIsInherit}
-                      {#if globalDefaultText('temperature')}
-                        <small class="projects-inherit-hint">
-                          {t(
-                            'inherit.hint',
-                            'Inherited: {value} (global default)',
-                            { value: globalDefaultText('temperature') },
-                          )}
-                        </small>
-                      {:else}
-                        <small class="projects-inherit-hint">
-                          {t(
-                            'inherit.hintProviderDefault',
-                            'Provider default — nothing is set here or in the global defaults.',
-                          )}
-                        </small>
-                      {/if}
-                    {/if}
-                  </label>
-
-                  <label class="projects-field">
-                    <span class="projects-label">
-                      {t(
-                        'projects.manage.defaultThinkingEffort',
-                        'Default thinking effort',
-                      )}
-                      <InfoHint
-                        text={t(
-                          'projects.manage.defaultThinkingEffortHelp',
-                          'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
-                        )}
-                      />
-                    </span>
-                    <Dropdown
-                      id="project-edit-thinking-effort"
-                      value={projectsState.editForm.default_thinking_effort}
-                      options={thinkingEffortOptions}
-                      ariaLabel={t(
-                        'projects.manage.defaultThinkingEffort',
-                        'Default thinking effort',
-                      )}
-                      disabled={projectsState.editSaving}
-                      triggerClass="projects-dropdown"
-                      onValueChange={(value) =>
-                        updateEditField('default_thinking_effort', value)}
-                    />
-                  </label>
-                </div>
-
-                <div class="detail-btns projectsState.projects-save-row">
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    data-testid={`project-save-${selectedProject.project_id}`}
-                    disabled={projectsState.editSaving}
-                  >
-                    {projectsState.editSaving
-                      ? t('projects.manage.saving', 'Saving…')
-                      : t('projects.manage.save', 'Save changes')}
-                  </Button>
-                </div>
-              </div>
-            </form>
-
-            <!-- Section 2: Auto-load files -->
-            <div class="detail-section">
-              <div class="detail-section-title">
-                {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
-                <InfoHint
-                  text={t(
-                    'projects.detail.autoLoadInfo',
-                    'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
-                  )}
-                />
-              </div>
-              <div class="detail-section-body">
-                <div class="projects-field">
-                  {#if projectsState.editForm.auto_load.length > 0}
-                    <ul class="projects-file-list">
-                      {#each projectsState.editForm.auto_load as filePath, index (index)}
-                        <li class="projects-file-row">
-                          <span class="projects-file-name">{filePath}</span>
-                          <button
-                            type="button"
-                            class="projects-file-remove"
-                            data-testid={`project-auto-load-remove-${index}`}
-                            disabled={projectsState.editSaving}
-                            aria-label={t(
-                              'projects.manage.autoLoadRemove',
-                              'Remove {file}',
-                              { file: filePath },
-                            )}
-                            onclick={() => removeAutoLoadEntry(index)}
-                          >
-                            ×
-                          </button>
-                        </li>
-                      {/each}
-                    </ul>
-                  {:else}
-                    <EmptyState
-                      density="compact"
-                      description={t(
-                        'projects.manage.autoLoadEmpty',
-                        'No auto-load files',
-                      )}
-                    />
-                  {/if}
-                  <div class="projects-file-add">
-                    <TextField
-                      id="project-edit-auto-load"
-                      class="projects-file-input"
-                      value={projectsState.autoLoadDraft}
-                      placeholder={t(
-                        'projects.manage.autoLoadPlaceholder',
-                        'Add a file path…',
-                      )}
-                      disabled={projectsState.editSaving}
-                      ariaLabel={t(
-                        'projects.manage.autoLoad',
-                        'Auto-load files',
-                      )}
-                      onInput={(next) => {
-                        projectsState.autoLoadDraft = next;
-                      }}
-                      onkeydown={handleAutoLoadKeydown}
-                    />
-                    <Button
-                      variant="secondary"
-                      data-testid="project-auto-load-add"
-                      disabled={projectsState.editSaving ||
-                        projectsState.autoLoadDraft.trim().length === 0}
-                      onClick={addAutoLoadEntry}
-                    >
-                      {t('projects.manage.autoLoadAdd', 'Add')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Section 3: Team -->
-            <div class="detail-section">
-              <div class="detail-section-title">
-                <span class="projects-section-title-copy">
-                  {t('projects.detail.sectionTeam', 'Team')}
-                  <InfoHint
-                    text={t(
-                      'projects.detail.teamInfo',
-                      'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
-                    )}
-                  />
-                </span>
-              </div>
-              <div class="detail-section-body">
-                {#if projectsState.activeReport && !projectsState.activeReport.clean}
-                  <div class="projects-field">
-                    <Banner variant="warn" role="status">
-                      <span>
-                        {t(
-                          'projects.report.findingCount',
-                          '{count} issues found',
-                          {
-                            count: projectsState.activeReport.findingCount,
-                          },
-                        )}
-                      </span>
-                      <Button
-                        variant="tertiary"
-                        aria-expanded={findingsExpanded}
-                        onClick={toggleFindings}
-                      >
-                        {findingsExpanded
-                          ? t('projects.report.hideDetails', 'Hide details')
-                          : t('projects.report.showDetails', 'Show details')}
-                      </Button>
-                    </Banner>
-                    {#if findingsExpanded}
-                      {#each projectsState.activeReport.groups as group (group.type)}
-                        <div class="projects-finding-group">
-                          <h4 class="projects-finding-title">
-                            {groupLabel(group.type)}
-                          </h4>
-                          <ul class="projects-findings">
-                            {#each group.findings as finding, index (`${group.type}-${index}`)}
-                              <li class="projects-finding">
-                                <span class="projects-finding-detail">
-                                  {finding.detail}
-                                </span>
-                                {#if finding.agent_id}
-                                  <span class="projects-finding-meta">
-                                    {t(
-                                      'projects.report.finding.agent',
-                                      'Agent {agentId}',
-                                      { agentId: finding.agent_id },
-                                    )}
+                      </Banner>
+                      {#if findingsExpanded}
+                        {#each projectsState.activeReport.groups as group (group.type)}
+                          <div class="projects-finding-group">
+                            <h4 class="projects-finding-title">
+                              {groupLabel(group.type)}
+                            </h4>
+                            <ul class="projects-findings">
+                              {#each group.findings as finding, index (`${group.type}-${index}`)}
+                                <li class="projects-finding">
+                                  <span class="projects-finding-detail">
+                                    {finding.detail}
                                   </span>
-                                {/if}
-                                {#if finding.source_path}
-                                  <span class="projects-finding-meta">
-                                    {t(
-                                      'projects.report.finding.source',
-                                      'Source: {source}',
-                                      { source: finding.source_path },
-                                    )}
-                                  </span>
-                                {/if}
-                              </li>
-                            {/each}
-                          </ul>
-                        </div>
-                      {/each}
-                    {/if}
-                  </div>
-                {/if}
-
-                {#if projectsState.scanLoading}
-                  <p class="projects-scan-loading" role="status">
-                    {t('projects.loading', 'Loading projectsState.projects…')}
-                  </p>
-                {:else if projectsState.activeTeam.length === 0}
-                  <EmptyState
-                    density="compact"
-                    description={t(
-                      'projects.team.empty',
-                      'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
-                    )}
-                  />
-                {:else}
-                  <ul class="projects-team">
-                    {#each projectsState.activeTeam as member (member.agent_id)}
-                      {@const expanded =
-                        projectsState.expandedMembers[member.agent_id] === true}
-                      {@const summary = effectiveDisplay(member, 'model')}
-                      <li
-                        class="projects-team-member"
-                        class:projectsState.projects-team-member--expanded={expanded}
-                        data-testid={`project-team-member-${member.agent_id}`}
-                      >
-                        <button
-                          type="button"
-                          class="projects-team-header"
-                          data-testid={`project-team-toggle-${member.agent_id}`}
-                          aria-expanded={expanded}
-                          onclick={() => toggleMember(member.agent_id)}
-                        >
-                          <svg
-                            class="projects-team-chevron"
-                            class:projectsState.projects-team-chevron--open={expanded}
-                            viewBox="0 0 12 12"
-                            width="11"
-                            height="11"
-                            aria-hidden="true"
-                          >
-                            <path d="M4 2l4 4-4 4" />
-                          </svg>
-                          <span class="projects-team-headline">
-                            <span class="projects-team-name">
-                              {member.display_name}
-                            </span>
-                            {#if member.description}
-                              <span class="projects-team-description">
-                                {member.description}
-                              </span>
-                            {/if}
-                          </span>
-                          <span
-                            class="projects-team-summary"
-                            use:tooltip={summary.value}
-                          >
-                            {summary.value}
-                          </span>
-                        </button>
-
-                        {#if expanded}
-                          <div class="projects-team-detail">
-                            <ul class="projects-effective-list">
-                              {#each ['model', 'temperature', 'thinking_effort'] as field (field)}
-                                {@const display = effectiveDisplay(
-                                  member,
-                                  field,
-                                )}
-                                <li class="projects-effective-row">
-                                  <span class="projects-effective-label">
-                                    {display.label}
-                                  </span>
-                                  <span
-                                    class="projects-effective-value"
-                                    class:projectsState.projects-effective-value--muted={display.isEmpty}
-                                  >
-                                    {display.value}
-                                  </span>
-                                  {#if display.sourceLabel}
-                                    <span class="projects-effective-source">
+                                  {#if finding.agent_id}
+                                    <span class="projects-finding-meta">
                                       {t(
-                                        'projects.team.fromSource',
-                                        'from {source}',
-                                        { source: display.sourceLabel },
+                                        'projects.report.finding.agent',
+                                        'Agent {agentId}',
+                                        { agentId: finding.agent_id },
+                                      )}
+                                    </span>
+                                  {/if}
+                                  {#if finding.source_path}
+                                    <span class="projects-finding-meta">
+                                      {t(
+                                        'projects.report.finding.source',
+                                        'Source: {source}',
+                                        { source: finding.source_path },
                                       )}
                                     </span>
                                   {/if}
                                 </li>
                               {/each}
                             </ul>
+                          </div>
+                        {/each}
+                      {/if}
+                    </div>
+                  {/if}
 
-                            <div class="projects-overrides">
-                              <!-- Model override -->
-                              <div class="projects-override-row">
-                                <span class="projects-label">
-                                  {t('projects.team.overrideLabel', 'Override')} ·
-                                  {t('projects.team.effectiveModel', 'Model')}
+                  {#if projectsState.scanLoading}
+                    <p class="projects-scan-loading" role="status">
+                      {t('projects.loading', 'Loading projectsState.projects…')}
+                    </p>
+                  {:else if projectsState.activeTeam.length === 0}
+                    <EmptyState
+                      density="compact"
+                      description={t(
+                        'projects.team.empty',
+                        'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
+                      )}
+                    />
+                  {:else}
+                    <ul class="projects-team">
+                      {#each projectsState.activeTeam as member (member.agent_id)}
+                        {@const expanded =
+                          projectsState.expandedMembers[member.agent_id] ===
+                          true}
+                        {@const summary = effectiveDisplay(member, 'model')}
+                        <li
+                          class="projects-team-member"
+                          class:projectsState.projects-team-member--expanded={expanded}
+                          data-testid={`project-team-member-${member.agent_id}`}
+                        >
+                          <button
+                            type="button"
+                            class="projects-team-header"
+                            data-testid={`project-team-toggle-${member.agent_id}`}
+                            aria-expanded={expanded}
+                            onclick={() => toggleMember(member.agent_id)}
+                          >
+                            <svg
+                              class="projects-team-chevron"
+                              class:projectsState.projects-team-chevron--open={expanded}
+                              viewBox="0 0 12 12"
+                              width="11"
+                              height="11"
+                              aria-hidden="true"
+                            >
+                              <path d="M4 2l4 4-4 4" />
+                            </svg>
+                            <span class="projects-team-headline">
+                              <span class="projects-team-name">
+                                {member.display_name}
+                              </span>
+                              {#if member.description}
+                                <span class="projects-team-description">
+                                  {member.description}
                                 </span>
-                                <div class="projects-override-controls">
-                                  <div class="projects-override-input">
-                                    <SearchableDropdown
-                                      id={`project-override-model-${member.agent_id}`}
-                                      value={selectModelValue(
-                                        overrideDraft(member.agent_id).model,
-                                        overrideModelOptions(member),
-                                      )}
-                                      options={overrideModelOptions(member)}
-                                      placeholder={t(
-                                        'projects.team.overrideModelPlaceholder',
-                                        'No override',
-                                      )}
-                                      searchPlaceholder={t(
-                                        'projects.manage.modelSearchPlaceholder',
-                                        'Filter models…',
-                                      )}
-                                      emptyLabel={t(
-                                        'projects.manage.modelSearchEmpty',
-                                        'No models match',
-                                      )}
-                                      ariaLabel={t(
-                                        'projects.team.effectiveModel',
-                                        'Model',
-                                      )}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'model',
-                                      )}
-                                      triggerClass="projects-dropdown"
-                                      panelClass="projects-view__search-panel"
-                                      footerActionLabel={overrideModelFilterFooter(
-                                        member,
-                                      )}
-                                      onFooterAction={() =>
-                                        toggleShowAllOverrideModels(
-                                          member.agent_id,
+                              {/if}
+                            </span>
+                            <span
+                              class="projects-team-summary"
+                              use:tooltip={summary.value}
+                            >
+                              {summary.value}
+                            </span>
+                          </button>
+
+                          {#if expanded}
+                            <div class="projects-team-detail">
+                              <ul class="projects-effective-list">
+                                {#each ['model', 'temperature', 'thinking_effort'] as field (field)}
+                                  {@const display = effectiveDisplay(
+                                    member,
+                                    field,
+                                  )}
+                                  <li class="projects-effective-row">
+                                    <span class="projects-effective-label">
+                                      {display.label}
+                                    </span>
+                                    <span
+                                      class="projects-effective-value"
+                                      class:projectsState.projects-effective-value--muted={display.isEmpty}
+                                    >
+                                      {display.value}
+                                    </span>
+                                    {#if display.sourceLabel}
+                                      <span class="projects-effective-source">
+                                        {t(
+                                          'projects.team.fromSource',
+                                          'from {source}',
+                                          { source: display.sourceLabel },
                                         )}
-                                      onOpenChange={trackModelDropdownOpen}
-                                      onValueChange={(value) =>
-                                        updateOverrideModelSelection(
-                                          member.agent_id,
-                                          value,
-                                        )}
-                                    />
-                                  </div>
-                                  <Button
-                                    variant="secondary"
-                                    data-testid={`project-override-set-model-${member.agent_id}`}
-                                    disabled={!canSetOverride(
-                                      member.agent_id,
-                                      'model',
-                                    )}
-                                    onClick={() =>
-                                      applySetOverride(
-                                        member.agent_id,
-                                        'model',
-                                      )}
-                                  >
+                                      </span>
+                                    {/if}
+                                  </li>
+                                {/each}
+                              </ul>
+
+                              <div class="projects-overrides">
+                                <!-- Model override -->
+                                <div class="projects-override-row">
+                                  <span class="projects-label">
                                     {t(
-                                      'projects.team.setOverride',
-                                      'Set override',
-                                    )}
-                                  </Button>
-                                  {#if memberFieldIsOverridden(member, 'model')}
-                                    <Button
-                                      variant="tertiary"
-                                      data-testid={`project-override-clear-model-${member.agent_id}`}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'model',
-                                      )}
-                                      onClick={() =>
-                                        applyClearOverride(
+                                      'projects.team.overrideLabel',
+                                      'Override',
+                                    )} ·
+                                    {t('projects.team.effectiveModel', 'Model')}
+                                  </span>
+                                  <div class="projects-override-controls">
+                                    <div class="projects-override-input">
+                                      <SearchableDropdown
+                                        id={`project-override-model-${member.agent_id}`}
+                                        value={selectModelValue(
+                                          overrideDraft(member.agent_id).model,
+                                          overrideModelOptions(member),
+                                        )}
+                                        options={overrideModelOptions(member)}
+                                        placeholder={t(
+                                          'projects.team.overrideModelPlaceholder',
+                                          'No override',
+                                        )}
+                                        searchPlaceholder={t(
+                                          'projects.manage.modelSearchPlaceholder',
+                                          'Filter models…',
+                                        )}
+                                        emptyLabel={t(
+                                          'projects.manage.modelSearchEmpty',
+                                          'No models match',
+                                        )}
+                                        ariaLabel={t(
+                                          'projects.team.effectiveModel',
+                                          'Model',
+                                        )}
+                                        disabled={isOverrideBusy(
                                           member.agent_id,
                                           'model',
                                         )}
-                                    >
-                                      {t(
-                                        'projects.team.clearOverride',
-                                        'Clear override',
-                                      )}
-                                    </Button>
-                                  {/if}
-                                </div>
-                              </div>
-
-                              <!-- Temperature override -->
-                              <div class="projects-override-row">
-                                <span class="projects-label">
-                                  {t('projects.team.overrideLabel', 'Override')} ·
-                                  {t(
-                                    'projects.team.effectiveTemperature',
-                                    'Temperature',
-                                  )}
-                                </span>
-                                <div class="projects-override-controls">
-                                  <TextField
-                                    id={`project-override-temperature-${member.agent_id}`}
-                                    class="projects-override-input"
-                                    inputmode="decimal"
-                                    value={overrideDraft(member.agent_id)
-                                      .temperature}
-                                    placeholder={t(
-                                      'projects.team.overrideTemperaturePlaceholder',
-                                      'e.g. 0.7',
-                                    )}
-                                    disabled={isOverrideBusy(
-                                      member.agent_id,
-                                      'temperature',
-                                    )}
-                                    ariaLabel={t(
-                                      'projects.team.effectiveTemperature',
-                                      'Temperature',
-                                    )}
-                                    onInput={(next) =>
-                                      updateOverrideDraft(
-                                        member.agent_id,
-                                        'temperature',
-                                        next,
-                                      )}
-                                  />
-                                  <Button
-                                    variant="secondary"
-                                    data-testid={`project-override-set-temperature-${member.agent_id}`}
-                                    disabled={!canSetOverride(
-                                      member.agent_id,
-                                      'temperature',
-                                    )}
-                                    onClick={() =>
-                                      applySetOverride(
-                                        member.agent_id,
-                                        'temperature',
-                                      )}
-                                  >
-                                    {t(
-                                      'projects.team.setOverride',
-                                      'Set override',
-                                    )}
-                                  </Button>
-                                  {#if memberFieldIsOverridden(member, 'temperature')}
-                                    <Button
-                                      variant="tertiary"
-                                      data-testid={`project-override-clear-temperature-${member.agent_id}`}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'temperature',
-                                      )}
-                                      onClick={() =>
-                                        applyClearOverride(
-                                          member.agent_id,
-                                          'temperature',
+                                        triggerClass="projects-dropdown"
+                                        panelClass="projects-view__search-panel"
+                                        footerActionLabel={overrideModelFilterFooter(
+                                          member,
                                         )}
-                                    >
-                                      {t(
-                                        'projects.team.clearOverride',
-                                        'Clear override',
-                                      )}
-                                    </Button>
-                                  {/if}
-                                </div>
-                              </div>
-
-                              <!-- Thinking-effort override -->
-                              <div class="projects-override-row">
-                                <span class="projects-label">
-                                  {t('projects.team.overrideLabel', 'Override')} ·
-                                  {t(
-                                    'projects.team.effectiveThinkingEffort',
-                                    'Thinking effort',
-                                  )}
-                                </span>
-                                <div class="projects-override-controls">
-                                  <div class="projects-override-input">
-                                    <Dropdown
-                                      id={`project-override-thinking-${member.agent_id}`}
-                                      value={overrideDraft(member.agent_id)
-                                        .thinking_effort}
-                                      options={overrideEffortOptions(member)}
-                                      ariaLabel={t(
-                                        'projects.team.effectiveThinkingEffort',
-                                        'Thinking effort',
-                                      )}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'thinking_effort',
-                                      )}
-                                      triggerClass="projects-dropdown"
-                                      onValueChange={(value) =>
-                                        updateOverrideDraft(
-                                          member.agent_id,
-                                          'thinking_effort',
-                                          value,
-                                        )}
-                                    />
-                                  </div>
-                                  <Button
-                                    variant="secondary"
-                                    data-testid={`project-override-set-thinking-${member.agent_id}`}
-                                    disabled={!canSetOverride(
-                                      member.agent_id,
-                                      'thinking_effort',
-                                    )}
-                                    onClick={() =>
-                                      applySetOverride(
-                                        member.agent_id,
-                                        'thinking_effort',
-                                      )}
-                                  >
-                                    {t(
-                                      'projects.team.setOverride',
-                                      'Set override',
-                                    )}
-                                  </Button>
-                                  {#if memberFieldIsOverridden(member, 'thinking_effort')}
-                                    <Button
-                                      variant="tertiary"
-                                      data-testid={`project-override-clear-thinking-${member.agent_id}`}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'thinking_effort',
-                                      )}
-                                      onClick={() =>
-                                        applyClearOverride(
-                                          member.agent_id,
-                                          'thinking_effort',
-                                        )}
-                                    >
-                                      {t(
-                                        'projects.team.clearOverride',
-                                        'Clear override',
-                                      )}
-                                    </Button>
-                                  {/if}
-                                </div>
-                              </div>
-
-                              <div
-                                class="projects-override-row projectsState.projects-override-row--policy"
-                              >
-                                <span class="projects-label">
-                                  {t(
-                                    'projects.team.compactionPolicy',
-                                    'Compaction Policy',
-                                  )}
-                                </span>
-                                {#if overrideDraft(member.agent_id).compaction_policy}
-                                  <CompactionPolicyEditor
-                                    value={overrideDraft(member.agent_id)
-                                      .compaction_policy}
-                                    onChange={(value) =>
-                                      updateOverrideDraft(
-                                        member.agent_id,
-                                        'compaction_policy',
-                                        value,
-                                      )}
-                                    idPrefix={`project-compaction-${member.agent_id}`}
-                                  />
-                                  <div class="projects-override-controls">
+                                        onFooterAction={() =>
+                                          toggleShowAllOverrideModels(
+                                            member.agent_id,
+                                          )}
+                                        onOpenChange={trackModelDropdownOpen}
+                                        onValueChange={(value) =>
+                                          updateOverrideModelSelection(
+                                            member.agent_id,
+                                            value,
+                                          )}
+                                      />
+                                    </div>
                                     <Button
                                       variant="secondary"
+                                      data-testid={`project-override-set-model-${member.agent_id}`}
                                       disabled={!canSetOverride(
                                         member.agent_id,
-                                        'compaction_policy',
+                                        'model',
                                       )}
                                       onClick={() =>
                                         applySetOverride(
                                           member.agent_id,
-                                          'compaction_policy',
+                                          'model',
                                         )}
                                     >
                                       {t(
@@ -1621,315 +1365,651 @@
                                         'Set override',
                                       )}
                                     </Button>
+                                    {#if memberFieldIsOverridden(member, 'model')}
+                                      <Button
+                                        variant="tertiary"
+                                        data-testid={`project-override-clear-model-${member.agent_id}`}
+                                        disabled={isOverrideBusy(
+                                          member.agent_id,
+                                          'model',
+                                        )}
+                                        onClick={() =>
+                                          applyClearOverride(
+                                            member.agent_id,
+                                            'model',
+                                          )}
+                                      >
+                                        {t(
+                                          'projects.team.clearOverride',
+                                          'Clear override',
+                                        )}
+                                      </Button>
+                                    {/if}
+                                  </div>
+                                </div>
+
+                                <!-- Temperature override -->
+                                <div class="projects-override-row">
+                                  <span class="projects-label">
+                                    {t(
+                                      'projects.team.overrideLabel',
+                                      'Override',
+                                    )} ·
+                                    {t(
+                                      'projects.team.effectiveTemperature',
+                                      'Temperature',
+                                    )}
+                                  </span>
+                                  <div class="projects-override-controls">
+                                    <TextField
+                                      id={`project-override-temperature-${member.agent_id}`}
+                                      class="projects-override-input"
+                                      inputmode="decimal"
+                                      value={overrideDraft(member.agent_id)
+                                        .temperature}
+                                      placeholder={t(
+                                        'projects.team.overrideTemperaturePlaceholder',
+                                        'e.g. 0.7',
+                                      )}
+                                      disabled={isOverrideBusy(
+                                        member.agent_id,
+                                        'temperature',
+                                      )}
+                                      ariaLabel={t(
+                                        'projects.team.effectiveTemperature',
+                                        'Temperature',
+                                      )}
+                                      onInput={(next) =>
+                                        updateOverrideDraft(
+                                          member.agent_id,
+                                          'temperature',
+                                          next,
+                                        )}
+                                    />
                                     <Button
-                                      variant="tertiary"
+                                      variant="secondary"
+                                      data-testid={`project-override-set-temperature-${member.agent_id}`}
+                                      disabled={!canSetOverride(
+                                        member.agent_id,
+                                        'temperature',
+                                      )}
                                       onClick={() =>
-                                        memberFieldIsOverridden(
+                                        applySetOverride(
+                                          member.agent_id,
+                                          'temperature',
+                                        )}
+                                    >
+                                      {t(
+                                        'projects.team.setOverride',
+                                        'Set override',
+                                      )}
+                                    </Button>
+                                    {#if memberFieldIsOverridden(member, 'temperature')}
+                                      <Button
+                                        variant="tertiary"
+                                        data-testid={`project-override-clear-temperature-${member.agent_id}`}
+                                        disabled={isOverrideBusy(
+                                          member.agent_id,
+                                          'temperature',
+                                        )}
+                                        onClick={() =>
+                                          applyClearOverride(
+                                            member.agent_id,
+                                            'temperature',
+                                          )}
+                                      >
+                                        {t(
+                                          'projects.team.clearOverride',
+                                          'Clear override',
+                                        )}
+                                      </Button>
+                                    {/if}
+                                  </div>
+                                </div>
+
+                                <!-- Thinking-effort override -->
+                                <div class="projects-override-row">
+                                  <span class="projects-label">
+                                    {t(
+                                      'projects.team.overrideLabel',
+                                      'Override',
+                                    )} ·
+                                    {t(
+                                      'projects.team.effectiveThinkingEffort',
+                                      'Thinking effort',
+                                    )}
+                                  </span>
+                                  <div class="projects-override-controls">
+                                    <div class="projects-override-input">
+                                      <Dropdown
+                                        id={`project-override-thinking-${member.agent_id}`}
+                                        value={overrideDraft(member.agent_id)
+                                          .thinking_effort}
+                                        options={overrideEffortOptions(member)}
+                                        ariaLabel={t(
+                                          'projects.team.effectiveThinkingEffort',
+                                          'Thinking effort',
+                                        )}
+                                        disabled={isOverrideBusy(
+                                          member.agent_id,
+                                          'thinking_effort',
+                                        )}
+                                        triggerClass="projects-dropdown"
+                                        onValueChange={(value) =>
+                                          updateOverrideDraft(
+                                            member.agent_id,
+                                            'thinking_effort',
+                                            value,
+                                          )}
+                                      />
+                                    </div>
+                                    <Button
+                                      variant="secondary"
+                                      data-testid={`project-override-set-thinking-${member.agent_id}`}
+                                      disabled={!canSetOverride(
+                                        member.agent_id,
+                                        'thinking_effort',
+                                      )}
+                                      onClick={() =>
+                                        applySetOverride(
+                                          member.agent_id,
+                                          'thinking_effort',
+                                        )}
+                                    >
+                                      {t(
+                                        'projects.team.setOverride',
+                                        'Set override',
+                                      )}
+                                    </Button>
+                                    {#if memberFieldIsOverridden(member, 'thinking_effort')}
+                                      <Button
+                                        variant="tertiary"
+                                        data-testid={`project-override-clear-thinking-${member.agent_id}`}
+                                        disabled={isOverrideBusy(
+                                          member.agent_id,
+                                          'thinking_effort',
+                                        )}
+                                        onClick={() =>
+                                          applyClearOverride(
+                                            member.agent_id,
+                                            'thinking_effort',
+                                          )}
+                                      >
+                                        {t(
+                                          'projects.team.clearOverride',
+                                          'Clear override',
+                                        )}
+                                      </Button>
+                                    {/if}
+                                  </div>
+                                </div>
+
+                                <div
+                                  class="projects-override-row projectsState.projects-override-row--policy"
+                                >
+                                  <span class="projects-label">
+                                    {t(
+                                      'projects.team.compactionPolicy',
+                                      'Compaction Policy',
+                                    )}
+                                  </span>
+                                  {#if overrideDraft(member.agent_id).compaction_policy}
+                                    <CompactionPolicyEditor
+                                      value={overrideDraft(member.agent_id)
+                                        .compaction_policy}
+                                      onChange={(value) =>
+                                        updateOverrideDraft(
+                                          member.agent_id,
+                                          'compaction_policy',
+                                          value,
+                                        )}
+                                      idPrefix={`project-compaction-${member.agent_id}`}
+                                    />
+                                    <div class="projects-override-controls">
+                                      <Button
+                                        variant="secondary"
+                                        disabled={!canSetOverride(
+                                          member.agent_id,
+                                          'compaction_policy',
+                                        )}
+                                        onClick={() =>
+                                          applySetOverride(
+                                            member.agent_id,
+                                            'compaction_policy',
+                                          )}
+                                      >
+                                        {t(
+                                          'projects.team.setOverride',
+                                          'Set override',
+                                        )}
+                                      </Button>
+                                      <Button
+                                        variant="tertiary"
+                                        onClick={() =>
+                                          memberFieldIsOverridden(
+                                            member,
+                                            'compaction_policy',
+                                          )
+                                            ? applyClearOverride(
+                                                member.agent_id,
+                                                'compaction_policy',
+                                              )
+                                            : updateOverrideDraft(
+                                                member.agent_id,
+                                                'compaction_policy',
+                                                null,
+                                              )}
+                                      >
+                                        {memberFieldIsOverridden(
                                           member,
                                           'compaction_policy',
                                         )
-                                          ? applyClearOverride(
-                                              member.agent_id,
-                                              'compaction_policy',
+                                          ? t(
+                                              'projects.team.clearOverride',
+                                              'Clear override',
                                             )
-                                          : updateOverrideDraft(
-                                              member.agent_id,
-                                              'compaction_policy',
-                                              null,
-                                            )}
+                                          : t('common.cancel', 'Cancel')}
+                                      </Button>
+                                    </div>
+                                  {:else}
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() =>
+                                        updateOverrideDraft(
+                                          member.agent_id,
+                                          'compaction_policy',
+                                          structuredClone(
+                                            projectsState.globalCompactionPolicy ??
+                                              {},
+                                          ),
+                                        )}
+                                    >
+                                      {t(
+                                        'projects.team.customizeCompaction',
+                                        'Customize for this agent',
+                                      )}
+                                    </Button>
+                                  {/if}
+                                </div>
+
+                                <div class="projects-tool-access-override">
+                                  <div class="projects-tool-access-heading">
+                                    <div>
+                                      <span class="projects-label">
+                                        {t(
+                                          'projects.team.toolAccessOverride',
+                                          'Tool access override',
+                                        )}
+                                      </span>
+                                      <p class="projects-tools-follow">
+                                        {t(
+                                          'projects.team.toolAccessOverrideHelp',
+                                          'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
+                                        )}
+                                      </p>
+                                    </div>
+                                    <StatusChip
+                                      variant={memberFieldIsOverridden(
+                                        member,
+                                        'tool_access',
+                                      )
+                                        ? 'info'
+                                        : 'neutral'}
                                     >
                                       {memberFieldIsOverridden(
                                         member,
-                                        'compaction_policy',
+                                        'tool_access',
                                       )
                                         ? t(
-                                            'projects.team.clearOverride',
-                                            'Clear override',
+                                            'projects.team.toolOverrideActive',
+                                            'Override active',
                                           )
-                                        : t('common.cancel', 'Cancel')}
-                                    </Button>
+                                        : t(
+                                            'projects.team.repositoryPolicyActive',
+                                            'Repository policy',
+                                          )}
+                                    </StatusChip>
                                   </div>
-                                {:else}
-                                  <Button
-                                    variant="secondary"
-                                    onClick={() =>
-                                      updateOverrideDraft(
+                                  <ToolAccessEditor
+                                    value={overrideDraft(member.agent_id)
+                                      .tool_access}
+                                    tools={projectsState.toolCatalog}
+                                    ceiling={projectsState.editForm
+                                      .allowed_tools}
+                                    disabled={isOverrideBusy(
+                                      member.agent_id,
+                                      'tool_access',
+                                    )}
+                                    showReset={memberFieldIsOverridden(
+                                      member,
+                                      'tool_access',
+                                    )}
+                                    onChange={(value) =>
+                                      updateToolAccessOverride(
                                         member.agent_id,
-                                        'compaction_policy',
-                                        structuredClone(
-                                          projectsState.globalCompactionPolicy ??
-                                            {},
-                                        ),
+                                        value,
                                       )}
-                                  >
-                                    {t(
-                                      'projects.team.customizeCompaction',
-                                      'Customize for this agent',
-                                    )}
-                                  </Button>
-                                {/if}
-                              </div>
-
-                              <div class="projects-tool-access-override">
-                                <div class="projects-tool-access-heading">
-                                  <div>
-                                    <span class="projects-label">
-                                      {t(
-                                        'projects.team.toolAccessOverride',
-                                        'Tool access override',
+                                    onReset={() =>
+                                      applyClearOverride(
+                                        member.agent_id,
+                                        'tool_access',
                                       )}
-                                    </span>
-                                    <p class="projects-tools-follow">
-                                      {t(
-                                        'projects.team.toolAccessOverrideHelp',
-                                        'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
-                                      )}
-                                    </p>
-                                  </div>
-                                  <StatusChip
-                                    variant={memberFieldIsOverridden(
-                                      member,
-                                      'tool_access',
-                                    )
-                                      ? 'info'
-                                      : 'neutral'}
-                                  >
-                                    {memberFieldIsOverridden(
-                                      member,
-                                      'tool_access',
-                                    )
-                                      ? t(
-                                          'projects.team.toolOverrideActive',
-                                          'Override active',
-                                        )
-                                      : t(
-                                          'projects.team.repositoryPolicyActive',
-                                          'Repository policy',
-                                        )}
-                                  </StatusChip>
+                                    onOpenExtensions={navigateToExtensions}
+                                  />
                                 </div>
-                                <ToolAccessEditor
-                                  value={overrideDraft(member.agent_id)
-                                    .tool_access}
-                                  tools={projectsState.toolCatalog}
-                                  ceiling={projectsState.editForm.allowed_tools}
-                                  disabled={isOverrideBusy(
-                                    member.agent_id,
-                                    'tool_access',
+
+                                <p class="projects-override-help">
+                                  {t(
+                                    'projects.team.overrideHelp',
+                                    'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
                                   )}
-                                  showReset={memberFieldIsOverridden(
-                                    member,
-                                    'tool_access',
-                                  )}
-                                  onChange={(value) =>
-                                    updateToolAccessOverride(
-                                      member.agent_id,
-                                      value,
-                                    )}
-                                  onReset={() =>
-                                    applyClearOverride(
-                                      member.agent_id,
-                                      'tool_access',
-                                    )}
-                                  onOpenExtensions={navigateToExtensions}
-                                />
+                                </p>
                               </div>
 
-                              <p class="projects-override-help">
-                                {t(
-                                  'projects.team.overrideHelp',
-                                  'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
-                                )}
-                              </p>
-                            </div>
-
-                            <div>
-                              <p class="projects-tools-line">
-                                {agentTargetPolicyText(member)}
-                              </p>
-                              <p class="projects-tools-follow">
-                                {t(
-                                  'projects.team.agentTargetsRepoOwned',
-                                  'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
-                                )}
-                              </p>
-                            </div>
-
-                            {#if member.denied_tools.length > 0}
                               <div>
                                 <p class="projects-tools-line">
-                                  {t(
-                                    'projects.team.deniedToolsBaseline',
-                                    'Repository baseline blocks: {tools}',
-                                    { tools: member.denied_tools.join(', ') },
-                                  )}
+                                  {agentTargetPolicyText(member)}
                                 </p>
                                 <p class="projects-tools-follow">
                                   {t(
-                                    'projects.team.deniedToolsBaselineHelp',
-                                    'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
+                                    'projects.team.agentTargetsRepoOwned',
+                                    'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
                                   )}
                                 </p>
                               </div>
-                            {/if}
 
-                            {#if member.source_path}
-                              <p class="projects-source-line">
-                                {t(
-                                  'projects.team.sourceFile',
-                                  'Source: {path} ({format})',
-                                  {
-                                    path: member.source_path,
-                                    format: member.source_format,
-                                  },
-                                )}
-                              </p>
-                            {/if}
-                          </div>
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
+                              {#if member.denied_tools.length > 0}
+                                <div>
+                                  <p class="projects-tools-line">
+                                    {t(
+                                      'projects.team.deniedToolsBaseline',
+                                      'Repository baseline blocks: {tools}',
+                                      { tools: member.denied_tools.join(', ') },
+                                    )}
+                                  </p>
+                                  <p class="projects-tools-follow">
+                                    {t(
+                                      'projects.team.deniedToolsBaselineHelp',
+                                      'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
+                                    )}
+                                  </p>
+                                </div>
+                              {/if}
+
+                              {#if member.source_path}
+                                <p class="projects-source-line">
+                                  {t(
+                                    'projects.team.sourceFile',
+                                    'Source: {path} ({format})',
+                                    {
+                                      path: member.source_path,
+                                      format: member.source_format,
+                                    },
+                                  )}
+                                </p>
+                              {/if}
+                            </div>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
               </div>
             </div>
-
-            <!-- Section 4: Tools -->
-            <div class="detail-section">
-              <div class="detail-section-title">
-                {t('projects.detail.sectionTools', 'Tools')}
-              </div>
-              <div class="detail-section-body">
-                <div class="projects-field">
-                  <span class="projects-label">
-                    {t('projects.manage.allowedTools', 'Tool whitelist')}
-                  </span>
-                  <p class="projects-help">
-                    {t(
-                      'projects.manage.allowedToolsHelp',
-                      'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
+            <div
+              class="management-topic"
+              role="tabpanel"
+              id="project-detail-panel-context"
+              aria-labelledby="project-detail-tab-context"
+              hidden={activeDetail !== 'context'}
+              tabindex="0"
+            >
+              <!-- Section 2: Auto-load files -->
+              <div class="detail-section">
+                <div class="detail-section-title">
+                  {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+                  <InfoHint
+                    text={t(
+                      'projects.detail.autoLoadInfo',
+                      'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
                     )}
-                  </p>
-                  <ToggleChipList
-                    items={toolChipItems}
-                    grouped
-                    groupLabel={projectToolGroupLabel}
-                    disabled={projectsState.editSaving}
-                    emptyLabel={t(
-                      'projects.manage.toolsEmpty',
-                      'No tools available',
-                    )}
-                    ariaToggleLabel={(name) =>
-                      t('projects.manage.toggleTool', 'Toggle tool {name}', {
-                        name,
-                      })}
-                    onToggle={(name, next) => toggleTool(name, next)}
-                    onSetAll={setAllTools}
-                    onOpenExtensions={navigateToExtensions}
-                  >
-                    {#snippet headerActions()}
-                      <Button
-                        variant="tertiary"
-                        data-testid="project-tools-reset"
+                  />
+                </div>
+                <div class="detail-section-body">
+                  <div class="projects-field">
+                    {#if projectsState.editForm.auto_load.length > 0}
+                      <ul class="projects-file-list">
+                        {#each projectsState.editForm.auto_load as filePath, index (index)}
+                          <li class="projects-file-row">
+                            <span class="projects-file-name">{filePath}</span>
+                            <button
+                              type="button"
+                              class="projects-file-remove"
+                              data-testid={`project-auto-load-remove-${index}`}
+                              disabled={projectsState.editSaving}
+                              aria-label={t(
+                                'projects.manage.autoLoadRemove',
+                                'Remove {file}',
+                                { file: filePath },
+                              )}
+                              onclick={() => removeAutoLoadEntry(index)}
+                            >
+                              ×
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <EmptyState
+                        density="compact"
+                        description={t(
+                          'projects.manage.autoLoadEmpty',
+                          'No auto-load files',
+                        )}
+                      />
+                    {/if}
+                    <div class="projects-file-add">
+                      <TextField
+                        id="project-edit-auto-load"
+                        class="projects-file-input"
+                        value={projectsState.autoLoadDraft}
+                        placeholder={t(
+                          'projects.manage.autoLoadPlaceholder',
+                          'Add a file path…',
+                        )}
                         disabled={projectsState.editSaving}
-                        onClick={resetToolsToDefaults}
+                        ariaLabel={t(
+                          'projects.manage.autoLoad',
+                          'Auto-load files',
+                        )}
+                        onInput={(next) => {
+                          projectsState.autoLoadDraft = next;
+                        }}
+                        onkeydown={handleAutoLoadKeydown}
+                      />
+                      <Button
+                        variant="secondary"
+                        data-testid="project-auto-load-add"
+                        disabled={projectsState.editSaving ||
+                          projectsState.autoLoadDraft.trim().length === 0}
+                        onClick={addAutoLoadEntry}
                       >
-                        {t(
-                          'projects.manage.resetDefaults',
-                          'Reset to defaults',
-                        )}
+                        {t('projects.manage.autoLoadAdd', 'Add')}
                       </Button>
-                    {/snippet}
-                  </ToggleChipList>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-
-            <!-- Section 5: Skills -->
-            <div class="detail-section">
-              <div class="detail-section-title">
-                <span>{t('projects.detail.sectionSkills', 'Skills')}</span>
-              </div>
-              <div class="detail-section-body">
-                <div class="projects-field">
-                  <span class="projects-label">
-                    {t('projects.manage.allowedSkills', 'Skill whitelist')}
-                  </span>
-                  <p class="projects-help">
-                    {t(
-                      'projects.manage.allowedSkillsHelp',
-                      'Project skills are active by default; bundled and global skills are opt-in.',
-                    )}
-                  </p>
-                  {#if skillToggleSections.project.length > 0}
-                    <span class="projects-sublabel">
-                      {t('projects.manage.projectSkills', 'Project skills')}
+            <div
+              class="management-topic"
+              role="tabpanel"
+              id="project-detail-panel-access"
+              aria-labelledby="project-detail-tab-access"
+              hidden={activeDetail !== 'access'}
+              tabindex="0"
+            >
+              <!-- Section 4: Tools -->
+              <div class="detail-section">
+                <div class="detail-section-title">
+                  {t('projects.detail.sectionTools', 'Tools')}
+                </div>
+                <div class="detail-section-body">
+                  <div class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.allowedTools', 'Tool whitelist')}
                     </span>
-                    <ToggleChipList
-                      items={projectSkillChips}
-                      disabled={projectsState.editSaving}
-                      ariaToggleLabel={(name) =>
-                        t(
-                          'projects.manage.toggleSkill',
-                          'Toggle skill {name}',
-                          {
-                            name,
-                          },
-                        )}
-                      onToggle={(name, next) => toggleProjectSkill(name, next)}
-                      onSetAll={setAllProjectSkills}
-                    />
-                  {/if}
-                  {#if skillToggleSections.bundled.length > 0}
-                    <span class="projects-sublabel">
-                      {t('projects.manage.bundledSkills', 'Bundled skills')}
-                    </span>
-                    <ToggleChipList
-                      items={bundledSkillChips}
-                      disabled={projectsState.editSaving}
-                      ariaToggleLabel={(name) =>
-                        t(
-                          'projects.manage.toggleSkill',
-                          'Toggle skill {name}',
-                          {
-                            name,
-                          },
-                        )}
-                      onToggle={(name, next) => toggleBundledSkill(name, next)}
-                      onSetAll={setAllBundledSkills}
-                    />
-                  {/if}
-                  {#if skillToggleSections.global.length > 0}
-                    <span class="projects-sublabel">
-                      {t('projects.manage.globalSkills', 'Global skills')}
-                    </span>
-                    <ToggleChipList
-                      items={globalSkillChips}
-                      disabled={projectsState.editSaving}
-                      ariaToggleLabel={(name) =>
-                        t(
-                          'projects.manage.toggleSkill',
-                          'Toggle skill {name}',
-                          {
-                            name,
-                          },
-                        )}
-                      onToggle={(name, next) => toggleGlobalSkill(name, next)}
-                      onSetAll={setAllGlobalSkills}
-                    />
-                  {/if}
-                  {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
-                    <EmptyState
-                      density="compact"
-                      description={t(
-                        'projects.manage.skillsEmpty',
-                        'No skills available',
+                    <p class="projects-help">
+                      {t(
+                        'projects.manage.allowedToolsHelp',
+                        'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
                       )}
-                    />
-                  {/if}
+                    </p>
+                    <ToggleChipList
+                      items={toolChipItems}
+                      grouped
+                      groupLabel={projectToolGroupLabel}
+                      disabled={projectsState.editSaving}
+                      emptyLabel={t(
+                        'projects.manage.toolsEmpty',
+                        'No tools available',
+                      )}
+                      ariaToggleLabel={(name) =>
+                        t('projects.manage.toggleTool', 'Toggle tool {name}', {
+                          name,
+                        })}
+                      onToggle={(name, next) => toggleTool(name, next)}
+                      onSetAll={setAllTools}
+                      onOpenExtensions={navigateToExtensions}
+                    >
+                      {#snippet headerActions()}
+                        <Button
+                          variant="tertiary"
+                          data-testid="project-tools-reset"
+                          disabled={projectsState.editSaving}
+                          onClick={resetToolsToDefaults}
+                        >
+                          {t(
+                            'projects.manage.resetDefaults',
+                            'Reset to defaults',
+                          )}
+                        </Button>
+                      {/snippet}
+                    </ToggleChipList>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Section 5: Skills -->
+              <div class="detail-section">
+                <div class="detail-section-title">
+                  <span>{t('projects.detail.sectionSkills', 'Skills')}</span>
+                </div>
+                <div class="detail-section-body">
+                  <div class="projects-field">
+                    <span class="projects-label">
+                      {t('projects.manage.allowedSkills', 'Skill whitelist')}
+                    </span>
+                    <p class="projects-help">
+                      {t(
+                        'projects.manage.allowedSkillsHelp',
+                        'Project skills are active by default; bundled and global skills are opt-in.',
+                      )}
+                    </p>
+                    {#if skillToggleSections.project.length > 0}
+                      <span class="projects-sublabel">
+                        {t('projects.manage.projectSkills', 'Project skills')}
+                      </span>
+                      <ToggleChipList
+                        items={projectSkillChips}
+                        disabled={projectsState.editSaving}
+                        ariaToggleLabel={(name) =>
+                          t(
+                            'projects.manage.toggleSkill',
+                            'Toggle skill {name}',
+                            {
+                              name,
+                            },
+                          )}
+                        onToggle={(name, next) =>
+                          toggleProjectSkill(name, next)}
+                        onSetAll={setAllProjectSkills}
+                      />
+                    {/if}
+                    {#if skillToggleSections.bundled.length > 0}
+                      <span class="projects-sublabel">
+                        {t('projects.manage.bundledSkills', 'Bundled skills')}
+                      </span>
+                      <ToggleChipList
+                        items={bundledSkillChips}
+                        disabled={projectsState.editSaving}
+                        ariaToggleLabel={(name) =>
+                          t(
+                            'projects.manage.toggleSkill',
+                            'Toggle skill {name}',
+                            {
+                              name,
+                            },
+                          )}
+                        onToggle={(name, next) =>
+                          toggleBundledSkill(name, next)}
+                        onSetAll={setAllBundledSkills}
+                      />
+                    {/if}
+                    {#if skillToggleSections.global.length > 0}
+                      <span class="projects-sublabel">
+                        {t('projects.manage.globalSkills', 'Global skills')}
+                      </span>
+                      <ToggleChipList
+                        items={globalSkillChips}
+                        disabled={projectsState.editSaving}
+                        ariaToggleLabel={(name) =>
+                          t(
+                            'projects.manage.toggleSkill',
+                            'Toggle skill {name}',
+                            {
+                              name,
+                            },
+                          )}
+                        onToggle={(name, next) => toggleGlobalSkill(name, next)}
+                        onSetAll={setAllGlobalSkills}
+                      />
+                    {/if}
+                    {#if skillToggleSections.project.length === 0 && skillToggleSections.bundled.length === 0 && skillToggleSections.global.length === 0}
+                      <EmptyState
+                        density="compact"
+                        description={t(
+                          'projects.manage.skillsEmpty',
+                          'No skills available',
+                        )}
+                      />
+                    {/if}
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
+          <div class="management-footer" hidden={activeDetail !== 'overview'}>
+            <span class="management-save-note"
+              >{projectsState.editSaving
+                ? t('common.saving', 'Saving…')
+                : t(
+                    'management.savedAutomatically',
+                    'Changes save automatically',
+                  )}</span
+            >
+            <Button
+              variant="primary"
+              type="submit"
+              form="project-settings-form"
+              data-testid={`project-save-${selectedProject.project_id}`}
+              disabled={projectsState.editSaving}
+            >
+              {projectsState.editSaving
+                ? t('projects.manage.saving', 'Saving…')
+                : t('projects.manage.save', 'Save changes')}
+            </Button>
           </div>
         </div>
       {/key}
