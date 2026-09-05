@@ -19,6 +19,7 @@ from core.sessions.titles import (
     TITLE_INPUT_HEAD_BYTES,
     TITLE_INPUT_TAIL_BYTES,
     TITLE_OMISSION_MARKER,
+    TITLE_SYSTEM_PROMPT,
     SessionTitleService,
     _bounded_text_projection,
     _generated_title,
@@ -242,10 +243,9 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
 
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
     request = adapter.requests[0]
-    assert request["messages"][0]["role"] == "system"
-    system_prompt = request["messages"][0]["content"]
-    assert isinstance(system_prompt, str)
-    assert system_prompt
+    assert len(request["messages"]) == 2
+    assert request["messages"][0] == {"role": "system", "content": TITLE_SYSTEM_PROMPT}
+    assert request["messages"][1]["role"] == "user"
     assert TITLE_OMISSION_MARKER in request["messages"][1]["content"]
     assert "max_tokens" not in request
     assert request["thinking_effort"] == "none"
@@ -289,6 +289,11 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(tmp_path
     await _wait_for_background(service)
 
     assert [request["thinking_effort"] for request in adapter.requests] == ["none", ""]
+    assert adapter.requests[0]["messages"] == adapter.requests[1]["messages"]
+    assert adapter.requests[1]["messages"][0] == {
+        "role": "system",
+        "content": TITLE_SYSTEM_PROMPT,
+    }
     assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Mandatory reasoning"
     )

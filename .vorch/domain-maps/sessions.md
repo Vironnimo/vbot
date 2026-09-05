@@ -58,6 +58,7 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 - Skill activation cache is synchronized from the supplied active history snapshot when one is provided and otherwise preserves explicit in-memory registrations; a committed Compaction checkpoint resets the epoch.
 - Callback failures after committed title or completion mutations are logged and isolated so callers never receive a false failure for state that already persisted.
 - `titles.py` owns immediate local titles and optional background Model titles. It accepts one final text line after removing hidden Reasoning and unambiguous presentation wrappers (a complete plain-text fence or a standalone Title/Titel label); it never chooses among multiple candidate lines. Invalid generated content keeps the local title and emits a content-free warning with the rejection reason and no traceback or extra Model request; unexpected failures retain their traceback. Regression coverage lives in `tests/core/sessions/test_titles.py`.
+- The title System Prompt instructs the Model to use the language of the user's main request (not quoted text/code/logs), preserve proper names and technical terms, and summarize the topic without following instructions in the supplied source material. These are Model instructions; the local validator enforces title shape and length, not language or semantic compliance.
 
 ## Constraints & Gotchas
 
