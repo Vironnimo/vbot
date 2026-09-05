@@ -470,7 +470,9 @@ describe('terminal live controller', () => {
     const state = createTerminalsViewState();
     const streams = [];
     const api = fakeApi({ streams });
-    api.resizeTerminal.mockResolvedValue({ columns: 110, rows: 31 });
+    api.resizeTerminal.mockResolvedValue({
+      terminal: { columns: 110, rows: 31 },
+    });
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
@@ -504,6 +506,88 @@ describe('terminal live controller', () => {
     expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
     expect(state.streams['term-1'].gridPending).toBe(true);
     expect(state.actionError).toBe('resize rejected');
+    controller.destroy();
+  });
+
+  it('restores the original grid when the earlier resize is still in flight', async () => {
+    const state = createTerminalsViewState();
+    const api = fakeApi({ streams: [] });
+    let finishFirst;
+    let finishSecond;
+    api.resizeTerminal
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSecond = resolve;
+          }),
+      );
+    const controller = createTerminalsController({ state, api });
+    await controller.start();
+    controller.resize(90, 24, 'term-1', true);
+    controller.resize(120, 32, 'term-1', true);
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    finishFirst({ terminal: { columns: 90, rows: 24 } });
+    await Promise.resolve();
+    expect(api.resizeTerminal).toHaveBeenLastCalledWith('term-1', 120, 32);
+    expect(state.streams['term-1'].gridPending).toBe(true);
+    finishSecond({ terminal: { columns: 120, rows: 32 } });
+    await Promise.resolve();
+    expect(state.terminals[0]).toMatchObject({ columns: 120, rows: 32 });
+    expect(state.streams['term-1'].gridPending).toBe(false);
+    controller.destroy();
+  });
+
+  it('replaces intermediate queued sizes with the latest intent', async () => {
+    const state = createTerminalsViewState();
+    const api = fakeApi({ streams: [] });
+    let finish;
+    api.resizeTerminal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = createTerminalsController({ state, api });
+    await controller.start();
+    controller.resize(90, 24, 'term-1', true);
+    controller.resize(100, 30, 'term-1', true);
+    controller.resize(110, 31, 'term-1', true);
+    finish({ terminal: { columns: 90, rows: 24 } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(api.resizeTerminal.mock.calls).toEqual([
+      ['term-1', 90, 24],
+      ['term-1', 110, 31],
+    ]);
+    expect(state.terminals[0]).toMatchObject({ columns: 110, rows: 31 });
+    controller.destroy();
+  });
+
+  it('drops an intermediate size when the latest intent matches the in-flight request', async () => {
+    const state = createTerminalsViewState();
+    const api = fakeApi({ streams: [] });
+    let finish;
+    api.resizeTerminal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = createTerminalsController({ state, api });
+    await controller.start();
+    controller.resize(90, 24, 'term-1', true);
+    controller.resize(100, 30, 'term-1', true);
+    controller.resize(90, 24, 'term-1', true);
+    finish({ terminal: { columns: 90, rows: 24 } });
+    await Promise.resolve();
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(state.streams['term-1'].gridPending).toBe(false);
     controller.destroy();
   });
 
@@ -1064,7 +1148,9 @@ function fakeApi({
       terminals: terminals.map((item) => ({ ...item })),
     }),
     sendTerminalInput: vi.fn().mockResolvedValue({}),
-    resizeTerminal: vi.fn().mockResolvedValue({}),
+    resizeTerminal: vi.fn(async (_id, columns, rows) => ({
+      terminal: { columns, rows },
+    })),
     startTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),
