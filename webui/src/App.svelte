@@ -1253,6 +1253,10 @@
           {serverUnavailable}
           {calendarRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
+          onOpenSession={(target, session) =>
+            requestAutosaveTransition(() =>
+              appController.navigateToSession(target, session),
+            )}
         />
       {:else if activeViewId === 'cron'}
         <CronView
