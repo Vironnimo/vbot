@@ -57,6 +57,7 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 - Recall and Statistics are disposable projections. Both include the Session generation in freshness state. Statistics appends through `load_since`; ordinary Message appends must not rebuild a complete Session projection.
 - Skill activation cache is synchronized from the supplied active history snapshot when one is provided and otherwise preserves explicit in-memory registrations; a committed Compaction checkpoint resets the epoch.
 - Callback failures after committed title or completion mutations are logged and isolated so callers never receive a false failure for state that already persisted.
+- `titles.py` owns immediate local titles and optional background Model titles. It accepts one final text line after removing hidden Reasoning and unambiguous presentation wrappers (a complete plain-text fence or a standalone Title/Titel label); it never chooses among multiple candidate lines. Invalid generated content keeps the local title and emits a content-free warning with the rejection reason and no traceback or extra Model request; unexpected failures retain their traceback. Regression coverage lives in `tests/core/sessions/test_titles.py`.
 
 ## Constraints & Gotchas
 

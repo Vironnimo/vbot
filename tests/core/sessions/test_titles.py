@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -345,6 +346,89 @@ def test_generated_title_ignores_typed_reasoning_blocks() -> None:
     assert title == "Session naming audit"
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        "```\nSession naming audit\n```",
+        "```text\nSession naming audit\n```",
+        "~~~plaintext\r\nSession naming audit\r\n~~~",
+        "Title:\nSession naming audit",
+        'Titel:\n"Session naming audit"',
+        "<think>Hidden analysis\nMore analysis</think>\n```\nSession naming audit\n```",
+        "```text\nTitle:\nSession naming audit\n```",
+    ],
+)
+def test_generated_title_accepts_unambiguous_wrappers(response: str) -> None:
+    assert _generated_title({"content": response}) == "Session naming audit"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "First candidate\nSecond candidate",
+        "Here is your title:\nSession naming audit",
+        "Session naming audit\nThis title summarizes the request.",
+        "```\nFirst candidate\nSecond candidate\n```",
+        "```\nSession naming audit\n~~~",
+        "```\nSession naming audit",
+        "```\n```",
+        "Title:\n",
+        "",
+    ],
+)
+def test_generated_title_rejects_ambiguous_or_empty_output(response: str) -> None:
+    with pytest.raises(ValueError):
+        _generated_title({"content": response})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "accepted"),
+    [
+        ("```text\nSession naming audit\n```", True),
+        ("Title:\nSession naming audit", True),
+        ("private-candidate-one\nprivate-candidate-two", False),
+        ("", False),
+        ("x" * (GENERATED_TITLE_MAX_CHARACTERS + 1), False),
+        ("The user is asking me to perform a session naming audit", False),
+    ],
+)
+async def test_title_validation_preserves_fallback_and_logs_without_content_or_trace(
+    tmp_path, caplog: pytest.LogCaptureFixture, response: str, accepted: bool
+) -> None:
+    adapter = StubAdapter(response)
+    runtime = StubRuntime(tmp_path, enabled=True, adapters=[adapter])
+    _append_first_user(runtime, "Inspect session naming")
+    service = SessionTitleService(cast(Any, runtime))
+    caplog.set_level(logging.WARNING, logger="vbot.sessions.titles")
+
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="Inspect session naming",
+        run_id="run-one",
+    )
+    await _wait_for_background(service)
+
+    metadata = runtime.chat_sessions.get_metadata(_address("coder", "session-one"))
+    assert metadata["auto_title"] == (
+        "Session naming audit" if accepted else "Inspect session naming"
+    )
+    assert metadata["auto_title_initialized"] is True
+    assert len(adapter.requests) == 1
+    assert adapter.closed is True
+    records = [record for record in caplog.records if record.name == "vbot.sessions.titles"]
+    assert len(records) == (0 if accepted else 1)
+    for record in records:
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+        assert record.args
+        if response:
+            assert response not in record.getMessage()
+
+
 def test_generated_title_enforces_absolute_character_limit() -> None:
     assert len("x" * GENERATED_TITLE_MAX_CHARACTERS) == GENERATED_TITLE_MAX_CHARACTERS
     assert _generated_title({"content": "x" * GENERATED_TITLE_MAX_CHARACTERS}) == (
@@ -436,7 +520,9 @@ async def test_empty_title_model_selection_uses_resolved_agent_model(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_failed_configured_model_keeps_local_title_without_agent_retry(tmp_path) -> None:
+async def test_failed_configured_model_keeps_local_title_without_agent_retry(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
     adapter = StubAdapter(error=RuntimeError("provider down"))
     runtime = StubRuntime(
         tmp_path,
@@ -461,6 +547,10 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(tmp
     assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Investigate login failure"
     )
+    records = [record for record in caplog.records if record.name == "vbot.sessions.titles"]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert adapter.closed is True
 
 
 @pytest.mark.asyncio
