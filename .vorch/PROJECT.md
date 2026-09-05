@@ -115,7 +115,7 @@ This checkout carries a git-ignored marker selecting the dev data directory (`~/
 
 ## Testing
 
-pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Rendered-component tests may use jsdom via Vitest when helper-level assertions are not enough. Pattern AAA; independent, deterministic, no shared state.
+pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Rendered-component tests may use jsdom via Vitest when helper-level assertions are not enough.
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (protocol token, persisted format, accessibility name, forbidden internal value) or a test-owned sentinel proves transport unchanged. Do not lock editable prose, error wording, or help copy - prefer exception types, error codes, structured fields, DOM roles, and security invariants. Wording quality belongs in scenario evals, not substring tests.
 
