@@ -90,6 +90,10 @@ class _TitleGenerationRequest:
     title_input: str
 
 
+class _InvalidGeneratedTitleError(ValueError):
+    """Expected Model output rejection with a content-free diagnostic."""
+
+
 class SessionTitleService:
     """Set a local title immediately and optionally improve it in the background."""
 
@@ -285,6 +289,15 @@ class SessionTitleService:
                 session_id,
                 model,
             )
+        except _InvalidGeneratedTitleError as exc:
+            _LOGGER.warning(
+                "Automatic Session title rejected; keeping local title "
+                "(agent=%s session=%s model=%s reason=%s)",
+                agent_id,
+                session_id,
+                model,
+                exc,
+            )
         except Exception:
             # The immediate local title is the final fallback. An explicitly
             # configured Title Model never cascades into another billable call.
@@ -426,22 +439,34 @@ def _generated_title(response: dict[str, Any]) -> str:
                 chunks.append(block_text)
         text = "\n".join(chunk for chunk in chunks if isinstance(chunk, str))
     else:
-        raise ValueError("Session title response did not include text content")
+        raise _InvalidGeneratedTitleError("Session title response did not include text content")
 
     text = _HIDDEN_REASONING_BLOCK_PATTERN.sub("", text)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # Unwrap presentation only when the entire response contains one bounded
+    # block. Never select one candidate from a multi-line answer.
+    if len(lines) >= 3:
+        fence = re.fullmatch(r"(`{3,}|~{3,})(?:text|plaintext)?", lines[0], re.IGNORECASE)
+        if fence is not None and lines[-1] == fence.group(1):
+            lines = lines[1:-1]
+    if lines and re.fullmatch(r"(?:title|titel)\s*:", lines[0], re.IGNORECASE):
+        lines = lines[1:]
+    if not lines:
+        raise _InvalidGeneratedTitleError("Session title response was empty")
     if len(lines) != 1:
-        raise ValueError("Session title response was not exactly one text line")
+        raise _InvalidGeneratedTitleError("Session title response was not exactly one text line")
     line = lines[0]
     line = re.sub(r"^(?:title|titel)\s*:\s*", "", line, flags=re.IGNORECASE)
     line = line.strip(" \t\"'`*_#")
     line = " ".join(line.split()).rstrip(".!?:;").strip(" \t\"'`*_#")
     if not line:
-        raise ValueError("Session title response was empty")
+        raise _InvalidGeneratedTitleError("Session title response was empty")
     if any(pattern.search(line) for pattern in _META_TITLE_PATTERNS):
-        raise ValueError("Session title response described the naming task instead of the topic")
+        raise _InvalidGeneratedTitleError(
+            "Session title response described the naming task instead of the topic"
+        )
     if len(line) > GENERATED_TITLE_MAX_CHARACTERS:
-        raise ValueError(
+        raise _InvalidGeneratedTitleError(
             f"Session title response exceeded {GENERATED_TITLE_MAX_CHARACTERS} characters"
         )
     return line
