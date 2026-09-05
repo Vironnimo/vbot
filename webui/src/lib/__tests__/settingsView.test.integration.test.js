@@ -103,34 +103,38 @@ describe('SettingsView', () => {
 
     const picker = document.querySelector('#settings-mobile-section');
     expect(picker).not.toBeNull();
-    expect(picker.textContent).toContain('Providers');
+    expect(picker.textContent).toContain('General');
 
     picker.click();
     flushSync();
 
     const appearanceOption = Array.from(
       document.body.querySelectorAll('.dropdown-option'),
-    ).find((option) => option.textContent.includes('Appearance'));
+    ).find((option) => option.textContent.includes('Connections'));
     expect(appearanceOption).toBeTruthy();
 
     appearanceOption.click();
     flushSync();
 
-    expect(picker.textContent).toContain('Appearance');
+    expect(picker.textContent).toContain('Connections');
     expect(
       document.querySelector('[data-settings-section="appearance"]').hidden,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       document.querySelector('[data-settings-section="providers"]').hidden,
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it('keeps exactly one topic visible and does not change topics while scrolling', async () => {
+  it('shows five category entries and related settings together without scroll-driven navigation', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    clickButton('Appearance');
+    clickButton('General');
+    expect(
+      document.querySelectorAll('.settings-desktop-index .snav-item'),
+    ).toHaveLength(5);
+    expect(document.querySelector('#settings-defaults-model')).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
     const visibleTopics = () =>
@@ -139,15 +143,17 @@ describe('SettingsView', () => {
       );
     expect(
       visibleTopics().map((section) => section.dataset.settingsSection),
-    ).toEqual(['appearance']);
+    ).toEqual(['appearance', 'preferences']);
     const scrollContainer = document.querySelector('.settings-content');
     scrollContainer.scrollTop = 400;
     scrollContainer.dispatchEvent(new Event('scroll'));
     flushSync();
     expect(
       visibleTopics().map((section) => section.dataset.settingsSection),
-    ).toEqual(['appearance']);
-    expect(document.activeElement.id).toBe('settings-section-appearance');
+    ).toEqual(['appearance', 'preferences']);
+    expect(document.activeElement).toBe(
+      document.querySelector('.settings-page-heading h2'),
+    );
   });
 
   it('finds settings across hidden topics with spacing-insensitive search and preserves drafts', async () => {
@@ -155,9 +161,9 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    clickButton('Agent defaults');
-    const input = document.querySelector('#settings-defaults-temperature');
-    input.value = '0.73';
+    clickButton('Web Search');
+    const input = document.querySelector('#settings-web-search-default-count');
+    input.value = '9';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     const search = document.querySelector('input[type="search"]');
@@ -175,11 +181,32 @@ describe('SettingsView', () => {
     expect(
       document.querySelector('[data-settings-section="general"]').hidden,
     ).toBe(true);
-    clickButton('Agent defaults');
-    expect(document.querySelector('#settings-defaults-temperature')).toBe(
+    clickButton('Web Search');
+    expect(document.querySelector('#settings-web-search-default-count')).toBe(
       input,
     );
-    expect(input.value).toBe('0.73');
+    expect(input.value).toBe('9');
+  });
+
+  it('routes shared Agent defaults search to Agents without duplicating its editor', async () => {
+    rpcMock.mockResolvedValue(createSettingsPayload());
+    const navigate = vi.fn();
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onNavigateToAgentDefaults: navigate },
+    });
+    flushSync();
+    await waitForText('Add provider');
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'thinking';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const result = Array.from(
+      document.querySelectorAll('.settings-search-result'),
+    ).find((item) => item.textContent.includes('Shared defaults'));
+    result.click();
+    expect(navigate).toHaveBeenCalledWith('defaults');
+    expect(document.querySelector('#settings-defaults-model')).toBeNull();
   });
 
   it('finds connected Providers while another topic is selected', async () => {
