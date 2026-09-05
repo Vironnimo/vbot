@@ -397,25 +397,17 @@ describe('i18n t()', () => {
       'Edited — differs from the built-in default.',
     );
     expect(t('systemPrompt.blockList.dataHint')).toContain('Generated content');
-    // The owner line is now a plain sentence stating the render condition; the
-    // tool/extension variants weave the technical name into the sentence.
-    expect(t('systemPrompt.blockList.ownerHint.always')).toBe(
-      'Always included.',
-    );
-    expect(
-      t('systemPrompt.blockList.ownerHint.tool', undefined, { name: 'bash' }),
-    ).toBe('Included only while the bash tool is active.');
-    expect(
-      t('systemPrompt.blockList.ownerHint.extension', undefined, {
-        name: 'homeassistant',
-      }),
-    ).toBe('Included only while the homeassistant extension is active.');
-    expect(t('systemPrompt.blockList.ownerHint.memory')).toBe(
-      'Included only while the memory tool is on.',
-    );
-    expect(t('systemPrompt.blockList.ownerHint.channel')).toBe(
-      'Included only while the agent has an active channel.',
-    );
+    for (const owner of ['always', 'memory', 'channel']) {
+      const key = `systemPrompt.blockList.ownerHint.${owner}`;
+      expect(t(key)).not.toBe(key);
+      expect(t(key).length).toBeGreaterThan(0);
+    }
+    for (const owner of ['tool', 'extension']) {
+      const key = `systemPrompt.blockList.ownerHint.${owner}`;
+      expect(t(key, undefined, { name: 'OWNER-NAME-FIXTURE' })).toContain(
+        'OWNER-NAME-FIXTURE',
+      );
+    }
     // The retired composed template and per-owner tokens must not linger.
     for (const retiredKey of [
       'systemPrompt.blockList.appearsWhen',

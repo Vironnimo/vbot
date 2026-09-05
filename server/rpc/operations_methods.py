@@ -228,7 +228,10 @@ def _optional_layout_position(params: JsonObject) -> int | None:
 
 
 async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "scope"}, "prompt.preview")
+    _reject_unsupported(params, {"agent_id", "scope", "include_tools"}, "prompt.preview")
+    include_tools = params.get("include_tools", False)
+    if not isinstance(include_tools, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.include_tools must be a boolean")
     scope = params.get("scope")
     try:
         prompt_scope = _prompt_manager(state).validate_scope(scope) if scope is not None else None
@@ -317,19 +320,30 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         agent,
     )
 
-    def estimate_preview() -> tuple[int, bool, int]:
+    def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:
         token_count, estimated = estimate_tokens(text)
         tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
-        return token_count, estimated, tool_tokens
+        tools = (
+            [
+                {"definition": definition, "tokens": estimate_json_tokens(definition)[0]}
+                for definition in tool_definitions
+            ]
+            if include_tools
+            else []
+        )
+        return token_count, estimated, tool_tokens, tools
 
-    token_count, estimated, tool_tokens = await _PROMPT_RPC_WORKERS.run(estimate_preview)
-    return {
+    token_count, estimated, tool_tokens, tools = await _PROMPT_RPC_WORKERS.run(estimate_preview)
+    result: JsonObject = {
         "text": text,
         "tokens": token_count,
         "tool_tokens": tool_tokens,
         "tool_count": len(tool_definitions),
         "estimated": estimated,
     }
+    if include_tools:
+        result["tools"] = tools
+    return result
 
 
 def _log_viewer(state: Any) -> LogViewer:

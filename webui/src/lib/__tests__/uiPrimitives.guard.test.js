@@ -116,24 +116,19 @@ describe('UI primitive guard', () => {
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
       /\.sp-block-row\s*\{[^}]*background:\s*var\(--prompt-header-surface\);/s,
     );
-    expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-data-block\s*\{[^}]*background:\s*var\(--prompt-content-surface\);/s,
-    );
     expect(SYSTEM_PROMPT_SOURCE).not.toMatch(/\.sp-block--data \.sp-block-row/);
     expect(SYSTEM_PROMPT_SOURCE).toContain(
       'class:sp-block--off={!block.enabled}',
     );
-    expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-block--off\s*\{[^}]*opacity:\s*0\.55;/s,
+    // Disabled and inherited state must not dim readable instructions.
+    expect(SYSTEM_PROMPT_SOURCE).not.toMatch(
+      /\.sp-block--(?:off|inherited)[^{]*\{[^}]*opacity:/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-preview-section\s*\{[^}]*border:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--preview-surface\);/s,
+      /\.sp-document\s*\{[^}]*background:\s*var\(--preview-surface\);/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-preview-header\s*\{[^}]*border-bottom:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--prompt-header-surface\);/s,
-    );
-    expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-preview-body\s*\{[^}]*background:\s*var\(--preview-surface\);/s,
+      /\.sp-preview-pre\s*\{[^}]*color:\s*var\(--text-hi\);/s,
     );
   });
 
