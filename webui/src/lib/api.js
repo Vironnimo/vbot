@@ -458,6 +458,15 @@ export function loadChatHistory(params = {}, options = {}) {
   return rpc('chat.history', params, options);
 }
 
+export function loadReflectionRuns(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Reflection request must be an object',
+    'chat.reflections',
+  );
+  return rpc('chat.reflections', params, options);
+}
+
 export function inspectSubAgentWork(params = {}, options = {}) {
   requirePlainObject(
     params,

@@ -100,6 +100,10 @@ CREATE INDEX sessions_live_scope_visibility
   ON sessions (project_id, agent_id, list_visibility_mask)
   WHERE status = 'live';
 
+CREATE INDEX sessions_live_fork_source
+  ON sessions (project_id, agent_id, json_extract(fork_source_json, '$.session_id'))
+  WHERE status = 'live';
+
 CREATE TABLE messages (
   message_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,

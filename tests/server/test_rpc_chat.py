@@ -15,7 +15,8 @@ from core.chat import (
 )
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.errors import ChatError
-from core.sessions import SessionAddress
+from core.runs import RunAdmission, RunKind
+from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server.rpc import (
     chat_methods,
@@ -31,6 +32,91 @@ from tests.server.rpc_test_support import (
 )
 
 __all__ = ["_no_models_dev_fetch"]
+
+
+@pytest.mark.asyncio
+async def test_reflections_restore_running_and_durable_reviews(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    source = sessions.create("coder", session_id="source")
+    fork = await sessions.fork(source.address, strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS)
+    sessions.record_run_kind(fork.address, RunKind.SKILL_REFLECTION)
+    release = asyncio.Event()
+
+    async def execute(run):
+        await release.wait()
+        fork.append(
+            ChatMessage.run_summary(
+                run_id=run.id,
+                status="completed",
+                iteration_count=1,
+                timing={
+                    "started_at": run.created_at,
+                    "completed_at": run.created_at,
+                    "duration_ms": 0,
+                },
+            )
+        )
+        return "done"
+
+    run = await state.chat_runs.start(
+        fork.address,
+        execute,
+        admission=RunAdmission(
+            run_kind=RunKind.SKILL_REFLECTION, contributes_to_agent_activity=False
+        ),
+    )
+    try:
+        live = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.reflections",
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": source.id,
+                },
+            },
+        )
+        assert live["ok"] is True
+        assert live["result"]["reflection_runs"] == [
+            {
+                "run_id": run.id,
+                "session_id": fork.id,
+                "run_kind": "skill_reflection",
+                "status": "running",
+                "started_at": run.created_at,
+            }
+        ]
+    finally:
+        release.set()
+        await run.wait()
+
+    for method in ("chat.history", "chat.reflections"):
+        result = await dispatch_rpc(
+            state,
+            {
+                "method": method,
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": source.id,
+                },
+            },
+        )
+        assert result["ok"] is True
+        assert result["result"]["reflection_runs"][0]["run_id"] == run.id
+        assert result["result"]["reflection_runs"][0]["status"] == "completed"
+    unrelated = sessions.create("coder", session_id="unrelated")
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.reflections",
+            "params": {
+                "agent_id": "coder",
+                "session_id": unrelated.id,
+            },
+        },
+    )
+    assert result["result"]["reflection_runs"] == []
 
 
 @pytest.mark.asyncio

@@ -2396,6 +2396,45 @@ class SessionStore:
         rows = [*reversed(earlier_rows), anchor, *later_rows]
         return exists, [(int(row["seq"]), message_from_row(row)) for row in rows]
 
+    def reflection_runs(self, address: SessionAddress) -> list[JsonObject]:
+        """Read each review fork's own terminal Run, excluding inherited history."""
+        with self._transaction(write=False) as connection:
+            source = self._require_live(connection, address)
+            rows = connection.execute(
+                """
+                SELECT s.session_id, r.run_id, r.status, r.started_at,
+                  (SELECT value FROM json_each(s.run_kinds_json)
+                   WHERE value IN ('reflection', 'memory_reflection', 'skill_reflection')
+                   ORDER BY key LIMIT 1) AS run_kind
+                FROM sessions AS s
+                JOIN messages AS m ON m.message_key = (
+                  SELECT message_key FROM messages
+                  WHERE session_key = s.session_key AND role = 'run_summary'
+                    AND seq >= json_extract(s.fork_source_json, '$.message_count')
+                  ORDER BY seq LIMIT 1
+                )
+                JOIN run_summaries AS r ON r.message_key = m.message_key
+                WHERE s.status = 'live' AND s.project_id = ? AND s.agent_id = ?
+                  AND json_extract(s.fork_source_json, '$.session_id') = ?
+                  AND json_extract(s.fork_source_json, '$.agent_id') = ?
+                  AND json_extract(s.fork_source_json, '$.project_id') IS ?
+                  AND julianday(json_extract(s.fork_source_json, '$.forked_at'))
+                    >= julianday(?)
+                  AND EXISTS (SELECT 1 FROM json_each(s.run_kinds_json)
+                    WHERE value IN ('reflection', 'memory_reflection', 'skill_reflection'))
+                ORDER BY r.started_at, r.run_id
+                """,
+                (
+                    source["project_id"],
+                    address.agent_id,
+                    address.session_id,
+                    address.agent_id,
+                    address.project_id,
+                    source["created_at"],
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def run_summary(
         self,
         address: SessionAddress,

@@ -50,6 +50,8 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 
 ## Cross-Domain Rules
 
+- `ChatSession.reflection_runs()` projects terminal reviews for the exact source Agent/Project/Session from live same-owner forks through an indexed provenance lookup. Only the first Run Summary after the fork's inherited Message count belongs to the review; copied summaries and later user Runs must not substitute for it. The query reads compact summary columns without reconstructing transcripts, excludes archived forks, and rejects provenance older than the live source generation.
+
 - Chat owns `ChatMessage`, request assembly, Run execution, Compaction behavior, and continuation record meaning. Sessions owns canonical persistence, ordering, metadata transactionality, validation, and storage lifecycle.
 - Agents and Projects must share the Runtime Session manager when started by Runtime. Their standalone stores may lazily own one and must close owned resources. Agent create/current-Session repair deletes a newly created Session if later file persistence fails; rename restore retargets Sessions back; Agent and Project deletion move filesystem state first and compensate it if Session archiving fails.
 - Recall and Statistics are disposable projections. Both include the Session generation in freshness state. Statistics appends through `load_since`; ordinary Message appends must not rebuild a complete Session projection.
