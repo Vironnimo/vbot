@@ -7,9 +7,12 @@ import contextlib
 import json
 import os
 import re
+import shlex
+import subprocess
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -328,6 +331,11 @@ class TerminalManager:
         self._monotonic = monotonic
         self._sleep = sleep
         self._sessions: dict[str, TerminalSession] = {}
+        self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
+        self._closed = False
+        self._reader_executor = ThreadPoolExecutor(
+            max_workers=TERMINAL_MAX_LIVE_GLOBAL, thread_name_prefix="vbot-terminal-read"
+        )
         self._changed_callbacks: list[TerminalChangedCallback] = []
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -353,6 +361,7 @@ class TerminalManager:
 
     def stop(self) -> None:
         """Synchronously stop every child and cancel background tasks."""
+        self._closed = True
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
@@ -370,12 +379,14 @@ class TerminalManager:
                 if task is not None and not task.done():
                     task.cancel()
             self._finish_files(session)
+        self._reader_executor.shutdown(wait=False, cancel_futures=True)
 
     async def aclose(self) -> None:
         """Stop all children and await reader, event, notification, and sweep tasks."""
         sweeper = self._sweeper_task
         self.stop()
         tasks: list[asyncio.Task[Any]] = []
+        tasks.extend(self._pending_spawns)
         if sweeper is not None and not sweeper.done():
             tasks.append(sweeper)
         for session in self._sessions.values():
@@ -487,6 +498,40 @@ class TerminalManager:
         self,
         owner: TerminalOwner | None,
         argv: Sequence[str],
+        **kwargs: Any,
+    ) -> TerminalSession:
+        """Reserve capacity before starting work and retain ownership through cancellation."""
+        if self._closed:
+            raise TerminalClosedError("Terminal Session is no longer running")
+        self._enforce_capacity(owner)
+        task = asyncio.create_task(self._spawn_admitted(owner, argv, **kwargs))
+        self._pending_spawns[task] = owner
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A worker cannot be cancelled once process creation has started. Keep
+            # its result owned until it has either failed or been stopped, even if
+            # the caller receives repeated cancellation requests during cleanup.
+            cleanup = asyncio.create_task(self._discard_cancelled_spawn(task))
+            while not cleanup.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(cleanup)
+            cleanup.result()
+            raise
+        finally:
+            self._pending_spawns.pop(task, None)
+
+    async def _discard_cancelled_spawn(self, task: asyncio.Task[TerminalSession]) -> None:
+        try:
+            session = await task
+        except Exception:
+            return
+        await self._terminate_session(session, suppress_attention=True)
+
+    async def _spawn_admitted(
+        self,
+        owner: TerminalOwner | None,
+        argv: Sequence[str],
         *,
         cwd: Path,
         env: Mapping[str, str] | None,
@@ -509,7 +554,6 @@ class TerminalManager:
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
         if group_id is not None:
             self._require_group(group_id)
-        self._enforce_capacity(owner)
 
         terminal_id = uuid.uuid4().hex
         log_path: Path | None = None
@@ -530,6 +574,9 @@ class TerminalManager:
                 rows,
                 columns,
             )
+            if self._closed:
+                await asyncio.to_thread(terminate_process_tree, adapter)
+                raise TerminalClosedError("Terminal Session is no longer running")
         except Exception as error:
             if log_handle is not None:
                 log_handle.close()
@@ -1116,7 +1163,9 @@ class TerminalManager:
         the command is written through the exact `data` channel exactly once,
         without bracketed-paste or Enter state.
         """
-        command = _shell_command(session.launch_command, session.launch_arguments)
+        command = _shell_command(
+            session.launch_command, session.launch_arguments, shell=session.command
+        )
         if command is None:
             return
         if not await _await_shell_ready(session):
@@ -1315,7 +1364,9 @@ class TerminalManager:
         error: BaseException | None = None
         try:
             while True:
-                text = await asyncio.to_thread(session.adapter.read, 4096)
+                text = await asyncio.get_running_loop().run_in_executor(
+                    self._reader_executor, session.adapter.read, 4096
+                )
                 if not text:
                     if not await asyncio.to_thread(session.adapter.is_alive):
                         break
@@ -1857,16 +1908,18 @@ class TerminalManager:
                 _LOGGER.exception("Terminal changed callback failed for terminal=%s", terminal_id)
 
     def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
+        pending = [owner for task, owner in self._pending_spawns.items() if not task.done()]
         live = [
             session
             for session in self._sessions.values()
             if session.state not in {"exited", "error"}
         ]
-        if len(live) >= TERMINAL_MAX_LIVE_GLOBAL:
+        if len(live) + len(pending) >= TERMINAL_MAX_LIVE_GLOBAL:
             raise TerminalCapacityError(
                 f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"
             )
         owned = sum(1 for session in live if owner is not None and session.lifecycle_owner == owner)
+        owned += sum(1 for pending_owner in pending if owner is not None and pending_owner == owner)
         if owner is not None and owned >= TERMINAL_MAX_LIVE_PER_SESSION:
             raise TerminalCapacityError(
                 "Live Terminal Session limit reached for this vBot Session "
@@ -1942,40 +1995,44 @@ def _input_chunks(
     return tuple(chunks)
 
 
-def _shell_command(command: str | None, arguments: Sequence[str]) -> str | None:
+def _shell_command(command: str | None, arguments: Sequence[str], *, shell: str) -> str | None:
     """Render one operator-requested command as shell input, or None."""
     if command is None:
         return None
     if not command.strip() or any(not argument for argument in arguments):
         return None
-    tokens = [command, *arguments]
-    if all(_SHELL_TOKEN_SAFE_RE.fullmatch(token) for token in tokens):
-        return " ".join(tokens)
-    return " ".join(_shell_quote(token) for token in tokens)
+    shell_name = shell.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if shell_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+        # Windows PowerShell reparses native arguments through the Windows
+        # command-line grammar. Modern PowerShell passes the string values.
+        native_arguments = (
+            [subprocess.list2cmdline([value]) for value in arguments]
+            if shell_name in {"powershell", "powershell.exe"}
+            else arguments
+        )
+        tokens = [_powershell_word(command), *map(_powershell_word, native_arguments)]
+        prefix = "& " if tokens[0].startswith("'") else ""
+        return prefix + " ".join(tokens)
+    if shell_name in {"cmd", "cmd.exe"}:
+        # Keep the executable's quotes for cmd's command lookup; escape the
+        # argument command-line syntax before cmd hands it to the native child.
+        return " ".join(
+            [
+                subprocess.list2cmdline([command]),
+                *(_CMD_META.sub(r"^\1", subprocess.list2cmdline([value])) for value in arguments),
+            ]
+        )
+    return " ".join(shlex.quote(token) for token in [command, *arguments])
 
 
-_SHELL_TOKEN_UNQUOTED_RE = re.compile(r"[A-Za-z0-9_\-./:=@+%^,]+")
+def _powershell_word(value: str) -> str:
+    if _POWERSHELL_SAFE_WORD.fullmatch(value):
+        return value
+    return "'" + value.replace("'", "''") + "'"
 
 
-def _shell_quote(token: str) -> str:
-    """Quote one shell word against the host shell's word boundaries.
-
-    Windows shells (PowerShell/cmd) escape a double quote as "" inside
-    double quotes; POSIX shells escape it as \\" . Tokens without shell
-    metacharacters stay unquoted for readability.
-    """
-    if _SHELL_TOKEN_SAFE_RE.fullmatch(token):
-        return token
-    if os.name == "nt":
-        if '"' in token:
-            token = token.replace('"', '""')
-        return f'"{token}"'
-    if '"' in token:
-        token = token.replace('"', '\\"')
-    return f'"{token}"'
-
-
-_SHELL_TOKEN_SAFE_RE = re.compile(r"[A-Za-z0-9_\-./\\:@=+%,]+")
+_POWERSHELL_SAFE_WORD = re.compile(r"[A-Za-z0-9_./\\:\-]+")
+_CMD_META = re.compile(r'([()%!^"<>&|])')
 
 
 async def _await_shell_ready(session: TerminalSession) -> bool:
