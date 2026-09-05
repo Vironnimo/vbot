@@ -785,12 +785,20 @@
 
   const connectServerEvents = () => appController.connectServerEvents();
 
-  // Deep-link to a specific Settings panel (Agent defaults, Extensions, Voice…).
-  // Sets the target + a fresh request id, then switches to the Settings view;
-  // SettingsView selects the panel when the request id changes.
-  const navigateToSettingsPanel = (panelId) => {
+  // Shared defaults have one owner in Agents, including links from Projects.
+  // Consume the target after opening so ordinary navigation returns to the Agent.
+  let pendingAgentDefaultsPanel = $state('');
+  const navigateToAgentDefaults = (panelId = 'defaults') =>
     requestAutosaveTransition(() => {
-      // A deliberate deep link (for example "Edit global defaults") owns the
+      pendingAgentDefaultsPanel = panelId === 'agent' ? '' : panelId;
+      return appController.selectView('agents');
+    });
+
+  const navigateToSettingsPanel = (panelId) => {
+    if (panelId === 'defaults' || panelId === 'compaction')
+      return navigateToAgentDefaults(panelId);
+    requestAutosaveTransition(() => {
+      // A deliberate deep link (for example Provider setup) owns the
       // next Settings position; ordinary tab switches leave the memory intact.
       settingsScrollPosition = null;
       return appController.navigateToSettingsPanel(panelId);
@@ -1210,6 +1218,8 @@
       {#if activeViewId === 'agents'}
         <AgentsView
           sharedSelectedAgentId={selectedAgentId}
+          targetDefaultsPanel={pendingAgentDefaultsPanel}
+          onDefaultsTargetHandled={() => (pendingAgentDefaultsPanel = '')}
           onAgentsChanged={refreshAgents}
           onAgentSelected={selectAgent}
           onToast={showToast}
@@ -1267,6 +1277,7 @@
       {:else if activeViewId === 'settings'}
         <SettingsView
           bind:this={settingsView}
+          onNavigateToAgentDefaults={navigateToAgentDefaults}
           {providerAuthEvent}
           onToast={showToast}
           {agents}

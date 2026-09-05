@@ -45,6 +45,77 @@ describe('App', () => {
     mountedComponent = await cleanupAppHarness(mountedComponent);
   });
 
+  it('routes shared defaults search into Agents and returns ordinary navigation to the selected Agent', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    sidebarNavButton('Settings').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('#settings-section-appearance'),
+      ).toBeTruthy(),
+    );
+    const search = document.querySelector('.settings-search-input');
+    search.value = 'thinking';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    Array.from(document.querySelectorAll('.settings-search-result'))
+      .find((button) => button.textContent.includes('Shared defaults'))
+      .click();
+    await waitForCondition(() =>
+      expect(document.querySelector('#settings-defaults-model')).toBeTruthy(),
+    );
+    expect(sidebarNavButton('Agents').getAttribute('aria-current')).toBe(
+      'page',
+    );
+    sidebarNavButton('Settings').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.settings-content')).toBeTruthy(),
+    );
+    sidebarNavButton('Agents').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.agent-editor-host')?.hidden).toBe(false),
+    );
+    expect(document.querySelector('.agent-shared-pane')).toBeNull();
+  });
+
+  it('retains shared defaults when their transition save fails', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'settings.update'
+        ? Promise.reject(new Error('save unavailable'))
+        : settingsRpc(method, params),
+    );
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    sidebarNavButton('Agents').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('.agent-list-defaults button'),
+      ).toBeTruthy(),
+    );
+    document.querySelector('.agent-list-defaults button').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('#settings-defaults-temperature'),
+      ).toBeTruthy(),
+    );
+    const input = document.querySelector('#settings-defaults-temperature');
+    input.value = '0.73';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    document.querySelector('.agent-shared-title button').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector(
+          '[aria-labelledby="autosave-transition-failure-title"]',
+        ),
+      ).toBeTruthy(),
+    );
+    expect(document.querySelector('.agent-shared-pane').hidden).toBe(false);
+    expect(input.value).toBe('0.73');
+  });
+
   it('renders Logs as a live view from the app shell', async () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();

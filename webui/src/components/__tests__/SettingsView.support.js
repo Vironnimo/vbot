@@ -25,6 +25,8 @@ vi.mock('$lib/api.js', () =>
   }),
 );
 
+export const { default: AgentsView } = await import('../AgentsView.svelte');
+
 export const { default: SettingsView } = await import('../SettingsView.svelte');
 
 export function resetSettingsViewHarness() {
@@ -50,12 +52,42 @@ export async function cleanupSettingsViewHarness(mountedComponent) {
 // Topic navigation keeps editors mounted; helpers scope repeated control labels
 // to the active topic just as the visible interface does.
 export async function openSettingsSection(navLabel, sectionId) {
-  await waitForCondition(() => buttonByText(navLabel));
-  buttonByText(navLabel).click();
+  const category = {
+    providers: 'Connections',
+    channels: 'Connections',
+    extensions: 'Connections',
+    specialized_models: 'Tools & Media',
+    voice: 'Tools & Media',
+    web_search: 'Tools & Media',
+    subagents: 'Tools & Media',
+    session_titles: 'Sessions & Memory',
+    recall: 'Sessions & Memory',
+    reflection: 'Sessions & Memory',
+    general: 'System',
+    debug: 'System',
+    appearance: 'General',
+    preferences: 'General',
+  }[sectionId];
+  if (sectionId === 'defaults' || sectionId === 'compaction') {
+    await waitForCondition(() => buttonByText('Shared defaults'));
+    buttonByText('Shared defaults').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('#settings-defaults-model'),
+    );
+    if (sectionId === 'compaction')
+      buttonByText('Configure Compaction').click();
+  } else {
+    await waitForCondition(() => buttonByText(category));
+    buttonByText(category).click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector(`#settings-section-${sectionId}`),
+    );
+    const heading = document.querySelector(`#settings-section-${sectionId}`);
+    if (heading.getAttribute('aria-expanded') !== 'true') heading.click();
+  }
   flushSync();
-  await waitForCondition(() =>
-    document.body.querySelector(`[data-settings-section="${sectionId}"]`),
-  );
   activeSection = document.body.querySelector(
     `[data-settings-section="${sectionId}"]`,
   );

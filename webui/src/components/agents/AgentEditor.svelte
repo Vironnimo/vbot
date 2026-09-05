@@ -358,6 +358,7 @@
       if (source === 'manual') {
         showAgentToast(t('common.alreadySaved', 'Already saved'));
       }
+
       return true;
     }
 
@@ -403,6 +404,7 @@
           showAgentToast(t('agents.updated', 'Agent updated.'));
         }
       }
+
       return true;
     } catch (error) {
       if (
@@ -767,6 +769,7 @@
       allTargetNames.includes(item),
     );
     const existingIndex = nextItems.indexOf(itemName);
+
     if (isAllowed && existingIndex === -1) {
       nextItems.push(itemName);
     } else if (!isAllowed && existingIndex !== -1) {
@@ -1328,56 +1331,6 @@
       hidden={activeDetail !== 'overview'}
       tabindex="0"
     >
-      <div class="detail-group">
-        <div class="detail-group-title">
-          {t('agents.detail.identity', 'Identity')}
-        </div>
-        <div class="detail-fields">
-          <FormField
-            controlId="agent-name"
-            label={t('agents.form.name', 'Name')}
-            error={formErrors.name ? fieldError('name') : ''}
-          >
-            {#snippet children(field)}
-              <TextField
-                id={field.controlId}
-                invalid={field.invalid}
-                aria-describedby={field.describedBy}
-                value={formValues.name}
-                onInput={(next) => (formValues.name = next)}
-              />
-            {/snippet}
-          </FormField>
-
-          {#if formMode === AGENT_FORM_MODE_EDIT}
-            <FormField
-              controlId="agent-project"
-              label={t('agents.form.project', 'Project')}
-              help={projectCatalogError
-                ? t(
-                    'agents.form.projectUnavailableHelp',
-                    'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
-                  )
-                : t(
-                    'agents.form.projectHelp',
-                    'Where relative file and shell work runs. Workspace remains the identity and memory home.',
-                  )}
-            >
-              <Dropdown
-                id="agent-project"
-                value={formValues.root_project_id ?? ''}
-                options={projectDropdownOptions}
-                disabled={Boolean(projectCatalogError)}
-                ariaLabel={t('agents.form.project', 'Project')}
-                triggerClass="agents-view__dropdown"
-                onValueChange={(selectedValue) => {
-                  formValues.root_project_id = selectedValue || null;
-                }}
-              />
-            </FormField>
-          {/if}
-        </div>
-      </div>
       <div class="detail-group agents-view__model-group">
         <div class="detail-group-title agents-view__group-title-row">
           <span>{t('agents.detail.model', 'Model')}</span>
@@ -1394,7 +1347,6 @@
         <div class="detail-fields agents-view__model-fields">
           <FormField
             controlId="agent-model"
-            full
             label={t('agents.form.model', 'Model')}
           >
             <SearchableDropdown
@@ -1417,7 +1369,6 @@
                 updateModelSelection('model', selectedValue)}
             />
           </FormField>
-
           <FormField
             controlId="agent-thinking-effort"
             class="agents-view__thinking-field"
@@ -1450,7 +1401,6 @@
               }}
             />
           </FormField>
-
           <FormField
             controlId="agent-temperature"
             help={temperatureIsInherit
@@ -1565,6 +1515,56 @@
           </FormField>
         </div>
       </div>
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.identity', 'Identity')}
+        </div>
+        <div class="detail-fields">
+          <FormField
+            controlId="agent-name"
+            label={t('agents.form.name', 'Name')}
+            error={formErrors.name ? fieldError('name') : ''}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                invalid={field.invalid}
+                aria-describedby={field.describedBy}
+                value={formValues.name}
+                onInput={(next) => (formValues.name = next)}
+              />
+            {/snippet}
+          </FormField>
+
+          {#if formMode === AGENT_FORM_MODE_EDIT}
+            <FormField
+              controlId="agent-project"
+              label={t('agents.form.project', 'Project')}
+              help={projectCatalogError
+                ? t(
+                    'agents.form.projectUnavailableHelp',
+                    'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
+                  )
+                : t(
+                    'agents.form.projectHelp',
+                    'Where relative file and shell work runs. Workspace remains the identity and memory home.',
+                  )}
+            >
+              <Dropdown
+                id="agent-project"
+                value={formValues.root_project_id ?? ''}
+                options={projectDropdownOptions}
+                disabled={Boolean(projectCatalogError)}
+                ariaLabel={t('agents.form.project', 'Project')}
+                triggerClass="agents-view__dropdown"
+                onValueChange={(selectedValue) => {
+                  formValues.root_project_id = selectedValue || null;
+                }}
+              />
+            </FormField>
+          {/if}
+        </div>
+      </div>
     </div>
     <div
       class="management-topic"
@@ -1577,6 +1577,12 @@
       <div class="detail-group agents-view__compaction-group">
         <div class="detail-group-title">
           {t('agents.detail.compaction', 'Compaction Policy')}
+
+          <Button
+            variant="tertiary"
+            onClick={() => onNavigateToSettingsPanel('compaction')}
+            >{t('agents.shared.title', 'Shared defaults')}</Button
+          >
         </div>
         <div class="agents-view__prompt-toggle-row">
           <div>

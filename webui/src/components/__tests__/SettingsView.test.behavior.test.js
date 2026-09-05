@@ -22,6 +22,7 @@ import {
   selectSimpleOption,
   setInputValue,
   SettingsView,
+  AgentsView,
   waitForCondition,
   waitForModelCatalogs,
 } from './SettingsView.support.js';
@@ -45,7 +46,7 @@ describe('SettingsView', () => {
   it('renders and saves the Defaults section', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
     await openDefaultsPanel();
 
@@ -147,7 +148,7 @@ describe('SettingsView', () => {
   it('uses the model picker for compaction summary model', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
     await openCompactionPanel();
     await waitForModelCatalogs();
