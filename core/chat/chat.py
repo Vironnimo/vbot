@@ -147,6 +147,7 @@ from core.chat.wire_shaping import (
     _message_to_request_dict,
     _notes_to_request_messages,
     _strip_assistant_reasoning_fields,
+    limit_request_images,
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
@@ -974,7 +975,7 @@ def _restore_in_run_tool_result_content(
             and not is_compacted_tool_result_content(message.get("content"))
         ):
             message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = rich_content_by_call_id[tool_call_id]
-    return rebuilt_messages
+    return limit_request_images(rebuilt_messages)
 
 
 def _serialize_continuation_request(
@@ -2465,7 +2466,7 @@ class ChatLoop:
             inputs.wire_media_types,
         )
         return _RequestState(
-            request_messages,
+            await _CHAT_TRANSFORM_WORKERS.run(limit_request_images, request_messages),
             tools,
             allowed_tool_names,
             session_tool_grants,
@@ -2618,6 +2619,10 @@ class ChatLoop:
                     async with self._dependencies.sessions.write_lock(session_address):
                         await session.flush_deferred_notes_async()
                         await context.session_snapshot.refresh(session)
+
+            messages_for_request = await _CHAT_TRANSFORM_WORKERS.run(
+                limit_request_images, messages_for_request
+            )
 
             # The next ordinal is derived from the canonical completed count.
             # Failed requests therefore do not consume an Iteration number.
@@ -2975,11 +2980,13 @@ class ChatLoop:
                     emitted_change_stats = current_change_stats
                     run.emit(RUN_CHANGE_STATS_EVENT, {"change_stats": current_change_stats})
 
-            continuation_request_messages = [
-                *messages_for_request,
-                assistant_request_message,
-                *tool_request_messages,
-            ]
+            # Bound the live request view as well, before Compaction estimates or
+            # another Tool cycle. Canonical artifacts remain available to reopen.
+            messages[:] = await _CHAT_TRANSFORM_WORKERS.run(limit_request_images, messages)
+            continuation_request_messages = await _CHAT_TRANSFORM_WORKERS.run(
+                limit_request_images,
+                [*messages_for_request, assistant_request_message, *tool_request_messages],
+            )
             tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                 build_model_step_context_usage,
                 assistant_message.usage,
