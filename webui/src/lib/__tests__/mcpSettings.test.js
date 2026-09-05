@@ -72,13 +72,11 @@ describe('MCP settings', () => {
     expect(state().error).toBeTruthy();
   });
   it('keeps the draft unsaved when the existing connection changed elsewhere', async () => {
-    const operation = vi
-      .fn()
-      .mockResolvedValue({
-        connections: [
-          { id: 'example', configuration: { ...configuration, agents: [] } },
-        ],
-      });
+    const operation = vi.fn().mockResolvedValue({
+      connections: [
+        { id: 'example', configuration: { ...configuration, agents: [] } },
+      ],
+    });
     setup(operation);
     expect(await controller.save(mcpDraft(configuration), configuration)).toBe(
       false,

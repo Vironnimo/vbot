@@ -26,7 +26,7 @@ from core.prompts import (
     PromptAgentStore,
     SystemPromptManager,
 )
-from core.tools import ToolAccess
+from core.tools import ToolAccess, ToolRegistry
 from core.utils.paths import model_path
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.operations_methods import (
@@ -201,10 +201,11 @@ def _manager(
     agents: list[StubAgent] | None = None,
     block_definitions: Sequence[BlockDefinition] = (),
     loaded_extensions: Sequence[str] = (),
+    tools: Any | None = None,
 ) -> SystemPromptManager:
     return SystemPromptManager(
         StubStorage(),
-        StubTools(),
+        tools if tools is not None else StubTools(),
         StubSkills(),
         vbot_version="0.1.0",
         vbot_root=tmp_path / "app",
@@ -629,3 +630,51 @@ async def test_preview_rejects_unsupported_field(tmp_path: Path) -> None:
     with pytest.raises(RpcError) as exc:
         await _preview_prompt(state, {"agent_id": "coder", "bogus": 1})
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, expected", [("all", ["mcp_example"]), ("none", [])])
+async def test_preview_inspects_only_effective_provider_definitions(
+    tmp_path: Path, mode: str, expected: list[str]
+) -> None:
+    agent = StubAgent(
+        id="coder", name="Coder", tool_access=ToolAccess(mode=mode, denied=("blocked",))
+    )
+    registry = ToolRegistry()
+    schema = {
+        "type": "object",
+        "properties": {"action": {"type": "string", "enum": ["search", "read"]}},
+        "additionalProperties": False,
+    }
+    for name in ("mcp_example", "blocked", "remote_detail"):
+        registry.register(
+            name, "TEST-DEFINITION", schema, lambda *_: {}, deferred=name == "remote_detail"
+        )
+    manager = _manager(tmp_path, agents=[agent], tools=registry)
+    state = _state(
+        manager,
+        runtime_extra={
+            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
+            "projects": SimpleNamespace(),
+            "skills_for": lambda *_: StubSkills(),
+        },
+    )
+
+    ordinary = await _preview_prompt(state, {"agent_id": "coder"})
+    inspected = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
+
+    assert "tools" not in ordinary
+    assert {key: value for key, value in inspected.items() if key != "tools"} == ordinary
+    assert [entry["definition"]["name"] for entry in inspected["tools"]] == expected
+    assert [
+        entry["definition"] for entry in inspected["tools"]
+    ] == manager.provider_tool_definitions(cast(Any, agent))
+    assert all(entry["tokens"] > 0 for entry in inspected["tools"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, "true", 1, [], {}])
+async def test_preview_rejects_non_boolean_tool_inspection(value: Any) -> None:
+    with pytest.raises(RpcError) as raised:
+        await _preview_prompt(SimpleNamespace(), {"agent_id": "coder", "include_tools": value})
+    assert raised.value.code == RPC_ERROR_INVALID_REQUEST
