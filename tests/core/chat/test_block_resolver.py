@@ -104,6 +104,22 @@ def test_image_window_counts_individual_images_in_sibling_results() -> None:
     assert parts[0]["type"] == "text"
 
 
+def test_four_user_images_are_all_sent_up_to_fourteen_mib() -> None:
+    content = [
+        {
+            "type": "media",
+            "media_type": "image/png",
+            "base64": "A" * (14 * 1024 * 1024 // 4),
+        }
+        for _ in range(4)
+    ]
+    message = {"role": "user", "content": content}
+    bounded = limit_request_images([message, _resolved_image_result(0)])
+    assert bounded[0] == message
+    assert len(bounded[0]["content"]) == 4
+    assert _native_image_calls(bounded) == []
+
+
 def test_image_byte_budget_reserves_user_references_before_recent_tools() -> None:
     reference = {
         "role": "user",
