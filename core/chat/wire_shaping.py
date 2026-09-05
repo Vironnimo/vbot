@@ -81,12 +81,7 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
 
 # Harness policy, not a claim about any Provider's transport limit. Count encoded
 # image payloads, independently of visual token estimates and text compaction.
-RECENT_TOOL_IMAGE_LIMIT = 3
-REQUEST_IMAGE_BYTES_LIMIT = 14 * 1024 * 1024
-_IMAGE_WINDOW_NOTE = (
-    "[Image omitted from this request to keep recent inspection images available. "
-    "Its file path follows; use the read Tool to inspect it again if needed.]"
-)
+REQUEST_IMAGE_BYTES_LIMIT = 150 * 1024 * 1024
 _IMAGE_BUDGET_NOTE = (
     "[Image omitted because the request's image-data budget is full. Its file path follows. "
     "Read fewer images together; if this image alone is too large, create a smaller copy "
@@ -97,23 +92,13 @@ _IMAGE_BUDGET_NOTE = (
 def limit_request_images(messages: list[JsonObject]) -> list[JsonObject]:
     """Bound resolved images without changing history, text, or Tool correlation.
 
-    User references have byte-budget priority, followed by all images in the most
-    recent Tool batch and three older Tool images. Path notes emitted
-    by the resolver stay in place. Copy changed containers so previously captured
-    requests and the live source remain intact; rebuilding/reopening applies the
-    same policy afresh. Audio, documents, and opaque reasoning are not traversed.
+    User references have byte-budget priority, followed by newest Tool images.
+    There is no image-count limit: below the byte budget, existing content stays
+    unchanged as the Run grows. Path notes emitted by the resolver stay in place.
+    Copy changed containers so captured requests and the live source remain
+    intact; rebuilding/reopening applies the same policy afresh. Audio, documents,
+    and opaque reasoning are not traversed.
     """
-    # Correlation identifies a whole sibling batch, including non-image Results.
-    # A newer text-only Tool batch ages the previous image batch normally.
-    latest_tool_ids: set[str] = set()
-    for message in messages:
-        calls = message.get("tool_calls")
-        if message.get("role") == "assistant" and isinstance(calls, list) and calls:
-            latest_tool_ids = {
-                call["id"]
-                for call in calls
-                if isinstance(call, dict) and isinstance(call.get("id"), str)
-            }
     candidates: list[tuple[int, str, int, JsonObject]] = []
     for message_index, message in enumerate(messages):
         role = message.get("role")
@@ -136,29 +121,18 @@ def limit_request_images(messages: list[JsonObject]) -> list[JsonObject]:
     candidates.reverse()
     candidates.sort(key=lambda item: item[1] != "content")
     remaining = REQUEST_IMAGE_BYTES_LIMIT
-    old_tool_image_count = 0
     result = list(messages)
     copied: set[int] = set()
     for message_index, field, block_index, block in candidates:
-        is_tool = field == TOOL_RESULT_CONTENT_BLOCKS_FIELD
-        is_old_tool_image = (
-            is_tool and messages[message_index].get("tool_call_id") not in latest_tool_ids
-        )
-        if is_old_tool_image:
-            old_tool_image_count += 1
         image_bytes = len(block["base64"])
-        if is_old_tool_image and old_tool_image_count > RECENT_TOOL_IMAGE_LIMIT:
-            note = _IMAGE_WINDOW_NOTE
-        elif image_bytes > remaining:
-            note = _IMAGE_BUDGET_NOTE
-        else:
+        if image_bytes <= remaining:
             remaining -= image_bytes
             continue
         if message_index not in copied:
             result[message_index] = dict(messages[message_index])
             result[message_index][field] = list(messages[message_index][field])
             copied.add(message_index)
-        result[message_index][field][block_index] = {"type": "text", "text": note}
+        result[message_index][field][block_index] = {"type": "text", "text": _IMAGE_BUDGET_NOTE}
     return result
 
 
