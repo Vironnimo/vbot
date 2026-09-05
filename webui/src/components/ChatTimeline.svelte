@@ -337,7 +337,11 @@
   }
 
   function handleTimelineClick(event) {
-    const image = event.target;
+    const preview =
+      event.target instanceof Element
+        ? event.target.closest('.tool-image-preview')
+        : null;
+    const image = preview?.querySelector('img') ?? event.target;
     if (!(image instanceof HTMLImageElement)) {
       return;
     }
@@ -346,7 +350,8 @@
     // open the raw image in a new tab.
     if (
       !image.closest('.msg-markdown') &&
-      !image.closest('.inline-attachment')
+      !image.closest('.inline-attachment') &&
+      !preview
     ) {
       return;
     }

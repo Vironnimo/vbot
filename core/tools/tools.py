@@ -566,6 +566,7 @@ class ToolContext:
         repr=False,
         compare=False,
     )
+    presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy callers working without change tracking.
     change_tracker: ChangeTracker | None = field(
@@ -1049,12 +1050,15 @@ class ToolRegistry:
     ) -> JsonObject:
         """Return display metadata for a concrete tool invocation."""
         facts = context.presentation_facts if context is not None else ()
-        return self.get(name).display.to_payload(
+        payload = self.get(name).display.to_payload(
             arguments,
             context=context,
             result=result,
             facts=facts,
         )
+        if context is not None and context.presentation_images:
+            payload["images"] = [dict(image) for image in context.presentation_images]
+        return payload
 
     def get(self, name: str) -> Tool:
         """Return a registered tool by name."""
