@@ -83,6 +83,7 @@ describe('SystemPromptView', () => {
 
     expect(document.querySelectorAll('.sp-block-owner')).toHaveLength(4);
     expect(document.querySelector('.sp-scroll.view-frame')).toBeTruthy();
+    expect(document.querySelector('.sp-top .sp-navigation')).toBeTruthy();
     expect(document.querySelector('.sp-header.view-header')).toBeTruthy();
     expect(
       document.querySelector('.sp-blocklist-toolbar.view-toolbar--split'),
@@ -789,7 +790,7 @@ describe('SystemPromptView', () => {
       '~1234 prompt + ~456 tools = ~1690 tokens',
     );
     expect(document.body.textContent).toContain('You are an agent named Alpha');
-    expect(buttonByText('Refresh')).toBeNull();
+    expect(buttonByText('Refresh')).toBeTruthy();
   });
 
   it('falls back to the plain token count when the agent has no tools', async () => {
@@ -820,7 +821,7 @@ describe('SystemPromptView', () => {
     expect(document.body.textContent).not.toContain('= ~');
   });
 
-  it('previews an agent prompt scope without the default agent picker', async () => {
+  it('keeps the Agent picker available when previewing a custom scope', async () => {
     rpcMock.mockImplementation(
       createRpcMock({
         promptPreview: { text: 'Agent scoped preview', tokens: 77 },
@@ -837,21 +838,18 @@ describe('SystemPromptView', () => {
 
     selectPromptScope('Alpha');
     await waitForCondition(
-      () =>
-        document.body
-          .querySelector('.sp-scope-chip')
-          ?.textContent.includes('Alpha'),
+      () => agentTrigger()?.textContent.includes('Alpha'),
       100,
     );
 
-    expect(document.body.querySelector('#sp-agent-select')).toBeNull();
+    expect(document.body.querySelector('#sp-agent-select')).toBeTruthy();
 
     await waitForCondition(
       () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
       100,
     );
 
-    expect(lastCall('prompt.preview')[1]).toEqual({
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
       agent_id: 'agent-1',
       scope: { type: 'agent', agent_id: 'agent-1' },
     });
@@ -898,7 +896,9 @@ describe('SystemPromptView', () => {
       100,
     );
 
-    expect(lastCall('prompt.preview')[1]).toEqual({ agent_id: 'builder@vbot' });
+    expect(lastCall('prompt.preview')[1]).toMatchObject({
+      agent_id: 'builder@vbot',
+    });
     expect(document.body.textContent).toContain('Project agent preview');
   });
 
@@ -961,6 +961,164 @@ describe('SystemPromptView', () => {
         ),
       100,
     );
+  });
+
+  it('opens in document view and copies the exact original prompt', async () => {
+    const text =
+      '# Inspection fixture\n\nKeep **all** words.\n<external>literal</external>';
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    rpcMock.mockImplementation(
+      createRpcMock({ promptPreview: { text, tokens: 25, tools: [] } }),
+    );
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    await waitForCondition(
+      () => document.querySelector('.sp-document h1'),
+      100,
+    );
+    expect(document.querySelector('.sp-editor').hidden).toBe(true);
+    expect(document.querySelector('external')).toBeNull();
+    clickTab('Original text');
+    expect(document.querySelector('.sp-preview-pre').textContent).toBe(text);
+    document.querySelector('.sp-document-toolbar button.btn-secondary').click();
+    await waitForCondition(() => writeText.mock.calls.length > 0, 100);
+    expect(writeText).toHaveBeenCalledWith(text);
+  });
+
+  it('shows searchable complete Tool definitions separately from the prompt', async () => {
+    const definition = {
+      name: 'mcp_fixture',
+      description: 'TEST-MCP-DESCRIPTION <script>inert</script>',
+      parameters: {
+        type: 'object',
+        properties: { action: { enum: ['search', 'describe'] } },
+      },
+    };
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: {
+          text: 'PROMPT-ONLY',
+          tokens: 10,
+          tools: [
+            { definition, tokens: 350 },
+            {
+              definition: {
+                name: 'read',
+                description: 'READ-FIXTURE',
+                parameters: {},
+              },
+              tokens: 100,
+            },
+          ],
+        },
+      }),
+    );
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    await waitForCondition(() => document.querySelector('.sp-document'), 100);
+    expect(document.querySelector('.sp-document').textContent).not.toContain(
+      'TEST-MCP-DESCRIPTION',
+    );
+    expect(lastCall('prompt.preview')[1].include_tools).toBe(true);
+    clickTab('Tools');
+    expect(document.querySelector('.tool-description').textContent).toBe(
+      definition.description,
+    );
+    expect(
+      JSON.parse(document.querySelector('.tool-schema').textContent),
+    ).toEqual(definition.parameters);
+    expect(document.querySelector('.tool-detail script')).toBeNull();
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'READ-FIXTURE';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('.tool-detail h3').textContent).toBe('read');
+    expect(document.querySelectorAll('.tool-index-item')).toHaveLength(1);
+    search.value = 'not-found';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('.tool-detail')).toBeNull();
+    expect(document.body.textContent).toContain('No matching Tools');
+  });
+
+  it('opens a block without changing inclusion or losing edits across tabs', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    await waitForCondition(
+      () => blockIds().length === baseBlocks().length,
+      100,
+    );
+    clickTab('Edit blocks');
+    const block = blockElement('core:intro');
+    const disclosure = block.querySelector('button[aria-expanded]');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    disclosure.click();
+    flushSync();
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    expect(lastCall('prompt.set_layout')).toBeUndefined();
+    const textarea = block.querySelector('textarea');
+    textarea.value = 'PRESERVED-DRAFT';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    clickTab('Tools');
+    clickTab('Edit blocks');
+    expect(block.querySelector('textarea').value).toBe('PRESERVED-DRAFT');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows a failed preview and retries without retaining old content', async () => {
+    const base = createRpcMock();
+    let failing = true;
+    rpcMock.mockImplementation((method, params) =>
+      method === 'prompt.preview' && failing
+        ? Promise.reject(new Error('test outage'))
+        : base(method, params),
+    );
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    await waitForCondition(() => buttonByText('Retry'), 100);
+    expect(document.querySelector('.sp-document')).toBeNull();
+    failing = false;
+    buttonByText('Retry').click();
+    await waitForCondition(() => document.querySelector('.sp-document'), 100);
+    expect(buttonByText('Retry')).toBeNull();
+  });
+
+  it('ignores an old Agent preview that finishes after a new selection', async () => {
+    const old = deferred();
+    const base = createRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method !== 'prompt.preview') return base(method, params);
+      return params.agent_id === 'agent-1'
+        ? old.promise
+        : Promise.resolve({ text: 'NEW-AGENT', tools: [], tokens: 5 });
+    });
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    await waitForCondition(() => lastCall('prompt.preview'), 100);
+    openDropdown(agentTrigger());
+    dropdownOptionButtons()
+      .find((button) => button.textContent.includes('Beta'))
+      .click();
+    flushSync();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.sp-document')
+          ?.textContent.includes('NEW-AGENT'),
+      100,
+    );
+    old.resolve({
+      text: 'STALE-AGENT',
+      tools: [{ definition: { name: 'stale', parameters: {} }, tokens: 5 }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(document.querySelector('.sp-document').textContent).toContain(
+      'NEW-AGENT',
+    );
+    clickTab('Tools');
+    expect(document.querySelector('.tool-detail')).toBeNull();
   });
 
   it('all new i18n keys have t() calls in the component source', () => {
@@ -1342,4 +1500,13 @@ function deferred() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function clickTab(name) {
+  const tab = [...document.querySelectorAll('[role="tab"]')].find(
+    (item) => item.textContent.trim() === name,
+  );
+  expect(tab, `Tab ${name}`).toBeTruthy();
+  tab.click();
+  flushSync();
 }
