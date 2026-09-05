@@ -24,5 +24,6 @@ Protocol extensions that the selected SDK cannot interpret must fail explicitly;
 
 - Runtime and Extension seams: `core/extensions/operations.py`, `core/extensions/runtime.py`, `core/runtime/runtime.py`; live Tool generations: `core/tools/tools.py`, `core/chat/chat.py`.
 - Management transport and automation: `server/rpc/extensions_methods.py`, `cli/extensions_management.py`, `cli/parser.py`; setup guidance: `resources/skills/vbot-cli/references/mcp.md`.
+- Connection management presentation: `webui/src/components/settings/SettingsMcpPanel.svelte` and `webui/src/lib/mcpSettings.js` reuse the same management operations as the CLI; UI ownership and tests: `webui/settings.md`.
 - Pending-input presentation: `webui/src/components/ExtensionRequests.svelte`, `webui/src/lib/extensionInputs.js` and their component/helper tests.
 - Protocol, transport, callback, task, grants, persistence, media, bounded-result, and real Chat request-prefix regressions: `tests/resources/extensions/test_mcp.py`; ownership, CLI parser, and same-Run publication tests live in the adjacent core/CLI suites.

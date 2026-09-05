@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
+  import SettingsMcpPanel from './SettingsMcpPanel.svelte';
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -561,6 +562,10 @@
             </div>
           {/if}
         </div>
+
+        {#if extension.name === 'mcp' && extension.status === 'loaded'}
+          <SettingsMcpPanel />
+        {/if}
 
         {#if !isOverridden && hasSettingsSchema(extension)}
           <div
