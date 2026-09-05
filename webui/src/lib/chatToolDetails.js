@@ -1,3 +1,4 @@
+import { getAttachmentUrl } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
@@ -14,6 +15,44 @@ const TOOL_ERROR_DETAIL_KEYS = [
   'status',
   'type',
 ];
+
+// Media URLs come only from stored attachment identities, never Tool paths or URLs.
+export function toolDetailImages(
+  value,
+  { preferPayload = false, tool = null } = {},
+) {
+  const result = parseJsonValue(value);
+  const candidates = preferPayload
+    ? Array.isArray(result?.artifacts)
+      ? result.artifacts.filter((item) => item?.kind === 'read_media')
+      : []
+    : (toolDisplay(tool)?.images ?? []);
+  if (!Array.isArray(candidates)) return [];
+  const seen = new Set();
+  return candidates.flatMap((item) => {
+    const id = item?.attachment_id;
+    if (
+      typeof id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        id,
+      ) ||
+      typeof item?.media_type !== 'string' ||
+      !item.media_type.startsWith('image/') ||
+      seen.has(id)
+    )
+      return [];
+    seen.add(id);
+    return [
+      {
+        src: getAttachmentUrl(id),
+        filename:
+          typeof item.filename === 'string' && item.filename
+            ? item.filename
+            : t('chat.attachment.preview', 'Preview attachment'),
+      },
+    ];
+  });
+}
 
 export const toolNameHasHiddenArguments = (toolName) =>
   Boolean(TOOL_ARGUMENT_HIDDEN_KEYS[toolName]);

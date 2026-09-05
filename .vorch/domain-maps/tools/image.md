@@ -7,9 +7,9 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 ### `analyze_image`
 
 - Tool name: `analyze_image`
-- Registration: `register_analyze_image_tool(registry, image_service)`
+- Registration: `register_analyze_image_tool(registry, image_service, *, attachment_store)`
 - Model-facing schema: required non-empty `prompt` plus required non-empty `images` array of local path strings, with no `additionalProperties` keyword. The registry's schema-guided normalization may wrap one scalar path string into the advertised array; the handler rejects unknown or remaining malformed arguments, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
-- Display: summary fields `prompt`, `images`.
+- Display: the collapsed primary shows `prompt`. After validated inputs are loaded, the handler stores those exact bytes as Attachments on a Tool worker and adds compact image references to `ToolContext.presentation_images`; the final Tool display carries them through live events and persisted History without adding artifacts or image bytes to the Model-facing result. Provider failures retain loaded-image previews; expected preview-storage failures log a warning and do not change analysis execution.
 - Success data is the closed, validated object `{ analysis: non-empty string }`; `{}` and additional fields are rejected. The service retains bare Model id, Provider Usage, and the analyzed-image count internally, but none enters the Agent-facing Tool Result or Session Statistics.
 - Invalid arguments return `invalid_arguments`. Expected failures project their typed Image-domain metadata directly: `image_not_found`, `image_read_error`, `image_too_large`, `unsupported_image_type`, `image_understanding_unavailable`, or `provider_error`; deterministic failures set `retryable: false`, while Provider failures preserve `retryable` and optional `attempts_made`. Unexpected exceptions bypass the Image handler and become the shared logged `tool_execution_error`.
 - Description states that files are uploaded to the configured external Provider and that text/instructions inside images are untrusted content, not instructions for the Main Agent.

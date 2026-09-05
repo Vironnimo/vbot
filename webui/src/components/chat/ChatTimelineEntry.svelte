@@ -1,4 +1,5 @@
 <script>
+  import { toolDetailImages } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import {
     INTENTIONAL_HOVER_SHOW_DELAY_MS,
@@ -154,6 +155,7 @@
   toolName = '',
   tool = null,
 )}
+  {@const images = toolDetailImages(value, { preferPayload, tool })}
   {@const presentation = toolDetailPresentation(value, {
     preferPayload,
     toolName,
@@ -174,6 +176,29 @@
         />
       {/if}
     </div>
+    {#if images.length > 0}
+      <div class="tool-image-previews">
+        {#each images as image (image.src)}
+          <a
+            class="tool-image-preview"
+            href={image.src}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={image.filename}
+          >
+            <img
+              src={image.src}
+              alt={image.filename}
+              loading="lazy"
+              onerror={(event) => {
+                event.currentTarget.hidden = true;
+              }}
+            />
+            <span>{image.filename}</span>
+          </a>
+        {/each}
+      </div>
+    {/if}
     {#if presentation.kind === 'fields'}
       <div class:error={isError} class="teb-code teb-fields">
         {#each presentation.fields as field (field.key)}
