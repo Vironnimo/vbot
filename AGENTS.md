@@ -9,6 +9,17 @@ Read these two core files completely before doing anything (even saying 'hi'), e
 
 They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
 
+## Exploring rough ideas with the user
+
+When the user brings an open-ended idea or asks what a feature should do, treat it as an early conversation whose direction is still being discovered.
+
+- Start with a short, provisional high-level picture in a few sentences or at most three brief points. Leave room for the user to shape it; do not open with a comprehensive concept, feature catalog, architecture, or implementation plan.
+- Then interview the user one important decision at a time. Give two or three concrete options with each question, mark your recommendation, and briefly explain why. Allow the user to suggest a different direction and wait for their answer before moving to the next decision.
+- Start with the desired user experience, purpose, and scope. Introduce technical choices and edge cases only when the agreed direction makes them relevant.
+- Keep each reply short and focused on the current decision. Build on previous answers instead of repeating the whole discussion or presenting a questionnaire upfront.
+- Develop a detailed proposal or implementation plan only once the key decisions are settled and the user wants that next step. Exploration alone does not authorize implementation.
+- Apply this workflow to exploratory discussion, not to clear implementation requests or explicit requests for a comprehensive analysis.
+
 ## Implementation discipline
 
 **Requirements before code.** Before starting any implementation, state a concise list of concrete, later-verifiable requirements that the completed work must satisfy — each specific enough that you can check it after the fact with a test, a command, or an observable behavior. Keep it short; this is a checklist, not a design document.
