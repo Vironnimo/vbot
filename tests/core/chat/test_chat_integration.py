@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from PIL import Image
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, wire_shaping
 from core.chat.chat import _restore_in_run_tool_result_content
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import (
@@ -572,12 +572,19 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
 
 
 @pytest.mark.asyncio
-async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
+@pytest.mark.parametrize("tight_budget", [False, True])
+async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tight_budget: bool,
 ) -> None:
     frames = [_PNG_BYTES + bytes([index]) * 1_400_000 for index in range(14)]
+    if tight_budget:
+        # Exercise repeated eviction/reopening without a 150 MiB fixture per request.
+        monkeypatch.setattr(
+            wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", len(base64.b64encode(frames[0])) * 4
+        )
     responses: list[JsonObject] = [
         {
             "content": f"inspection-{index}",
@@ -677,16 +684,23 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
                 for part in _tool_result_content_parts(request.messages)
                 if part["type"] == "media"
             ]
-            expected_indices = (
-                list(range(max(0, iteration - 4), iteration))
-                if iteration <= 14
-                else [11, 12, 13, 0]
-            )
+            expected_indices = list(range(iteration)) if iteration <= 14 else [*range(14), 0]
+            if tight_budget:
+                expected_indices = expected_indices[-4:]
             assert [base64.b64decode(part["base64"]) for part in images] == [
                 frames[index] for index in expected_indices
             ]
-            assert sum(len(part["base64"]) for part in images) <= 14 * 1024 * 1024
-            assert len(json.dumps(request.messages).encode()) < 14 * 1024 * 1024
+            assert (
+                sum(len(part["base64"]) for part in images)
+                <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
+            )
+            if iteration and not tight_budget:
+                previous_images = [
+                    part
+                    for part in _tool_result_content_parts(adapter.requests[iteration - 1].messages)
+                    if part["type"] == "media"
+                ]
+                assert images[: len(previous_images)] == previous_images
             for index in range(iteration):
                 if index < 14:
                     assert any(
@@ -698,7 +712,9 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
             for part in _tool_result_content_parts(rebuilt_requests[0])
             if part["type"] == "media"
         ]
-        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == frames[6:10]
+        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == (
+            frames[6:10] if tight_budget else frames[:10]
+        )
         session = runtime.chat_sessions.get(session_address("coder", "session-one"))
         persisted = session.load()
         assert runtime.chat_runs is not None

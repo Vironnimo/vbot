@@ -16,10 +16,10 @@ from PIL import Image
 
 from core.attachments import AttachmentStore
 from core.attachments.images import ImageConverter
-from core.chat import ChatMessage
+from core.chat import ChatMessage, wire_shaping
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
-from core.chat.wire_shaping import REQUEST_IMAGE_BYTES_LIMIT, limit_request_images
+from core.chat.wire_shaping import limit_request_images
 from core.model_tasks import SpeechExecutionError
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.sessions import ChatSessionManager
@@ -75,12 +75,13 @@ def _native_image_calls(messages: list[dict]) -> list[str]:
     ]
 
 
-def test_image_window_preserves_text_correlation_and_original_request() -> None:
+def test_images_preserve_existing_request_prefix_as_run_grows() -> None:
     source = [_resolved_image_result(index) for index in range(14)]
     source.insert(2, {"role": "assistant", "content": "inspection findings"})
     before = deepcopy(source)
     bounded = limit_request_images(source)
-    assert _native_image_calls(bounded) == ["call-11", "call-12", "call-13"]
+    assert _native_image_calls(bounded) == [f"call-{index}" for index in range(14)]
+    assert bounded == before
     assert source == before
     assert limit_request_images(bounded) == bounded
     for original, projected in zip(source, bounded, strict=True):
@@ -92,30 +93,31 @@ def test_image_window_preserves_text_correlation_and_original_request() -> None:
                 == original[TOOL_RESULT_CONTENT_BLOCKS_FIELD][-1]
             )
     reopened = limit_request_images([*bounded, _resolved_image_result(0)])
-    assert _native_image_calls(reopened) == ["call-12", "call-13", "call-0"]
+    assert reopened[: len(bounded)] == bounded
+    assert _native_image_calls(reopened) == [*[f"call-{index}" for index in range(14)], "call-0"]
 
 
-def test_image_window_counts_individual_images_in_sibling_results() -> None:
+def test_image_budget_preserves_all_images_in_sibling_results() -> None:
     first = _resolved_image_result(0)
     second = _resolved_image_result(1)
     second[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= 4
     bounded = limit_request_images([first, second])
-    assert _native_image_calls(bounded) == ["call-1"]
+    assert _native_image_calls(bounded) == ["call-0", "call-1"]
     parts = bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD]
-    assert sum(part["type"] == "media" for part in parts) == 3
+    assert sum(part["type"] == "media" for part in parts) == 4
     assert len(parts) == 8
-    assert parts[0]["type"] == "text"
+    assert parts[0]["type"] == "media"
 
 
-def test_fresh_sibling_images_are_complete_with_three_older_images() -> None:
+def test_image_and_text_tool_batches_preserve_all_older_images() -> None:
     older = [_resolved_image_result(index) for index in range(5)]
     fresh = [_resolved_image_result(index) for index in range(5, 9)]
     calls = [{"id": message["tool_call_id"], "name": "read", "arguments": {}} for message in fresh]
     messages = [*older, {"role": "assistant", "tool_calls": calls}, *fresh]
     bounded = limit_request_images(messages)
-    assert _native_image_calls(bounded) == [f"call-{index}" for index in range(2, 9)]
+    assert _native_image_calls(bounded) == [f"call-{index}" for index in range(9)]
     assert limit_request_images(bounded) == bounded
-    # A later text-only Tool step ages the complete previous batch.
+    # A later text-only Tool step must not rewrite the previous image prefix.
     aged = limit_request_images(
         [
             *bounded,
@@ -123,7 +125,8 @@ def test_fresh_sibling_images_are_complete_with_three_older_images() -> None:
             {"role": "tool", "tool_call_id": "text", "content": "notes"},
         ]
     )
-    assert _native_image_calls(aged) == ["call-6", "call-7", "call-8"]
+    assert aged[: len(bounded)] == bounded
+    assert _native_image_calls(aged) == [f"call-{index}" for index in range(9)]
 
 
 def test_one_fresh_tool_result_can_carry_more_than_three_images() -> None:
@@ -140,12 +143,13 @@ def test_one_fresh_tool_result_can_carry_more_than_three_images() -> None:
     )
 
 
-def test_four_user_images_are_all_sent_up_to_fourteen_mib() -> None:
+def test_four_user_images_are_all_sent_up_to_150_mib() -> None:
+    payload = "A" * (150 * 1024 * 1024 // 4)
     content = [
         {
             "type": "media",
             "media_type": "image/png",
-            "base64": "A" * (14 * 1024 * 1024 // 4),
+            "base64": payload,
         }
         for _ in range(4)
     ]
@@ -156,7 +160,10 @@ def test_four_user_images_are_all_sent_up_to_fourteen_mib() -> None:
     assert _native_image_calls(bounded) == []
 
 
-def test_image_byte_budget_reserves_user_references_before_recent_tools() -> None:
+def test_image_byte_budget_reserves_user_references_before_recent_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", 16)
     reference = {
         "role": "user",
         "content": [
@@ -167,7 +174,7 @@ def test_image_byte_budget_reserves_user_references_before_recent_tools() -> Non
     messages = [
         reference,
         _resolved_image_result(0, 4),
-        _resolved_image_result(1, REQUEST_IMAGE_BYTES_LIMIT - 4),
+        _resolved_image_result(1, 12),
     ]
     bounded = limit_request_images(messages)
     assert bounded[0] == reference
@@ -176,8 +183,11 @@ def test_image_byte_budget_reserves_user_references_before_recent_tools() -> Non
 
 
 @pytest.mark.parametrize("role", ["user", "tool"])
-def test_single_oversized_image_degrades_explicitly_without_dropping_other_media(role: str) -> None:
-    message = _resolved_image_result(0, REQUEST_IMAGE_BYTES_LIMIT + 4)
+def test_single_oversized_image_degrades_explicitly_without_dropping_other_media(
+    role: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", 16)
+    message = _resolved_image_result(0, 20)
     field = TOOL_RESULT_CONTENT_BLOCKS_FIELD
     if role == "user":
         message["role"] = role
