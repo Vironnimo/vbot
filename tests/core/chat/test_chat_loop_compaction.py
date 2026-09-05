@@ -2033,6 +2033,71 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
 
 
 @pytest.mark.asyncio
+async def test_real_auto_compaction_truncation_preserves_history_skills_and_prompt_epoch(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"], allowed_skills=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Incomplete summary"},
+                {"type": "finish", "reason": "output_truncated"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=_RealCompactionStorage(
+            {
+                "enabled": True,
+                "trigger": {"type": "input_tokens", "tokens": 1},
+                "strategy": {"type": "summary_tail", "tail_tokens": 1, "summary_model": None},
+            },
+            data_dir=tmp_path,
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD CONTEXT " * 8_000))
+    session.activate_skill_context("one", {"activation_content": "SKILL SENTINEL"})
+    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
+    session.append(ChatMessage.user("Current request"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Current answer"))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+    pinned_skill_catalog(loop._dependencies, "coder", session.id, agent, runtime.skills, None)
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
+    messages = await loop._build_request_messages(agent, session)
+    original_history = session.load()
+    original_skills = session.activated_skill_contents()
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    result = await _maybe_auto_compact(
+        loop, agent, adapter, "gpt-5.2", session, messages, usage=None, run=run
+    )
+
+    request_after = await loop.build_request_state(agent, session, inputs=RequestBuildInputs())
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", session.id))
+    assert result == messages
+    assert session.load() == original_history
+    assert HISTORY_TOOL_NAME not in request_after.session_tool_grants
+    assert session.activated_skill_contents() == original_skills
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
+    assert runtime.refresh_skills_for_calls == []
+    assert len(adapter.stream_requests) == 1
+    assert [event.type for event in run.events] == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_ABORTED_EVENT,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_compaction_projection_failure_does_not_persist_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

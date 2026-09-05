@@ -19,12 +19,14 @@ from core.chat.messages import (
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
 )
+from core.chat.streaming import StreamingAccumulator
 from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
 )
 from core.debug.redaction import redact_json_body
+from core.providers.adapter import TERMINAL_OUTCOME_STOP
 from core.sessions import current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
@@ -391,8 +393,7 @@ class CompactionService:
                 request_messages=request_messages,
             )
             plan = prepared.plan
-            response: Any | None = None
-            response_adapter: Any | None = None
+            response: JsonObject | None = None
             if plan.model_messages is not None:
                 adapter, model_id = _plan_model_target(
                     plan,
@@ -423,12 +424,10 @@ class CompactionService:
                 response = await _send_streaming_model_request(
                     adapter, model_messages, request_options
                 )
-                response_adapter = adapter
             return await _COMPACTION_WORKERS.run(
                 _finalize_compaction,
                 prepared,
                 response=response,
-                response_adapter=response_adapter,
                 minimum_reclaim_tokens=minimum_reclaim_tokens,
             )
         except CompactionError:
@@ -498,15 +497,14 @@ def _prepare_compaction_model_messages(
 def _finalize_compaction(
     prepared: _PreparedCompaction,
     *,
-    response: Any | None,
-    response_adapter: Any | None,
+    response: JsonObject | None,
     minimum_reclaim_tokens: int,
 ) -> ChatMessage:
-    """Normalize the response, validate the Projection, and estimate reclaim."""
+    """Extract the canonical summary, validate the Projection, and estimate reclaim."""
     plan = prepared.plan
     summary = plan.summary_text
-    if response_adapter is not None:
-        summary = _extract_summary_text(_normalize_response(response_adapter, response))
+    if response is not None:
+        summary = _extract_summary_text(response)
     if summary and prepared.strategy_id == STRATEGY_SUMMARY_TAIL:
         summary = _reference_summary(summary)
     projection = [*plan.before_summary]
@@ -1119,52 +1117,25 @@ async def _send_streaming_model_request(
     messages: list[dict[str, Any]],
     request_options: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run one Model call over the adapter stream and rebuild a send()-shaped response.
+    """Consume one canonical stream, accepting only a completed text response.
 
     Some providers (observed on OpenRouter's stealth tier) reject large
     non-streaming completions outright while streaming the same payload fine,
-    so Compaction always consumes the stream and reassembles the plain
-    completion object the response normalization expects.
+    so Compaction always streams. Adapter deltas are already normalized and must
+    never be passed back through a raw-wire response parser.
     """
-    content_parts: list[str] = []
-    usage: dict[str, Any] = {}
-    finish_reason: str | None = None
+    accumulator = StreamingAccumulator()
     async for delta in adapter.stream(messages, **request_options):
-        delta_type = delta.get("type")
-        if delta_type == "content_delta":
-            text = delta.get("text")
-            if isinstance(text, str):
-                content_parts.append(text)
-        elif delta_type == "usage":
-            if isinstance(delta.get("input_tokens"), int):
-                usage["prompt_tokens"] = delta["input_tokens"]
-            if isinstance(delta.get("output_tokens"), int):
-                usage["completion_tokens"] = delta["output_tokens"]
-        elif delta_type == "finish":
-            reason = delta.get("reason")
-            if isinstance(reason, str):
-                finish_reason = reason
-    return {
-        "choices": [
-            {
-                "message": {"role": "assistant", "content": "".join(content_parts)},
-                "finish_reason": finish_reason or "stop",
-            }
-        ],
-        "usage": usage,
-    }
-
-
-def _normalize_response(summary_adapter: Any, response: Any) -> dict[str, Any]:
-    if not isinstance(response, dict):
-        raise CompactionError("Summary adapter returned a non-object response")
-    normalize_response = getattr(summary_adapter, "normalize_response", None)
-    if callable(normalize_response):
-        normalized = normalize_response(response)
-        if not isinstance(normalized, dict):
-            raise CompactionError("Summary adapter normalize_response() must return an object")
-        return cast("dict[str, Any]", normalized)
-    return cast("dict[str, Any]", response)
+        if delta.get("type") != "heartbeat":
+            accumulator.add_delta(delta)
+    if accumulator.finish_reason != TERMINAL_OUTCOME_STOP:
+        raise CompactionError(
+            "Summary stream did not complete successfully "
+            f"(outcome={accumulator.finish_reason or 'missing'})"
+        )
+    if accumulator.has_partial_tool_call:
+        raise CompactionError("Summary stream requested Tools instead of completing its summary")
+    return accumulator.finalize_assistant_fields().to_response_dict()
 
 
 def _extract_summary_text(response: dict[str, Any]) -> str:
