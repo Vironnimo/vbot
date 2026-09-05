@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.attachments import AttachmentStore
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
@@ -22,6 +26,8 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
+from core.tools.file_state import FileReadState
+from core.tools.read import register_read_tool
 from core.utils.errors import ConfigError, ProviderError
 from tests.core.chat.chat_loop_support import (
     ClosingStubAdapter,
@@ -35,6 +41,85 @@ from tests.core.chat.chat_loop_support import (
 )
 
 JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vision,wire_type", [(True, "image/png"), (True, "image/jpeg"), (False, "image/png")]
+)
+async def test_fallback_preserves_local_read_pixels_without_disk_copies(
+    tmp_path: Path, vision: bool, wire_type: str
+) -> None:
+    source = tmp_path / "original.png"
+    pixels = b"\x89PNG\r\n\x1a\noriginal"
+    source.write_bytes(pixels)
+
+    class DeletingAdapter(StubAdapter):
+        async def send(self, *args: Any, **kwargs: Any) -> Any:
+            if self.requests:
+                source.unlink()
+            return await super().send(*args, **kwargs)
+
+    primary = DeletingAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "read-image", "name": "read", "arguments": {"path": str(source)}}
+                ],
+            },
+            ProviderRateLimitError("switch target"),  # type: ignore[list-item]
+        ],
+        wire_media_types=frozenset({"image/png"}),
+    )
+    fallback = StubAdapter(
+        [{"content": "done", "tool_calls": None}],
+        wire_media_types=frozenset({wire_type}),
+    )
+    tools = ToolRegistry()
+    register_read_tool(
+        tools,
+        attachment_store=AttachmentStore(tmp_path),
+        speech_service=None,
+        file_state=FileReadState(),
+        speech_max_size_bytes=1024,
+    )
+    agent = StubAgent(
+        id="coder",
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
+        allowed_tools=["read"],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary,
+        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
+        provider_ids={"openai", "anthropic"},
+        tools=tools,
+        models=StubModels(
+            {("openai", "primary"): 128_000, ("anthropic", "fallback"): 128_000},
+            input_modalities={
+                ("openai", "primary"): ("text", "image"),
+                ("anthropic", "fallback"): ("text", "image") if vision else ("text",),
+            },
+        ),
+    )
+    await build_chat_loop(runtime).send("coder", "inspect", session_id="s1")
+    parts = [
+        part
+        for message in fallback.requests[0]["messages"]
+        for part in message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD, [])
+    ]
+    native = [part for part in parts if part.get("type") == "media"]
+    if vision and wire_type == "image/png":
+        assert [base64.b64decode(part["base64"]) for part in native] == [pixels]
+    else:
+        assert native == []
+    assert any(source.as_posix() in part.get("text", "") for part in parts)
+    assert not list((tmp_path / "artifacts" / "attachments").rglob("*"))
+    persisted = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+    assert "base64" not in json.dumps([message.to_dict() for message in persisted])
 
 
 @pytest.mark.asyncio
