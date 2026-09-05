@@ -4,7 +4,7 @@
 
 ## Overview
 
-An Extension is the unit of discovery, identity, configuration, enable/disable, and lifecycle. Extensions can contribute Chat hooks, Slash Commands, Tools, Recall backends, System Prompt blocks, channel interaction handlers, and settings schemas. The owning backend domain still decides when a capability is used and what its business payload means: Chat owns hook fire-points, Command execution, and tool-result policy, Tools owns Tool execution contracts, Recall owns backend semantics, Prompts owns block assembly, Channels owns transport, and Runtime owns bootstrap/rebuild ordering.
+An Extension is the unit of discovery, identity, configuration, enable/disable, and lifecycle. Extensions can contribute Chat hooks, Slash Commands, Tools, Recall backends, System Prompt blocks, channel interaction handlers, settings schemas, schema-described management operations, and live Tool catalogs. The owning backend domain still decides when a capability is used and what its business payload means: Chat owns hook fire-points, Command execution, and tool-result policy, Tools owns Tool execution contracts, Recall owns backend semantics, Prompts owns block assembly, Channels owns transport, and Runtime owns bootstrap/rebuild ordering.
 
 Extensions execute arbitrary code in the vBot process on the normal asyncio runtime. They are inside the kernel trust boundary, not sandboxed plugins. User-facing author guidance lives in `docs/extensions.md`; runnable examples live in `examples/extensions/`.
 
@@ -71,4 +71,5 @@ Read these only when your task matches - not by default.
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
+- Changing the bundled MCP client, transports, Agent grants, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Informing the Model about a background event or state change -> `model-communication.md`

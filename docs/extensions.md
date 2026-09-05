@@ -11,7 +11,7 @@ for runnable samples see [`examples/extensions/`](../examples/extensions/).
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **3**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly.
+`API_VERSION` is currently **4**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4.
 
 ## Install and discovery
 
@@ -532,3 +532,10 @@ handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
 To turn the same idea into a hook instead, copy
 [`examples/extensions/guard_bash.py`](../examples/extensions/guard_bash.py),
 which denies destructive `bash` commands via the `tool_call` decision hook.
+
+
+## Managed operations and MCP
+
+API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions <name> operations`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.
+
+The bundled MCP Extension uses these same interfaces. Use `vbot extensions mcp operations` to inspect its management surface, `save --stdin` to configure a connection on the vBot server machine, `grant <id> --agent <address>` for access, and `test` followed by an Agent-scoped `invoke` to verify it. Tools, Resources/templates, Prompts, completion, subscriptions, logging, progress, sampling, roots, elicitation, OAuth, and historical task results pass through the connection. Configuration grants do not override an Agent's explicit Tool denials or a Project's Tool Whitelist. The bundled vbot-cli Skill includes the full installation and diagnosis workflow.

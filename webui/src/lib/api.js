@@ -726,6 +726,18 @@ export function listExtensions(options = {}) {
   return rpc('extensions.list', {}, options);
 }
 
+export function extensionOperation(name, operation, args = {}, options = {}) {
+  return rpc(
+    'extensions.operation',
+    { name, operation, arguments: args },
+    options,
+  );
+}
+
+export function listExtensionRequests(options = {}) {
+  return rpc('extensions.requests', {}, options);
+}
+
 export function reloadExtensions(options = {}) {
   return rpc('extensions.reload', {}, options);
 }

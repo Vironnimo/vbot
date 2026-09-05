@@ -20,6 +20,7 @@ import types
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -29,6 +30,7 @@ from core.extensions.interactions import (
     InteractionHandlerDeclaration,
     InteractionResponder,
 )
+from core.extensions.operations import ExtensionHost, ExtensionOperations
 from core.extensions.settings_schema import SettingsFieldDeclaration, parse_settings_fields
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -52,7 +54,7 @@ _EXTENSION_WORKERS = BoundedWorkerPool(
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 3
+API_VERSION = 4
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -289,6 +291,7 @@ class ExtensionDeclarations:
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
     interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
     settings_schema: list[SettingsFieldDeclaration] | None = None
+    operations: ExtensionOperations | None = None
 
 
 @dataclass
@@ -362,6 +365,8 @@ class ExtensionAPI:
         self.logger = logger
         self._config_provider = config_provider
         self._credential_resolver = credential_resolver
+        self.operations = ExtensionOperations(extension_name)
+        declarations.operations = self.operations
 
     def register_settings(self, fields: list[Any]) -> None:
         """Declare this extension's settings schema (see :mod:`settings_schema`).
@@ -563,6 +568,7 @@ class ExtensionRegistry:
         self._handlers: dict[str, list[RegisteredHandler]] = defaultdict(list)
         self._interaction_handlers: dict[str, RegisteredHandler] = {}
         self._records: list[ExtensionRecord] = []
+        self._host: ExtensionHost | None = None
 
     @classmethod
     def load(
@@ -757,6 +763,15 @@ class ExtensionRegistry:
                 f"extension(s) {joined} (skipped there)",
             )
 
+    def bind_host(self, host: ExtensionHost) -> None:
+        self._host = host
+
+    def management(self, name: str) -> ExtensionOperations:
+        record = next((item for item in self._records if item.name == name), None)
+        if record is None or record.status != "loaded" or record.declarations.operations is None:
+            raise ValueError(f"Extension is not available: {name}")
+        return record.declarations.operations
+
     def apply_tools(self, tool_registry: ToolRegistry) -> None:
         """Register every loaded extension's declared tools into *tool_registry*.
 
@@ -772,6 +787,10 @@ class ExtensionRegistry:
         for record in loaded:
             for declaration in record.declarations.tools:
                 declarers[declaration.name].append(record.name)
+
+        for record in loaded:
+            if record.declarations.operations is not None:
+                record.declarations.operations.bind(tool_registry)
 
         applied_families = self._apply_tool_families(tool_registry, loaded)
         builtin_names = {tool.name for tool in tool_registry.list_tools(include_internal=True)}
@@ -1108,6 +1127,8 @@ class ExtensionRegistry:
             return False
 
         declarations = record.declarations
+        if declarations.operations is not None:
+            declarations.operations.retire()
         self._remove_handlers(name)
         self._remove_interaction_handlers(name)
         if tool_registry is not None:
@@ -1139,6 +1160,8 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status != "loaded":
                 continue
+            if record.declarations.operations is not None:
+                record.declarations.operations.retire()
             self._unregister_extension_tools(tool_registry, record.declarations.tools)
             self._unregister_extension_tool_families(
                 tool_registry, record.name, record.declarations.tool_families
@@ -1215,6 +1238,12 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status != "loaded":
                 continue
+            operations = record.declarations.operations
+            if operations is not None and operations.startup:
+                if self._host is None:
+                    raise RuntimeError("Managed Extension requires a bound host")
+                for start in operations.startup:
+                    await self._invoke_lifecycle("startup", record.name, partial(start, self._host))
             for handler in record.declarations.startup:
                 await self._invoke_lifecycle("startup", record.name, handler)
 
@@ -1223,6 +1252,8 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status != "loaded":
                 continue
+            if record.declarations.operations is not None:
+                record.declarations.operations.retire()
             for handler in record.declarations.shutdown:
                 await self._invoke_lifecycle("shutdown", record.name, handler)
 

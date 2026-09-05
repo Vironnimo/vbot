@@ -53,7 +53,7 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |
 | attachments.md | `core/attachments/` | Blob storage, MIME sniffing, text extraction |
-| extensions.md | `core/extensions/` | Extension kernel boundary, loading/lifecycle invariants |
+| extensions.md | `core/extensions/` | Extension kernel boundary, loading/lifecycle, management operations, live Tool catalogs, bundled MCP |
 | agent.md | `core/agents/` | Agent schema, workspace lifecycle, archive-on-delete |
 | projects.md | `core/projects/` | Project boundary, anchor/ceiling invariants |
 | subagents.md | `core/subagents/` | Sub-agent coordinator, batch tracking, run linkage |

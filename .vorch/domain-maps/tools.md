@@ -55,6 +55,8 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 - Tool timing metadata never reaches provider adapters; provider tool messages carry only role, correlation, name, content.
 - A `tool:<name>`-owned prompt block still drops when its Tool is not ready (gate 2 reads filtered definitions).
 
+Live Extension catalogs publish atomically through `ExtensionOperations.replace_tools`; ToolRegistry revision changes refresh the next Provider cycle's definitions and contracts. Removing a catalog retires its authority. Definition-profile context includes the exact Agent/Project identity. See `extensions/mcp.md` for connection grants and remote schema changes.
+
 ## Constraints & Gotchas
 
 - Non-envelope, non-serializable, or schema-violating successful results reject as `invalid_tool_result` without aborting the Run.
