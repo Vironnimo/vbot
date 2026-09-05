@@ -392,7 +392,7 @@ describe('AgentsView', () => {
       'Unavailable / custom: openai/gpt-5.2',
     );
 
-    setTextInputValue(1, 'Alpha Prime');
+    setTextInputValue('agent-name', 'Alpha Prime');
 
     document.body
       .querySelector('form')
@@ -431,7 +431,7 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
 
-    setTextInputValue(1, 'Alpha Renamed');
+    setTextInputValue('agent-name', 'Alpha Renamed');
 
     document.body
       .querySelector('form')

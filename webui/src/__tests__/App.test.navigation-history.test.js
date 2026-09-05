@@ -329,16 +329,25 @@ describe('App', () => {
     expect(document.querySelector('.chat-view__state-banner')).toBeNull();
   });
 
-  it('restores the Settings reading position after switching to another tab', async () => {
+  it('restores the Settings topic and its reading position after switching to another tab', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     mountedComponent = mount(App, { target: document.body });
     flushSync();
 
     sidebarNavButton('Settings')?.click();
     await waitForCondition(() => {
-      expect(document.querySelector('.settings-scroll-tail')).toBeTruthy();
+      expect(
+        document.querySelector('[data-settings-section="providers"]'),
+      ).toBeTruthy();
     });
 
+    settingsPanelButton('Specialized Models')?.click();
+    await waitForCondition(() => {
+      expect(
+        document.querySelector('[data-settings-section="specialized_models"]')
+          .hidden,
+      ).toBe(false);
+    });
     const firstScrollContainer = document.querySelector('.settings-content');
     firstScrollContainer.scrollTop = 640;
 
@@ -353,6 +362,10 @@ describe('App', () => {
       expect(restoredContainer).toBeTruthy();
       expect(restoredContainer).not.toBe(firstScrollContainer);
       expect(restoredContainer.scrollTop).toBe(640);
+      expect(
+        document.querySelector('[data-settings-section="specialized_models"]')
+          .hidden,
+      ).toBe(false);
     });
   });
 

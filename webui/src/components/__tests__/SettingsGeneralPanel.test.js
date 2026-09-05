@@ -154,7 +154,12 @@ describe('SettingsGeneralPanel', () => {
 
     mountedComponent = mount(SettingsGeneralPanel, {
       target: document.body,
-      props: { settings: null, clientsRefreshToken: 0, onOpenSetupGuide },
+      props: {
+        page: 'preferences',
+        settings: null,
+        clientsRefreshToken: 0,
+        onOpenSetupGuide,
+      },
     });
     flushSync();
     await flushAsync();

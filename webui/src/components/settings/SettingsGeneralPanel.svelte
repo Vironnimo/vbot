@@ -20,6 +20,7 @@
 
   let {
     settings = null,
+    page = 'system',
     clientsRefreshToken = 0,
     onOpenSetupGuide = noop,
     onCommit = noop,
@@ -102,7 +103,7 @@
   // visible and swap silently, so a live update never flashes "Loading…".
   $effect(() => {
     void clientsRefreshToken;
-    void loadClients();
+    if (page === 'system') void loadClients();
   });
 
   async function loadClients() {
@@ -173,155 +174,157 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.serverHost', 'Server host')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.serverHostDescription',
-        'Address and port the vBot server listens on.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--input">
-    <TextField readonly value={serverHostValue} />
-  </div>
-</div>
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.dataDirectory', 'Data directory')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.dataDirectoryDescription',
-        'Root path for agents, sessions, and workspace files.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--input">
-    <TextField readonly value={dataDirectoryValue} />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.timezone', 'Time zone')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.timezoneDescription',
-        'Used by Agents, Calendar, Cron, and every displayed date and time.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--input">
-    <SearchableDropdown
-      id="settings-general-timezone"
-      value={timezoneValue}
-      options={timezoneOptions}
-      disabled={savingTimezone}
-      ariaLabel={t('settings.general.timezone', 'Time zone')}
-      searchPlaceholder={t(
-        'settings.general.timezoneSearch',
-        'Search time zones…',
-      )}
-      onValueChange={handleTimezoneChange}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.keepAwake', 'Keep computer awake')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.keepAwakeDescription',
-        'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control">
-    <Toggle
-      checked={keepAwakeValue}
-      disabled={savingKeepAwake}
-      ariaLabel={t('settings.general.keepAwake', 'Keep computer awake')}
-      onChange={handleKeepAwakeChange}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.setupGuide', 'Setup guide')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.setupGuideDescription',
-        'Reopen the guided first-run setup to connect a provider and assign a model.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control">
-    <Button variant="secondary" onClick={onOpenSetupGuide}>
-      {t('settings.general.setupGuideAction', 'Open setup guide')}
-    </Button>
-  </div>
-</div>
-
-<div class="s-row s-row--stacked">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.general.clients.title', 'Connected clients')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.general.clients.description',
-        'App windows currently connected to this server (browser tabs and the Desktop app).',
-      )}
-    </div>
-  </div>
-</div>
-
-{#if clientsError}
-  <Banner variant="error">{clientsError}</Banner>
-{:else if !clientsLoaded}
-  <Banner variant="neutral">
-    {t('settings.general.clients.loading', 'Loading connected clients…')}
-  </Banner>
-{:else if clientRows.length === 0}
-  <EmptyState
-    density="compact"
-    description={t(
-      'settings.general.clients.empty',
-      'No app windows connected.',
-    )}
-  />
-{:else}
-  <div class="s-clients-list">
-    {#each clientRows as row (row.id)}
-      <div class="s-client-row" class:s-client-row--own={row.isOwn}>
-        <div class="s-row-info">
-          <div class="s-client-row__head">
-            <span class="s-row-label">{accessorLabel(row.accessor)}</span>
-            {#if row.isOwn}
-              <StatusChip variant="info">
-                {t('settings.general.clients.thisWindow', 'This window')}
-              </StatusChip>
-            {/if}
-          </div>
-          <div class="s-row-desc">{clientDetail(row)}</div>
-        </div>
-        <div class="s-row-control">
-          <StatusChip variant="success">{statusLabel(row.status)}</StatusChip>
-        </div>
+{#if page === 'preferences'}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.timezone', 'Time zone')}
       </div>
-    {/each}
+      <div class="s-row-desc">
+        {t(
+          'settings.general.timezoneDescription',
+          'Used by Agents, Calendar, Cron, and every displayed date and time.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--input">
+      <SearchableDropdown
+        id="settings-general-timezone"
+        value={timezoneValue}
+        options={timezoneOptions}
+        disabled={savingTimezone}
+        ariaLabel={t('settings.general.timezone', 'Time zone')}
+        searchPlaceholder={t(
+          'settings.general.timezoneSearch',
+          'Search time zones…',
+        )}
+        onValueChange={handleTimezoneChange}
+      />
+    </div>
   </div>
+
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.setupGuide', 'Setup guide')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.general.setupGuideDescription',
+          'Reopen the guided first-run setup to connect a provider and assign a model.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Button variant="secondary" onClick={onOpenSetupGuide}>
+        {t('settings.general.setupGuideAction', 'Open setup guide')}
+      </Button>
+    </div>
+  </div>
+{:else}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.serverHost', 'Server host')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.general.serverHostDescription',
+          'Address and port the vBot server listens on.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--input">
+      <TextField readonly value={serverHostValue} />
+    </div>
+  </div>
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.dataDirectory', 'Data directory')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.general.dataDirectoryDescription',
+          'Root path for agents, sessions, and workspace files.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--input">
+      <TextField readonly value={dataDirectoryValue} />
+    </div>
+  </div>
+
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.keepAwake', 'Keep computer awake')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.general.keepAwakeDescription',
+          'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Toggle
+        checked={keepAwakeValue}
+        disabled={savingKeepAwake}
+        ariaLabel={t('settings.general.keepAwake', 'Keep computer awake')}
+        onChange={handleKeepAwakeChange}
+      />
+    </div>
+  </div>
+
+  <div class="s-row s-row--stacked">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.general.clients.title', 'Connected clients')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.general.clients.description',
+          'App windows currently connected to this server (browser tabs and the Desktop app).',
+        )}
+      </div>
+    </div>
+  </div>
+
+  {#if clientsError}
+    <Banner variant="error">{clientsError}</Banner>
+  {:else if !clientsLoaded}
+    <Banner variant="neutral">
+      {t('settings.general.clients.loading', 'Loading connected clients…')}
+    </Banner>
+  {:else if clientRows.length === 0}
+    <EmptyState
+      density="compact"
+      description={t(
+        'settings.general.clients.empty',
+        'No app windows connected.',
+      )}
+    />
+  {:else}
+    <div class="s-clients-list">
+      {#each clientRows as row (row.id)}
+        <div class="s-client-row" class:s-client-row--own={row.isOwn}>
+          <div class="s-row-info">
+            <div class="s-client-row__head">
+              <span class="s-row-label">{accessorLabel(row.accessor)}</span>
+              {#if row.isOwn}
+                <StatusChip variant="info">
+                  {t('settings.general.clients.thisWindow', 'This window')}
+                </StatusChip>
+              {/if}
+            </div>
+            <div class="s-row-desc">{clientDetail(row)}</div>
+          </div>
+          <div class="s-row-control">
+            <StatusChip variant="success">{statusLabel(row.status)}</StatusChip>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
 {/if}

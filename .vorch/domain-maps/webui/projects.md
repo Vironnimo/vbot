@@ -6,6 +6,8 @@ Read this reference only for the WebUI Projects management view, Project discove
 
 `ProjectsView.svelte` renders the master-detail management surface; `createProjectsState()` provides its reactive state and `createProjectsController()` owns loading, selection, form drafts, catalogs, scans, mutation reconciliation, and removal/re-point workflows. The Project selected here is management state and is intentionally independent of Chat's selected Project context.
 
+The detail uses the shared `TabList` for Overview, Team, Context, and Tools & Skills. These panels stay mounted across topic changes, and the App autosave coordinator guards navigation. Overview owns Project defaults and its persistent save footer; Context owns auto-load files. At tablet/mobile widths the Project list becomes a horizontal selector to preserve detail width.
+
 The view forwards user intent to the controller; the controller alone sequences the Project wrappers in `api.js`. Presentation-only labels and derived picker options stay in the view, while payload normalization and workflow state stay in `projectsView.js`. Neither layer discovers files, resolves Agent inheritance, or decides backend conflict policy.
 
 ## Adding and editing Projects

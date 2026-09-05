@@ -117,11 +117,36 @@ describe('ProjectsView', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Project settings',
-      'Auto-load files',
       'Team',
+      'Auto-load files',
       'Tools',
       'Skills',
     ]);
+  });
+
+  it('opens Team and Context directly without losing the Project form', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo' })],
+    });
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('#project-edit-name'));
+    const name = document.querySelector('#project-edit-name');
+    name.value = 'Draft project';
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    for (const topic of ['team', 'context', 'access', 'overview']) {
+      document.querySelector(`#project-detail-tab-${topic}`).click();
+      flushSync();
+      const visible = Array.from(
+        document.querySelectorAll('.management-topic'),
+      ).filter((panel) => !panel.hidden);
+      expect(visible.map((panel) => panel.id)).toEqual([
+        `project-detail-panel-${topic}`,
+      ]);
+    }
+    expect(document.querySelector('#project-edit-name')).toBe(name);
+    expect(name.value).toBe('Draft project');
   });
 
   it('opens the remembered project and reports later list selections', async () => {

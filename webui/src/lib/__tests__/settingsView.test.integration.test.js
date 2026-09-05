@@ -91,7 +91,7 @@ describe('SettingsView', () => {
     expect(document.body.textContent).not.toMatch(/token count/i);
   });
 
-  it('uses the compact section picker to navigate the mobile Settings document', async () => {
+  it('uses the compact section picker to open one Settings topic', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
@@ -117,96 +117,106 @@ describe('SettingsView', () => {
     flushSync();
 
     expect(picker.textContent).toContain('Appearance');
-    expect(scrollTo).toHaveBeenCalledWith({
-      behavior: 'smooth',
-      top: 0,
-    });
+    expect(
+      document.querySelector('[data-settings-section="appearance"]').hidden,
+    ).toBe(false);
+    expect(
+      document.querySelector('[data-settings-section="providers"]').hidden,
+    ).toBe(true);
   });
 
-  it('shares an upper-third reading line between click navigation, scrollspy, and the document tail', async () => {
+  it('keeps exactly one topic visible and does not change topics while scrolling', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-
-    const scrollContainer = document.querySelector('.settings-content');
-    const appearanceSection = document.querySelector(
-      '[data-settings-section="appearance"]',
-    );
-    Object.defineProperties(scrollContainer, {
-      clientHeight: { configurable: true, value: 1000 },
-      scrollHeight: { configurable: true, value: 4000 },
-      scrollTop: { configurable: true, value: 400, writable: true },
-    });
-    scrollContainer.getBoundingClientRect = () => ({ top: 100 });
-    appearanceSection.getBoundingClientRect = () => ({ top: 900 });
-    const scrollTo = vi.fn();
-    scrollContainer.scrollTo = scrollTo;
-
     clickButton('Appearance');
-
-    // 400 current + 800 section delta - 320 reading-line offset.
-    expect(scrollTo).toHaveBeenCalledWith({
-      behavior: 'smooth',
-      top: 880,
-    });
-
-    const originalMatchMedia = window.matchMedia;
-    window.matchMedia = vi.fn(() => ({ matches: true }));
-    try {
-      clickButton('Appearance');
-      expect(scrollTo).toHaveBeenLastCalledWith({
-        behavior: 'auto',
-        top: 880,
-      });
-    } finally {
-      window.matchMedia = originalMatchMedia;
-    }
-
-    window.dispatchEvent(new Event('resize'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
-    expect(document.querySelector('.settings-scroll-tail').style.height).toBe(
-      '680px',
-    );
-
-    const sections = Array.from(
-      document.querySelectorAll('[data-settings-section]'),
-    );
-    sections.forEach((section, index) => {
-      section.getBoundingClientRect = () => ({ top: 100 + index * 100 });
-    });
-    scrollContainer.dispatchEvent(new Event('wheel'));
-    scrollContainer.dispatchEvent(new Event('scroll'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    flushSync();
-
-    const activeIndexItem = document.querySelector(
-      '.settings-desktop-index .snav-item[aria-current="true"]',
-    );
-    expect(activeIndexItem.textContent.trim()).toBe('Agent defaults');
-
-    const appearanceIndex = sections.indexOf(appearanceSection);
-    sections.forEach((section, index) => {
-      section.getBoundingClientRect = () => ({
-        top:
-          index < appearanceIndex
-            ? -100
-            : index === appearanceIndex
-              ? 420.5
-              : 1000,
-      });
-    });
-    scrollContainer.dispatchEvent(new Event('scroll'));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    flushSync();
-
+    const visibleTopics = () =>
+      Array.from(document.querySelectorAll('[data-settings-section]')).filter(
+        (section) => !section.hidden,
+      );
     expect(
-      document
-        .querySelector(
-          '.settings-desktop-index .snav-item[aria-current="true"]',
-        )
-        .textContent.trim(),
-    ).toBe('Appearance');
+      visibleTopics().map((section) => section.dataset.settingsSection),
+    ).toEqual(['appearance']);
+    const scrollContainer = document.querySelector('.settings-content');
+    scrollContainer.scrollTop = 400;
+    scrollContainer.dispatchEvent(new Event('scroll'));
+    flushSync();
+    expect(
+      visibleTopics().map((section) => section.dataset.settingsSection),
+    ).toEqual(['appearance']);
+    expect(document.activeElement.id).toBe('settings-section-appearance');
+  });
+
+  it('finds settings across hidden topics with spacing-insensitive search and preserves drafts', async () => {
+    rpcMock.mockImplementation(createSettingsRpcHandler());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
+    clickButton('Agent defaults');
+    const input = document.querySelector('#settings-defaults-temperature');
+    input.value = '0.73';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'timezone';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const results = document.querySelectorAll('.settings-search-result');
+    expect(results).toHaveLength(1);
+    results[0].click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(
+      document.querySelector('[data-settings-section="preferences"]').hidden,
+    ).toBe(false);
+    expect(
+      document.querySelector('[data-settings-section="general"]').hidden,
+    ).toBe(true);
+    clickButton('Agent defaults');
+    expect(document.querySelector('#settings-defaults-temperature')).toBe(
+      input,
+    );
+    expect(input.value).toBe('0.73');
+  });
+
+  it('finds connected Providers while another topic is selected', async () => {
+    rpcMock.mockResolvedValue(createSettingsPayload());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
+    clickButton('Appearance');
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'OpenAI';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(
+      Array.from(document.querySelectorAll('.settings-search-result')).map(
+        (result) => result.textContent,
+      ),
+    ).toContainEqual(expect.stringContaining('Providers'));
+  });
+
+  it('shows an empty search state and can navigate out of it', async () => {
+    rpcMock.mockResolvedValue(createSettingsPayload());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'no-such-setting-sentinel';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(
+      document.querySelector('.settings-search-results .empty-state'),
+    ).toBeTruthy();
+    clickButton('Providers');
+    flushSync();
+    expect(search.value).toBe('');
+    expect(
+      document.querySelector('[data-settings-section="providers"]').hidden,
+    ).toBe(false);
   });
 
   it('edits and saves sub-agent settings', async () => {
@@ -583,7 +593,7 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    openSection('Server info', 'general');
+    openSection('General', 'preferences');
 
     document
       .getElementById('settings-general-timezone')

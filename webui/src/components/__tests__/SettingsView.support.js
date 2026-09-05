@@ -47,10 +47,8 @@ export async function cleanupSettingsViewHarness(mountedComponent) {
   return null;
 }
 
-// All settings sections are always rendered in one scrolling document, so
-// "opening" a section means clicking its index entry and scoping the query
-// helpers to that section's DOM subtree (same-labeled controls — e.g. the
-// per-section Save buttons — exist once per section).
+// Topic navigation keeps editors mounted; helpers scope repeated control labels
+// to the active topic just as the visible interface does.
 export async function openSettingsSection(navLabel, sectionId) {
   await waitForCondition(() => buttonByText(navLabel));
   buttonByText(navLabel).click();
