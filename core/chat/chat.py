@@ -2556,8 +2556,33 @@ class ChatLoop:
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
         tool_finalization_reason: str | None = None
         tool_finalization_violation_count = 0
+        tool_catalog_revision = -1
         while True:
             run.raise_if_cancelled()
+            registry = self._dependencies.tools
+            if tool_finalization_reason is None and registry.revision != tool_catalog_revision:
+                tool_catalog_revision = registry.revision
+                refreshed = await _run_prompt_method(
+                    self._dependencies.get_system_prompts(),
+                    "provider_tool_definitions_async",
+                    "provider_tool_definitions",
+                    agent,
+                    session_tool_grants=state.session_tool_grants,
+                )
+                tools = await self._route_tool_definitions(
+                    refreshed,
+                    input_modalities=target.input_modalities,
+                    wire_media_types=target.wire_media_types,
+                )
+                allowed_names = tuple(str(tool["name"]) for tool in tools)
+                contracts = await _CHAT_TRANSFORM_WORKERS.run(
+                    registry.contracts_for_provider_definitions,
+                    tools,
+                )
+                state = _RequestState(
+                    messages, tools, allowed_names, state.session_tool_grants, contracts
+                )
+                context.request_state = state
             async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
                 try:

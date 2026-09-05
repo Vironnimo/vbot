@@ -208,6 +208,7 @@ class ConfigAgent:
     # Resolved through the chain (agent → project default → global default); both
     # ``temperature`` and ``thinking_effort`` carry the first tier that delivered,
     # or ``None`` when all tiers fell through → the provider default.
+    project_id: str | None = None
     thinking_effort: str | None = None
     fallback_models: list[str] = field(default_factory=lambda: list(_CONFIG_AGENT_FALLBACK_MODELS))
     workspace: str = _CONFIG_AGENT_WORKSPACE
@@ -601,6 +602,7 @@ class AgentResolver:
             allowed_skills,
             tools,
             project.overrides.get(agent_id, {}).get("compaction_policy"),
+            project_id=project_id,
         )
 
     def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
@@ -1053,9 +1055,12 @@ def _build_config_agent(
     allowed_skills: list[str],
     tools: dict[str, Any],
     compaction_policy: Any,
+    *,
+    project_id: str | None = None,
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
+        project_id=project_id,
         name=scanned.display_name,
         model=resolved_model,
         temperature=resolved_temperature,

@@ -120,3 +120,8 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 Read these only when your task matches - not by default.
 
 - Changing installer, updater, uninstaller, autostart internals, install shapes, or `.vbot-install.json` handling -> `cli/lifecycle-management.md`
+
+
+## Extension management operations
+
+`extensions <name> operations` and `<operation> --help` discover API v4 management schemas through `extensions.operation`. Dynamic operation flags are forwarded in order while `--host`, `--port`, and `--data-dir` remain accessor-owned. Secret operations require UTF-8 JSON on stdin; the generic parser does not echo their values. Long operations return job ids with explicit terminal states and a cancellation operation. Existing Extension settings commands keep their original grammar. Source: `cli/parser.py`, `cli/extensions_management.py`; tests: `tests/cli/test_extensions_operations.py`.

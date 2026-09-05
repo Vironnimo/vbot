@@ -1,0 +1,28 @@
+# MCP Extension
+
+The bundled `resources/extensions/mcp/` package is a vBot MCP host/client. Its package entry point exports registration; API v4 supplies management, host capabilities, and live Tool publication. It runs external MCP processes on the vBot server machine; accessors do not launch helpers on their own machines.
+
+## Ownership and invariants
+
+`extension.py` owns connection CRUD, exact Agent-address grants, live Tool declarations, and asynchronous management jobs. `config.py` validates and atomically persists `<data-dir>/mcp/connections.json`; a corrupt document cannot be overwritten through normal management. Credential references are configuration; values use the host credential store. Transport changes close and replace the connection. Incremental grant/revoke operations serialize persistence and update the live connection without restarting unrelated work.
+
+The connection Tool is `mcp_<id>`. Remote Tools receive deterministic bounded names and follow that parent Tool's activation. Definition profiles include Agent and Project identity, so equal bare ids in different Projects cannot share a grant. Explicit Tool denials, selected Tool policies, and Project ceilings still apply. Direct CLI invocation resolves that Agent's effective policy and uses ToolRegistry dispatch. A grant alone does not add a parent Tool to a selected policy. Remote schema changes fail stale calls rather than applying old arguments to a new definition.
+
+`client.py` uses the pinned official MCP SDK for stdio, Streamable HTTP, and legacy SSE. One task owns each connection's SDK context; invocations serialize per connection, while different connections run independently. Cancellation is not a promise to undo a remote mutation, and mutations are never automatically replayed. Transient failures of read operations retry at most three times with exponential backoff and jitter; authorization and validation failures do not retry. Connection-owner cancellation exits an active request and releases its pending inputs. Discovery preserves all catalog pages and their standard metadata. Catalog notifications trigger republishing; Resource subscriptions acknowledge before success and expose changes through bounded sequenced events, with explicit gap counts. Stderr is drained and configured credentials are redacted before diagnostic retention.
+
+Sampling uses the invoking Agent's configured Model and only the server's explicitly supplied context. It does not copy Session history or other connections into the request. Sampling requests, the selection policy, and usage are available in connection events; these auxiliary requests do not currently contribute to the parent Run's main response usage counters. Roots use the invoking work directory. Elicitation and OAuth are resumable pending inputs available to the CLI and global WebUI request dialog; OAuth tokens use host credentials. Legacy callback and current `input_required` flows are exercised through real SDK connections.
+
+`content.py` preserves standard structured content, annotations, `_meta`, and Resource/Prompt content. Binary blocks become durable files; image/audio attachment artifacts use normal Chat media routing. If attachment delivery cannot accept a binary, its file and the delivery error remain available. MCP error content stays in the failure envelope, including media artifacts.
+
+## Compatibility boundary
+
+The SDK is pinned to `mcp==2.1.1`. The 2026-07-28 protocol removes ping; connection testing reports catalog verification instead when that revision is negotiated. Historical task-augmented Tools require the SDK dispatcher's raw request seam because the high-level SDK wrongly validates task handles as ordinary Tool results. That seam stays inside `ConnectionRunner._task_send`, reuses the existing connection stamping/cancellation/progress machinery, validates task handles, and returns the complete original task payload. Do not replace it with the empty `GetTaskPayloadResult` model or an unparameterized generic Request: those drop payload or argument fields. The real stdio task test protects both cases.
+
+Protocol extensions that the selected SDK cannot interpret must fail explicitly; never advertise a capability that the host does not implement or silently discard unsupported content. External protocol-version compatibility is distinct from prohibited legacy vBot configuration migrations.
+
+## Source and verification
+
+- Runtime and Extension seams: `core/extensions/operations.py`, `core/extensions/runtime.py`, `core/runtime/runtime.py`; live Tool generations: `core/tools/tools.py`, `core/chat/chat.py`.
+- Management transport and automation: `server/rpc/extensions_methods.py`, `cli/extensions_management.py`, `cli/parser.py`; setup guidance: `resources/skills/vbot-cli/references/mcp.md`.
+- Pending-input presentation: `webui/src/components/ExtensionRequests.svelte`, `webui/src/lib/extensionInputs.js` and their component/helper tests.
+- Protocol, transport, callback, task, grants, persistence, and media regressions: `tests/resources/extensions/test_mcp.py`; ownership, CLI parser, and same-Run publication tests live in the adjacent core/CLI suites.
