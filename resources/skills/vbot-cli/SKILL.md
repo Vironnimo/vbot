@@ -9,7 +9,7 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 
 ## MCP connections
 
-For requests to install or configure an MCP server, including a supplied setup link, read `references/mcp.md` and use `vbot extensions mcp operations` to discover the installed management interface. Install and run prerequisites on the machine hosting vBot. Configure the connection, grant the intended Agent access, and verify an actual permitted operation. User input and sign-in requests are available through the same CLI and appear in the WebUI. Do not report a successful setup from saved configuration alone.
+For MCP installation, configuration, or use, read `references/mcp.md`. It covers setup from a supplied link on the vBot machine, Agent grants, targeted discovery, saved-result reading, user input, and verification through an actual application operation.
 
 ## System and paths
 
