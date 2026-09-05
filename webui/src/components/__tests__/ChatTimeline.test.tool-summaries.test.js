@@ -39,7 +39,7 @@ describe('ChatTimeline', () => {
     vi.useRealTimers();
   });
 
-  it.each(['read', 'analyze_image'])(
+  it.each(['read', 'analyze_image', 'web_fetch'])(
     'shows %s image previews live and after history reload',
     async (name) => {
       const state = ensureSessionState(
@@ -72,13 +72,13 @@ describe('ChatTimeline', () => {
         error: null,
         data: { content: 'test result' },
         artifacts:
-          name === 'read' ? [{ ...images[0], kind: 'read_media' }] : [],
+          name === 'web_fetch' ? [{ ...images[0], kind: 'read_media' }] : [],
       };
       const display = {
         version: 1,
         images:
-          name === 'analyze_image'
-            ? images.map((image, index) => ({
+          name !== 'web_fetch'
+            ? images.slice(0, name === 'read' ? 1 : 2).map((image, index) => ({
                 filename: image.filename,
                 url: `/api/files/original${index}.signature`,
               }))
@@ -130,14 +130,14 @@ describe('ChatTimeline', () => {
         });
         flushSync();
         const previews = [...document.querySelectorAll('.tool-image-preview')];
-        expect(previews).toHaveLength(name === 'read' ? 1 : 2);
+        expect(previews).toHaveLength(name === 'analyze_image' ? 2 : 1);
         const disclosure = previews[0].closest('details');
         expect(disclosure.open).toBe(false);
         disclosure.querySelector('summary').click();
         flushSync();
         expect(disclosure.open).toBe(true);
         const expectedSource =
-          name === 'read'
+          name === 'web_fetch'
             ? `/api/attachments/${images[0].attachment_id}`
             : '/api/files/original0.signature';
         expect(previews[0].querySelector('img').getAttribute('src')).toBe(

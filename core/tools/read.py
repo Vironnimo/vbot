@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -28,7 +29,6 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolHandler,
     ToolRegistry,
-    read_media_artifact,
     run_tool_worker,
     tool_failure,
     tool_success,
@@ -605,7 +605,7 @@ def make_read_handler(
     """Create a read handler bound to the attachment store and speech service.
 
     Closes over the services so the text path stays dependency-free while images
-    are promoted to attachments and audio is transcribed via speech-to-text.
+    are passed in memory and audio is transcribed via speech-to-text.
     Mirrors the image-generation tool's factory pattern. ``file_state`` records
     each read so the write/edit guard can detect unread or externally-changed
     files (see ``file_state.py``). Reads take no part in change statistics:
@@ -670,7 +670,7 @@ def make_read_handler(
                 return tool_failure(
                     "file_read_error", f"failed to read file: {displayed_path}: {error}"
                 )
-            return _read_image(attachment_store, resolved, raw, media_type)
+            return _read_image(context, resolved, raw, media_type)
         if media_type.startswith("audio/"):
             if file_size > speech_max_size_bytes:
                 return tool_failure(
@@ -781,27 +781,22 @@ def _read_extracted_document(
 
 
 def _read_image(
-    attachment_store: Any,
+    context: ToolContext,
     resolved: Path,
     raw: bytes,
     media_type: str,
 ) -> JsonObject:
-    """Promote an image to an attachment-backed rich Tool Result."""
-    try:
-        record = attachment_store.store(resolved.name, raw)
-    except AttachmentError as error:
-        return tool_failure("attachment_error", str(error))
-
-    return tool_success(
-        {"content": (f"Loaded image {record.filename} ({record.media_type}).")},
-        artifacts=[
-            read_media_artifact(
-                attachment_id=record.id,
-                filename=record.filename,
-                media_type=record.media_type,
-            )
-        ],
+    """Pass loaded pixels to Chat without creating a persistent attachment."""
+    context.presentation_images.append({"path": str(resolved), "filename": resolved.name})
+    context.result_media.append(
+        {
+            "path": str(resolved),
+            "filename": resolved.name,
+            "media_type": media_type,
+            "base64": base64.b64encode(raw).decode("ascii"),
+        }
     )
+    return tool_success({"content": f"Loaded image {resolved.name} ({media_type})."})
 
 
 async def _read_audio(
