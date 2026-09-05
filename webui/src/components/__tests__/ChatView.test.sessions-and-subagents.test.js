@@ -939,7 +939,21 @@ describe('ChatView', () => {
             active_run: initialActiveRuns[params.session_id],
           };
         }
-        return secondHistoryDeferred;
+        if (chatHistoryCallCount === 2) {
+          return secondHistoryDeferred;
+        }
+        return {
+          session_id: params.session_id,
+          messages: [
+            { id: 'assistant-one', role: 'assistant', content: 'Hello' },
+          ],
+          has_more: false,
+          active_run: {
+            run_id: 'run-replacement',
+            sse_url: '/api/runs/run-replacement/events',
+            status: 'running',
+          },
+        };
       }
       if (method === 'chat.commands') {
         return { items: [] };
@@ -1008,14 +1022,10 @@ describe('ChatView', () => {
       ],
       has_more: false,
     });
-    // The await resumes and runs the reconcile branch. `listQueue` is mocked
-    // separately in `api.js` and does not hit `rpcMock`, so the total
-    // `rpcMock` call count is `agent.list + chat.history × 2 + chat.commands`
-    // = 4. Wait for the second history response to land by waiting for the
-    // await chain inside `loadHistoryForSession` to reach the `await
-    // syncSessionQueue(sessionState)` call.
+    // The obsolete snapshot triggers a fresh read, which confirms the new
+    // Run before releasing the composer and navigation controls.
     await waitForCondition(
-      () => chatHistoryCallCount >= 2 && sessionState.currentRun !== null,
+      () => chatHistoryCallCount === 3 && !chatState.loadingHistory,
       100,
     );
     flushSync();

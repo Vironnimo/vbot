@@ -16,6 +16,12 @@ const CHAT_STATUS_PARTIAL = 'partial';
 const CHAT_STATUS_CANCELLED = 'cancelled';
 const CHAT_STATUS_INTERRUPTED = 'interrupted';
 
+const RUN_HISTORY_CONTENT_ROLES = new Set([
+  'assistant',
+  'tool',
+  'compaction_checkpoint',
+]);
+
 const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
   'run_failed',
@@ -113,12 +119,59 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
         liveItems,
         runEvents,
       )
-    : [...historyItems, ...liveItems];
+    : mergeTimelineItems(historyItems, liveItems);
 
-  return reconciledItems.flatMap((item) =>
+  const persistedMessageIds = new Set(
+    reconciledItems
+      .filter((item) => item.type === 'message' && !item.liveErrorRunId)
+      .map((item) => item.id),
+  );
+  const visibleItems = reconciledItems.filter(
+    (item) => !item.liveErrorRunId || !persistedMessageIds.has(item.id),
+  );
+  return visibleItems.flatMap((item) =>
     isCompactionOnlyRunItem(item)
       ? item.items.map(stripTimelineSequence)
       : [stripTimelineSequence(item)],
+  );
+}
+
+// Insert retained Run groups into canonical History without sorting History
+// itself or separating a live User message from its Assistant output.
+function mergeTimelineItems(historyItems, liveItems) {
+  const result = [...historyItems];
+  for (let index = 0; index < liveItems.length; index += 1) {
+    const item = liveItems[index];
+    const group = [item];
+    const next = liveItems[index + 1];
+    if (
+      item.event?.type === 'user_message_persisted' &&
+      next?.type === 'assistant_run' &&
+      next.runId === item.event.run_id
+    ) {
+      group.push(next);
+      index += 1;
+    }
+    const timestamp = timelineItemTimestamp(item);
+    const insertionIndex =
+      timestamp === null
+        ? -1
+        : result.findIndex((existing) => {
+            const existingTimestamp = timelineItemTimestamp(existing);
+            return existingTimestamp !== null && existingTimestamp > timestamp;
+          });
+    result.splice(
+      insertionIndex < 0 ? result.length : insertionIndex,
+      0,
+      ...group,
+    );
+  }
+  return result;
+}
+
+function timelineItemTimestamp(item) {
+  return timestampToMs(
+    item.message?.timestamp ?? item.event?.timestamp ?? item.timestamp,
   );
 }
 
@@ -335,7 +388,7 @@ function selectTrackedRunTimelineSource(
       item.type === 'assistant_run' && matchesRunId(item.runId, activeRunId),
   );
   if (!liveAssistantRun) {
-    return [...historyItems, ...liveItems];
+    return mergeTimelineItems(historyItems, liveItems);
   }
   liveAssistantRun.startTimestamp =
     sessionState.currentRun?.startedAt ?? liveAssistantRun.startTimestamp;
@@ -374,7 +427,13 @@ function selectTrackedRunTimelineSource(
   const activeUserItem = historyMessageItem(
     sessionState.messages[currentUserIndex],
   );
-  const prefixHistoryItems = historyTimelineItems(prefixMessages);
+  const currentLiveErrors = remainingLiveItems.filter(
+    (item) => item.liveErrorRunId === activeRunId,
+  );
+  const prefixHistoryItems = mergeTimelineItems(
+    historyTimelineItems(prefixMessages),
+    remainingLiveItems.filter((item) => item.liveErrorRunId !== activeRunId),
+  );
   const trailingHistoryItems = historyTimelineItems(trailingMessages);
 
   if (
@@ -394,7 +453,7 @@ function selectTrackedRunTimelineSource(
           activeUserItem,
           liveAssistantRun,
           ...trailingHistoryItems,
-          ...remainingLiveItems,
+          ...currentLiveErrors,
         ];
       }
       const currentTurnHistoryItems = historyTimelineItems(currentTurnMessages);
@@ -407,10 +466,10 @@ function selectTrackedRunTimelineSource(
         ...prefixHistoryItems,
         ...currentTurnHistoryItems,
         ...trailingHistoryItems,
-        ...remainingLiveItems,
+        ...currentLiveErrors,
       ];
     }
-    return [...historyItems, ...remainingLiveItems];
+    return mergeTimelineItems(historyItems, remainingLiveItems);
   }
 
   return [
@@ -418,7 +477,7 @@ function selectTrackedRunTimelineSource(
     activeUserItem,
     liveAssistantRun,
     ...trailingHistoryItems,
-    ...remainingLiveItems,
+    ...currentLiveErrors,
   ];
 }
 
@@ -454,13 +513,132 @@ function trackedRunSourceWithoutUserAnchor(
   activeRunId,
   messages,
 ) {
-  if (!liveRunOutputPersistedInHistory(liveAssistantRun, messages)) {
-    return [...historyItems, ...liveItems];
-  }
-  const remainingLiveItems = liveItems.filter(
-    (item) => !matchesActiveRunTimelineItem(item, activeRunId),
+  const liveMessageIds = new Set(
+    liveAssistantRun.events
+      .map((event) => event.payload?.message?.id)
+      .filter(Boolean),
   );
-  return [...historyItems, ...remainingLiveItems];
+  const overlapIndex = (messages ?? []).findIndex(
+    (message) =>
+      RUN_HISTORY_CONTENT_ROLES.has(message.role) &&
+      liveMessageIds.has(message.id),
+  );
+  const currentLiveItems = liveItems.filter(
+    (item) =>
+      matchesActiveRunTimelineItem(item, activeRunId) ||
+      item.liveErrorRunId === activeRunId,
+  );
+  const remainingLiveItems = liveItems.filter(
+    (item) => !currentLiveItems.includes(item),
+  );
+  const currentLiveErrors = currentLiveItems.filter(
+    (item) => item.liveErrorRunId === activeRunId,
+  );
+  if (hasPersistedRunSummary(messages, activeRunId)) {
+    return mergeTimelineItems(historyItems, remainingLiveItems);
+  }
+  if (overlapIndex < 0) {
+    return liveRunOutputPersistedInHistory(liveAssistantRun, messages)
+      ? mergeTimelineItems(historyItems, remainingLiveItems)
+      : [
+          ...mergeTimelineItems(historyItems, remainingLiveItems),
+          ...currentLiveItems,
+        ];
+  }
+
+  // A note-triggered Run has no visible User anchor. Its persisted overlap
+  // locates the Assistant/Tool segment; retain the unseen replay prefix and
+  // overlay live children instead of declaring the entire Run persisted.
+  let start = overlapIndex;
+  let end = overlapIndex + 1;
+  while (start > 0 && RUN_HISTORY_CONTENT_ROLES.has(messages[start - 1].role))
+    start -= 1;
+  while (
+    end < messages.length &&
+    RUN_HISTORY_CONTENT_ROLES.has(messages[end].role)
+  )
+    end += 1;
+  const historyRun = createAssistantRunItem({
+    id: liveAssistantRun.id,
+    runId: activeRunId,
+    source: 'history',
+  });
+  for (const message of messages.slice(start, end)) {
+    if (message.role === 'assistant')
+      appendHistoryAssistantMessage(historyRun, message);
+    else if (message.role === 'tool')
+      appendHistoryToolResult(historyRun, message);
+    else
+      appendLiveRunEvent(historyRun, {
+        type: 'compaction_completed',
+        sequence: historyRun.items.length,
+        timestamp: message.timestamp,
+        payload: { message },
+      });
+  }
+  const items = [...historyRun.items];
+  let insertionIndex = items.length;
+  for (const child of [...liveAssistantRun.items].reverse()) {
+    const matchingIndex = items.findIndex((historyChild) =>
+      timelineChildrenMatch(historyChild, child),
+    );
+    if (matchingIndex < 0) {
+      items.splice(insertionIndex, 0, child);
+      continue;
+    }
+    items[matchingIndex] = mergeTimelineChild(items[matchingIndex], child);
+    insertionIndex = matchingIndex;
+  }
+  const mergedRun = {
+    ...liveAssistantRun,
+    timestamp: messages[start].timestamp ?? liveAssistantRun.timestamp,
+    items: items.map((item, sequence) => ({ ...item, sequence })),
+  };
+  syncAssistantRunCollections(mergedRun);
+  return mergeTimelineItems(
+    [
+      ...historyTimelineItems(messages.slice(0, start)),
+      mergedRun,
+      ...currentLiveErrors,
+      ...historyTimelineItems(messages.slice(end)),
+    ],
+    remainingLiveItems,
+  );
+}
+
+function timelineChildrenMatch(historyChild, liveChild) {
+  if (historyChild.type !== liveChild.type) return false;
+  if (historyChild.type === 'tool_call')
+    return (
+      Boolean(historyChild.toolCallId) &&
+      historyChild.toolCallId === liveChild.toolCallId
+    );
+  if (historyChild.type === 'compaction_separator')
+    return (
+      Boolean(historyChild.message?.id) &&
+      historyChild.message.id === liveChild.message?.id
+    );
+  const historyIds = new Set(
+    (historyChild.messages ?? []).map((message) => message.id).filter(Boolean),
+  );
+  return (liveChild.events ?? []).some((event) =>
+    historyIds.has(event.payload?.message?.id),
+  );
+}
+
+function mergeTimelineChild(historyChild, liveChild) {
+  if (
+    historyChild.type === 'tool_call' &&
+    historyChild.resultEvent &&
+    !liveChild.resultEvent
+  ) {
+    return {
+      ...historyChild,
+      stdout: liveChild.stdout || historyChild.stdout,
+      stderr: liveChild.stderr || historyChild.stderr,
+    };
+  }
+  return { ...historyChild, ...liveChild };
 }
 
 function liveRunOutputPersistedInHistory(liveAssistantRun, messages) {
@@ -785,7 +963,10 @@ function liveTimelineItems(runEvents, projectionCache = null) {
         timelineEntries.push({
           kind: 'standalone',
           order: arrivalIndex,
-          item: historyMessageItem(message),
+          item: {
+            ...historyMessageItem(message),
+            liveErrorRunId: event.run_id,
+          },
         });
       }
       continue;
@@ -1426,6 +1607,17 @@ function mergeableTextSection(
   }
 
   const lastMatchingItem = assistantRun.items[lastMatchingIndex];
+  if (!isFinalizableTextDraft(lastMatchingItem)) {
+    const previousMessage =
+      lastMatchingItem.messages?.at(-1) ??
+      lastMatchingItem.events?.at(-1)?.payload?.message;
+    if (
+      streaming ||
+      (message?.id && previousMessage?.id && message.id !== previousMessage.id)
+    )
+      return null;
+  }
+
   const interveningItems = assistantRun.items.slice(lastMatchingIndex + 1);
   if (interveningItems.length === 0) {
     return lastMatchingItem;

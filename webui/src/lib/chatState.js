@@ -167,7 +167,7 @@ export function createChatController({
   const queueSyncVersions = new Map();
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
-  let displayedHistoryLoadCount = 0;
+  let displayedHistoryLoad = null;
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
@@ -717,30 +717,52 @@ export function createChatController({
     return loadHistoryForSession(agent.id, agent.current_session_id);
   }
 
+  function beginHistoryRequest(sessionState) {
+    const version = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
+    historyLoadVersions.set(sessionState.key, version);
+    const snapshotVersion = sessionState.historySnapshotVersion;
+    return {
+      snapshotVersion,
+      isLatest: () => historyLoadVersions.get(sessionState.key) === version,
+    };
+  }
+
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
-    const requestVersion = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
-    historyLoadVersions.set(sessionState.key, requestVersion);
-    const isLatestRequest = () =>
-      historyLoadVersions.get(sessionState.key) === requestVersion;
+    const request = beginHistoryRequest(sessionState);
+    const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
     if (startedDisplayed) {
-      displayedHistoryLoadCount += 1;
+      displayedHistoryLoad = request;
       chatState.loadingHistory = true;
       chatState.historyError = '';
       runStream.closeSubscriptionsExcept(sessionState.key);
     }
-    const staleRunId = sessionState.currentRun?.runId ?? '';
     try {
-      const history = await operations.loadChatHistory({
-        agent_id: agentId,
-        session_id: sessionId,
-        limit: HISTORY_INITIAL_LIMIT,
-      });
-      if (!isLatestRequest()) {
-        return false;
-      }
+      let history;
+      let staleRunId;
+      do {
+        staleRunId = sessionState.currentRun?.runId ?? '';
+        history = await operations.loadChatHistory({
+          agent_id: agentId,
+          session_id: sessionId,
+          limit: HISTORY_INITIAL_LIMIT,
+        });
+        if (
+          !isLatestRequest() ||
+          sessionState.historySnapshotVersion !== request.snapshotVersion
+        ) {
+          return false;
+        }
+        // Run admission can overtake a History response, including while the
+        // composer is disabled. Read again rather than reattach the old Run
+        // or install the lineage from before an accepted edit.
+      } while (
+        sessionState.currentRun?.runId &&
+        sessionState.currentRun.runId !== staleRunId &&
+        history?.active_run?.run_id !== sessionState.currentRun.runId
+      );
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
@@ -777,11 +799,9 @@ export function createChatController({
       }
       return false;
     } finally {
-      if (startedDisplayed) {
-        displayedHistoryLoadCount = Math.max(0, displayedHistoryLoadCount - 1);
-        if (displayedHistoryLoadCount === 0) {
-          chatState.loadingHistory = false;
-        }
+      if (displayedHistoryLoad === request) {
+        displayedHistoryLoad = null;
+        chatState.loadingHistory = false;
       }
     }
   }
@@ -791,6 +811,8 @@ export function createChatController({
       return false;
     }
 
+    const request = beginHistoryRequest(sessionState);
+    const isLatestRequest = request.isLatest;
     try {
       const history = await operations.loadChatHistory({
         agent_id: sessionState.agentId,
@@ -800,7 +822,11 @@ export function createChatController({
       // A new Run may have started while durable history was loading. That
       // newer Run owns the Session now, so this recovery response must not
       // replace its optimistic state or subscription.
-      if (sessionState.currentRun?.runId !== expectedRunId) {
+      if (
+        !isLatestRequest() ||
+        sessionState.historySnapshotVersion !== request.snapshotVersion ||
+        sessionState.currentRun?.runId !== expectedRunId
+      ) {
         return true;
       }
 
@@ -1284,7 +1310,7 @@ export function createChatController({
     queueSyncVersions.clear();
     subAgentStatusInflightKeys.clear();
     subAgentStatusVerificationKeys.clear();
-    displayedHistoryLoadCount = 0;
+    displayedHistoryLoad = null;
     chatState.loadingHistory = false;
   }
 

@@ -14,6 +14,348 @@ import {
 import { countTimelineTextOccurrences } from './chatState.support.js';
 
 describe('chat state helpers', () => {
+  it.each(['assistant_output_delta', 'reasoning_delta', 'tool_call_started'])(
+    'keeps new %s visible after loading an automatic Run prefix',
+    (type) => {
+      const session = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-one',
+      );
+      const prefix = {
+        id: 'prefix',
+        role: 'assistant',
+        content: 'Earlier saved output',
+      };
+      const saved = { id: 'saved', role: 'assistant', content: 'Saved output' };
+      startRun(session, { run_id: 'run-one' });
+      appendRunEvent(session, {
+        run_id: 'run-one',
+        sequence: 1,
+        type: 'assistant_output',
+        payload: { message: saved },
+      });
+      loadHistory(session, [prefix, saved]);
+      const payload =
+        type === 'tool_call_started'
+          ? {
+              tool_call: {
+                id: 'new-tool',
+                name: 'read',
+                arguments: { path: 'example.txt' },
+              },
+            }
+          : {
+              content_delta: 'Fresh output',
+              reasoning_delta: 'Fresh reasoning',
+            };
+
+      appendRunEvent(session, {
+        run_id: 'run-one',
+        sequence: 2,
+        type,
+        payload,
+      });
+      const timeline = visibleTimelineItemsForRender(session);
+
+      expect(countTimelineTextOccurrences(timeline, prefix.content)).toBe(1);
+      expect(countTimelineTextOccurrences(timeline, saved.content)).toBe(1);
+      const children = timeline.flatMap((item) => item.items ?? []);
+      if (type === 'tool_call_started') {
+        expect(children.some((item) => item.toolCallId === 'new-tool')).toBe(
+          true,
+        );
+      } else {
+        expect(
+          children.some(
+            (item) =>
+              item.content ===
+              (type === 'reasoning_delta' ? 'Fresh reasoning' : 'Fresh output'),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it('keeps an unanchored replay head after its already persisted User message', () => {
+    const session = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const user = {
+      id: 'user',
+      role: 'user',
+      content: 'Question',
+      timestamp: '2026-09-05T10:00:01Z',
+    };
+    loadHistory(session, [user]);
+    startRun(session, {
+      run_id: 'run-one',
+      events: [
+        {
+          run_id: 'run-one',
+          sequence: 1,
+          type: 'run_started',
+          timestamp: '2026-09-05T10:00:00Z',
+        },
+      ],
+    });
+
+    expect(
+      visibleTimelineItemsForRender(session).map((item) => item.id),
+    ).toEqual(['user', 'assistant-run-run-one']);
+  });
+
+  it('retains canonical Tool results while overlaying a partial automatic-Run replay', () => {
+    const session = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const assistant = {
+      id: 'saved',
+      role: 'assistant',
+      content: 'Inspecting',
+      tool_calls: [
+        { id: 'call-one', name: 'bash', arguments: { command: 'example' } },
+      ],
+    };
+    const result = {
+      id: 'result',
+      role: 'tool',
+      name: 'bash',
+      tool_call_id: 'call-one',
+      content: '{"ok":true,"data":{"content":"Canonical result"}}',
+    };
+    loadHistory(session, [assistant, result]);
+    startRun(session, { run_id: 'run-one' });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 1,
+      type: 'assistant_output',
+      payload: { message: assistant },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 2,
+      type: 'tool_call_started',
+      payload: { tool_call: assistant.tool_calls[0] },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 3,
+      type: 'tool_call_stdout',
+      payload: { tool_call_id: 'call-one', data: 'Live stdout' },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 4,
+      type: 'reasoning_delta',
+      payload: { reasoning_delta: 'Next step' },
+    });
+
+    const [run] = visibleTimelineItemsForRender(session);
+
+    expect(run.tools).toHaveLength(1);
+    expect(run.tools[0]).toMatchObject({
+      result: result.content,
+      stdout: 'Live stdout',
+      status: 'success',
+    });
+    expect(run.reasoning[0].content).toBe('Next step');
+  });
+
+  it('keeps successive automatic-Run answers distinct through terminal History reconciliation', () => {
+    const session = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const first = { id: 'first', role: 'assistant', content: 'First step' };
+    const second = { id: 'second', role: 'assistant', content: 'Second step' };
+    loadHistory(session, [first]);
+    startRun(session, { run_id: 'run-one' });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 1,
+      type: 'assistant_output',
+      payload: { message: first },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 2,
+      type: 'assistant_output_delta',
+      payload: { content_delta: 'Second' },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 3,
+      type: 'assistant_output',
+      payload: { message: second },
+    });
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 4,
+      type: 'run_completed',
+      payload: { status: 'completed' },
+    });
+    for (const message of [first, second])
+      expect(
+        countTimelineTextOccurrences(
+          visibleTimelineItemsForRender(session),
+          message.content,
+        ),
+      ).toBe(1);
+
+    loadHistory(session, [
+      first,
+      second,
+      {
+        id: 'summary',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+      },
+    ]);
+
+    for (const message of [first, second])
+      expect(
+        countTimelineTextOccurrences(
+          visibleTimelineItemsForRender(session),
+          message.content,
+        ),
+      ).toBe(1);
+  });
+
+  it('merges an automatic Run across a persisted Compaction checkpoint without duplication', () => {
+    const session = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const first = {
+      id: 'first',
+      role: 'assistant',
+      content: 'Before compaction',
+    };
+    const checkpoint = {
+      id: 'checkpoint',
+      role: 'compaction_checkpoint',
+      content: 'Checkpoint',
+    };
+    const second = {
+      id: 'second',
+      role: 'assistant',
+      content: 'After compaction',
+    };
+    loadHistory(session, [first, checkpoint, second]);
+    startRun(session, { run_id: 'run-one' });
+    for (const [index, message] of [first, checkpoint, second].entries()) {
+      appendRunEvent(session, {
+        run_id: 'run-one',
+        sequence: index + 1,
+        type:
+          message === checkpoint ? 'compaction_completed' : 'assistant_output',
+        payload: { message },
+      });
+    }
+    appendRunEvent(session, {
+      run_id: 'run-one',
+      sequence: 4,
+      type: 'assistant_output_delta',
+      payload: { content_delta: 'Fresh continuation' },
+    });
+
+    const timeline = visibleTimelineItemsForRender(session);
+
+    expect(timeline).toHaveLength(1);
+    expect(
+      timeline[0].items.map((item) => item.content ?? item.message?.content),
+    ).toEqual([
+      'Before compaction',
+      'Checkpoint',
+      'After compaction',
+      'Fresh continuation',
+    ]);
+  });
+
+  it('keeps retained older Runs before the newest loaded page', () => {
+    const session = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    for (const [index, runId] of ['older', 'newer'].entries()) {
+      const timestamp = `2026-09-05T10:0${index}:00Z`;
+      startRun(session, { run_id: runId });
+      appendRunEvent(session, {
+        run_id: runId,
+        sequence: 1,
+        timestamp,
+        type: 'user_message_persisted',
+        payload: {
+          message: {
+            id: `${runId}-user`,
+            role: 'user',
+            content: `${runId} question`,
+            timestamp,
+          },
+        },
+      });
+      appendRunEvent(session, {
+        run_id: runId,
+        sequence: 2,
+        timestamp,
+        type: 'assistant_output',
+        payload: {
+          message: {
+            id: `${runId}-answer`,
+            role: 'assistant',
+            content: `${runId} answer`,
+            timestamp,
+          },
+        },
+      });
+      if (runId === 'older') {
+        appendRunEvent(session, {
+          run_id: runId,
+          sequence: 3,
+          timestamp,
+          type: 'run_completed',
+          payload: { status: 'completed' },
+        });
+      }
+    }
+
+    loadHistory(
+      session,
+      [
+        {
+          id: 'newer-user',
+          role: 'user',
+          content: 'newer question',
+          timestamp: '2026-09-05T10:01:00Z',
+        },
+      ],
+      { hasMore: true, nextBefore: 'newer-cursor' },
+    );
+
+    expect(
+      visibleTimelineItemsForRender(session).map(
+        (item) =>
+          item.message?.content ??
+          item.event?.payload?.message?.content ??
+          item.outputs?.map((output) => output.content).join(''),
+      ),
+    ).toEqual([
+      'older question',
+      'older answer',
+      'newer question',
+      'newer answer',
+    ]);
+  });
+
   it('keeps one assistant run when SSE replay overlaps with persisted active run history', () => {
     const sessionState = ensureSessionState(
       createChatState(),

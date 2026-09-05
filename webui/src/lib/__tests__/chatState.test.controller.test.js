@@ -48,6 +48,111 @@ function setup({
 }
 
 describe('chat controller', () => {
+  it('reloads a stale active-run snapshot without replacing a newer live Run', async () => {
+    const older = deferred();
+    const loadChatHistory = vi
+      .fn()
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce({
+        messages: [{ id: 'new-user', role: 'user', content: 'New question' }],
+        active_run: { run_id: 'new-run', status: 'running' },
+      });
+    const { chatState, controller, runStream } = setup({
+      operationOverrides: { loadChatHistory },
+      isDisplayedSession: () => true,
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(session, { run_id: 'old-run' });
+    const loading = controller.loadHistoryForSession('alpha', 'session-one');
+    startRun(session, { run_id: 'new-run' });
+    appendRunEvent(session, {
+      run_id: 'new-run',
+      sequence: 1,
+      type: 'assistant_output_delta',
+      payload: { content_delta: 'Fresh answer' },
+    });
+    older.resolve({
+      messages: [],
+      active_run: { run_id: 'old-run', status: 'running' },
+    });
+
+    await loading;
+
+    expect(loadChatHistory).toHaveBeenCalledTimes(2);
+    expect(runStream.attachRunStream).toHaveBeenCalledExactlyOnceWith(session, {
+      run_id: 'new-run',
+      status: 'running',
+    });
+    expect(session.streamingRunEvents[0].payload.content_delta).toBe(
+      'Fresh answer',
+    );
+    expect(session.messages[0].id).toBe('new-user');
+  });
+
+  it.each(['session-one', 'session-two'])(
+    'releases the displayed load before an older request finishes (%s)',
+    async (destination) => {
+      const older = deferred();
+      let displayed = 'session-one';
+      const loadChatHistory = vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockResolvedValueOnce({ messages: [] });
+      const { chatState, controller } = setup({
+        operationOverrides: { loadChatHistory },
+        isDisplayedSession: (_agent, session) => session === displayed,
+      });
+      const first = controller.loadHistoryForSession('alpha', 'session-one');
+      displayed = destination;
+
+      await controller.loadHistoryForSession('alpha', destination);
+
+      expect(chatState.loadingHistory).toBe(false);
+      older.resolve({ messages: [] });
+      await first;
+      expect(chatState.loadingHistory).toBe(false);
+    },
+  );
+
+  it.each(['refresh', 'recovery'])(
+    'does not let an older recovery overwrite a newer %s',
+    async (replacement) => {
+      const older = deferred();
+      const freshMessage = {
+        id: 'fresh',
+        role: 'assistant',
+        content: 'Fresh saved output',
+      };
+      const loadChatHistory = vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockResolvedValueOnce({
+          messages: [freshMessage],
+          active_run: { run_id: 'run-one', status: 'running' },
+        });
+      const { chatState, controller } = setup({
+        operationOverrides: { loadChatHistory },
+        isDisplayedSession: () => true,
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'session-one');
+      startRun(session, { run_id: 'run-one' });
+      const recovering = controller.reconcileRunSession(session, 'run-one');
+      if (replacement === 'refresh') {
+        await controller.loadHistoryForSession('alpha', 'session-one');
+      } else {
+        await controller.reconcileRunSession(session, 'run-one');
+      }
+      older.resolve({
+        messages: [],
+        active_run: { run_id: 'run-one', status: 'running' },
+      });
+
+      await recovering;
+
+      expect(session.messages).toEqual([freshMessage]);
+    },
+  );
+
   it('uses the opaque server cursor when loading older History', async () => {
     const loadChatHistory = vi
       .fn()
