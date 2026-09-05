@@ -28,6 +28,8 @@ When the user brings an open-ended idea or asks what a feature should do, treat 
 
 ## Chat terminology
 
+Always label choices offered to the user with numbers (1, 2, 3) or letters (a, b, c).
+
 Use vBot's established terms exactly as the glossary and domain maps define them. Say Tools, Run, Session, Queue, Skill, Provider — not translated alternatives.
 
 ## Agent-facing text review
