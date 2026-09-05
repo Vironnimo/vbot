@@ -1118,9 +1118,54 @@ export const englishCatalog = Object.freeze({
   'projects.rePoint.success': 'Project re-pointed.',
 
   'systemPrompt.title': 'System Prompt',
-  'systemPrompt.eyebrow': 'Prompt assembly',
+  'systemPrompt.tabs.prompt': 'Prompt',
+  'systemPrompt.tabs.tools': 'Tools',
+  'systemPrompt.tabs.edit': 'Edit blocks',
+  'systemPrompt.tabs.label': 'System Prompt views',
+  'systemPrompt.format.document': 'Document',
+  'systemPrompt.format.original': 'Original text',
+  'systemPrompt.format.label': 'Prompt display',
+  'systemPrompt.tools.note':
+    'These definitions accompany the System Prompt. MCP exposes a connection Tool here; individual functions are discovered later during the conversation.',
+  'systemPrompt.tools.empty': 'No Tools in this preview',
+  'systemPrompt.tools.emptyHint':
+    'The selected Agent currently has no available Tool definitions.',
+  'systemPrompt.tools.search': 'Search Tools',
+  'systemPrompt.tools.matches': '{shown} of {total} Tools',
+  'systemPrompt.tools.list': 'Tool definitions',
+  'systemPrompt.tools.copy': 'Copy definition',
+  'systemPrompt.tools.description': 'Description',
+  'systemPrompt.tools.parameters': 'Parameters · JSON Schema',
+  'systemPrompt.tools.original': 'Complete definition · JSON',
+  'systemPrompt.tools.noMatches': 'No matching Tools',
+  'systemPrompt.tools.searchHint':
+    'Try a Tool name or a word from its description.',
+  'systemPrompt.preview.about': 'About this preview',
+  'systemPrompt.preview.refresh': 'Refresh',
+  'systemPrompt.preview.baseline':
+    'Current Agent configuration. A running Session can also contain pinned context, additional Tools, and conversation results.',
+  'systemPrompt.preview.noText':
+    'The current configuration produces an empty System Prompt.',
+  'systemPrompt.blockList.off': 'Off',
+  'systemPrompt.blockList.close': 'Close',
+  'systemPrompt.blockList.edit': 'Edit',
+  'systemPrompt.blockList.inspect': 'Inspect',
+  'systemPrompt.editor.autosave':
+    'Changes save automatically. The switches control inclusion; opening a block does not change it.',
+  'systemPrompt.blockTitle.core:runtime': 'Runtime',
+  'systemPrompt.blockTitle.core:identity_runtime': 'Identity environment',
+  'systemPrompt.blockTitle.core:tools': 'Tool guidance',
+  'systemPrompt.blockTitle.core:tools_list': 'Optional Tool list',
+  'systemPrompt.blockTitle.core:channels': 'Channels',
+  'systemPrompt.blockTitle.core:skills': 'Available Skills',
+  'systemPrompt.blockTitle.core:skill_maintenance': 'Skill maintenance',
+  'systemPrompt.blockTitle.core:soul': 'Identity · SOUL',
+  'systemPrompt.blockTitle.core:working_project': 'Working Project',
+  'systemPrompt.blockTitle.core:agent_body': 'Agent instructions',
+  'systemPrompt.blockTitle.memory:guidance': 'Memory',
+  'systemPrompt.eyebrow': 'Agent context',
   'systemPrompt.subtitle':
-    'Inspect, order, and preview the blocks that compose every agent’s system prompt.',
+    'Read the prompt, inspect available Tools, and adjust instructions.',
   'systemPrompt.scope.label': 'Prompt scope',
   'systemPrompt.scope.default': 'Default',
   'systemPrompt.fragmentEditor.save': 'Save',
@@ -1191,15 +1236,16 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.blockList.reorderHandle': 'Reorder {id} (use arrow keys)',
   'systemPrompt.blockList.reorderAnnouncement':
     'Moved to position {position} of {total}',
-  'systemPrompt.blockList.ownerHint.always': 'Always included.',
+  'systemPrompt.blockList.ownerHint.always':
+    'Included when enabled and non-empty.',
   'systemPrompt.blockList.ownerHint.tool':
-    'Included only while the {name} tool is active.',
+    'Requires the {name} Tool to be available.',
   'systemPrompt.blockList.ownerHint.extension':
-    'Included only while the {name} extension is active.',
+    'Requires the {name} Extension to be active.',
   'systemPrompt.blockList.ownerHint.memory':
-    'Included only while the memory tool is on.',
+    'Requires Memory in the System Prompt to be enabled.',
   'systemPrompt.blockList.ownerHint.channel':
-    'Included only while the agent has an active channel.',
+    'Requires an enabled Channel for this Agent.',
 
   'settings.categories.general': 'General',
   'settings.categories.generalDescription':

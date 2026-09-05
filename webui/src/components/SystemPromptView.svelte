@@ -3,6 +3,9 @@
   import { SvelteMap } from 'svelte/reactivity';
 
   import Dropdown from './Dropdown.svelte';
+  import MarkdownContent from './chat/MarkdownContent.svelte';
+  import ToolDefinitionsPanel from './ToolDefinitionsPanel.svelte';
+  import TabList from './ui/TabList.svelte';
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -64,7 +67,23 @@
   let promptScopes = $state([]);
   let selectedScopeKey = $state('default');
   let selectedAgentId = $state('');
+  let activeTab = $state('prompt');
+  let promptFormat = $state('document');
+  let previewTools = $state([]);
+  let previewError = $state('');
   let previewText = $state('');
+  let tabs = $derived([
+    { id: 'prompt', label: t('systemPrompt.tabs.prompt', 'Prompt') },
+    { id: 'tools', label: t('systemPrompt.tabs.tools', 'Tools') },
+    { id: 'edit', label: t('systemPrompt.tabs.edit', 'Edit blocks') },
+  ]);
+  let formatTabs = $derived([
+    { id: 'document', label: t('systemPrompt.format.document', 'Document') },
+    {
+      id: 'original',
+      label: t('systemPrompt.format.original', 'Original text'),
+    },
+  ]);
   let previewTokens = $state(null);
   let previewToolTokens = $state(null);
   let previewToolCount = $state(null);
@@ -158,6 +177,7 @@
     loadProjectTeams();
     return () => {
       scopeLoadRequestId += 1;
+      previewRequestId += 1;
       unregisterPromptAutosave();
       clearAutoSaveTimers();
       clearPreviewRefreshTimer();
@@ -179,6 +199,7 @@
     if (!targetScopeAgentId) {
       return;
     }
+    activeTab = 'edit';
     const targetKey = `agent:${targetScopeAgentId}`;
     const nextKey = promptScopes.some((scope) => scope.key === targetKey)
       ? targetKey
@@ -265,6 +286,19 @@
     }
   }
 
+  function selectPreviewAgent(agentId) {
+    if (agentId === selectedAgentId) return;
+    return autosaveContext.requestTransition(async () => {
+      selectedAgentId = agentId;
+      const scopeKey = promptScopes.some(
+        (scope) => scope.key === `agent:${agentId}`,
+      )
+        ? `agent:${agentId}`
+        : 'default';
+      await applyScopeSelection(scopeKey);
+    });
+  }
+
   function selectScope(nextScopeKey) {
     if (nextScopeKey === selectedScopeKey) {
       return false;
@@ -276,6 +310,11 @@
 
   async function applyScopeSelection(nextScopeKey) {
     selectedScopeKey = nextScopeKey;
+    const scope = promptScopes.find((entry) => entry.key === nextScopeKey);
+    if (scope?.type === 'agent') selectedAgentId = scope.agent_id;
+    previewRequestId += 1;
+    previewTools = [];
+    previewError = '';
     previewText = '';
     previewTokens = null;
     previewToolTokens = null;
@@ -346,7 +385,8 @@
         inheritance:
           typeof raw.inheritance === 'string' ? raw.inheritance : null,
         preview: !editable ? content : '',
-        previewExpanded: false,
+        previewExpanded: previous?.previewExpanded ?? false,
+        editorExpanded: previous?.editorExpanded ?? false,
         isSaving: false,
         isBusy: false,
       };
@@ -475,30 +515,33 @@
     if (owner.startsWith('tool:')) {
       return t(
         'systemPrompt.blockList.ownerHint.tool',
-        'Included only while the {name} tool is active.',
+        'Requires the {name} Tool to be available.',
         { name: owner.slice('tool:'.length) },
       );
     }
     if (owner.startsWith('extension:')) {
       return t(
         'systemPrompt.blockList.ownerHint.extension',
-        'Included only while the {name} extension is active.',
+        'Requires the {name} Extension to be active.',
         { name: owner.slice('extension:'.length) },
       );
     }
     if (owner === 'memory') {
       return t(
         'systemPrompt.blockList.ownerHint.memory',
-        'Included only while the memory tool is on.',
+        'Requires Memory in the System Prompt to be enabled.',
       );
     }
     if (owner === 'channel') {
       return t(
         'systemPrompt.blockList.ownerHint.channel',
-        'Included only while the agent has an active channel.',
+        'Requires an enabled Channel for this Agent.',
       );
     }
-    return t('systemPrompt.blockList.ownerHint.always', 'Always included.');
+    return t(
+      'systemPrompt.blockList.ownerHint.always',
+      'Included when enabled and non-empty.',
+    );
   }
 
   function dataKindLabel() {
@@ -917,6 +960,15 @@
     try {
       await createPromptBlock(scopedParams({ slug: trimmed }));
       await loadBlocksForScope(selectedScopeKey);
+      const created = blocks.find((block) => block.id === `user:${trimmed}`);
+      if (created) {
+        created.editorExpanded = true;
+        await tick();
+        document
+          .getElementById(`sp-block-body-${created.id}`)
+          ?.querySelector('textarea')
+          ?.focus();
+      }
       schedulePreviewRefresh();
     } catch {
       showToast(
@@ -1006,12 +1058,19 @@
     const requestId = previewRequestId + 1;
     previewRequestId = requestId;
     isRefreshingPreview = true;
+    previewError = '';
+    previewText = '';
+    previewTools = [];
+    previewTokens = null;
+    previewToolTokens = null;
+    previewToolCount = null;
 
     try {
-      const result = await previewPrompt(params);
+      const result = await previewPrompt({ ...params, include_tools: true });
       if (requestId !== previewRequestId) {
         return;
       }
+      previewTools = result.tools ?? [];
       previewText = result.text ?? '';
       previewTokens = result.tokens ?? null;
       previewToolTokens = result.tool_tokens ?? null;
@@ -1020,9 +1079,9 @@
       if (requestId !== previewRequestId) {
         return;
       }
-      showToast(
-        t('systemPrompt.error.previewFailed', 'Failed to load preview'),
-        'error',
+      previewError = t(
+        'systemPrompt.error.previewFailed',
+        'Failed to load preview',
       );
     } finally {
       if (requestId === previewRequestId) {
@@ -1038,6 +1097,7 @@
 
     try {
       await navigator.clipboard.writeText(previewText);
+      showToast(t('common.copied', 'Copied'), 'success');
     } catch {
       showToast(t('systemPrompt.error.copyFailed', 'Failed to copy'), 'error');
     }
@@ -1050,11 +1110,11 @@
 
 <section class="sp-view view active" aria-labelledby="sp-title">
   <div class="sp-layout">
-    <div class="sp-scroll view-frame">
+    <div class="sp-top view-frame">
       <header class="sp-header view-header">
         <div class="view-header__intro">
           <p class="sp-eyebrow view-header__eyebrow">
-            {t('systemPrompt.eyebrow', 'Prompt assembly')}
+            {t('systemPrompt.eyebrow', 'Agent context')}
           </p>
           <h2 id="sp-title" class="sp-title view-header__title">
             {t('systemPrompt.title', 'System Prompt')}
@@ -1062,388 +1122,509 @@
           <p class="sp-subtitle view-header__subtitle">
             {t(
               'systemPrompt.subtitle',
-              'Inspect, order, and preview the blocks that compose every agent’s system prompt.',
+              'Read the prompt, inspect available Tools, and adjust instructions.',
             )}
           </p>
         </div>
       </header>
 
-      <div class="sp-blocklist-toolbar view-toolbar view-toolbar--split">
-        <div class="sp-scope-control">
-          <span class="sp-scope-label view-toolbar__label" id="sp-scope-label">
-            {t('systemPrompt.scope.label', 'Prompt scope')}
+      <div class="sp-context-bar">
+        <div class="sp-preview-heading-row">
+          <span class="sp-preview-heading">
+            {t('systemPrompt.preview.heading', 'Preview for')}
           </span>
-          <Dropdown
-            id="sp-scope-select"
-            value={selectedScopeKey}
-            options={scopeOptions}
-            ariaLabel={t('systemPrompt.scope.label', 'Prompt scope')}
-            triggerClass="sp-scope-dropdown"
-            onValueChange={(value) => selectScope(value)}
-          />
+          {#if previewAgentOptions.length > 0}
+            <span class="sp-agent-label" id="sp-agent-label">
+              {t('systemPrompt.preview.agentLabel', 'Agent')}
+            </span>
+            <Dropdown
+              id="sp-agent-select"
+              value={selectedAgentId}
+              options={previewAgentOptions}
+              ariaLabel={t('systemPrompt.preview.agentLabel', 'Agent')}
+              triggerClass="sp-agent-dropdown"
+              listClass="sp-agent-dropdown-list"
+              onValueChange={selectPreviewAgent}
+            />
+          {/if}
+          {#if previewTokens !== null}
+            {#if previewToolTokens}
+              <span
+                class="sp-token-count"
+                use:tooltip={t(
+                  'systemPrompt.preview.tokenBreakdownHint',
+                  'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
+                  { count: previewToolCount ?? 0 },
+                )}
+              >
+                {t(
+                  'systemPrompt.preview.tokenBreakdown',
+                  '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
+                  {
+                    prompt: previewTokens,
+                    tools: previewToolTokens,
+                    total: previewTokens + previewToolTokens,
+                  },
+                )}
+              </span>
+            {:else}
+              <span class="sp-token-count">
+                {t('systemPrompt.preview.tokenCount', '~{count} tokens', {
+                  count: previewTokens,
+                })}
+              </span>
+            {/if}
+          {/if}
         </div>
-        {#if !isLoadingData}
-          <div class="sp-blocklist-toolbar-actions view-toolbar__actions">
-            <Button
-              variant="secondary"
-              class="sp-btn-sm"
-              onClick={createCustomBlock}
+        <Button
+          variant="secondary"
+          class="sp-refresh"
+          disabled={isRefreshingPreview ||
+            isLoadingData ||
+            !canRefreshPreview()}
+          onClick={refreshPreview}
+          >{t('systemPrompt.preview.refresh', 'Refresh')}</Button
+        >
+      </div>
+      <div class="view-toolbar view-toolbar--tabs sp-navigation">
+        <TabList
+          items={tabs}
+          value={activeTab}
+          idPrefix="sp-content"
+          ariaLabel={t('systemPrompt.tabs.label', 'System Prompt views')}
+          onChange={(value) => (activeTab = value)}
+        />
+      </div>
+    </div>
+    <div class="sp-scroll view-frame">
+      <div
+        class="sp-editor"
+        hidden={activeTab !== 'edit'}
+        role="tabpanel"
+        id="sp-content-panel-edit"
+        aria-labelledby="sp-content-tab-edit"
+        tabindex="0"
+      >
+        <div class="sp-blocklist-toolbar view-toolbar view-toolbar--split">
+          <div class="sp-scope-control">
+            <span
+              class="sp-scope-label view-toolbar__label"
+              id="sp-scope-label"
             >
-              {t('systemPrompt.blockList.newBlock', 'New block')}
-            </Button>
-            <Button variant="secondary" class="sp-btn-sm" onClick={resetLayout}>
-              {t(
-                'systemPrompt.blockList.resetLayout',
-                'Reset order & visibility',
+              {t('systemPrompt.scope.label', 'Prompt scope')}
+            </span>
+            <Dropdown
+              id="sp-scope-select"
+              value={selectedScopeKey}
+              options={scopeOptions}
+              ariaLabel={t('systemPrompt.scope.label', 'Prompt scope')}
+              triggerClass="sp-scope-dropdown"
+              onValueChange={(value) => selectScope(value)}
+            />
+          </div>
+          {#if !isLoadingData}
+            <div class="sp-blocklist-toolbar-actions view-toolbar__actions">
+              <Button
+                variant="secondary"
+                class="sp-btn-sm"
+                onClick={createCustomBlock}
+              >
+                {t('systemPrompt.blockList.newBlock', 'New block')}
+              </Button>
+              <Button
+                variant="secondary"
+                class="sp-btn-sm"
+                onClick={resetLayout}
+              >
+                {t(
+                  'systemPrompt.blockList.resetLayout',
+                  'Reset order & visibility',
+                )}
+              </Button>
+            </div>
+          {/if}
+        </div>
+
+        {#if isLoadingData}
+          <Banner variant="neutral">
+            {t('common.loading', 'Loading…')}
+          </Banner>
+        {:else}
+          <details
+            class="sp-blocklist-guide"
+            aria-labelledby="sp-blocklist-guide-title"
+          >
+            <summary class="sp-blocklist-guide__intro">
+              <span class="sp-blocklist-guide__eyebrow">
+                {t('systemPrompt.blockList.guide.label', 'How it works')}
+              </span>
+              <h3 id="sp-blocklist-guide-title">
+                {t(
+                  'systemPrompt.blockList.guide.title',
+                  'These blocks become the System Prompt.',
+                )}
+              </h3>
+            </summary>
+            <div class="sp-blocklist-guide__details">
+              <p>
+                <strong>
+                  {t('systemPrompt.blockList.guide.assemblyLabel', 'Assembly')}
+                </strong>
+                <span>
+                  {t(
+                    'systemPrompt.blockList.guide.assembly',
+                    'Blocks are read from top to bottom. Drag to reorder them, use the switches to include or exclude them, and edit their content directly.',
+                  )}
+                </span>
+              </p>
+              <p>
+                <strong>
+                  {t('systemPrompt.blockList.guide.scopeLabel', 'Scope')}
+                </strong>
+                <span>
+                  {t(
+                    'systemPrompt.blockList.guide.scope',
+                    'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
+                  )}
+                </span>
+              </p>
+            </div>
+          </details>
+
+          <ul class="sp-blocks" role="list">
+            {#each blocks as block, index (block.id)}
+              <li
+                class="sp-block"
+                class:sp-block--off={!block.enabled}
+                class:sp-block--inherited={isAgentScope && isInherited(block)}
+                ondragover={(event) => handleDragOver(index, event)}
+                ondrop={(event) => handleDrop(index, event)}
+              >
+                <div class="sp-block-row">
+                  <button
+                    type="button"
+                    class="sp-drag-handle"
+                    draggable="true"
+                    data-block-handle={block.id}
+                    aria-label={t(
+                      'systemPrompt.blockList.reorderHandle',
+                      'Reorder {id} (use arrow keys)',
+                      { id: block.id },
+                    )}
+                    ondragstart={(event) => handleDragStart(index, event)}
+                    ondragend={handleDragEnd}
+                    onkeydown={(event) => handleHandleKeydown(index, event)}
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 12 12"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <circle cx="3.5" cy="2.5" r="1.1" fill="currentColor" />
+                      <circle cx="8.5" cy="2.5" r="1.1" fill="currentColor" />
+                      <circle cx="3.5" cy="6" r="1.1" fill="currentColor" />
+                      <circle cx="8.5" cy="6" r="1.1" fill="currentColor" />
+                      <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
+                      <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
+                    </svg>
+                  </button>
+
+                  <div class="sp-block-meta">
+                    <strong class="sp-block-title"
+                      >{t(
+                        `systemPrompt.blockTitle.${block.id}`,
+                        block.id,
+                      )}</strong
+                    >
+                    <div class="sp-block-id-row">
+                      <span class="sp-block-id">{block.id}</span>
+                      {#if !block.enabled}<Badge variant="neutral"
+                          >{t('systemPrompt.blockList.off', 'Off')}</Badge
+                        >{/if}
+                      {#if isCustomBlock(block)}
+                        <Badge variant="info">
+                          {t('systemPrompt.blockList.customBadge', 'custom')}
+                        </Badge>
+                      {/if}
+                      {#if block.kind === 'data'}
+                        <span
+                          class="tooltip-anchor"
+                          use:tooltip={t(
+                            'systemPrompt.blockList.dataHint',
+                            'Generated content — rebuilt automatically, not editable.',
+                          )}
+                        >
+                          <Badge variant="neutral">
+                            {t('systemPrompt.blockList.dataBadge', 'auto')}
+                          </Badge>
+                        </span>
+                      {/if}
+                      {#if isAgentScope && isInherited(block)}
+                        <span
+                          class="tooltip-anchor"
+                          use:tooltip={t(
+                            'systemPrompt.blockList.inheritedHint',
+                            'Inherited from the Default scope — editing creates an override.',
+                          )}
+                        >
+                          <Badge variant="neutral">
+                            {t(
+                              'systemPrompt.blockList.inheritedBadge',
+                              'inherited',
+                            )}
+                          </Badge>
+                        </span>
+                      {:else if block.editable && block.isModified}
+                        <span
+                          class="tooltip-anchor"
+                          use:tooltip={t(
+                            'systemPrompt.fragmentEditor.modifiedHint',
+                            'Edited — differs from the built-in default.',
+                          )}
+                        >
+                          <Badge variant="info">
+                            {t(
+                              'systemPrompt.fragmentEditor.modifiedIndicator',
+                              'modified',
+                            )}
+                          </Badge>
+                        </span>
+                      {/if}
+                      {#if block.editable && block.isDirty}
+                        <span
+                          class="tooltip-anchor"
+                          use:tooltip={t(
+                            'systemPrompt.fragmentEditor.dirtyIndicator',
+                            'Unsaved changes',
+                          )}
+                        >
+                          <Badge variant="warn">
+                            {t(
+                              'systemPrompt.fragmentEditor.dirtyIndicator',
+                              'unsaved',
+                            )}
+                          </Badge>
+                        </span>
+                      {/if}
+                    </div>
+                    <span class="sp-block-owner">{ownerHint(block.owner)}</span>
+                  </div>
+
+                  <div class="sp-block-actions">
+                    <Button
+                      variant="secondary"
+                      aria-expanded={block.editorExpanded}
+                      aria-controls={`sp-block-body-${block.id}`}
+                      onClick={() =>
+                        (block.editorExpanded = !block.editorExpanded)}
+                    >
+                      {block.editorExpanded
+                        ? t('systemPrompt.blockList.close', 'Close')
+                        : block.editable
+                          ? t('systemPrompt.blockList.edit', 'Edit')
+                          : t('systemPrompt.blockList.inspect', 'Inspect')}
+                    </Button>
+                    {#if block.editable && !(isAgentScope && isInherited(block) && !block.isModified)}
+                      <Button
+                        variant="secondary"
+                        class="sp-btn-sm"
+                        disabled={block.isBusy || block.isSaving}
+                        onClick={() => resetBlock(block.id)}
+                      >
+                        {block.isBusy
+                          ? t('common.loading', 'Loading…')
+                          : t('systemPrompt.fragmentEditor.reset', 'Reset')}
+                      </Button>
+                    {/if}
+                    {#if isCustomBlock(block)}
+                      <Button
+                        variant="danger"
+                        class="sp-btn-sm"
+                        onClick={() => removeCustomBlock(block.id)}
+                      >
+                        {t('common.remove', 'Remove')}
+                      </Button>
+                    {/if}
+                    <Toggle
+                      checked={block.enabled}
+                      size="sm"
+                      ariaLabel={t(
+                        'systemPrompt.blockList.toggleAria',
+                        'Toggle {id}',
+                        { id: block.id },
+                      )}
+                      onChange={() => toggleBlock(block.id)}
+                    />
+                  </div>
+                </div>
+
+                <div
+                  id={`sp-block-body-${block.id}`}
+                  hidden={!block.editorExpanded}
+                >
+                  {#if block.editable}
+                    <TextArea
+                      ariaLabel={block.id}
+                      rows={12}
+                      variant="inset"
+                      spellcheck="false"
+                      value={block.editedContent}
+                      onInput={(value) => handleTextareaInput(block.id, value)}
+                    />
+                  {:else}
+                    <div class="sp-data-block">
+                      <div class="sp-data-block-head">
+                        <span class="sp-data-block-label"
+                          >{dataKindLabel()}</span
+                        >
+                        {#if block.preview}
+                          <button
+                            type="button"
+                            class="sp-data-toggle"
+                            aria-expanded={block.previewExpanded}
+                            onclick={() => togglePreview(block.id)}
+                          >
+                            {block.previewExpanded
+                              ? t(
+                                  'systemPrompt.blockList.hidePreview',
+                                  'Hide preview',
+                                )
+                              : t(
+                                  'systemPrompt.blockList.showPreview',
+                                  'Show preview',
+                                )}
+                          </button>
+                        {/if}
+                      </div>
+                      {#if block.preview && block.previewExpanded}
+                        <pre class="sp-data-preview">{block.preview}</pre>
+                      {:else if !block.preview}
+                        <span class="sp-data-empty">
+                          {t(
+                            'systemPrompt.blockList.dataEmpty',
+                            'No content for the current scope.',
+                          )}
+                        </span>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
+
+          {#if blocks.length === 0}
+            <EmptyState
+              density="compact"
+              description={t(
+                'systemPrompt.blockList.empty',
+                'No prompt blocks for this scope.',
               )}
+            />
+          {/if}
+
+          <div class="sp-global-footer">
+            <span
+              >{t(
+                'systemPrompt.editor.autosave',
+                'Changes save automatically. The switches control inclusion; opening a block does not change it.',
+              )}</span
+            >
+            <Button
+              variant="primary"
+              class="sp-btn-sm"
+              disabled={isBusy}
+              onClick={handleManualSaveAll}
+            >
+              {isBusy
+                ? t('common.saving', 'Saving…')
+                : t('systemPrompt.fragmentEditor.save', 'Save')}
             </Button>
           </div>
         {/if}
       </div>
-
-      {#if isLoadingData}
-        <Banner variant="neutral">
-          {t('common.loading', 'Loading…')}
-        </Banner>
-      {:else}
-        <section
-          class="sp-blocklist-guide"
-          aria-labelledby="sp-blocklist-guide-title"
+      {#if activeTab !== 'edit'}
+        <div
+          class="sp-reader"
+          role="tabpanel"
+          id={`sp-content-panel-${activeTab}`}
+          aria-labelledby={`sp-content-tab-${activeTab}`}
+          tabindex="0"
+          aria-busy={isRefreshingPreview}
         >
-          <div class="sp-blocklist-guide__intro">
-            <span class="sp-blocklist-guide__eyebrow">
-              {t('systemPrompt.blockList.guide.label', 'How it works')}
-            </span>
-            <h3 id="sp-blocklist-guide-title">
-              {t(
-                'systemPrompt.blockList.guide.title',
-                'These blocks become the System Prompt.',
-              )}
-            </h3>
-          </div>
-          <div class="sp-blocklist-guide__details">
-            <p>
-              <strong>
-                {t('systemPrompt.blockList.guide.assemblyLabel', 'Assembly')}
-              </strong>
-              <span>
-                {t(
-                  'systemPrompt.blockList.guide.assembly',
-                  'Blocks are read from top to bottom. Drag to reorder them, use the switches to include or exclude them, and edit their content directly.',
-                )}
-              </span>
-            </p>
-            <p>
-              <strong>
-                {t('systemPrompt.blockList.guide.scopeLabel', 'Scope')}
-              </strong>
-              <span>
-                {t(
-                  'systemPrompt.blockList.guide.scope',
-                  'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
-                )}
-              </span>
-            </p>
-          </div>
-        </section>
-
-        <ul class="sp-blocks" role="list">
-          {#each blocks as block, index (block.id)}
-            <li
-              class="sp-block"
-              class:sp-block--off={!block.enabled}
-              class:sp-block--inherited={isAgentScope && isInherited(block)}
-              ondragover={(event) => handleDragOver(index, event)}
-              ondrop={(event) => handleDrop(index, event)}
+          <details class="sp-about">
+            <summary
+              >{t('systemPrompt.preview.about', 'About this preview')}</summary
             >
-              <div class="sp-block-row">
-                <button
-                  type="button"
-                  class="sp-drag-handle"
-                  draggable="true"
-                  data-block-handle={block.id}
-                  aria-label={t(
-                    'systemPrompt.blockList.reorderHandle',
-                    'Reorder {id} (use arrow keys)',
-                    { id: block.id },
-                  )}
-                  ondragstart={(event) => handleDragStart(index, event)}
-                  ondragend={handleDragEnd}
-                  onkeydown={(event) => handleHandleKeydown(index, event)}
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <circle cx="3.5" cy="2.5" r="1.1" fill="currentColor" />
-                    <circle cx="8.5" cy="2.5" r="1.1" fill="currentColor" />
-                    <circle cx="3.5" cy="6" r="1.1" fill="currentColor" />
-                    <circle cx="8.5" cy="6" r="1.1" fill="currentColor" />
-                    <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
-                    <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
-                  </svg>
-                </button>
-
-                <div class="sp-block-meta">
-                  <div class="sp-block-id-row">
-                    <span class="sp-block-id">{block.id}</span>
-                    {#if isCustomBlock(block)}
-                      <Badge variant="info">
-                        {t('systemPrompt.blockList.customBadge', 'custom')}
-                      </Badge>
-                    {/if}
-                    {#if block.kind === 'data'}
-                      <span
-                        class="tooltip-anchor"
-                        use:tooltip={t(
-                          'systemPrompt.blockList.dataHint',
-                          'Generated content — rebuilt automatically, not editable.',
-                        )}
-                      >
-                        <Badge variant="neutral">
-                          {t('systemPrompt.blockList.dataBadge', 'auto')}
-                        </Badge>
-                      </span>
-                    {/if}
-                    {#if isAgentScope && isInherited(block)}
-                      <span
-                        class="tooltip-anchor"
-                        use:tooltip={t(
-                          'systemPrompt.blockList.inheritedHint',
-                          'Inherited from the Default scope — editing creates an override.',
-                        )}
-                      >
-                        <Badge variant="neutral">
-                          {t(
-                            'systemPrompt.blockList.inheritedBadge',
-                            'inherited',
-                          )}
-                        </Badge>
-                      </span>
-                    {:else if block.editable && block.isModified}
-                      <span
-                        class="tooltip-anchor"
-                        use:tooltip={t(
-                          'systemPrompt.fragmentEditor.modifiedHint',
-                          'Edited — differs from the built-in default.',
-                        )}
-                      >
-                        <Badge variant="info">
-                          {t(
-                            'systemPrompt.fragmentEditor.modifiedIndicator',
-                            'modified',
-                          )}
-                        </Badge>
-                      </span>
-                    {/if}
-                    {#if block.editable && block.isDirty}
-                      <span
-                        class="tooltip-anchor"
-                        use:tooltip={t(
-                          'systemPrompt.fragmentEditor.dirtyIndicator',
-                          'Unsaved changes',
-                        )}
-                      >
-                        <Badge variant="warn">
-                          {t(
-                            'systemPrompt.fragmentEditor.dirtyIndicator',
-                            'unsaved',
-                          )}
-                        </Badge>
-                      </span>
-                    {/if}
-                  </div>
-                  <span class="sp-block-owner">{ownerHint(block.owner)}</span>
-                </div>
-
-                <div class="sp-block-actions">
-                  {#if block.editable && !(isAgentScope && isInherited(block) && !block.isModified)}
-                    <Button
-                      variant="secondary"
-                      class="sp-btn-sm"
-                      disabled={block.isBusy || block.isSaving}
-                      onClick={() => resetBlock(block.id)}
-                    >
-                      {block.isBusy
-                        ? t('common.loading', 'Loading…')
-                        : t('systemPrompt.fragmentEditor.reset', 'Reset')}
-                    </Button>
-                  {/if}
-                  {#if isCustomBlock(block)}
-                    <Button
-                      variant="danger"
-                      class="sp-btn-sm"
-                      onClick={() => removeCustomBlock(block.id)}
-                    >
-                      {t('common.remove', 'Remove')}
-                    </Button>
-                  {/if}
-                  <Toggle
-                    checked={block.enabled}
-                    size="sm"
-                    ariaLabel={t(
-                      'systemPrompt.blockList.toggleAria',
-                      'Toggle {id}',
-                      { id: block.id },
-                    )}
-                    onChange={() => toggleBlock(block.id)}
-                  />
-                </div>
-              </div>
-
-              {#if block.editable}
-                <TextArea
-                  variant="inset"
-                  spellcheck="false"
-                  value={block.editedContent}
-                  onInput={(value) => handleTextareaInput(block.id, value)}
-                />
-              {:else}
-                <div class="sp-data-block">
-                  <div class="sp-data-block-head">
-                    <span class="sp-data-block-label">{dataKindLabel()}</span>
-                    {#if block.preview}
-                      <button
-                        type="button"
-                        class="sp-data-toggle"
-                        aria-expanded={block.previewExpanded}
-                        onclick={() => togglePreview(block.id)}
-                      >
-                        {block.previewExpanded
-                          ? t(
-                              'systemPrompt.blockList.hidePreview',
-                              'Hide preview',
-                            )
-                          : t(
-                              'systemPrompt.blockList.showPreview',
-                              'Show preview',
-                            )}
-                      </button>
-                    {/if}
-                  </div>
-                  {#if block.preview && block.previewExpanded}
-                    <pre class="sp-data-preview">{block.preview}</pre>
-                  {:else if !block.preview}
-                    <span class="sp-data-empty">
-                      {t(
-                        'systemPrompt.blockList.dataEmpty',
-                        'No content for the current scope.',
-                      )}
-                    </span>
-                  {/if}
-                </div>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-
-        {#if blocks.length === 0}
-          <EmptyState
-            density="compact"
-            description={t(
-              'systemPrompt.blockList.empty',
-              'No prompt blocks for this scope.',
-            )}
-          />
-        {/if}
-
-        <div class="sp-preview-section">
-          <div class="sp-preview-header">
-            <div class="sp-preview-heading-row">
-              <span class="sp-preview-heading">
-                {t('systemPrompt.preview.heading', 'Preview for')}
-              </span>
-              {#if selectedScope.type === 'agent'}
-                <span class="sp-scope-chip">{selectedScope.label}</span>
-              {:else if agents.length > 0}
-                <span class="sp-agent-label" id="sp-agent-label">
-                  {t('systemPrompt.preview.agentLabel', 'Agent')}
-                </span>
-                <Dropdown
-                  id="sp-agent-select"
-                  value={selectedAgentId}
-                  options={previewAgentOptions}
-                  ariaLabel={t('systemPrompt.preview.agentLabel', 'Agent')}
-                  triggerClass="sp-agent-dropdown"
-                  listClass="sp-agent-dropdown-list"
-                  onValueChange={(value) => {
-                    selectedAgentId = value;
-                  }}
-                />
-              {/if}
-              {#if previewTokens !== null}
-                {#if previewToolTokens}
-                  <span
-                    class="sp-token-count"
-                    use:tooltip={t(
-                      'systemPrompt.preview.tokenBreakdownHint',
-                      'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
-                      { count: previewToolCount ?? 0 },
-                    )}
-                  >
-                    {t(
-                      'systemPrompt.preview.tokenBreakdown',
-                      '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
-                      {
-                        prompt: previewTokens,
-                        tools: previewToolTokens,
-                        total: previewTokens + previewToolTokens,
-                      },
-                    )}
-                  </span>
-                {:else}
-                  <span class="sp-token-count">
-                    {t('systemPrompt.preview.tokenCount', '~{count} tokens', {
-                      count: previewTokens,
-                    })}
-                  </span>
-                {/if}
-              {/if}
-            </div>
-            <div class="sp-preview-controls">
+            <p class="sp-preview-note">
+              {t(
+                'systemPrompt.preview.baseline',
+                'Current Agent configuration. A running Session can also contain pinned context, additional Tools, and conversation results.',
+              )}
+            </p>
+          </details>
+          {#if previewError}
+            <Banner variant="error"
+              >{previewError}
+              <Button variant="secondary" onClick={refreshPreview}
+                >{t('common.retry', 'Retry')}</Button
+              >
+            </Banner>
+          {:else if isRefreshingPreview || isLoadingData}
+            <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+          {:else if !canRefreshPreview()}
+            <EmptyState
+              description={t(
+                'systemPrompt.preview.empty',
+                'Select an agent to preview its system prompt.',
+              )}
+            />
+          {:else if activeTab === 'tools'}
+            <ToolDefinitionsPanel tools={previewTools} {onToast} />
+          {:else}
+            <div class="sp-document-toolbar">
+              <TabList
+                items={formatTabs}
+                value={promptFormat}
+                appearance="segmented"
+                density="compact"
+                idPrefix="sp-format"
+                ariaLabel={t('systemPrompt.format.label', 'Prompt display')}
+                onChange={(value) => (promptFormat = value)}
+              />
               <Button
                 variant="secondary"
-                class="sp-btn-sm"
                 disabled={!previewText}
                 onClick={copyPreview}
+                >{t('systemPrompt.preview.copy', 'Copy')}</Button
               >
-                {t('systemPrompt.preview.copy', 'Copy')}
-              </Button>
             </div>
-          </div>
-
-          <div class="sp-preview-body">
-            {#if previewText}
-              <pre class="sp-preview-pre">{previewText}</pre>
-            {:else if isRefreshingPreview}
-              <div class="sp-preview-empty">
-                {t('common.loading', 'Loading…')}
-              </div>
-            {:else}
-              <div class="sp-preview-empty">
-                {t(
-                  'systemPrompt.preview.empty',
-                  'Select an agent to preview its system prompt.',
-                )}
-              </div>
-            {/if}
-          </div>
-        </div>
-
-        <div class="sp-global-footer">
-          <Button
-            variant="primary"
-            class="sp-btn-sm"
-            disabled={isBusy}
-            onClick={handleManualSaveAll}
-          >
-            {isBusy
-              ? t('common.saving', 'Saving…')
-              : t('systemPrompt.fragmentEditor.save', 'Save')}
-          </Button>
+            <div
+              class="sp-document"
+              role="tabpanel"
+              id={`sp-format-panel-${promptFormat}`}
+              aria-labelledby={`sp-format-tab-${promptFormat}`}
+              tabindex="0"
+            >
+              {#if !previewText}
+                <EmptyState
+                  description={t(
+                    'systemPrompt.preview.noText',
+                    'The current configuration produces an empty System Prompt.',
+                  )}
+                />
+              {:else if promptFormat === 'original'}
+                <pre class="sp-preview-pre">{previewText}</pre>
+              {:else}
+                <MarkdownContent
+                  source={previewText}
+                  class="sp-document-content"
+                />
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -1494,24 +1675,28 @@
 </section>
 
 <style>
-  .sp-view {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    overflow: hidden;
-    background: var(--bg);
-    position: relative;
-  }
-
+  .sp-view,
   .sp-layout {
     display: flex;
     min-height: 0;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
     overflow: hidden;
+    background: var(--bg);
   }
-
+  .sp-layout {
+    flex-direction: column;
+  }
+  .sp-top {
+    flex-shrink: 0;
+    padding-bottom: 0;
+  }
+  .sp-top > *,
+  .sp-scroll > * {
+    width: 100%;
+    max-width: var(--content-max-wide);
+    margin-inline: auto;
+  }
   .sp-scroll {
     display: flex;
     min-height: 0;
@@ -1521,408 +1706,313 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
   }
-
-  /* Cap the prompt editor/preview content to the wide content measure and
-     center it; the scroll container stays full-width (scrollbar at the edge). */
-  .sp-scroll > * {
-    width: 100%;
-    max-width: var(--content-max-wide);
-    margin-inline: auto;
+  .sp-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
-
+  .sp-editor[hidden] {
+    display: none;
+  }
+  .sp-context-bar,
+  .sp-preview-heading-row,
+  .sp-document-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .sp-context-bar,
+  .sp-document-toolbar {
+    justify-content: space-between;
+  }
+  .sp-navigation {
+    margin-bottom: 0;
+  }
+  .sp-preview-heading,
+  .sp-agent-label,
+  .sp-scope-label {
+    font-size: var(--fs-label-md);
+    color: var(--text-hi);
+  }
+  .sp-token-count {
+    color: var(--text-med);
+    font: var(--fs-mono-body)/1.5 var(--font-mono);
+  }
   .sp-scope-control {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     min-width: 0;
   }
-
-  /* The scope and preview-agent pickers use the shared Dropdown primitive; only
-     width and the mono trigger/option type are view-specific. */
-  :global(.sp-scope-dropdown) {
-    max-width: min(280px, 56vw);
-  }
-
+  :global(.sp-scope-dropdown),
   :global(.sp-agent-dropdown) {
-    max-width: 240px;
+    max-width: min(280px, 65vw);
   }
-
-  :global(.sp-scope-dropdown .dropdown-primitive__trigger),
-  :global(.sp-agent-dropdown .dropdown-primitive__trigger),
-  :global(.sp-agent-dropdown-list .dropdown-primitive__option) {
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
   :global(.sp-agent-dropdown-list) {
     max-height: 260px;
     overflow-y: auto;
   }
-
-  .sp-blocklist-guide {
-    display: grid;
-    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr);
-    align-items: center;
-    gap: 18px 28px;
-    padding: 16px 20px 16px 18px;
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: var(--r-md);
-    background: var(--surface);
-  }
-
-  .sp-blocklist-guide__intro {
-    min-width: 0;
-  }
-
-  .sp-blocklist-guide__eyebrow {
-    display: block;
-    margin-bottom: 7px;
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  .sp-blocklist-guide h3 {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: var(--fs-heading-sm);
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1.35;
-  }
-
-  .sp-blocklist-guide__details {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 22px;
-    min-width: 0;
-  }
-
-  .sp-blocklist-guide__details p {
-    display: flex;
-    min-width: 0;
-    margin: 0;
-    padding-left: 16px;
-    border-left: 1px solid var(--border-2);
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .sp-blocklist-guide__details strong {
-    color: var(--text-hi);
-    font-size: var(--fs-body-sm);
-    font-weight: 600;
-    line-height: 1.3;
-  }
-
-  .sp-blocklist-guide__details span {
+  .sp-about {
+    margin-bottom: 16px;
     color: var(--text-med);
     font-size: var(--fs-body-sm);
-    line-height: 1.5;
   }
-
+  .sp-about summary {
+    cursor: pointer;
+    padding: 4px 0;
+  }
+  .sp-about summary:focus-visible {
+    outline: 2px solid var(--accent);
+  }
+  .sp-preview-note {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.6;
+    margin: 0 0 20px;
+  }
+  .sp-document {
+    margin-top: 16px;
+    background: var(--preview-surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    padding: 28px;
+    min-width: 0;
+  }
+  .sp-preview-pre {
+    margin: 0;
+    color: var(--text-hi);
+    font: var(--fs-mono-body)/1.8 var(--font-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .sp-document :global(.sp-document-content) {
+    max-width: 85ch;
+    margin: auto;
+    color: var(--text-hi);
+    font: var(--fs-body-lg)/1.8 var(--font-ui);
+    overflow-wrap: anywhere;
+  }
+  .sp-document :global(.sp-document-content h1),
+  .sp-document :global(.sp-document-content h2),
+  .sp-document :global(.sp-document-content h3) {
+    color: var(--text-hi);
+    font-weight: 600;
+    line-height: 1.4;
+    margin-top: 28px;
+    margin-bottom: 14px;
+  }
+  .sp-document :global(.sp-document-content h1) {
+    font-size: var(--fs-heading-lg);
+  }
+  .sp-document :global(.sp-document-content h2) {
+    font-size: var(--fs-heading-md);
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sp-document :global(.sp-document-content h3) {
+    font-size: var(--fs-heading-sm);
+  }
+  .sp-document :global(.sp-document-content > :first-child) {
+    margin-top: 0;
+  }
+  .sp-document :global(.sp-document-content p),
+  .sp-document :global(.sp-document-content ul),
+  .sp-document :global(.sp-document-content ol) {
+    margin-block: 14px;
+  }
+  .sp-document :global(.sp-document-content li) {
+    margin-block: 6px;
+  }
+  .sp-document :global(.sp-document-content pre) {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-hi);
+  }
+  .sp-document :global(.sp-document-content code) {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    color: var(--text-hi);
+  }
+  .sp-document :global(.sp-document-content img) {
+    max-width: 100%;
+  }
+  .sp-document :global(.sp-document-content table) {
+    display: block;
+    overflow-x: auto;
+  }
+  .sp-document :global(.sp-document-content th),
+  .sp-document :global(.sp-document-content td) {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sp-document :global(.sp-document-content a) {
+    color: var(--accent);
+  }
   .sp-blocklist-toolbar-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    flex-shrink: 0;
+    gap: 8px;
   }
-
+  .sp-blocklist-guide {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text-med);
+  }
+  .sp-blocklist-guide__intro {
+    cursor: pointer;
+    color: var(--text-hi);
+  }
+  .sp-blocklist-guide__eyebrow {
+    display: none;
+  }
+  .sp-blocklist-guide h3 {
+    display: inline;
+    font-size: var(--fs-body-md);
+    font-weight: 500;
+  }
+  .sp-blocklist-guide__details {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 12px;
+  }
+  .sp-blocklist-guide__details p {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    line-height: 1.6;
+  }
+  .sp-blocklist-guide__details strong {
+    display: block;
+    color: var(--text-hi);
+  }
   .sp-blocks {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    /* Only zero the block margins — the inline margins stay `auto` (from
-       `.sp-scroll > *`) so the list centers on the same measure as the header
-       and preview instead of sitting flush-left. */
-    margin-block: 0;
+    margin: 0;
     padding: 0;
     list-style: none;
   }
-
   .sp-block {
-    display: flex;
-    flex-direction: column;
     border: 1px solid var(--border);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-md);
     overflow: hidden;
     background: var(--prompt-content-surface);
   }
-
   .sp-block--off {
-    opacity: 0.55;
+    border-style: dashed;
   }
-
-  /* An inherited block (agent scope, no override yet) shows its default greyed
-     out — both the id and the editable textarea — so it reads as "not your copy
-     yet" (T5). Editing it creates the override, which flips off this class. */
-  .sp-block--inherited .sp-block-id {
-    color: var(--text-med);
-  }
-
-  .sp-block--inherited :global(.text-area) {
-    color: var(--text-med);
-  }
-
   .sp-block-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    padding: 14px;
     background: var(--prompt-header-surface);
   }
-
+  .sp-block-meta {
+    min-width: 0;
+    flex: 1;
+  }
+  .sp-block-title {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-hi);
+    font-size: var(--fs-body-lg);
+    font-weight: 500;
+  }
+  .sp-block-id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sp-block-id {
+    color: var(--text-hi);
+    font: 500 var(--fs-mono-body)/1.5 var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+  .sp-block-owner {
+    display: block;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    margin-top: 6px;
+  }
+  .sp-block-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
   .sp-drag-handle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 30px;
+    height: 30px;
     padding: 0;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-2);
     border-radius: var(--r-sm);
-    color: var(--text-lo);
+    color: var(--text-med);
     background: transparent;
     cursor: grab;
     flex-shrink: 0;
   }
-
-  .sp-drag-handle:hover {
-    color: var(--text-med);
-    border-color: var(--border-2);
+  .sp-drag-handle:focus-visible,
+  .sp-blocklist-guide__intro:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
-
-  .sp-drag-handle:focus-visible {
-    outline: none;
-    color: var(--accent);
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .sp-drag-handle:active {
-    cursor: grabbing;
-  }
-
-  .sp-block-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .sp-block-id-row {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .sp-block-id {
+  .sp-block :global(.text-area) {
     color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font: var(--fs-body-lg)/1.7 var(--font-ui);
+    padding: 20px;
+    min-height: 240px;
   }
-
-  .sp-block-owner {
-    color: var(--text-lo);
-    font-family: var(--font-ui);
-    font-size: 11px;
-    letter-spacing: 0.01em;
-  }
-
-  .sp-block-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  :global(.sp-btn-sm) {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
   .sp-data-block {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 14px;
-    background: var(--prompt-content-surface);
+    padding: 20px;
   }
-
   .sp-data-block-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 12px;
   }
-
-  .sp-data-block-label {
+  .sp-data-block-label,
+  .sp-data-empty {
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.02em;
+    font-size: var(--fs-body-sm);
   }
-
   .sp-data-toggle {
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-lo);
+    padding: 8px 12px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    color: var(--text-hi);
     background: transparent;
-    font-family: var(--font-mono);
-    font-size: 11px;
     cursor: pointer;
   }
-
-  .sp-data-toggle:hover {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-
   .sp-data-preview {
-    margin: 0;
-    max-height: 220px;
-    overflow: auto;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    color: var(--text-med);
-    background: var(--bg);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    color: var(--text-hi);
+    font: var(--fs-mono-body)/1.7 var(--font-mono);
   }
-
-  .sp-data-empty {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-style: italic;
-  }
-
   .sp-global-footer {
-    display: flex;
-    flex-shrink: 0;
-    justify-content: flex-end;
-    padding: 0 0 4px;
-  }
-
-  .sp-preview-section {
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-lg);
-    overflow: hidden;
-    background: var(--preview-surface);
-    flex-shrink: 0;
-  }
-
-  .sp-preview-header {
+    position: sticky;
+    bottom: -20px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border-2);
-    background: var(--prompt-header-surface);
-    flex-shrink: 0;
-    flex-wrap: wrap;
+    gap: 20px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding: 16px 0;
   }
-
-  .sp-preview-heading-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-
-  .sp-preview-heading {
-    color: var(--text-hi);
-    font-size: 12.5px;
-    font-weight: 500;
-  }
-
-  .sp-agent-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    line-height: 1;
-  }
-
-  .sp-scope-chip {
-    max-width: 240px;
-    overflow: hidden;
-    padding: 2px 7px;
-    border: 1px solid rgba(232, 135, 10, 0.2);
-    border-radius: 3px;
-    color: var(--accent);
-    background: var(--accent-dim);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sp-token-count {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 3px;
-    background: var(--surface-2);
-  }
-
-  .sp-preview-controls {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .sp-preview-body {
-    min-height: 120px;
-    background: var(--preview-surface);
-  }
-
-  .sp-preview-pre {
-    margin: 0;
-    padding: 14px;
+  .sp-global-footer span {
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    font-size: var(--fs-body-sm);
   }
-
-  .sp-preview-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 120px;
-    padding: 20px;
-    color: var(--text-lo);
-    font-size: 12.5px;
-    text-align: center;
-  }
-
   .sp-sr-only {
     position: absolute;
     width: 1px;
@@ -1934,41 +2024,52 @@
     clip: rect(0 0 0 0);
     white-space: nowrap;
   }
-
-  @media (max-width: 1000px) {
-    .sp-blocklist-guide {
-      grid-template-columns: 1fr;
-    }
-  }
-
   @media (max-width: 640px) {
+    .sp-eyebrow,
+    .sp-subtitle {
+      display: none;
+    }
+    .sp-context-bar {
+      position: relative;
+    }
+    .sp-preview-heading-row {
+      width: 100%;
+    }
+    .sp-token-count {
+      flex-basis: 100%;
+      font-size: var(--fs-mono-sm);
+    }
+    :global(.sp-refresh) {
+      position: absolute;
+      right: 0;
+      top: 0;
+    }
+    .sp-document {
+      padding: 16px;
+    }
     .sp-block-row {
       flex-wrap: wrap;
     }
-
+    .sp-block-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
     .sp-scope-control {
       align-items: flex-start;
       flex-direction: column;
     }
-
-    .sp-blocklist-toolbar {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .sp-blocklist-guide {
-      gap: 16px;
-      padding: 15px 16px 16px 14px;
-    }
-
     .sp-blocklist-guide__details {
       grid-template-columns: 1fr;
-      gap: 14px;
     }
-
-    .sp-preview-header {
-      flex-direction: column;
-      align-items: flex-start;
+    .sp-drag-handle {
+      width: 40px;
+      height: 40px;
+    }
+    .sp-global-footer {
+      bottom: -16px;
+    }
+    .sp-preview-heading {
+      display: none;
     }
   }
 </style>
