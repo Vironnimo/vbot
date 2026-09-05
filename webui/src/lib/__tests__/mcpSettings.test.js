@@ -37,6 +37,53 @@ function setup(operation) {
 }
 
 describe('MCP settings', () => {
+  it('inspects capabilities through the read-only management operation', async () => {
+    const operation = vi.fn().mockResolvedValue({ tools: [], total: 0 });
+    const state = setup(operation);
+    await controller.inspect('example', { query: 'scene', offset: 10 });
+    expect(operation).toHaveBeenCalledWith('mcp', 'inspect', {
+      id: 'example',
+      query: 'scene',
+      offset: 10,
+    });
+    expect(state().inspector).toMatchObject({
+      id: 'example',
+      query: 'scene',
+      loading: false,
+      data: { total: 0 },
+    });
+  });
+  it('ignores old searches and does not reopen a dismissed inspector', async () => {
+    let finish;
+    const operation = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue({ total: 0 });
+    const state = setup(operation);
+    const pending = controller.inspect('first');
+    await controller.inspect('second');
+    controller.closeInspector();
+    finish({ total: 99 });
+    await pending;
+    expect(state().inspector).toBeNull();
+  });
+  it('keeps inspector failures local and allows retry', async () => {
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('test-owned-inspect-error'))
+      .mockResolvedValue({ total: 0 });
+    const state = setup(operation);
+    await controller.inspect('example');
+    expect(state().inspector.error).toBe('test-owned-inspect-error');
+    expect(state().error).toBe('');
+    await controller.inspect('example');
+    expect(state().inspector.error).toBe('');
+  });
   it('preserves complete configuration, exact arguments, and grants on edit', () => {
     expect(mcpConfiguration(mcpDraft(configuration))).toEqual(configuration);
   });

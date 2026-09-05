@@ -6,6 +6,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -27,6 +28,7 @@
     targetError: '',
     notice: '',
     job: null,
+    inspector: null,
   });
   let draft = $state(null);
   let original = $state(null);
@@ -34,6 +36,7 @@
   let secretConnection = $state(null);
   let secretKey = $state('');
   let secretValue = $state('');
+  let capabilityQuery = $state('');
   const controller = createMcpSettings({
     onChange: (next) => {
       state = next;
@@ -154,6 +157,17 @@
       }
     );
   }
+
+  function accessLabel(access) {
+    if (access.access === 'allowed')
+      return t('mcp.accessAllowed', 'Tool access allowed: {count} Tools', {
+        count: access.tool_count,
+      });
+    if (access.access === 'blocked')
+      return t('mcp.accessBlocked', 'Blocked by Agent Tool settings');
+    if (access.access === 'disabled') return t('mcp.disabled', 'Disabled');
+    return t('mcp.accessUnresolved', 'Agent unavailable');
+  }
 </script>
 
 <section class="mcp-panel" aria-label={t('mcp.title', 'MCP connections')}>
@@ -243,15 +257,44 @@
           </p>
           <p>
             {connection.configuration.agents.length
-              ? t('mcp.granted', 'Agents: {agents}', {
+              ? t('mcp.assigned', 'Granted to: {agents}', {
                   agents: connection.configuration.agents.join(', '),
                 })
               : t('mcp.noGrants', 'No Agents have access.')}
           </p>
+          {#if connection.counts}
+            <p class="mcp-catalog-counts">
+              {t(
+                'mcp.catalogCounts',
+                'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
+                {
+                  tools: connection.counts.tools ?? 0,
+                  resources:
+                    (connection.counts.resources ?? 0) +
+                    (connection.counts.resource_templates ?? 0),
+                  prompts: connection.counts.prompts ?? 0,
+                },
+              )}
+            </p>
+          {/if}
+          {#each connection.agent_access ?? [] as access (access.agent)}
+            {#if access.access === 'blocked' || access.access === 'unresolved'}
+              <Banner variant="warn"
+                >{access.agent}: {accessLabel(access)}</Banner
+              >
+            {/if}
+          {/each}
           {#if connection.error}<Banner variant="error"
               >{connection.error}</Banner
             >{/if}
           <div class="mcp-actions">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                capabilityQuery = '';
+                void controller.inspect(connection.id);
+              }}>{t('mcp.capabilities', 'Capabilities & access')}</Button
+            >
             <Button
               variant="secondary"
               disabled={blocked}
@@ -284,6 +327,191 @@
     </div>
   {/if}
 </section>
+
+{#if state.inspector}
+  <Modal
+    title={t('mcp.inspectTitle', 'Capabilities & access: {name}', {
+      name: state.inspector.id,
+    })}
+    onClose={controller.closeInspector}
+    class="mcp-modal"
+  >
+    {#snippet body()}
+      <div class="modal-body mcp-inspector">
+        <form
+          class="mcp-capability-search"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void controller.inspect(state.inspector.id, {
+              query: capabilityQuery,
+            });
+          }}
+        >
+          <TextField
+            ariaLabel={t('mcp.searchTools', 'Search Tools')}
+            placeholder={t('mcp.searchTools', 'Search Tools')}
+            value={capabilityQuery}
+            onInput={(value) => {
+              capabilityQuery = value;
+            }}
+          />
+          <Button type="submit" variant="secondary"
+            >{t('common.search', 'Search')}</Button
+          >
+          <Button
+            variant="secondary"
+            onClick={() => {
+              capabilityQuery = '';
+              void controller.inspect(state.inspector.id);
+            }}>{t('mcp.showAll', 'Show all')}</Button
+          >
+        </form>
+        {#if state.inspector.loading}
+          <Banner variant="neutral" role="status"
+            >{t('common.loading', 'Loading…')}</Banner
+          >
+        {:else if state.inspector.error}
+          <Banner variant="error" role="alert">
+            {state.inspector.error}
+            <Button
+              variant="secondary"
+              onClick={() =>
+                controller.inspect(state.inspector.id, {
+                  query: state.inspector.query,
+                  offset: state.inspector.offset,
+                })}>{t('common.retry', 'Retry')}</Button
+            >
+          </Banner>
+        {:else if state.inspector.data}
+          {@const catalog = state.inspector.data}
+          <div class="mcp-heading">
+            <div class="mcp-access-heading">
+              <h4>{t('mcp.agentAccess', 'Agent access')}</h4>
+              <InfoHint
+                text={t(
+                  'mcp.accessExplanation',
+                  'A grant and the Agent’s Tool settings must both allow access. Connection tests verify the server; they do not change Agent permissions.',
+                )}
+              />
+            </div>
+            <StatusChip variant={status(catalog).variant}
+              >{status(catalog).label}</StatusChip
+            >
+          </div>
+          {#if catalog.agent_access?.length}
+            <ul class="mcp-access-list">
+              {#each catalog.agent_access as access (access.agent)}
+                <li>
+                  <strong>{access.agent}</strong><span
+                    >{accessLabel(access)}</span
+                  >
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p>{t('mcp.noGrants', 'No Agents have access.')}</p>
+          {/if}
+          {#if !catalog.catalog_available}
+            <EmptyState
+              density="compact"
+              title={t('mcp.catalogMissing', 'No catalog discovered yet')}
+              description={t(
+                'mcp.catalogMissingHint',
+                'Close this view and test the connection to load its capabilities.',
+              )}
+            />
+          {:else}
+            {#if catalog.state !== 'connected'}
+              <Banner variant="warn"
+                >{t(
+                  'mcp.catalogStale',
+                  'Showing the last discovered catalog. The connection is currently unavailable.',
+                )}</Banner
+              >
+            {/if}
+            <h4>
+              {t('mcp.availableTools', 'Tools ({count})', {
+                count: catalog.total,
+              })}
+            </h4>
+            {#if catalog.tools.length}
+              <ul class="mcp-capability-list">
+                {#each catalog.tools as tool (tool.target)}
+                  <li>
+                    <strong>{tool.name}</strong>
+                    <p>
+                      {tool.description.slice(0, 160)}{tool.description.length >
+                      160
+                        ? '…'
+                        : ''}
+                    </p>
+                    {#if tool.description.length > 160}
+                      <details>
+                        <summary
+                          >{t(
+                            'mcp.fullDescription',
+                            'Full description',
+                          )}</summary
+                        >
+                        <p class="mcp-guidance">{tool.description}</p>
+                      </details>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+              <div class="mcp-actions">
+                <Button
+                  variant="secondary"
+                  disabled={catalog.previous_offset == null}
+                  onClick={() =>
+                    controller.inspect(catalog.id, {
+                      query: state.inspector.query,
+                      offset: catalog.previous_offset,
+                    })}>{t('common.previous', 'Previous')}</Button
+                >
+                <Button
+                  variant="secondary"
+                  disabled={catalog.next_offset == null}
+                  onClick={() =>
+                    controller.inspect(catalog.id, {
+                      query: state.inspector.query,
+                      offset: catalog.next_offset,
+                    })}>{t('common.next', 'Next')}</Button
+                >
+              </div>
+            {:else}
+              <EmptyState
+                density="compact"
+                title={t('mcp.noToolsFound', 'No Tools found')}
+                description={t(
+                  'mcp.noToolsFoundHint',
+                  'Search checks names and descriptions. Show all Tools to inspect general-purpose capabilities.',
+                )}
+              />
+            {/if}
+            {#if catalog.instructions}
+              <details>
+                <summary>{t('mcp.serverGuidance', 'Server guidance')}</summary>
+                <p class="mcp-guidance">{catalog.instructions}</p>
+              </details>
+            {/if}
+            {#if catalog.prompts.length}
+              <details>
+                <summary>{t('mcp.serverPrompts', 'Server prompts')}</summary>
+                <ul class="mcp-capability-list">
+                  {#each catalog.prompts as prompt (prompt.name)}<li>
+                      <strong>{prompt.name}</strong>
+                      <p>{prompt.description}</p>
+                    </li>{/each}
+                </ul>
+              </details>
+            {/if}
+          {/if}
+        {/if}
+      </div>
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if draft}
   <Modal
@@ -849,7 +1077,59 @@
     overflow-y: auto;
     min-height: 0;
   }
+  .mcp-inspector {
+    display: grid;
+    gap: 14px;
+  }
+  .mcp-access-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mcp-capability-search {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+  }
+  .mcp-capability-list,
+  .mcp-access-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .mcp-capability-list li,
+  .mcp-access-list li {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    overflow-wrap: anywhere;
+  }
+  .mcp-capability-list strong,
+  .mcp-access-list strong {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    font-weight: 500;
+    color: var(--text-hi);
+  }
+  .mcp-access-list li {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
+  }
+  .mcp-guidance {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-hi);
+  }
+  .mcp-catalog-counts {
+    font-family: var(--font-mono);
+  }
   @media (max-width: 640px) {
+    .mcp-capability-search {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
     .mcp-grid,
     .mcp-grants,
     .mcp-mapping {

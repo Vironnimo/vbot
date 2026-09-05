@@ -1,6 +1,30 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'mcp.accessAllowed': 'Tool access allowed: {count} Tools',
+  'mcp.accessBlocked': 'Blocked by Agent Tool settings',
+  'mcp.accessUnresolved': 'Agent unavailable',
+  'mcp.assigned': 'Granted to: {agents}',
+  'mcp.catalogCounts':
+    'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
+  'mcp.capabilities': 'Capabilities & access',
+  'mcp.inspectTitle': 'Capabilities & access: {name}',
+  'mcp.searchTools': 'Search Tools',
+  'mcp.showAll': 'Show all',
+  'mcp.accessExplanation':
+    'A grant and the Agent’s Tool settings must both allow access. Connection tests verify the server; they do not change Agent permissions.',
+  'mcp.catalogMissing': 'No catalog discovered yet',
+  'mcp.catalogMissingHint':
+    'Close this view and test the connection to load its capabilities.',
+  'mcp.catalogStale':
+    'Showing the last discovered catalog. The connection is currently unavailable.',
+  'mcp.availableTools': 'Tools ({count})',
+  'mcp.noToolsFound': 'No Tools found',
+  'mcp.noToolsFoundHint':
+    'Search checks names and descriptions. Show all Tools to inspect general-purpose capabilities.',
+  'mcp.serverGuidance': 'Server guidance',
+  'mcp.serverPrompts': 'Server prompts',
+  'mcp.fullDescription': 'Full description',
   'mcp.accessHelp':
     'Select who may use this connection. Existing Tool restrictions and Project limits still apply.',
   'mcp.add': 'Add MCP connection',
