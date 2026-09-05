@@ -216,6 +216,24 @@ class ContentBlockResolver:
             )
         ]
 
+    @staticmethod
+    def resolve_tool_image(
+        image: JsonObject,
+        input_modalities: frozenset[str],
+        wire_media_types: frozenset[str],
+    ) -> list[JsonObject]:
+        """Render already-loaded local pixels without any attachment or file I/O."""
+        reason = _VISION_UNAVAILABLE_REASON if "image" not in input_modalities else None
+        note = ContentBlockResolver._file_path_note(
+            "Image", image["filename"], image["media_type"], image["path"], reason=reason
+        )
+        if "image" not in input_modalities or image["media_type"] not in wire_media_types:
+            return [note]
+        return [
+            {"type": "media", "base64": image["base64"], "media_type": image["media_type"]},
+            note,
+        ]
+
     def _resolve_image_block(
         self,
         attachment_id: str,
@@ -420,10 +438,15 @@ class ContentBlockResolver:
                 "type": "text",
                 "text": f"[{label}: {filename} ({media_type}) — file no longer available]",
             }
+        return self._file_path_note(label, filename, media_type, record.file_path, reason=reason)
+
+    @staticmethod
+    def _file_path_note(
+        label: str, filename: str, media_type: str, path: str, *, reason: str | None = None
+    ) -> JsonObject:
         reason_prefix = f"{reason} — " if reason else ""
         note_text = (
-            f"[{label}: {filename} ({media_type}) — "
-            f"{reason_prefix}Path: {model_path(record.file_path)}]"
+            f"[{label}: {filename} ({media_type}) — {reason_prefix}Path: {model_path(path)}]"
         )
         return {"type": "text", "text": note_text}
 

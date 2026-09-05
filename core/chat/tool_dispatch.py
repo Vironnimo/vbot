@@ -130,6 +130,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._rejections = dict(rejections or {})
         self._tool_timings: dict[str, JsonObject] = {}
         self._tool_displays: dict[str, JsonObject] = {}
+        self._tool_media: dict[str, list[JsonObject]] = {}
         self._extension_hook_lock = asyncio.Lock()
 
     def _hook_context(self) -> HookContext:
@@ -351,6 +352,8 @@ class _EmittingToolRegistry(ToolRegistry):
                         ),
                     )
 
+            if result.get("ok") is True and context.result_media:
+                self._tool_media[context.tool_call_id] = context.result_media
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
             completed_display = _tool_display_payload(
@@ -399,6 +402,13 @@ class _EmittingToolRegistry(ToolRegistry):
             # Clearing on every exit path keeps the registry bounded and lets a
             # later call that re-uses the same id start from a clean slate.
             self._run.clear_tool_cancel(context.tool_call_id)
+
+    def take_media_for_call(self, tool_call_id: str) -> list[JsonObject]:
+        """Transfer in-memory media to the correlated request without retaining a cache."""
+        return [
+            {**media, "tool_call_id": tool_call_id}
+            for media in self._tool_media.pop(tool_call_id, [])
+        ]
 
     def timing_for_call(self, tool_call_id: str) -> JsonObject | None:
         """Return measured timing for a completed tool call."""
@@ -560,6 +570,7 @@ async def _dispatch_tool_calls(
             )
         )
         media_outputs.extend(_read_media_outputs(result, tool_call_id=tool_call.id))
+        media_outputs.extend(emitting_registry.take_media_for_call(tool_call.id))
     return tool_messages, media_outputs
 
 
@@ -662,7 +673,7 @@ def _read_media_outputs(
 ) -> list[JsonObject]:
     """Extract request-local rich-content descriptors from a Tool Result.
 
-    ``read`` and ``web_fetch`` image results carry compact attachment
+    ``web_fetch`` and other stored image results carry compact attachment
     references. Chat resolves them into media content on the correlated Tool
     Result for the active Run. Other artifact kinds yield nothing.
     """

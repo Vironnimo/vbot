@@ -567,6 +567,8 @@ class ToolContext:
         compare=False,
     )
     presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
+    # Request-only media: never included in result envelopes or lifecycle events.
+    result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy callers working without change tracking.
     change_tracker: ChangeTracker | None = field(
@@ -886,9 +888,8 @@ def read_media_artifact(*, attachment_id: str, filename: str, media_type: str) -
     """Build a ``read_media`` artifact describing a stored media blob.
 
     A Tool emits this artifact so Chat can attach the stored image as Run-local
-    rich content on the correlated Tool Result. Both ``read`` (local image
-    files) and ``web_fetch`` (fetched image URLs) produce it, so the contract
-    shape lives here once instead of being duplicated in each Tool.
+    rich content on the correlated Tool Result. ``web_fetch`` and remote Tool
+    media use this shared shape; local ``read`` images use in-memory content.
     """
     return {
         "kind": READ_MEDIA_ARTIFACT_KIND,
