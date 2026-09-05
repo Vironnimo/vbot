@@ -16,17 +16,38 @@ const TOOL_ERROR_DETAIL_KEYS = [
   'type',
 ];
 
-// Media URLs come only from stored attachment identities, never Tool paths or URLs.
+// Use server-issued file URLs or stored attachment identities, never raw Tool paths.
 export function toolDetailImages(
   value,
   { preferPayload = false, tool = null } = {},
 ) {
+  if (!preferPayload) {
+    const images = toolDisplay(tool)?.images;
+    if (!Array.isArray(images)) return [];
+    const seen = new Set();
+    return images.flatMap((image) => {
+      if (
+        typeof image?.url !== 'string' ||
+        !/^\/api\/files\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(image.url) ||
+        seen.has(image.url)
+      )
+        return [];
+      seen.add(image.url);
+      return [
+        {
+          src: image.url,
+          filename:
+            typeof image.filename === 'string' && image.filename
+              ? image.filename
+              : t('chat.attachment.preview', 'Preview attachment'),
+        },
+      ];
+    });
+  }
   const result = parseJsonValue(value);
-  const candidates = preferPayload
-    ? Array.isArray(result?.artifacts)
-      ? result.artifacts.filter((item) => item?.kind === 'read_media')
-      : []
-    : (toolDisplay(tool)?.images ?? []);
+  const candidates = Array.isArray(result?.artifacts)
+    ? result.artifacts.filter((item) => item?.kind === 'read_media')
+    : [];
   if (!Array.isArray(candidates)) return [];
   const seen = new Set();
   return candidates.flatMap((item) => {

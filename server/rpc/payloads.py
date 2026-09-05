@@ -350,7 +350,7 @@ def remove_opaque_provider_metadata(value: Any, *, file_delivery: Any | None = N
         return {
             key: remove_opaque_provider_metadata(item, file_delivery=file_delivery)
             for key, item in source.items()
-            if key not in {"output_files", "reasoning_meta", "reasoning_scope"}
+            if key not in {"output_files", "image_files", "reasoning_meta", "reasoning_scope"}
         }
     if isinstance(value, list):
         return [

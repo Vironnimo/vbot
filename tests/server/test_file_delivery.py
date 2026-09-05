@@ -186,3 +186,53 @@ def _only_file_url(content: str) -> str:
 
 def _file_urls(content: str) -> list[str]:
     return [f"{FILE_URL_PREFIX}{match.group(1)}" for match in _FILE_URL_PATTERN.finditer(content)]
+
+
+def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_path: Path) -> None:
+    from server.rpc.payloads import remove_opaque_provider_metadata
+
+    image = tmp_path / "original image.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
+    display = {"image_files": [{"path": str(image), "filename": image.name}]}
+    message = ChatMessage.tool(
+        tool_call_id="call", name="analyze_image", content="{}", tool_display=display
+    )
+    runtime = StubRuntime(tmp_path / "data", StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+    with TestClient(app) as client:
+        delivery = cast(Any, client.app).state.file_delivery
+        public = _visible_message(message, file_delivery=delivery)
+        preview = public["tool_display"]["images"][0]
+        assert preview["filename"] == image.name
+        assert "path" not in preview
+        assert "image_files" not in public["tool_display"]
+        url = preview["url"]
+        assert client.get(url).content == image.read_bytes()
+        image.write_bytes(b"\x89PNG\r\n\x1a\nchanged")
+        assert client.get(url).content == image.read_bytes()
+        image.unlink()
+        assert client.get(url).status_code == 404
+        reloaded = _visible_message(message, file_delivery=delivery)
+        assert reloaded["tool_display"]["images"][0]["url"] == url
+        event = remove_opaque_provider_metadata(
+            {"payload": {"display": display}}, file_delivery=delivery
+        )
+        assert event["payload"]["display"] == public["tool_display"]
+    restarted = _visible_message(message, file_delivery=FileDelivery(secret=b"restart"))
+    assert restarted["tool_display"]["images"][0]["url"] != url
+    assert "image_files" not in _visible_message(message)["tool_display"]
+
+
+def test_tool_image_projection_rejects_non_absolute_paths(tmp_path: Path) -> None:
+    delivery = FileDelivery()
+    projected = delivery.project_message(
+        {
+            "image_files": [
+                {"path": "relative.png"},
+                {"path": "https://example.com/image.png"},
+                {"path": str(tmp_path / "bad\0name")},
+                None,
+            ]
+        }
+    )
+    assert projected == {"images": []}

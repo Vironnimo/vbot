@@ -518,9 +518,7 @@ class Runtime:
             )
             register_process_tool(self._tools, self._process_manager)
             register_text_to_speech_tool(self._tools, self._speech)
-            register_analyze_image_tool(
-                self._tools, self._image, attachment_store=self._attachment_store
-            )
+            register_analyze_image_tool(self._tools, self._image)
             register_image_generation_tool(self._tools, self._image)
             register_generate_video_tool(self._tools, self._video)
             register_generate_music_tool(self._tools, self._music)

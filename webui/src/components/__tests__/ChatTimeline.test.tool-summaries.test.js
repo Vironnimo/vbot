@@ -76,7 +76,13 @@ describe('ChatTimeline', () => {
       };
       const display = {
         version: 1,
-        images: name === 'analyze_image' ? images : [],
+        images:
+          name === 'analyze_image'
+            ? images.map((image, index) => ({
+                filename: image.filename,
+                url: `/api/files/original${index}.signature`,
+              }))
+            : [],
       };
       appendRunEvent(state, {
         type: 'tool_call_started',
@@ -130,15 +136,40 @@ describe('ChatTimeline', () => {
         disclosure.querySelector('summary').click();
         flushSync();
         expect(disclosure.open).toBe(true);
+        const expectedSource =
+          name === 'read'
+            ? `/api/attachments/${images[0].attachment_id}`
+            : '/api/files/original0.signature';
         expect(previews[0].querySelector('img').getAttribute('src')).toBe(
-          `/api/attachments/${images[0].attachment_id}`,
+          expectedSource,
         );
         previews[0].focus();
         previews[0].click(); // Keyboard activation targets the link, not its image.
         flushSync();
         expect(
           document.querySelector('.image-lightbox__image').getAttribute('src'),
-        ).toContain(images[0].attachment_id);
+        ).toContain(expectedSource);
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
+        flushSync();
+        expect(document.querySelector('.image-lightbox')).toBeNull();
+        const thumbnail = previews[0].querySelector('img');
+        thumbnail.dispatchEvent(new Event('error'));
+        expect(thumbnail.hidden).toBe(true);
+        expect(thumbnail.nextElementSibling.getAttribute('role')).toBe('img');
+        previews[0].click();
+        flushSync();
+        document
+          .querySelector('.image-lightbox__image')
+          .dispatchEvent(new Event('error'));
+        flushSync();
+        expect(document.querySelector('.image-lightbox__image')).toBeNull();
+        expect(
+          document.querySelector(
+            '.image-lightbox .image-unavailable[role="img"]',
+          ),
+        ).toBeTruthy();
         document.dispatchEvent(
           new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
         );

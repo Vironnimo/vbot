@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
@@ -314,7 +314,6 @@ class ImageService:
         *,
         image_paths: Sequence[str | Path],
         run_context: ImageUnderstandingRunContext | None = None,
-        on_images_loaded: Callable[[Sequence[ImageInput]], Awaitable[None]] | None = None,
     ) -> ImageUnderstandingResult:
         """Analyze local images with the configured image-understanding Model.
 
@@ -343,7 +342,6 @@ class ImageService:
                 normalized_prompt,
                 image_paths,
                 run_context=run_context,
-                on_images_loaded=on_images_loaded,
             )
 
     async def _analyze(
@@ -352,7 +350,6 @@ class ImageService:
         image_paths: Sequence[str | Path],
         *,
         run_context: ImageUnderstandingRunContext | None,
-        on_images_loaded: Callable[[Sequence[ImageInput]], Awaitable[None]] | None,
     ) -> ImageUnderstandingResult:
         """Execute one bounded image-understanding request."""
 
@@ -407,9 +404,6 @@ class ImageService:
                     "Configured image-understanding target cannot carry "
                     f"these image types: {media_list}"
                 )
-
-            if on_images_loaded is not None:
-                await on_images_loaded(input_images)
 
             content = await asyncio.to_thread(
                 _analysis_content,

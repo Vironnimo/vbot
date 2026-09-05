@@ -1071,10 +1071,22 @@ a.inline-attachment:focus-visible {
   object-fit: contain;
 }
 
-.tool-image-preview span {
+.tool-image-preview > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
+}
+
+.tool-image-preview .image-unavailable {
+  display: none;
+  height: 88px;
+  width: 100%;
+  padding: 4px;
+  font-size: var(--fs-mono-xs);
+}
+
+.tool-image-preview img[hidden] + .image-unavailable {
+  display: flex;
 }
