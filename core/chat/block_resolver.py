@@ -7,16 +7,32 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
+from core.attachments.images import ImageConversionError, ImageConverter
 from core.chat.errors import ChatError
 from core.chat.file_mentions import file_mention_request_text
 from core.model_tasks import SpeechError
 from core.tools.read import render_text_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat.block_resolver")
+_IMAGE_WORKERS = BoundedWorkerPool(name="chat-images", max_workers=1)
+_IMAGE_CONVERTED_REASON = (
+    "a converted copy is shown in a format supported by this Model; "
+    "the path points to the unchanged original"
+)
+_IMAGE_CONVERSION_FAILED_REASON = (
+    "this image could not be converted to a supported format; only the original file path "
+    "is provided. Create a standard PNG or JPEG copy and read that copy"
+)
+_IMAGE_MULTIFRAME_REASON = (
+    "this image contains multiple frames or pages and cannot be converted as a single image "
+    "without omitting content; export the relevant frames or pages as separate PNG or JPEG "
+    "files and read those files"
+)
 
 # Reasons appended to a path note when an attachment cannot be delivered as
 # native content. The run degrades to the file path instead of aborting, so the
@@ -61,6 +77,7 @@ class ContentBlockResolver:
     ) -> None:
         self._attachment_store = attachment_store
         self._transcriber = transcriber
+        self._image_converter = ImageConverter()
 
     async def resolve_messages(
         self,
@@ -180,7 +197,7 @@ class ContentBlockResolver:
         media_type = self._require_string(block, "media_type")
 
         if media_type.startswith("image/"):
-            return self._resolve_image_block(
+            return await self._resolve_image_block(
                 attachment_id,
                 filename,
                 media_type,
@@ -217,24 +234,40 @@ class ContentBlockResolver:
         ]
 
     @staticmethod
-    def resolve_tool_image(
+    async def resolve_tool_image(
         image: JsonObject,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
+        converter: ImageConverter,
     ) -> list[JsonObject]:
-        """Render already-loaded local pixels without any attachment or file I/O."""
+        """Render loaded local pixels, converting without attachment or file I/O."""
+        media_type = image["media_type"]
+        encoded = image["base64"]
         reason = _VISION_UNAVAILABLE_REASON if "image" not in input_modalities else None
+        if "image" in input_modalities and media_type not in wire_media_types:
+            try:
+                raw = await _IMAGE_WORKERS.run(base64.b64decode, encoded)
+                converted, media_type = await converter.convert(raw, media_type, wire_media_types)
+                encoded = await _IMAGE_WORKERS.run(
+                    lambda: base64.b64encode(converted).decode("ascii")
+                )
+                reason = _IMAGE_CONVERTED_REASON
+            except ImageConversionError as exc:
+                reason = (
+                    _IMAGE_MULTIFRAME_REASON
+                    if exc.reason == "multiple_frames"
+                    else _UNSUPPORTED_MEDIA_REASON
+                    if exc.reason == "unsupported_target"
+                    else _IMAGE_CONVERSION_FAILED_REASON
+                )
         note = ContentBlockResolver._file_path_note(
             "Image", image["filename"], image["media_type"], image["path"], reason=reason
         )
-        if "image" not in input_modalities or image["media_type"] not in wire_media_types:
+        if "image" not in input_modalities or media_type not in wire_media_types:
             return [note]
-        return [
-            {"type": "media", "base64": image["base64"], "media_type": image["media_type"]},
-            note,
-        ]
+        return [{"type": "media", "base64": encoded, "media_type": media_type}, note]
 
-    def _resolve_image_block(
+    async def _resolve_image_block(
         self,
         attachment_id: str,
         filename: str,
@@ -261,23 +294,51 @@ class ContentBlockResolver:
                 )
             ]
 
-        if not (is_current_turn and media_type in wire_media_types):
-            # Either an earlier turn, or a vision model whose wire cannot carry this
-            # image type: keep the blob path visible so the agent can open it.
-            label = image_label if is_current_turn else f"{image_label} from an earlier turn"
+        if not is_current_turn:
+            label = f"{image_label} from an earlier turn"
             return [self._path_note_block(label, attachment_id, filename, media_type)]
 
-        blob_data = self._read_attachment_bytes(attachment_id)
+        if not any(kind.startswith("image/") for kind in wire_media_types):
+            return [
+                self._path_note_block(
+                    image_label,
+                    attachment_id,
+                    filename,
+                    media_type,
+                    reason=_UNSUPPORTED_MEDIA_REASON,
+                )
+            ]
+
+        blob_data = await _IMAGE_WORKERS.run(self._read_attachment_bytes, attachment_id)
+        try:
+            converted, target_type = await self._image_converter.convert(
+                blob_data, media_type, wire_media_types
+            )
+        except ImageConversionError as exc:
+            failure_reason = (
+                _IMAGE_MULTIFRAME_REASON
+                if exc.reason == "multiple_frames"
+                else _UNSUPPORTED_MEDIA_REASON
+                if exc.reason == "unsupported_target"
+                else _IMAGE_CONVERSION_FAILED_REASON
+            )
+            return [
+                self._path_note_block(
+                    image_label, attachment_id, filename, media_type, reason=failure_reason
+                )
+            ]
+        reason = _IMAGE_CONVERTED_REASON if target_type != media_type else None
+        encoded = await _IMAGE_WORKERS.run(lambda: base64.b64encode(converted).decode("ascii"))
         native_block = {
             "type": "media",
-            "base64": base64.b64encode(blob_data).decode("ascii"),
-            "media_type": media_type,
+            "base64": encoded,
+            "media_type": target_type,
         }
         # The native image rides with a path note so the agent also holds a handle to
         # the original file (e.g. to forward it), not only the pixels.
         return [
             native_block,
-            self._path_note_block(image_label, attachment_id, filename, media_type),
+            self._path_note_block(image_label, attachment_id, filename, media_type, reason=reason),
         ]
 
     def _resolve_video_block(

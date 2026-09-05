@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,8 +12,10 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from PIL import Image
 
 from core.attachments import AttachmentStore
+from core.attachments.images import ImageConverter
 from core.chat import ChatMessage
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
@@ -102,6 +105,39 @@ def test_image_window_counts_individual_images_in_sibling_results() -> None:
     assert sum(part["type"] == "media" for part in parts) == 3
     assert len(parts) == 8
     assert parts[0]["type"] == "text"
+
+
+def test_fresh_sibling_images_are_complete_with_three_older_images() -> None:
+    older = [_resolved_image_result(index) for index in range(5)]
+    fresh = [_resolved_image_result(index) for index in range(5, 9)]
+    calls = [{"id": message["tool_call_id"], "name": "read", "arguments": {}} for message in fresh]
+    messages = [*older, {"role": "assistant", "tool_calls": calls}, *fresh]
+    bounded = limit_request_images(messages)
+    assert _native_image_calls(bounded) == [f"call-{index}" for index in range(2, 9)]
+    assert limit_request_images(bounded) == bounded
+    # A later text-only Tool step ages the complete previous batch.
+    aged = limit_request_images(
+        [
+            *bounded,
+            {"role": "assistant", "tool_calls": [{"id": "text", "name": "read", "arguments": {}}]},
+            {"role": "tool", "tool_call_id": "text", "content": "notes"},
+        ]
+    )
+    assert _native_image_calls(aged) == ["call-6", "call-7", "call-8"]
+
+
+def test_one_fresh_tool_result_can_carry_more_than_three_images() -> None:
+    message = _resolved_image_result(0)
+    message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= 4
+    bounded = limit_request_images(
+        [
+            {"role": "assistant", "tool_calls": [{"id": "call-0"}]},
+            message,
+        ]
+    )
+    assert (
+        sum(block["type"] == "media" for block in bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD]) == 4
+    )
 
 
 def test_four_user_images_are_all_sent_up_to_fourteen_mib() -> None:
@@ -1188,3 +1224,44 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
     assert request_messages[1]["content"] == "first"
     assert request_messages[2]["content"] == "second"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["image/png", "image/jpeg"])
+async def test_local_tool_image_converts_loaded_pixels_without_source_file(target: str) -> None:
+    source = io.BytesIO()
+    Image.new("RGB", (12, 8), "blue").save(source, format="BMP")
+    image = {
+        "path": "removed-original.bmp",
+        "filename": "original.bmp",
+        "media_type": "image/bmp",
+        "base64": base64.b64encode(source.getvalue()).decode("ascii"),
+    }
+    parts = await ContentBlockResolver.resolve_tool_image(
+        image, TEXT_IMAGE, frozenset({target}), ImageConverter()
+    )
+    assert parts[0]["media_type"] == target
+    with Image.open(io.BytesIO(base64.b64decode(parts[0]["base64"]))) as delivered:
+        assert delivered.size == (12, 8)
+    assert "converted copy" in parts[1]["text"]
+    assert "removed-original.bmp" in parts[1]["text"]
+    assert image["media_type"] == "image/bmp"
+
+
+@pytest.mark.asyncio
+async def test_local_tool_image_conversion_failure_retains_original_path() -> None:
+    parts = await ContentBlockResolver.resolve_tool_image(
+        {
+            "path": "broken.bmp",
+            "filename": "broken.bmp",
+            "media_type": "image/bmp",
+            "base64": base64.b64encode(b"broken pixels").decode("ascii"),
+        },
+        TEXT_IMAGE,
+        frozenset({"image/png"}),
+        ImageConverter(),
+    )
+    assert len(parts) == 1
+    assert parts[0]["type"] == "text"
+    assert "could not be converted" in parts[0]["text"]
+    assert "broken.bmp" in parts[0]["text"]

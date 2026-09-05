@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 import threading
 from pathlib import Path
@@ -11,6 +13,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 from core.debug import DebugContext
 from core.model_tasks import (
@@ -770,6 +773,23 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
             iteration_number=3,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_analysis_converts_for_the_actual_target_without_changing_original(tmp_path: Path):
+    source = tmp_path / "diagram.bmp"
+    Image.new("RGB", (12, 8), "blue").save(source)
+    original = source.read_bytes()
+    adapter = _UnderstandingAdapter()
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    for target in ("image/png", "image/jpeg"):
+        adapter.wire_media_types = frozenset({target})
+        await service.analyze("Describe it", image_paths=[source])
+        part = adapter.requests[-1]["messages"][1]["content"][1]
+        assert part["media_type"] == target
+        with Image.open(io.BytesIO(base64.b64decode(part["base64"]))) as converted:
+            assert converted.size == (12, 8)
+    assert source.read_bytes() == original
 
 
 @pytest.mark.asyncio

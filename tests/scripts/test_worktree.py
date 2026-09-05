@@ -1463,9 +1463,9 @@ def test_repair_finish_closes_window_for_other_tasks(real_repo, monkeypatch):
     assert follow_up == 0
 
 
-def test_repair_finish_without_window_reports_already_closed(capsys, tmp_path, monkeypatch):
+def test_repair_finish_without_window_reports_already_closed(capsys, real_repo, monkeypatch):
     module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    _patch_repo_globals(monkeypatch, module, real_repo)
 
     result = module.cmd_repair_finish(argparse.Namespace(name="quiet-task"))
     captured = capsys.readouterr()

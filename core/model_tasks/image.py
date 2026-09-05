@@ -6,11 +6,13 @@ import asyncio
 import base64
 import inspect
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from core.attachments import sniff_media_type
+from core.attachments.images import ImageConversionError, ImageConverter
 from core.chat.model_resolution import resolve_request_temperature
 from core.debug import DebugContext
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
@@ -163,6 +165,7 @@ class ImageService:
             raise ValueError("max_input_bytes must be greater than 0")
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._image_converter = ImageConverter()
         self._max_input_bytes = max_input_bytes
         self._analysis_semaphore = asyncio.Semaphore(_IMAGE_ANALYSIS_CONCURRENCY_LIMIT)
         self._resolver = TaskBindingResolver(
@@ -376,6 +379,7 @@ class ImageService:
             image_paths,
             max_size_bytes=self._max_input_bytes,
             max_total_bytes=DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
+            allow_conversion=True,
         )
         adapter = None
         try:
@@ -395,15 +399,23 @@ class ImageService:
                 )
                 raise ImageUnderstandingUnavailableError(safe_error) from exc
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
-            unsupported_media_types = sorted(
-                {image.media_type for image in input_images} - wire_media_types
-            )
-            if unsupported_media_types:
-                media_list = ", ".join(unsupported_media_types)
-                raise ImageUnsupportedMediaTypeError(
-                    "Configured image-understanding target cannot carry "
-                    f"these image types: {media_list}"
-                )
+            compatible_images: list[ImageInput] = []
+            converted_total = 0
+            for image in input_images:
+                try:
+                    data, media_type = await self._image_converter.convert(
+                        image.data, image.media_type, wire_media_types
+                    )
+                except ImageConversionError as exc:
+                    raise ImageUnsupportedMediaTypeError(
+                        f"Image format conversion failed for {image.filename}. "
+                        "Export a single-frame PNG or JPEG copy and try again."
+                    ) from exc
+                converted_total += len(data)
+                _ensure_analysis_total_size(len(data), self._max_input_bytes)
+                _ensure_analysis_total_size(converted_total, DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES)
+                compatible_images.append(replace(image, data=data, media_type=media_type))
+            input_images = tuple(compatible_images)
 
             content = await asyncio.to_thread(
                 _analysis_content,
@@ -637,6 +649,7 @@ def _load_image_inputs(
     *,
     max_size_bytes: int,
     max_total_bytes: int | None = None,
+    allow_conversion: bool = False,
 ) -> tuple[ImageInput, ...]:
     """Read bounded local image files without imposing a path allowlist."""
 
@@ -668,7 +681,11 @@ def _load_image_inputs(
         _ensure_analysis_total_size(total_bytes, max_total_bytes)
 
         media_type = sniff_media_type(data, path.name)
-        if not media_type.startswith("image/"):
+        # Generation/video/music clients own their distinct upload contracts.
+        # Preserve their existing accepted inputs; only analysis opts into the
+        # newly decoded formats and converts against its actual Chat target.
+        directly_supported = media_type in {"image/png", "image/jpeg", "image/gif", "image/webp"}
+        if not media_type.startswith("image/") or not (directly_supported or allow_conversion):
             raise ImageUnsupportedMediaTypeError(f"Source file is not a supported image: {path}")
         inputs.append(
             ImageInput(
