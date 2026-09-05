@@ -1327,6 +1327,9 @@ class Runtime:
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
 
+    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
+        return self._skill_operations().inspect_skill(entry_id)
+
     def skill_inventory(self) -> dict[str, Any]:
         return self._skill_operations().skill_inventory()
 

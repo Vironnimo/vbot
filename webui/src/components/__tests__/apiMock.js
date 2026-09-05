@@ -60,6 +60,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     updateSkill: (params) => call('skill.update', params),
     deleteSkill: (scope, name) => call('skill.delete', { scope, name }),
     skillInventory: () => call('skill.inventory'),
+    inspectSkill: (id) => call('skill.inspect', { id }),
     setSkillDisabled: (name, disabled) =>
       call('skill.set_disabled', { name, disabled }),
     shareSkill: (agentId, name, shared, receivers = []) =>

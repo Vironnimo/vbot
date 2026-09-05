@@ -10,6 +10,7 @@ import pytest
 
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.skill_methods import (
+    _skill_inspect,
     _skill_inventory,
     _skill_set_disabled,
     _skill_share,
@@ -69,19 +70,21 @@ def _state(tmp_path: Path) -> Any:
 
 
 class TestInventory:
-    def test_returns_the_runtime_inventory_unchanged(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_returns_the_runtime_inventory_unchanged(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
         state.runtime.inventory = {"skills": [{"name": "x"}], "stale_shared": []}
 
-        result = _skill_inventory(state, {})
+        result = await _skill_inventory(state, {})
 
         assert result == {"skills": [{"name": "x"}], "stale_shared": []}
 
-    def test_rejects_params(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_rejects_params(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_inventory(state, {"scope": "global"})
+            await _skill_inventory(state, {"scope": "global"})
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
@@ -208,3 +211,35 @@ def test_manager_methods_are_registered() -> None:
         "skill.set_disabled",
         "skill.share",
     } <= set(handlers)
+
+
+@pytest.mark.asyncio
+async def test_inspection_reads_exact_id_off_the_event_loop(tmp_path: Path) -> None:
+    import threading
+
+    state = _state(tmp_path)
+    caller_thread = threading.get_ident()
+
+    def inspect(entry_id: str) -> dict[str, str]:
+        assert threading.get_ident() != caller_thread
+        assert entry_id == "opaque-id"
+        return {"id": entry_id, "content": "inspection-sentinel"}
+
+    state.runtime.inspect_skill = inspect
+    assert await _skill_inspect(state, {"id": "opaque-id"}) == {
+        "id": "opaque-id",
+        "content": "inspection-sentinel",
+    }
+
+
+@pytest.mark.asyncio
+async def test_inspection_maps_a_vanished_package_to_invalid_request(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+
+    def inspect(entry_id: str) -> None:
+        raise ValueError(entry_id)
+
+    state.runtime.inspect_skill = inspect
+    with pytest.raises(RpcError) as error:
+        await _skill_inspect(state, {"id": "missing-id"})
+    assert error.value.code == RPC_ERROR_INVALID_REQUEST

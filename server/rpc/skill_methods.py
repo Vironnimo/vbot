@@ -23,6 +23,7 @@ from typing import Any, cast
 from core.settings import is_valid_agent_id
 from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -35,6 +36,7 @@ _GLOBAL_SCOPE = "global"
 _AGENT_SCOPE_PREFIX = "agent:"
 _HUMAN_AUTHOR = "human"
 _LOGGER = get_logger("server.rpc.skills")
+_SKILL_READ_WORKERS = BoundedWorkerPool(name="skill-manager", max_workers=1)
 
 
 def _validated_scope(state: Any, params: JsonObject) -> str:
@@ -175,11 +177,21 @@ def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
-def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
+async def _skill_inspect(state: Any, params: JsonObject) -> JsonObject:
+    entry_id = _required_string(params, "id")
+    try:
+        return cast(
+            JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.inspect_skill, entry_id)
+        )
+    except (ValueError, OSError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
     """Return every Skill from every source with status/share/owner annotations."""
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.inventory does not accept params")
-    return cast(JsonObject, state.runtime.skill_inventory())
+    return cast(JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory))
 
 
 def _required_bool(params: JsonObject, key: str) -> bool:
@@ -267,6 +279,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.write_file": _skill_write_file,
         "skill.remove_file": _skill_remove_file,
         "skill.inventory": _skill_inventory,
+        "skill.inspect": _skill_inspect,
         "skill.set_disabled": _skill_set_disabled,
         "skill.share": _skill_share,
     }
