@@ -418,10 +418,15 @@ class Run:
         not prevent the Run from reaching its terminal cancelled state.
         """
         while self._cancel_cleanup_futures:
+            cleanup_futures = tuple(self._cancel_cleanup_futures)
             await asyncio.gather(
-                *tuple(self._cancel_cleanup_futures),
+                *cleanup_futures,
                 return_exceptions=True,
             )
+            # Gathering already-completed futures need not yield to their queued
+            # done callbacks. Retire this settled snapshot ourselves so the drain
+            # cannot spin while preserving any newly registered cleanup work.
+            self._cancel_cleanup_futures.difference_update(cleanup_futures)
 
     def tool_call_cancelled(self, tool_call_id: str) -> bool:
         """Return whether a tool call was user-cancelled."""

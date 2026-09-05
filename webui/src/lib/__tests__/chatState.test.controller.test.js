@@ -77,6 +77,169 @@ describe('chat controller', () => {
     expect(sessionState.historyBefore).toBe('');
   });
 
+  it.each([
+    ['refresh', 'success'],
+    ['refresh', 'failure'],
+    ['recovery', 'success'],
+    ['recovery', 'failure'],
+  ])(
+    'discards stale older-page %s/%s results without skipping history',
+    async (replacement, outcome) => {
+      const older = deferred();
+      const message = (id) => ({ id, role: 'user', content: id });
+      const loadChatHistory = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [message('middle'), message('recent')],
+          has_more: true,
+          next_before: 'cursor-middle',
+        })
+        .mockReturnValueOnce(older.promise)
+        .mockResolvedValueOnce({
+          messages: [message('recent'), message('newest')],
+          has_more: true,
+          next_before: 'cursor-recent',
+        })
+        .mockResolvedValueOnce({
+          messages: [message('oldest'), message('middle')],
+          has_more: false,
+        });
+      const { chatState, controller } = setup({
+        operationOverrides: { loadChatHistory },
+      });
+      await controller.loadHistoryForSession('alpha', 'session-one');
+      const sessionState = ensureSessionState(
+        chatState,
+        'alpha',
+        'session-one',
+      );
+      startRun(sessionState, { run_id: 'run-one', status: 'running' });
+
+      const pendingOlder = controller.loadOlderHistory(sessionState);
+      if (replacement === 'recovery') {
+        await controller.reconcileRunSession(sessionState, 'run-one');
+      } else {
+        await controller.loadHistoryForSession('alpha', 'session-one');
+      }
+      sessionState.actionError = 'newer-action-error';
+      if (outcome === 'failure') {
+        older.reject(new Error('stale-page-error'));
+      } else {
+        older.resolve({
+          messages: [message('oldest')],
+          has_more: false,
+          background_bash_statuses: { 'old-process': 'running' },
+        });
+      }
+
+      expect(await pendingOlder).toBe(false);
+      expect(sessionState.messages.map((item) => item.id)).toEqual([
+        'recent',
+        'newest',
+      ]);
+      expect(sessionState.historyBefore).toBe('cursor-recent');
+      expect(sessionState.hasOlderHistory).toBe(true);
+      expect(sessionState.loadingOlderHistory).toBe(false);
+      expect(sessionState.actionError).toBe('newer-action-error');
+      expect(sessionState.backgroundBashStatuses).toEqual({});
+
+      expect(await controller.loadOlderHistory(sessionState)).toBe(true);
+      expect(loadChatHistory).toHaveBeenLastCalledWith({
+        agent_id: 'alpha',
+        session_id: 'session-one',
+        limit: 50,
+        before: 'cursor-recent',
+      });
+      expect(sessionState.messages.map((item) => item.id)).toEqual([
+        'oldest',
+        'middle',
+        'recent',
+        'newest',
+      ]);
+      expect(sessionState.hasOlderHistory).toBe(false);
+    },
+  );
+
+  it.each(['failed refresh', 'other Session refresh'])(
+    'keeps a pending older page usable after a %s',
+    async (replacement) => {
+      const older = deferred();
+      const loadChatHistory = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [{ id: 'recent', role: 'user', content: 'Recent' }],
+          has_more: true,
+          next_before: 'cursor-recent',
+        })
+        .mockReturnValueOnce(older.promise);
+      const { chatState, controller } = setup({
+        operationOverrides: { loadChatHistory },
+      });
+      await controller.loadHistoryForSession('alpha', 'session-one');
+      const sessionState = ensureSessionState(
+        chatState,
+        'alpha',
+        'session-one',
+      );
+      const pendingOlder = controller.loadOlderHistory(sessionState);
+      if (replacement === 'failed refresh') {
+        loadChatHistory.mockRejectedValueOnce(new Error('refresh-error'));
+        await controller.loadHistoryForSession('alpha', 'session-one');
+      } else {
+        loadChatHistory.mockResolvedValueOnce({
+          messages: [],
+          has_more: false,
+        });
+        await controller.loadHistoryForSession('alpha', 'session-two');
+      }
+      older.resolve({
+        messages: [{ id: 'oldest', role: 'user', content: 'Oldest' }],
+        has_more: false,
+      });
+
+      expect(await pendingOlder).toBe(true);
+      expect(sessionState.messages.map((item) => item.id)).toEqual([
+        'oldest',
+        'recent',
+      ]);
+      expect(sessionState.loadingOlderHistory).toBe(false);
+      expect(sessionState.hasOlderHistory).toBe(false);
+    },
+  );
+
+  it('discards an older page after an accepted history edit', async () => {
+    const older = deferred();
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ id: 'edited', role: 'user', content: 'Original' }],
+        has_more: true,
+        next_before: 'cursor-edited',
+      })
+      .mockReturnValueOnce(older.promise);
+    const editChatMessage = vi.fn().mockResolvedValue({
+      run_id: 'run-edited',
+      status: 'running',
+    });
+    const { chatState, controller } = setup({
+      operationOverrides: { loadChatHistory, editChatMessage },
+    });
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    const pendingOlder = controller.loadOlderHistory(sessionState);
+
+    await controller.editMessage(sessionState, 'edited', 'Replacement');
+    older.resolve({
+      messages: [{ id: 'oldest', role: 'user', content: 'Oldest' }],
+      has_more: false,
+    });
+
+    expect(await pendingOlder).toBe(false);
+    expect(sessionState.messages).toEqual([]);
+    expect(sessionState.currentRun.runId).toBe('run-edited');
+    expect(sessionState.hasOlderHistory).toBe(true);
+  });
+
   it('applies each connection snapshot object only once', () => {
     const { controller, runStream } = setup();
     const snapshot = { active_runs: [] };
@@ -1493,8 +1656,10 @@ describe('chat controller', () => {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((resolvePromise) => {
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }

@@ -855,6 +855,9 @@ export function createChatController({
     }
     sessionState.loadingOlderHistory = true;
     sessionState.actionError = '';
+    const snapshotVersion = sessionState.historySnapshotVersion;
+    const isCurrentSnapshot = () =>
+      sessionState.historySnapshotVersion === snapshotVersion;
     try {
       const history = await operations.loadChatHistory({
         agent_id: sessionState.agentId,
@@ -862,6 +865,11 @@ export function createChatController({
         limit: HISTORY_OLDER_LIMIT,
         before,
       });
+      // A refreshed snapshot owns a new page boundary. Joining a page from
+      // the previous snapshot could skip the messages between those bounds.
+      if (!isCurrentSnapshot()) {
+        return false;
+      }
       prependHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
@@ -869,7 +877,9 @@ export function createChatController({
       });
       return true;
     } catch (error) {
-      sessionState.actionError = `${translate('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${errorMessage(error)}`;
+      if (isCurrentSnapshot()) {
+        sessionState.actionError = `${translate('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${errorMessage(error)}`;
+      }
       return false;
     } finally {
       sessionState.loadingOlderHistory = false;
@@ -1370,6 +1380,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       sessionId,
       messages: [],
       historyLoaded: false,
+      historySnapshotVersion: 0,
       runEvents: [],
       streamingRunEvents: [],
       streamingPhase: 0,
@@ -1589,6 +1600,8 @@ export function loadHistory(sessionState, messages, options = {}) {
     ? sessionState.seenStreamingEventKeys
     : new Set();
   sessionState.messages = visibleMessages;
+  sessionState.historySnapshotVersion =
+    (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.historyLoaded = true;
   sessionState.hasOlderHistory = options.hasMore === true;
   sessionState.historyBefore =
@@ -1733,6 +1746,8 @@ export function truncateSessionForEdit(sessionState, messageId) {
     return false;
   }
   sessionState.messages = sessionState.messages.slice(0, targetIndex);
+  sessionState.historySnapshotVersion =
+    (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.runEvents = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
