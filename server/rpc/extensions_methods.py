@@ -145,14 +145,14 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
     it is not offered anywhere, which is exactly what an unready tool means here.
     """
     declarations = record.declarations
+    tool_names = [declaration.name for declaration in declarations.tools]
+    if declarations.operations is not None:
+        tool_names.extend(declarations.operations.tool_names)
     return {
         "hooks": {
             event: len(handlers) for event, handlers in declarations.hooks.items() if handlers
         },
-        "tools": [
-            {"name": declaration.name, "ready": _tool_is_ready(state, declaration.name)}
-            for declaration in declarations.tools
-        ],
+        "tools": [{"name": name, "ready": _tool_is_ready(state, name)} for name in tool_names],
         "commands": [
             {
                 "name": declaration.name,
@@ -297,11 +297,52 @@ def _required_str(params: JsonObject, key: str) -> str:
     return value
 
 
+async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"name", "operation", "arguments"}, "extensions.operation")
+    name = _required_str(params, "name")
+    operation = _required_str(params, "operation")
+    arguments = params.get("arguments", {})
+    if not isinstance(arguments, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Operation arguments must be an object")
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extensions are unavailable")
+    try:
+        management = registry.management(name)
+        if operation == "describe":
+            return {"operations": management.describe()}
+        return dict(await management.invoke(operation, arguments))
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+def _extension_requests(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "extensions.requests")
+    registry = state.runtime.extensions
+    requests = []
+    if registry is not None:
+        for record in registry.records():
+            operations = record.declarations.operations
+            if record.status != "loaded" or operations is None or operations.pending_inputs is None:
+                continue
+            for request in operations.pending_inputs():
+                requests.append(
+                    {
+                        **request,
+                        "extension": record.name,
+                        "response_operation": operations.input_response_operation,
+                    }
+                )
+    return {"requests": requests}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return extension visibility and secret RPC handlers."""
 
     return {
         "extensions.list": _list_extensions,
+        "extensions.operation": _extension_operation,
+        "extensions.requests": _extension_requests,
         "extensions.reload": _reload_extensions,
         "extensions.set_secret": _set_extension_secret,
     }

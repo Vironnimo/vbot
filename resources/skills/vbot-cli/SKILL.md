@@ -1,11 +1,15 @@
 ---
 name: vbot-cli
-description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, Bootstrap Runs, prompts, skills, pinned Memory entries, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage and limit history, and Session usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, Bootstrap Runs, prompts, skills, pinned Memory entries, extensions and MCP connections, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage and limit history, and Session usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
 
 The `vbot` CLI is the automation surface for configuring and operating a vBot instance: run the command, verify the result, report what changed. One async Runtime lives behind the server; the CLI, WebUI, Desktop, and Channels are Accessors to that same system rather than separate stores.
+
+## MCP connections
+
+For requests to install or configure an MCP server, including a supplied setup link, read `references/mcp.md` and use `vbot extensions mcp operations` to discover the installed management interface. Install and run prerequisites on the machine hosting vBot. Configure the connection, grant the intended Agent access, and verify an actual permitted operation. User input and sign-in requests are available through the same CLI and appear in the WebUI. Do not report a successful setup from saved configuration alone.
 
 ## System and paths
 

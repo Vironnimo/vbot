@@ -1684,7 +1684,9 @@ class SystemPromptManager:
         agent: PromptAgent,
         session_tool_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
-        profile_context = ToolDefinitionProfileContext(agent_id=agent.id)
+        profile_context = ToolDefinitionProfileContext(
+            agent_id=agent.id, project_id=getattr(agent, "project_id", None)
+        )
         resolution = resolve_tool_access(
             agent.tool_access,
             self._tool_registry.list_tools(),
@@ -1712,7 +1714,9 @@ class SystemPromptManager:
         *,
         effective_tool_names: Sequence[str] | None = None,
     ) -> list[JsonObject]:
-        profile_context = ToolDefinitionProfileContext(agent_id=agent.id)
+        profile_context = ToolDefinitionProfileContext(
+            agent_id=agent.id, project_id=getattr(agent, "project_id", None)
+        )
         if effective_tool_names is not None:
             return self._tool_registry.prompt_definitions(
                 effective_tool_names,

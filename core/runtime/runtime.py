@@ -31,6 +31,7 @@ from core.extensions import (
     InteractionEvent,
     InteractionResponder,
 )
+from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
 from core.model_tasks import (
@@ -555,6 +556,7 @@ class Runtime:
                 reload_skills=self.reload_skills,
                 recover_recall=self._recover_recall_backend_if_deactivated,
                 logger=self.logger,
+                make_host=self._extension_host,
             )
             # Skills load after extensions: a loaded extension may bundle its own skills
             # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
@@ -831,7 +833,67 @@ class Runtime:
         No-op before ``start()`` / after shutdown.
         """
         if self._extensions is not None:
+            self._extensions.bind_host(self._extension_host())
             await self._extensions.fire_startup()
+
+    def _extension_host(self) -> ExtensionHost:
+        return ExtensionHost(
+            data_dir=self.storage.data_dir,
+            sample=self._sample_extension,
+            resolve_agent=self.agent_resolver.resolve_agent,
+            store_attachment=self.attachment_store.store,
+            resolve_credential=self.resolve_environment_credential,
+            set_credential=self._set_extension_credential,
+            resolve_cwd=self._extension_cwd,
+        )
+
+    def _extension_cwd(self, project_id: str | None, agent_id: str) -> Path:
+        from core.projects.resolver import resolve_working_project_id
+
+        agent = self.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
+        if working_project_id is not None:
+            return Path(self.projects.get(working_project_id).cwd)
+        return Path(agent.workspace)
+
+    def _set_extension_credential(self, key: str, value: str) -> None:
+        if value:
+            self.storage.set_data_dir_credential(key, value)
+        else:
+            self.storage.remove_data_dir_credential(key)
+        self.reload_environment_credentials()
+
+    async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
+        from core.chat.model_resolution import resolve_agent_model_target
+
+        agent = self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
+        provider_id, model_id, connection_id = resolve_agent_model_target(self, agent)
+        adapter = self.get_adapter(ConnectionRef(provider_id, connection_id))
+        options = {
+            key: request[key]
+            for key in ("stop_sequences", "tool_choice")
+            if request.get(key) is not None
+        }
+        try:
+            response = await adapter.send(
+                request["messages"],
+                model_id=model_id,
+                tools=request.get("tools"),
+                max_tokens=request["max_tokens"],
+                temperature=request.get("temperature")
+                if request.get("temperature") is not None
+                else agent.temperature,
+                **options,
+                **adapter.request_context_kwargs(
+                    agent_id=context.agent_id,
+                    session_id=context.session_id,
+                    project_id=context.project_id,
+                ),
+            )
+            normalized = adapter.normalize_response(response, model_id=model_id)
+        finally:
+            await adapter.aclose()
+        return {"model": f"{provider_id}/{model_id}", **normalized}
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""

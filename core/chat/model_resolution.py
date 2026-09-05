@@ -317,3 +317,12 @@ def _ensure_provider_exists(providers: ProviderRegistry, provider_id: str) -> No
         providers.get(provider_id)
     except KeyError as exc:
         raise ChatError(f"provider not found: {provider_id}") from exc
+
+
+def resolve_agent_model_target(
+    dependencies: ModelResolutionDependencies, agent: Any
+) -> tuple[str, str, str]:
+    """Resolve an Agent's exact configured Model and usable Provider Connection."""
+    provider_id, connection_id = _resolve_agent_connection(dependencies, agent)
+    _, model_id, _ = parse_model_with_connection(agent.model)
+    return provider_id, model_id, connection_id

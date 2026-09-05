@@ -55,3 +55,10 @@ Loaded Extensions fire startup in load order after runtime capability applicatio
 - Runtime mutation: `core/runtime/runtime.py`
 - RPC catalog/secrets and Settings delta: `server/rpc/extensions_methods.py`, `server/rpc/settings_methods.py`
 - Focused coverage: `tests/core/extensions/test_loader.py`, `test_registration.py`, `test_settings_schema.py`, `test_reload_primitives.py`, `test_deactivate.py`, and Extension RPC/Runtime tests
+
+
+## Managed operations and live catalogs
+
+API v4 adds `api.operations` (`core/extensions/operations.py`). Operations declare argument schemas, async handlers, and a secret-input marker; `extensions.operation` validates before invocation and exposes schema paths rather than rejected credential values. CLI discovers this catalog instead of adding Extension-specific parser branches. Optional pending-input callbacks feed `extensions.requests`; responses use the declared operation through the same RPC boundary. `ExtensionRequests.svelte` is mounted globally because input can arrive while Chat is active.
+
+Managed startup receives an injected `ExtensionHost` with data-directory, credential, Agent/cwd resolution, attachment storage, and Model sampling capabilities. Runtime binds this host before startup and on reload. `replace_tools` stages a complete catalog and checks exact prior ownership before publication; retirement removes its catalogs and prevents late publication. ToolRegistry revision changes let Chat refresh definitions/contracts at the next Provider boundary while retaining the existing System Prompt and Session messages. Dynamic Tools also appear in the Extension capability inventory. Tests: `tests/core/extensions/test_operations.py`, `tests/core/chat/test_live_extension_tools.py`, and `tests/cli/test_extensions_operations.py`.
