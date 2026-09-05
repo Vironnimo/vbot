@@ -66,6 +66,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('skill.share', { agent_id: agentId, name, shared, receivers }),
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
+    loadReflectionRuns: (params) => call('chat.reflections', params),
     createSession: (params) => call('session.create', params),
     listSessionActivity: (agentIds) =>
       call('session.activity_list', { agent_ids: agentIds }),

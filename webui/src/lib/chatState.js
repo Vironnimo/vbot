@@ -18,6 +18,7 @@ import {
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
+  loadReflectionRuns as requestLoadReflectionRuns,
   markSessionRead as requestMarkSessionRead,
   removeFromQueue as requestRemoveFromQueue,
   showProject as requestShowProject,
@@ -37,6 +38,7 @@ import {
 } from './chatTimeline.js';
 import {
   isSubAgentSpawnTool,
+  isReflectionRunKind,
   resolveSubAgentCancelPlan,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -136,6 +138,7 @@ function defaultChatOperations() {
     listSessionActivity: (...args) => requestListSessionActivity(...args),
     listSessions: (...args) => requestListSessions(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
     removeFromQueue: (...args) => requestRemoveFromQueue(...args),
     showProject: (...args) => requestShowProject(...args),
@@ -164,6 +167,7 @@ export function createChatController({
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
   const historyLoadVersions = new Map();
+  const reflectionLoadVersions = new Map();
   const queueSyncVersions = new Map();
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
@@ -730,6 +734,7 @@ export function createChatController({
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     const request = beginHistoryRequest(sessionState);
+    const reflectionRequest = beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
@@ -770,6 +775,7 @@ export function createChatController({
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,
       });
+      reflectionRequest.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       if (
         !history?.active_run &&
@@ -812,6 +818,7 @@ export function createChatController({
     }
 
     const request = beginHistoryRequest(sessionState);
+    const reflectionRequest = beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     try {
       const history = await operations.loadChatHistory({
@@ -837,6 +844,7 @@ export function createChatController({
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,
       });
+      reflectionRequest.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       const activeRun = attachableHistoryRun(sessionState, history?.active_run);
       if (activeRun) {
@@ -1115,6 +1123,72 @@ export function createChatController({
     }
   }
 
+  function beginReflectionRequest(sessionState) {
+    const version = (reflectionLoadVersions.get(sessionState.key) ?? 0) + 1;
+    reflectionLoadVersions.set(sessionState.key, version);
+    const baseline = { ...sessionState.reflectionTasks };
+    const isLatest = () =>
+      reflectionLoadVersions.get(sessionState.key) === version;
+    return {
+      isLatest,
+      apply(rows) {
+        if (!isLatest() || !Array.isArray(rows)) return;
+        const restored = {};
+        for (const row of rows) {
+          if (
+            !row?.run_id ||
+            !row.session_id ||
+            !isReflectionRunKind(row.run_kind)
+          )
+            continue;
+          if (
+            row.status !== 'running' &&
+            !TERMINAL_RUN_STATUSES.has(row.status)
+          )
+            continue;
+          restored[row.run_id] = {
+            sessionId: row.session_id,
+            runKind: row.run_kind,
+            status: row.status,
+            startedAt: row.started_at ?? '',
+          };
+        }
+        // Events received during the read are newer than its snapshot. A
+        // terminal result also never regresses to a stale running snapshot.
+        for (const [runId, entry] of Object.entries(
+          sessionState.reflectionTasks,
+        )) {
+          if (
+            entry !== baseline[runId] ||
+            (restored[runId]?.status === 'running' &&
+              TERMINAL_RUN_STATUSES.has(entry.status))
+          ) {
+            restored[runId] = entry;
+          }
+        }
+        sessionState.reflectionTasks = restored;
+      },
+    };
+  }
+
+  async function refreshReflectionTasks(sessionState) {
+    const request = beginReflectionRequest(sessionState);
+    try {
+      const result = await operations.loadReflectionRuns({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+      });
+      request.apply(result?.reflection_runs);
+    } catch (error) {
+      if (
+        request.isLatest() &&
+        isDisplayedSession(sessionState.agentId, sessionState.sessionId)
+      ) {
+        sessionState.actionError = errorMessage(error);
+      }
+    }
+  }
+
   function applyConnectionSnapshot(snapshot) {
     if (!snapshot || snapshot === handledConnectionSnapshot) {
       return false;
@@ -1156,6 +1230,11 @@ export function createChatController({
       }
     }
     runStream.applyConnectionSnapshot(snapshot);
+    for (const sessionState of Object.values(chatState.sessions)) {
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        void refreshReflectionTasks(sessionState);
+      }
+    }
     return true;
   }
 

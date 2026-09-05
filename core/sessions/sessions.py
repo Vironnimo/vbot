@@ -975,6 +975,9 @@ class ChatSession:
             for sequence, message in records
         )
 
+    def reflection_runs(self) -> list[JsonObject]:
+        return self._store.reflection_runs(self.address)
+
     def find_run_summary(
         self,
         *,

@@ -37,6 +37,8 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 `working_project_id` is internal execution state and never appears in SSE, WebSocket, Queue, history, or public Run payloads. The Run-owned `iteration_count` is deliberately public: active snapshots and Run RPC responses expose its current value, `model_step_usage` exposes the value after each completed Model response, terminal events expose the final value, and Chat Run Summaries persist it for History.
 Reflection attribution: the bridge resolves a reflection fork's `fork_source` provenance from canonical Session metadata once per Run and stamps `source_session_id` onto every bridged WebSocket lifecycle payload and `connection_ready.active_runs` entry for the reflection kinds (`reflection`, `memory_reflection`, `skill_reflection`), so accessors can attribute a review to its source Session without extra reads. Resolution failures degrade to an omitted field, never a failed bridge.
 
+Reflection recovery: `chat.history` includes the source Session's `reflection_runs` on initial-page reads; `chat.reflections` refreshes only that projection on reconnect. The Chat RPC owner combines active Runs with Sessions' durable review summaries on the bounded worker pool. Persisted terminal results win over the captured running snapshot, so reviews completed during a disconnect remain recoverable without retaining the event bus or downloading fork transcripts.
+
 
 ## `resource_changed`
 

@@ -38,6 +38,7 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _bridge_run_to_event_bus,
     publish_resource_changed,
+    reflection_source_session_id,
 )
 from server.rpc.payloads import (
     _queued_response,
@@ -115,6 +116,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.chat_sessions.get,
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
         )
+        reflection_runs = await _reflection_runs(state, session) if before is None else None
         history = await _CHAT_RPC_WORKERS.run(
             session.read_chat_history_snapshot,
             limit=limit,
@@ -160,6 +162,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     }
     if projection.before_cursor is not None:
         response["next_before"] = projection.before_cursor
+    if reflection_runs is not None:
+        response["reflection_runs"] = reflection_runs
     context_usage = (
         active_run_object.terminal_payload_extras.get("context_usage")
         if active_run_object is not None
@@ -172,6 +176,48 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
+    address = session.address
+    # Capture running reviews before the durable read. If one finishes during
+    # that read, its persisted terminal status wins over the active snapshot.
+    active = [
+        run
+        for run in _state_chat_runs(state).active_runs()
+        if run.agent_id == address.agent_id and run.project_id == address.project_id
+    ]
+
+    def read() -> list[JsonObject]:
+        rows = {
+            run.id: {
+                "run_id": run.id,
+                "session_id": run.session_id,
+                "run_kind": run.run_kind.value,
+                "status": "running",
+                "started_at": run.created_at,
+            }
+            for run in active
+            if reflection_source_session_id(state.runtime.chat_sessions, run) == address.session_id
+        }
+        rows.update({row["run_id"]: row for row in session.reflection_runs()})
+        return list(rows.values())
+
+    return await _CHAT_RPC_WORKERS.run(read)
+
+
+async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.reflections")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        session = await _CHAT_RPC_WORKERS.run(
+            state.runtime.chat_sessions.get,
+            SessionAddress(project_id, agent_id, session_id),
+        )
+        return {"reflection_runs": await _reflection_runs(state, session)}
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def _project_chat_history(
@@ -772,6 +818,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "chat.history": _chat_history,
+        "chat.reflections": _chat_reflections,
         "chat.send": _send_chat,
         "chat.stream": _stream_chat,
         "chat.edit": _edit_chat,
