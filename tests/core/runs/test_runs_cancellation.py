@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from textwrap import dedent
+
 from core.sessions import SessionAddress
 
 from .runs_test_support import (
@@ -18,6 +22,62 @@ from .runs_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
+SUBPROCESS_TIMEOUT_SECONDS = 10
+
+
+async def test_immediate_async_cleanup_settles_cancel_and_starts_queued_run() -> None:
+    # A regression can starve asyncio itself, so only a separate interpreter's
+    # timeout can safely bound this production-manager scenario.
+    scenario = dedent(
+        """
+        import asyncio
+
+        from core.runs import ChatRunManager, RunStatus
+        from core.sessions import SessionAddress
+
+        async def main():
+            manager = ChatRunManager()
+            started = asyncio.Event()
+            completed = []
+
+            async def cleanup():
+                completed.append("cleanup")
+
+            async def first_executor(run):
+                run.add_cancel_callback(cleanup)
+                started.set()
+                await asyncio.Event().wait()
+
+            async def second_executor(run):
+                completed.append("second")
+                return "second"
+
+            address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
+            first = await manager.start(address, first_executor)
+            await started.wait()
+            queued = await manager.enqueue(address, second_executor)
+
+            await manager.cancel(first.id, reason="user")
+            second = await queued.future
+            assert await second.wait() == "second"
+            assert first.status == RunStatus.CANCELLED
+            assert completed == ["cleanup", "second"]
+            await manager.aclose()
+
+        asyncio.run(main())
+        """
+    )
+
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, "-c", scenario],
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
@@ -161,6 +221,68 @@ async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None
     second = await queued.future
     assert await second.wait() == "second"
     assert second_started.is_set()
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_cancel_drains_cleanup_registered_by_another_callback(
+    cleanup_fails: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    nested_started = asyncio.Event()
+    nested_release = asyncio.Event()
+    completed: list[str] = []
+    failure = RuntimeError("nested cleanup failure")
+    caplog.set_level(logging.WARNING, logger="vbot.runs")
+
+    async def nested_cleanup() -> None:
+        nested_started.set()
+        await nested_release.wait()
+        completed.append("cleanup")
+        if cleanup_fails:
+            raise failure
+
+    async def first_executor(run: Run) -> str:
+        async def cleanup() -> None:
+            cleanup_started.set()
+            await cleanup_release.wait()
+            run.add_cancel_callback(nested_cleanup)
+
+        run.add_cancel_callback(cleanup)
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    async def second_executor(_run: Run) -> str:
+        completed.append("second")
+        return "second"
+
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    first = await manager.start(address, first_executor)
+    await started.wait()
+    queued = await manager.enqueue(address, second_executor)
+
+    cancelling = asyncio.create_task(manager.cancel(first.id, reason="user"))
+    await cleanup_started.wait()
+    cleanup_release.set()
+    await nested_started.wait()
+
+    assert not queued.future.done()
+    assert first.status == RunStatus.RUNNING
+
+    nested_release.set()
+    assert await cancelling is first
+    second = await queued.future
+    assert await second.wait() == "second"
+    assert first.status == RunStatus.CANCELLED
+    assert completed == ["cleanup", "second"]
+    logged_failure = any(
+        record.exc_info and record.exc_info[1] is failure for record in caplog.records
+    )
+    assert logged_failure == cleanup_fails
 
 
 async def test_cancel_callback_failure_does_not_skip_remaining_callbacks(
