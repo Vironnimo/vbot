@@ -55,23 +55,6 @@ Runtime Agent-facing text must be self-contained for a fresh Agent that has not 
 
 **Technical Decisions** — when making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long-term maintainability.
 
-## Error Handling
-
-| Type | Examples | Action |
-|---|---|---|
-| **Expected** | invalid input, not found, timeout, rate limit | Handle locally, log `warn`, return meaningful response |
-| **Unexpected** | crashes, null refs, broken assumptions | Do NOT handle — log `error`, rethrow |
-
-Key question: "Did I expect this could happen?" Yes → handle. No → rethrow.
-
-- Never silently swallow errors
-- Handle as close to origin as possible
-- Error messages must be meaningful — "something went wrong" is useless
-
-**Retry transient errors**: network failures and HTTP 429/502/503/504 always; HTTP 500 only for idempotent (safely repeatable) requests — never on action-causing POSTs. Max 3 retries, exponential backoff with jitter. Do NOT retry: other 4xx, auth failures, validation errors.
-
-For project-specific error patterns, log format, and logging setup → `.vorch/PROJECT.md` (Conventions section).
-
 ## Testing
 
 Write tests **together with the feature** — never skip.
