@@ -32,9 +32,13 @@ from core.compaction.compaction import (
     CompactionPlan,
     _plan_working_tail,
     _reference_summary,
+    _send_streaming_model_request,
     _tail_soft_limit,
     _tail_token_span,
 )
+from core.providers.anthropic import AnthropicAdapter
+from core.providers.ollama import OllamaAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.sessions.sessions import _skill_context_note_content
 from core.tools import tool_success
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
@@ -66,10 +70,6 @@ class StubAdapter:
         self.requests.append({"messages": messages, **kwargs})
         yield {"type": "content_delta", "text": self.text}
         yield {"type": "finish", "reason": "stop"}
-
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        message = response["choices"][0]["message"]
-        return {"content": message["content"], "usage": response.get("usage")}
 
 
 class RetainContextStrategy:
@@ -447,11 +447,22 @@ async def test_manual_summary_tail_uses_manual_prompt_before_tail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() -> None:
+async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.compaction import compaction
+
     loop_thread = threading.get_ident()
     strategy_threads: list[int] = []
     stream_threads: list[int] = []
-    normalize_threads: list[int] = []
+    finalization_threads: list[int] = []
+    original_extract = compaction._extract_summary_text
+
+    def recording_extract(response: dict[str, Any]) -> str:
+        finalization_threads.append(threading.get_ident())
+        return original_extract(response)
+
+    monkeypatch.setattr(compaction, "_extract_summary_text", recording_extract)
 
     class RecordingStrategy:
         id = "recording"
@@ -472,11 +483,6 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() 
             yield {"type": "content_delta", "text": "summary"}
             yield {"type": "finish", "reason": "stop"}
 
-        def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-            normalize_threads.append(threading.get_ident())
-            message = response["choices"][0]["message"]
-            return {"content": message["content"]}
-
     adapter = RecordingAdapter()
     await CompactionService(RecordingStrategy()).compact(
         [user("u1", "old context")],
@@ -489,7 +495,129 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() 
 
     assert strategy_threads and strategy_threads != [loop_thread]
     assert stream_threads == [loop_thread]
-    assert normalize_threads and normalize_threads != [loop_thread]
+    assert finalization_threads and finalization_threads != [loop_thread]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize(
+    "adapter_class", [OpenAICompatibleAdapter, AnthropicAdapter, OllamaAdapter]
+)
+async def test_compaction_consumes_canonical_stream_without_raw_wire_normalization(
+    strategy: str, adapter_class: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = object.__new__(adapter_class)
+    requests: list[list[dict[str, Any]]] = []
+
+    async def stream(
+        messages: list[dict[str, Any]], **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        requests.append(messages)
+        yield {"type": "heartbeat"}
+        yield {"type": "content_delta", "text": "SUMMARY SENTINEL"}
+        yield {"type": "finish", "reason": "stop"}
+
+    monkeypatch.setattr(adapter, "stream", stream)
+    messages = [
+        user("u1", "old request"),
+        assistant("a1", "old answer"),
+        user("u2", "current request"),
+        assistant("a2", "current answer"),
+    ]
+
+    result = await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+        request_messages=provider_request(messages),
+        active_adapter=adapter,
+        active_model_id="summary",
+    )
+
+    assert result.role == "compaction_checkpoint"
+    assert "SUMMARY SENTINEL" in str(result.content)
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize(
+    "finish", ["output_truncated", "content_filtered", "error", "unknown", "tool_calls", None]
+)
+async def test_compaction_rejects_partial_summary_without_successful_finish(
+    strategy: str, finish: str | None
+) -> None:
+    class IncompleteAdapter(StubAdapter):
+        async def stream(
+            self, messages: list[dict], **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            self.requests.append({"messages": messages, **kwargs})
+            yield {"type": "content_delta", "text": "Partial summary"}
+            if finish is not None:
+                yield {"type": "finish", "reason": finish}
+
+    adapter = IncompleteAdapter()
+    messages = [user("u1", "request"), assistant("a1", "answer")]
+    original_messages = [message.to_dict() for message in messages]
+
+    with pytest.raises(CompactionError):
+        await CompactionService().compact(
+            messages,
+            agent=object(),
+            summary_adapter=adapter,
+            summary_model_id="summary",
+            storage=StubStorage(),
+            settings=CompactionSettings(strategy=strategy),
+            request_messages=provider_request(messages),
+            active_adapter=adapter,
+            active_model_id="summary",
+        )
+
+    assert len(adapter.requests) == 1
+    assert [message.to_dict() for message in messages] == original_messages
+
+
+@pytest.mark.asyncio
+async def test_compaction_rejects_tool_attempt_even_when_finish_claims_stop() -> None:
+    class ToolAdapter:
+        async def stream(
+            self, messages: list[dict], **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            yield {"type": "content_delta", "text": "I will inspect the context"}
+            yield {
+                "type": "tool_call_delta",
+                "id": "call-1",
+                "name_delta": "read",
+                "arguments_delta": '{"path":"notes.txt"}',
+            }
+            yield {"type": "finish", "reason": "stop"}
+
+    with pytest.raises(CompactionError):
+        await _send_streaming_model_request(ToolAdapter(), [], {})
+
+
+@pytest.mark.asyncio
+async def test_compaction_stream_preserves_split_usage_and_post_finish_details() -> None:
+    class UsageAdapter:
+        async def stream(
+            self, messages: list[dict], **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            yield {"type": "content_delta", "text": "summary"}
+            yield {"type": "usage", "input_tokens": 100, "cache_read_tokens": 20}
+            yield {"type": "finish", "reason": "stop"}
+            yield {"type": "usage", "output_tokens": 30, "reasoning_tokens": 10}
+
+    response = await _send_streaming_model_request(UsageAdapter(), [], {})
+
+    assert response["usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 30,
+        "cache_read_tokens": 20,
+        "reasoning_tokens": 10,
+    }
 
 
 @pytest.mark.asyncio
