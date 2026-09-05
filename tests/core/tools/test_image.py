@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from core.attachments import AttachmentStore
 from core.model_tasks import (
     ImageExecutionError,
     ImageInputError,
@@ -21,7 +19,6 @@ from core.model_tasks import (
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
 )
-from core.model_tasks.image_types import ImageInput
 from core.tools import InvalidToolResultError, ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
@@ -392,7 +389,7 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     second = workspace / "second.png"
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=AttachmentStore(tmp_path))
+    register_analyze_image_tool(registry, service)
     tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
     assert tool.parameters == ANALYZE_IMAGE_TOOL_PARAMETERS
     assert "additionalProperties" not in tool.parameters
@@ -442,9 +439,7 @@ def test_analyze_image_tool_has_closed_result_contract(
     invalid_data: dict[str, object],
 ) -> None:
     registry = ToolRegistry()
-    register_analyze_image_tool(
-        registry, _ImageService(tmp_path / "unused.png"), attachment_store=AttachmentStore(tmp_path)
-    )
+    register_analyze_image_tool(registry, _ImageService(tmp_path / "unused.png"))
     tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
 
     assert tool.result_schema == {
@@ -468,7 +463,7 @@ async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> 
     image.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=AttachmentStore(tmp_path))
+    register_analyze_image_tool(registry, service)
 
     result = await registry.dispatch(
         _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
@@ -488,7 +483,7 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
         tmp_path / "unused.png",
         analysis_error=ImageInputError("bad image"),
     )
-    register_analyze_image_tool(registry, service, attachment_store=AttachmentStore(tmp_path))
+    register_analyze_image_tool(registry, service)
     context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
 
     with pytest.raises(ToolContractError):
@@ -533,7 +528,6 @@ async def test_analyze_image_tool_projects_stable_expected_error_codes(
     register_analyze_image_tool(
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=analysis_error),
-        attachment_store=AttachmentStore(tmp_path),
     )
 
     result = await registry.dispatch(
@@ -559,7 +553,6 @@ async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Pa
     register_analyze_image_tool(
         registry,
         _ImageService(tmp_path / "unused.png", analysis_error=provider_error),
-        attachment_store=AttachmentStore(tmp_path),
     )
 
     result = await registry.dispatch(
@@ -584,7 +577,6 @@ async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Pat
             tmp_path / "unused.png",
             analysis_error=RuntimeError("implementation defect"),
         ),
-        attachment_store=AttachmentStore(tmp_path),
     )
 
     with pytest.raises(RuntimeError):
@@ -664,7 +656,6 @@ class _ImageService:
         *,
         image_paths: tuple[Path, ...],
         run_context: ImageUnderstandingRunContext,
-        on_images_loaded: Callable[[Sequence[ImageInput]], Awaitable[None]],
     ) -> object:
         self.received_analysis_prompt = prompt
         self.received_analysis_paths = image_paths
@@ -677,3 +668,47 @@ class _ImageService:
             image_count=len(image_paths),
             usage={"input_tokens": 12, "output_tokens": 7},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True])
+async def test_analysis_preview_retains_only_original_paths_without_writing_files(
+    tmp_path: Path,
+    missing: bool,
+) -> None:
+    import json
+
+    from core.chat import ChatMessage
+
+    project = tmp_path / "project"
+    project.mkdir()
+    image = project / "original image.png"
+    if not missing:
+        image.write_bytes(b"\x89PNG\r\n\x1a\noriginal")
+    before = set(tmp_path.rglob("*"))
+    service = _ImageService(
+        image,
+        analysis_error=ImageNotFoundError("missing") if missing else None,
+    )
+    registry = ToolRegistry()
+    register_analyze_image_tool(registry, service)
+    context = replace(_make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME), cwd=project)
+    args = {"prompt": "Inspect", "images": [image.name]}
+    result = await registry.dispatch(context, args)
+    assert result["ok"] is not missing
+    display = registry.display_for_call(
+        ANALYZE_IMAGE_TOOL_NAME, args, context=context, result=result
+    )
+    restored = ChatMessage.from_dict(
+        ChatMessage.tool(
+            tool_call_id="call",
+            name=ANALYZE_IMAGE_TOOL_NAME,
+            content=json.dumps(result),
+            tool_display=display,
+        ).to_dict()
+    )
+    assert restored.tool_display is not None
+    assert restored.tool_display["image_files"] == [{"path": str(image), "filename": image.name}]
+    assert result["artifacts"] == []
+    assert "image_files" not in result
+    assert set(tmp_path.rglob("*")) == before

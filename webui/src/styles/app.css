@@ -3871,3 +3871,31 @@ kbd {
     grid-row: auto;
   }
 }
+
+.image-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-med);
+  text-align: center;
+  white-space: normal;
+}
+
+.image-unavailable svg {
+  width: 32px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.image-lightbox > .image-unavailable {
+  width: min(320px, calc(100vw - 48px));
+  min-height: 180px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}

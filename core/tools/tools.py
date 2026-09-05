@@ -1057,7 +1057,7 @@ class ToolRegistry:
             facts=facts,
         )
         if context is not None and context.presentation_images:
-            payload["images"] = [dict(image) for image in context.presentation_images]
+            payload["image_files"] = [dict(image) for image in context.presentation_images]
         return payload
 
     def get(self, name: str) -> Tool:
