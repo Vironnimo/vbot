@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.chat import _restore_in_run_tool_result_content
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
@@ -467,12 +468,24 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = FakeAdapter(
+    class DeletingAdapter(FakeAdapter):
+        async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            if len(self.requests) == 1:
+                Path(agent.workspace).joinpath("diagram.png").unlink()
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = DeletingAdapter(
         [
             {
                 "content": None,
                 "tool_calls": [
                     {"id": "call_read", "name": "read", "arguments": {"path": "diagram.png"}}
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "read_text", "name": "read", "arguments": {"path": "notes.txt"}}
                 ],
             },
             {"content": "I can see the diagram.", "tool_calls": None},
@@ -492,6 +505,8 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         )
         Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
 
+        Path(agent.workspace).joinpath("notes.txt").write_text("test", encoding="utf-8")
+        stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
         assistant = await runtime.chat_loop.send(
             "coder", "Look at diagram.png", session_id="session-one"
         )
@@ -504,13 +519,22 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         media_parts = [part for part in tool_result_parts if part.get("type") == "media"]
         assert len(media_parts) == 1
         assert media_parts[0]["media_type"] == "image/png"
-        assert media_parts[0]["base64"]
+        assert base64.b64decode(media_parts[0]["base64"]) == _PNG_BYTES
+        later_parts = _tool_result_content_parts(adapter.requests[2].messages)
+        assert [part for part in later_parts if part.get("type") == "media"] == media_parts
+        assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
+        assert runtime.chat_runs is not None
+        assert "base64" not in json.dumps(
+            [event.payload for run in runtime.chat_runs._runs.values() for event in run.events]
+        )
 
         # The canonical Session persists only the original user turn and the
         # compact Tool envelope; request-only base64 never reaches history.
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert [message.role for message in messages] == [
             "user",
+            "assistant",
+            "tool",
             "assistant",
             "tool",
             "assistant",
@@ -529,7 +553,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
             "Continue without reopening it.",
             session_id="session-one",
         )
-        next_run_messages = adapter.requests[2].messages
+        next_run_messages = adapter.requests[3].messages
         assert all(TOOL_RESULT_CONTENT_BLOCKS_FIELD not in message for message in next_run_messages)
         assert "base64" not in json.dumps(next_run_messages)
     finally:
@@ -580,11 +604,14 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
             if len(self.requests) == 10:
                 session = runtime.chat_sessions.get(session_address("coder", "session-one"))
                 rebuilt_requests.append(
-                    await runtime.chat_loop._build_request_messages(
-                        agent,
-                        session,
-                        input_modalities=frozenset({"text", "image"}),
-                        wire_media_types=IMAGE_WIRE_MEDIA_TYPES,
+                    _restore_in_run_tool_result_content(
+                        await runtime.chat_loop._build_request_messages(
+                            agent,
+                            session,
+                            input_modalities=frozenset({"text", "image"}),
+                            wire_media_types=IMAGE_WIRE_MEDIA_TYPES,
+                        ),
+                        messages,
                     )
                 )
             return await super().send(messages, model_id=model_id, **kwargs)
@@ -661,14 +688,20 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
         assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == frames[7:10]
         session = runtime.chat_sessions.get(session_address("coder", "session-one"))
         persisted = session.load()
+        assert runtime.chat_runs is not None
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert len([message for message in persisted if message.role == "tool"]) == 15
         for message in persisted:
             if message.role == "tool":
                 assert isinstance(message.content, str)
-                artifact = json.loads(message.content)["artifacts"][0]
-                record = runtime.attachment_store.get(artifact["attachment_id"])
-                assert Path(record.file_path).read_bytes() in frames
+                artifacts = json.loads(message.content)["artifacts"]
+                if message.name == "read":
+                    assert artifacts == []
+                    assert message.tool_display is not None
+                    assert message.tool_display["image_files"]
+                else:
+                    record = runtime.attachment_store.get(artifacts[0]["attachment_id"])
+                    assert Path(record.file_path).read_bytes() in frames
     finally:
         runtime.stop()
 

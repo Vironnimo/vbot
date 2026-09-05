@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -759,29 +760,29 @@ async def test_read_audio_empty_transcription_is_failure(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_read_image_stores_attachment_and_emits_read_media_artifact(tmp_path: Path) -> None:
+async def test_read_image_passes_pixels_in_memory_without_creating_files(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     image_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00"
     workspace.joinpath("diagram.png").write_bytes(image_bytes)
     store = _FakeAttachmentStore(media_type="image/png")
 
-    result = await make_handler(store=store)(make_context(workspace), {"path": "diagram.png"})
+    context = make_context(workspace)
+    before = set(tmp_path.rglob("*"))
+    result = await make_handler(store=store)(context, {"path": "diagram.png"})
 
     assert is_tool_result_envelope(result) is True
     assert result["ok"] is True
-    assert store.stored == [("diagram.png", image_bytes)]
+    assert store.stored == []
+    assert set(tmp_path.rglob("*")) == before
+    assert base64.b64decode(context.result_media[0]["base64"]) == image_bytes
+    assert context.presentation_images == [
+        {"path": str(workspace / "diagram.png"), "filename": "diagram.png"}
+    ]
     data = result["data"]
     assert isinstance(data, dict)
     assert "diagram.png" in data["content"]
-    assert result["artifacts"] == [
-        {
-            "kind": "read_media",
-            "attachment_id": "att-123",
-            "filename": "diagram.png",
-            "media_type": "image/png",
-        }
-    ]
+    assert result["artifacts"] == []
 
 
 @pytest.mark.asyncio

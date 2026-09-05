@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
+from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.continuation import (
     ContinuationCause,
@@ -222,7 +223,6 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
-    from core.chat.block_resolver import ContentBlockResolver
     from core.chat.request_runner import WireRequestRunner
     from core.compaction import CompactionService
     from core.compaction.run_coordination import CompactionRunCoordinator
@@ -954,8 +954,11 @@ def _current_run_read_media_outputs(
 def _restore_in_run_tool_result_content(
     rebuilt_messages: list[JsonObject],
     live_messages: list[JsonObject],
+    *,
+    input_modalities: frozenset[str] | None = None,
+    wire_media_types: frozenset[str] | None = None,
 ) -> list[JsonObject]:
-    """Restore request-only rich Tool Results after in-Run Compaction."""
+    """Restore live Tool pixels after Compaction or a capability-aware fallback."""
 
     from core.compaction import is_compacted_tool_result_content
 
@@ -973,8 +976,17 @@ def _restore_in_run_tool_result_content(
             and isinstance(tool_call_id, str)
             and tool_call_id in rich_content_by_call_id
             and not is_compacted_tool_result_content(message.get("content"))
+            and not (input_modalities is not None and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message)
         ):
-            message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = rich_content_by_call_id[tool_call_id]
+            message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = [
+                block
+                for block in rich_content_by_call_id[tool_call_id]
+                if block.get("type") != "media"
+                or (
+                    (input_modalities is None or "image" in input_modalities)
+                    and (wire_media_types is None or block.get("media_type") in wire_media_types)
+                )
+            ]
     return limit_request_images(rebuilt_messages)
 
 
@@ -2142,12 +2154,19 @@ class ChatLoop:
                 f"Model {from_binding} unavailable. Switched to {binding} for this run."
             )
             await context.session_snapshot.refresh(session)
+            live_messages = context.request_state.messages if context.request_state else []
             context.request_state = await self.build_request_state(
                 agent,
                 session,
                 inputs=RequestBuildInputs.from_context(
                     context, candidate_target
                 ).with_session_messages(context.session_snapshot.active_messages),
+            )
+            context.request_state.messages[:] = _restore_in_run_tool_result_content(
+                context.request_state.messages,
+                live_messages,
+                input_modalities=candidate_target.input_modalities,
+                wire_media_types=candidate_target.wire_media_types,
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -3047,7 +3066,7 @@ class ChatLoop:
         not fabricate or persist a user turn.
         """
 
-        if self._attachment_resolver is None or not media_outputs:
+        if not media_outputs:
             return
 
         by_tool_call_id: dict[str, list[JsonObject]] = {}
@@ -3062,6 +3081,19 @@ class ChatLoop:
                 by_tool_call_id.get(tool_call_id, []) if isinstance(tool_call_id, str) else []
             )
             if not matching:
+                continue
+            local_content = [
+                block
+                for media_output in matching
+                if "base64" in media_output
+                for block in ContentBlockResolver.resolve_tool_image(
+                    media_output, input_modalities, wire_media_types
+                )
+            ]
+            if local_content:
+                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content
+            matching = [media for media in matching if "attachment_id" in media]
+            if not matching or self._attachment_resolver is None:
                 continue
             content_blocks = [
                 content_block_to_dict(
@@ -3089,7 +3121,7 @@ class ChatLoop:
             )
             resolved_content = resolved[0].get("content")
             if isinstance(resolved_content, list):
-                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = resolved_content
+                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content + resolved_content
 
     def resolve_context_window(
         self,
