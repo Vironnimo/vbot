@@ -41,6 +41,54 @@ describe('ChatTimeline', () => {
     vi.useRealTimers();
   });
 
+  it.each([false, true])(
+    'renders a persisted Run error once with a User anchor: %s',
+    (withUser) => {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-one',
+      );
+      const message = {
+        id: 'failure',
+        role: 'error',
+        content: 'Test provider failure',
+        error_kind: 'provider',
+      };
+      startRun(sessionState, {
+        run_id: 'automatic',
+        events: [{ run_id: 'automatic', sequence: 1, type: 'run_started' }],
+      });
+      appendRunEvent(sessionState, {
+        run_id: 'automatic',
+        sequence: 2,
+        type: 'error_message_persisted',
+        payload: { message },
+      });
+      const user = { id: 'user', role: 'user', content: 'User question' };
+      if (withUser) {
+        appendRunEvent(sessionState, {
+          run_id: 'automatic',
+          sequence: 3,
+          type: 'user_message_persisted',
+          payload: { message: user },
+        });
+      }
+      loadHistory(sessionState, withUser ? [user, message] : [message]);
+
+      mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: { sessionState, agentName: 'Alpha' },
+      });
+      flushSync();
+
+      expect(
+        document.querySelectorAll('[data-timeline-item-id="failure"]'),
+      ).toHaveLength(1);
+      expect(document.body.textContent).toContain(message.content);
+    },
+  );
+
   it('keeps thinking above later tool rows after subsequent reasoning updates', () => {
     const sessionState = ensureSessionState(
       createChatState(),
