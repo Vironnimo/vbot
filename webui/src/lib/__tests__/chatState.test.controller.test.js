@@ -32,7 +32,11 @@ function setup({
   const controller = createChatController({
     chatState,
     runStream,
-    operations: { listQueue, ...operationOverrides },
+    operations: {
+      listQueue,
+      loadReflectionRuns: vi.fn().mockResolvedValue({ reflection_runs: [] }),
+      ...operationOverrides,
+    },
     translate: (_key, fallback) => fallback,
     isDisplayedSession,
     shouldLoadCurrentHistory,
@@ -48,6 +52,104 @@ function setup({
 }
 
 describe('chat controller', () => {
+  const review = (status = 'completed', runId = 'review-one') => ({
+    run_id: runId,
+    session_id: 'review-session',
+    run_kind: 'memory_reflection',
+    status,
+    started_at: '2026-09-05T10:00:00Z',
+  });
+
+  it('restores completed reflections on fresh history load without touching another Session', async () => {
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        loadChatHistory: vi
+          .fn()
+          .mockResolvedValue({ messages: [], reflection_runs: [review()] }),
+      },
+    });
+    const other = ensureSessionState(chatState, 'alpha', 'other');
+    await controller.loadHistoryForSession('alpha', 'source');
+    expect(
+      chatState.sessions['alpha::source'].reflectionTasks['review-one'],
+    ).toEqual({
+      sessionId: 'review-session',
+      runKind: 'memory_reflection',
+      status: 'completed',
+      startedAt: '2026-09-05T10:00:00Z',
+    });
+    expect(other.reflectionTasks).toEqual({});
+  });
+
+  it('recovers a reflection completed while disconnected and deduplicates connection snapshots', async () => {
+    const loadReflectionRuns = vi
+      .fn()
+      .mockResolvedValue({ reflection_runs: [review()] });
+    const { chatState, controller } = setup({
+      operationOverrides: { loadReflectionRuns },
+      isDisplayedSession: (agent, session) =>
+        agent === 'alpha@project' && session === 'source',
+    });
+    const source = ensureSessionState(chatState, 'alpha@project', 'source');
+    const snapshot = { active_runs: [], queues: [] };
+    controller.applyConnectionSnapshot(snapshot);
+    controller.applyConnectionSnapshot(snapshot);
+    await vi.waitFor(() =>
+      expect(source.reflectionTasks['review-one']?.status).toBe('completed'),
+    );
+    expect(loadReflectionRuns).toHaveBeenCalledExactlyOnceWith({
+      agent_id: 'alpha@project',
+      session_id: 'source',
+    });
+  });
+
+  it('keeps newer live results when a reflection restore response arrives late', async () => {
+    const response = deferred();
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        loadChatHistory: vi.fn().mockReturnValue(response.promise),
+      },
+    });
+    const source = ensureSessionState(chatState, 'alpha', 'source');
+    const loading = controller.loadHistoryForSession('alpha', 'source');
+    const terminal = {
+      sessionId: 'review-session',
+      runKind: 'memory_reflection',
+      status: 'failed',
+      startedAt: '2026-09-05T10:00:00Z',
+    };
+    source.reflectionTasks = {
+      'review-one': terminal,
+      'new-review': { ...terminal, status: 'running' },
+    };
+    response.resolve({ messages: [], reflection_runs: [review('running')] });
+    await loading;
+    expect(source.reflectionTasks['review-one']).toBe(terminal);
+    expect(source.reflectionTasks['new-review'].status).toBe('running');
+  });
+
+  it('ignores an obsolete reconnect response and removes deleted review rows', async () => {
+    const response = deferred();
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        loadReflectionRuns: vi.fn().mockReturnValue(response.promise),
+        loadChatHistory: vi
+          .fn()
+          .mockResolvedValue({ messages: [], reflection_runs: [] }),
+      },
+      isDisplayedSession: () => true,
+    });
+    const source = ensureSessionState(chatState, 'alpha', 'source');
+    source.reflectionTasks = {
+      stale: { sessionId: 'deleted', status: 'completed' },
+    };
+    controller.applyConnectionSnapshot({ active_runs: [] });
+    await controller.loadHistoryForSession('alpha', 'source');
+    response.resolve({ reflection_runs: [review('running')] });
+    await Promise.resolve();
+    expect(source.reflectionTasks).toEqual({});
+  });
+
   it('reloads a stale active-run snapshot without replacing a newer live Run', async () => {
     const older = deferred();
     const loadChatHistory = vi

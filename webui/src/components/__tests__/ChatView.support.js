@@ -242,6 +242,10 @@ export function createChatRpcMock({
       throw new Error(`Unexpected session id: ${params.session_id}`);
     }
 
+    if (method === 'chat.reflections') {
+      return { reflection_runs: [] };
+    }
+
     if (method === 'chat.commands') {
       if (commandsError) {
         throw new Error('chat.commands unavailable');
