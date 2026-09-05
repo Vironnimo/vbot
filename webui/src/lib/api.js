@@ -389,6 +389,15 @@ export function deleteSkill(scope, name, options = {}) {
   return rpc('skill.delete', { scope, name }, options);
 }
 
+export function inspectSkill(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Skill id must be a non-empty string',
+    'skill.inspect',
+  );
+  return rpc('skill.inspect', { id }, options);
+}
+
 export function skillInventory(options = {}) {
   return rpc('skill.inventory', {}, options);
 }

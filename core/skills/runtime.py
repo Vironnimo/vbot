@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -346,6 +347,47 @@ class SkillRuntime:
         allowed_names = set(effective_project_allowed_skills(project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
+    def _manager_sources(self) -> list[tuple[Path, str | None, str | None]]:
+        self._ensure_started()
+        roots = self._skill_scan_roots(self._storage.load_settings(), self._resources_path)
+        sources: list[tuple[Path, str | None, str | None]] = [
+            (root, origin, None)
+            for root, origin in zip(roots, self._bundled_skill_origins(roots), strict=True)
+        ]
+        sources.extend(
+            (
+                project_skills_dir(Path(project.cwd), project.source_format),
+                project_skill_origin(project.display_name),
+                None,
+            )
+            for project in self._projects.list()
+        )
+        sources.extend(
+            (self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id)
+            for agent in self._agents.list()
+        )
+        unique_sources: dict[tuple[Path, str | None], tuple[Path, str | None, str | None]] = {}
+        for source in sources:
+            unique_sources.setdefault((source[0].resolve(), source[2]), source)
+        return list(unique_sources.values())
+
+    @staticmethod
+    def _manager_entry_id(root: Path, path: Path, owner_id: str | None) -> str:
+        identity = f"{root.resolve().as_posix()}\0{path.resolve().as_posix()}\0{owner_id or ''}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
+        """Read exactly one currently inventoried package without activating it."""
+        environment = self._skill_environment(self._storage.load_environment())
+        for root, _origin, owner_id in self._manager_sources():
+            registry = SkillRegistry.load(root, environment=environment)
+            paths = [skill.path for skill in registry.list_all()]
+            paths.extend(diagnostic.path for diagnostic in registry.invalid_diagnostics())
+            for path in paths:
+                if self._manager_entry_id(root, path, owner_id) == entry_id:
+                    return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
+        raise ValueError("Skill is no longer present in the inventory")
+
     def skill_inventory(self) -> dict[str, Any]:
         """One pass over every Skill source for the human manager (no exclusions).
 
@@ -360,13 +402,11 @@ class SkillRuntime:
         dropped.
         """
         self._ensure_started()
-        settings = self._storage.load_settings()
         environment = self._skill_environment(self._storage.load_environment())
-        scan_roots = self._skill_scan_roots(settings, self._resources_path)
         policy = self._policy.load()
 
         # (metadata, origin, owner_id, warnings, loadable) per scanned package.
-        raw_entries: list[tuple[SkillMetadata, str | None, str | None, list[str], bool]] = []
+        raw_entries: list[tuple[SkillMetadata, str | None, str | None, list[str], bool, Path]] = []
         merged_roots: list[Path] = []
         merged_origins: list[str | None] = []
 
@@ -374,26 +414,20 @@ class SkillRuntime:
             registry = SkillRegistry.load(root, environment=environment)
             for skill in registry.list_all():
                 raw_entries.append(
-                    (skill, origin, owner_id, registry.warnings_for(skill.name), True)
+                    (skill, origin, owner_id, registry.warnings_for(skill.name), True, root)
                 )
             for diagnostic in registry.invalid_diagnostics():
                 placeholder = SkillMetadata(
                     name=diagnostic.name, description="", path=diagnostic.path
                 )
-                raw_entries.append((placeholder, origin, owner_id, diagnostic.warnings, False))
+                raw_entries.append(
+                    (placeholder, origin, owner_id, diagnostic.warnings, False, root)
+                )
             merged_roots.append(root)
             merged_origins.append(origin)
 
-        for root, origin in zip(scan_roots, self._bundled_skill_origins(scan_roots), strict=True):
-            add_root(root, origin, None)
-        for project in self._projects.list():
-            add_root(
-                project_skills_dir(Path(project.cwd), project.source_format),
-                project_skill_origin(project.display_name),
-                None,
-            )
-        for agent in self._agents.list():
-            add_root(self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id)
+        for root, origin, owner_id in self._manager_sources():
+            add_root(root, origin, owner_id)
 
         merged = SkillRegistry.load(
             merged_roots[0],
@@ -402,7 +436,7 @@ class SkillRuntime:
             origins=merged_origins,
         )
         skills: list[dict[str, Any]] = []
-        for skill, origin, owner_id, warnings, loadable in raw_entries:
+        for skill, origin, owner_id, warnings, loadable, root in raw_entries:
             if loadable:
                 availability = merged.availability_for(skill.name)
                 missing = list(availability.missing)
@@ -420,6 +454,20 @@ class SkillRuntime:
             shared_receivers = owner_shared.get(skill.name, frozenset())
             skills.append(
                 {
+                    "id": self._manager_entry_id(root, skill.path, owner_id),
+                    "editable_scope": (
+                        f"agent:{owner_id}"
+                        if owner_id
+                        else "global"
+                        if root.resolve() == self.global_skills_dir.resolve()
+                        else None
+                    )
+                    if loadable
+                    else None,
+                    "source_label": (root.parent.name if root.name == "skills" else root.name)
+                    if origin == SKILL_ORIGIN_GLOBAL
+                    and root.resolve() != self.global_skills_dir.resolve()
+                    else None,
                     "name": skill.name,
                     "description": skill.description,
                     "origin": origin,
