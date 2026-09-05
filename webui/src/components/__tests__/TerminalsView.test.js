@@ -163,7 +163,11 @@ describe('TerminalsView', () => {
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
-    resizeTerminalMock.mockReset().mockResolvedValue({});
+    resizeTerminalMock
+      .mockReset()
+      .mockImplementation(async (_id, columns, rows) => ({
+        terminal: { columns, rows },
+      }));
     killTerminalMock.mockReset().mockResolvedValue({});
     forgetTerminalMock.mockReset().mockResolvedValue({});
     createTerminalGroupMock.mockReset().mockResolvedValue({});
@@ -265,7 +269,9 @@ describe('TerminalsView', () => {
 
     // The server confirms a different size than the fitted tile: the
     // pipeline closed without reconciling the two grids.
-    resizeTerminalMock.mockResolvedValue({ columns: 120, rows: 40 });
+    resizeTerminalMock.mockResolvedValue({
+      terminal: { columns: 120, rows: 40 },
+    });
     mockHostHeight = 660;
     resizeObservers[0].fire();
     await flushAnimationFrames(2);

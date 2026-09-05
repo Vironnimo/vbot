@@ -36,7 +36,7 @@ _PRIVATE_MODE_SEQUENCE_MIN = 1000
 # pyte cannot act on any of these keyboard/DA sequences, so they are
 # dropped before they reach it.
 _XT_KEYBOARD_MODE_COMPLETE = re.compile(r"\x1b\[[<>=][0-9;:]*[A-Za-z]")
-_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b\[[<>=][0-9;:]*$")
+_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b(?:\[(?:[<>=][0-9;:]*)?)?$")
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -330,11 +330,16 @@ class TerminalRenderer:
             line = self._screen.buffer[row_index]
             for column_index in range(self.columns):
                 cell = line[column_index]
+                # pyte stores the second cell of a wide glyph as empty. The
+                # glyph already advances the viewer by two columns; emitting a
+                # space for its continuation would wrap and scroll the snapshot.
+                if not cell.data:
+                    continue
                 style = _cell_style(cell)
                 if style != active_style:
                     parts.append(_style_sequence(cell))
                     active_style = style
-                parts.append(cell.data or " ")
+                parts.append(cell.data)
 
         cursor = self._screen.cursor
         parts.extend(

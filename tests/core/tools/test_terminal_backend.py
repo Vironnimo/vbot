@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import core.tools.terminal_backend as terminal_backend
 from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
 
@@ -172,6 +174,37 @@ def test_keyboard_mode_sequence_split_across_feeds_is_dropped() -> None:
     assert renderer.screen_text().startswith("ab")
     assert all(not renderer._screen.buffer[0][col].underscore for col in range(20))
     assert all(not renderer._screen.buffer[0][col].bold for col in range(20))
+
+
+@pytest.mark.parametrize("sequence", ["\x1b[>4;1m", "\x1b[=1u", "\x1b[<1u"])
+def test_keyboard_modes_are_filtered_at_every_stream_boundary(sequence: str) -> None:
+    for boundary in range(1, len(sequence)):
+        renderer = TerminalRenderer(40, 10, scrollback_lines=20)
+        renderer.feed("before" + sequence[:boundary])
+        renderer.feed(sequence[boundary:] + "after")
+        assert renderer.screen_text() == "beforeafter"
+        assert not renderer._screen.cursor.attrs.underscore
+        assert not renderer._screen.cursor.attrs.bold
+
+
+@pytest.mark.parametrize("alternate", [False, True])
+@pytest.mark.parametrize(
+    "text", ["\u4e2d\u6587AB", "\U0001f600AB", "e\u0301\u4e2d", "x" * 38 + "\u4e2d"]
+)
+def test_unicode_snapshot_preserves_screen_and_cursor(text: str, alternate: bool) -> None:
+    source = TerminalRenderer(40, 10, scrollback_lines=20)
+    if alternate:
+        source.feed("\x1b[?1049h")
+    source.feed(text + "\r\n\x1b[31mTAIL\x1b[0m")
+    viewer = TerminalRenderer(40, 10, scrollback_lines=20)
+    viewer.feed(source.ansi_snapshot())
+    assert viewer.screen_text() == source.screen_text()
+    assert viewer.page(before=None, limit=20) == source.page(before=None, limit=20)
+    assert (viewer._screen.cursor.x, viewer._screen.cursor.y) == (
+        source._screen.cursor.x,
+        source._screen.cursor.y,
+    )
+    assert viewer._screen.buffer[1][0].fg == "red"
 
 
 def test_ansi_snapshot_reemits_alternate_screen_and_terminal_modes() -> None:
