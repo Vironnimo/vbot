@@ -1116,6 +1116,49 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.blockList.ownerHint.channel':
     'Included only while the agent has an active channel.',
 
+  'settings.categories.general': 'General',
+  'settings.categories.generalDescription':
+    'Make vBot comfortable to work with.',
+  'settings.categories.sessions': 'Sessions & Memory',
+  'settings.categories.sessionsDescription':
+    'Name conversations, find earlier work and learn from finished Sessions.',
+  'settings.categories.tools': 'Tools & Media',
+  'settings.categories.toolsDescription':
+    'Set up speech, images, web search and delegation.',
+  'settings.categories.connections': 'Connections',
+  'settings.categories.connectionsDescription':
+    'Connect Model Providers, messaging Channels and Extensions.',
+  'settings.categories.systemDescription':
+    'Server, connected devices and diagnostics.',
+  'settings.summary.appearance': 'Language, reading width and work details',
+  'settings.summary.hostTimezone': 'Server time zone',
+  'settings.summary.indexedSearch': 'Indexed search',
+  'settings.summary.historySearch': 'Session history search',
+  'settings.summary.notConfigured': 'Not configured',
+  'settings.summary.delegation': 'Depth, parallel work and time limits',
+  'settings.summary.providers': 'Accounts, credentials and available Models',
+  'settings.summary.channels': 'Messaging accounts and access',
+  'settings.summary.extensions': 'Installed capabilities and configuration',
+  'settings.summary.media': 'Speech, images and embeddings',
+  'settings.summary.voice': 'Microphone and voice activation',
+  'settings.summary.server': 'Server and connected clients',
+  'settings.summary.connection': 'Current server connection',
+  'settings.agentShortcut.description':
+    'Changing an Agent’s Model or Thinking level?',
+  'settings.agentShortcut.action': 'Go to Agents',
+  'agents.shared.title': 'Shared defaults',
+  'settings.agentShortcut.search':
+    'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
+  'agents.shared.back': 'Back to Agent',
+  'agents.shared.scope':
+    'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
+  'agents.shared.modelTitle': 'Model & Thinking',
+  'agents.shared.modelDescription':
+    'Choose the common starting point. Individual Agents can override it.',
+  'agents.shared.compactionDescription':
+    'The inherited policy for keeping long conversations within the Model context.',
+  'agents.shared.configureCompaction': 'Configure Compaction',
+  'agents.shared.listHint': 'Common Model, Thinking & Compaction',
   'settings.title': 'Settings',
   'settings.loading': 'Loading settings…',
   'settings.loadError': 'Settings could not be loaded.',
@@ -1125,7 +1168,7 @@ export const englishCatalog = Object.freeze({
   'settings.groups.general': 'General',
   'settings.groups.capabilities': 'Capabilities',
   'settings.groups.integrations': 'Integrations',
-  'settings.preferences.title': 'General',
+  'settings.preferences.title': 'Region & setup',
   'settings.preferences.subtitle': 'Time zone and getting started.',
   'settings.search.results': 'Search results',
   'settings.search.guidance': 'Choose a topic to open its settings.',

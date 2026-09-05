@@ -9,6 +9,11 @@
   let {
     agents = [],
     selectedAgentId = '',
+
+    sharedDefaultsOpen = false,
+
+    onOpenSharedDefaults = () => {},
+
     isLoading = false,
     isReordering = false,
     onSelect = () => {},
@@ -39,6 +44,7 @@
     if (dragSourceIndex === null || isReordering) {
       return;
     }
+
     event.preventDefault();
     dragTargetIndex = index;
     if (event.dataTransfer) {
@@ -203,6 +209,18 @@
         </div>
       {/each}
     {/if}
+  </div>
+
+  <div class="agent-list-defaults">
+    <Button
+      variant="secondary"
+      class={sharedDefaultsOpen ? 'agent-defaults-active' : ''}
+      aria-pressed={sharedDefaultsOpen}
+      onClick={onOpenSharedDefaults}
+      >{t('agents.shared.title', 'Shared defaults')}</Button
+    >
+
+    <p>{t('agents.shared.listHint', 'Common Model, Thinking & Compaction')}</p>
   </div>
   <div class="agent-list-pane__sr-only" aria-live="polite" role="status">
     {reorderAnnouncement}

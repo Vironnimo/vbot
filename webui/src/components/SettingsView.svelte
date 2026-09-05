@@ -1,13 +1,12 @@
 <script>
   import { onMount, tick, untrack } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
-  import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
-  import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
@@ -34,6 +33,7 @@
     connectProvider = null,
     disconnectProvider = null,
     onToast = noop,
+    onNavigateToAgentDefaults = noop,
     agents = [],
     desktopCapabilities = null,
     targetPanelId = '',
@@ -55,15 +55,12 @@
     return captureScrollPosition();
   }
 
-  let catalogGroups = $derived([
-    {
-      id: 'connect',
-      label: () => t('settings.groups.connect', 'Connect'),
-      sections: [
+  const autosaveContext = useAutosaveContext();
+  let catalog = $derived(
+    new Map(
+      [
         {
           id: 'providers',
-          labelKey: 'settings.providers.title',
-          labelFallback: 'Providers',
           label: () => t('settings.providers.title', 'Providers'),
           subtitle: () =>
             t(
@@ -73,8 +70,6 @@
         },
         {
           id: 'channels',
-          labelKey: 'settings.channels.title',
-          labelFallback: 'Channels',
           label: () => t('settings.channels.title', 'Channels'),
           subtitle: () =>
             t(
@@ -84,8 +79,6 @@
         },
         {
           id: 'extensions',
-          labelKey: 'settings.extensions.title',
-          labelFallback: 'Extensions',
           label: () => t('settings.extensions.title', 'Extensions'),
           subtitle: () =>
             t(
@@ -93,27 +86,8 @@
               'Loaded extensions and their capabilities. Toggles take effect immediately.',
             ),
         },
-      ],
-    },
-    {
-      id: 'models',
-      label: () => t('settings.groups.models', 'Models'),
-      sections: [
-        {
-          id: 'defaults',
-          labelKey: 'settings.defaults.title',
-          labelFallback: 'Agent defaults',
-          label: () => t('settings.defaults.title', 'Agent defaults'),
-          subtitle: () =>
-            t(
-              'settings.defaults.subtitle',
-              'Model, temperature, and thinking effort used when an agent or project leaves them unset — shown there as "Inherited: … (global default)".',
-            ),
-        },
         {
           id: 'specialized_models',
-          labelKey: 'settings.specializedModels.title',
-          labelFallback: 'Specialized Models',
           label: () =>
             t('settings.specializedModels.title', 'Specialized Models'),
           subtitle: () =>
@@ -122,27 +96,8 @@
               'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
             ),
         },
-      ],
-    },
-    {
-      id: 'conversation',
-      label: () => t('settings.groups.conversation', 'Conversation'),
-      sections: [
-        {
-          id: 'compaction',
-          labelKey: 'settings.compaction.title',
-          labelFallback: 'Compaction',
-          label: () => t('settings.compaction.title', 'Compaction'),
-          subtitle: () =>
-            t(
-              'settings.compaction.subtitle',
-              'Automatic summarizing when a conversation nears the model context limit.',
-            ),
-        },
         {
           id: 'session_titles',
-          labelKey: 'settings.sessionTitles.title',
-          labelFallback: 'Session titles',
           label: () => t('settings.sessionTitles.title', 'Session titles'),
           subtitle: () =>
             t(
@@ -152,8 +107,6 @@
         },
         {
           id: 'recall',
-          labelKey: 'settings.recall.title',
-          labelFallback: 'Recall',
           label: () => t('settings.recall.title', 'Recall'),
           subtitle: () =>
             t(
@@ -161,16 +114,8 @@
               'How agents search past conversations.',
             ),
         },
-      ],
-    },
-    {
-      id: 'behavior',
-      label: () => t('settings.groups.behavior', 'Behavior'),
-      sections: [
         {
           id: 'voice',
-          labelKey: 'settings.voice.title',
-          labelFallback: 'Voice',
           label: () => t('settings.voice.title', 'Voice'),
           subtitle: () =>
             t(
@@ -180,8 +125,6 @@
         },
         {
           id: 'web_search',
-          labelKey: 'settings.webSearch.title',
-          labelFallback: 'Web Search',
           label: () => t('settings.webSearch.title', 'Web Search'),
           subtitle: () =>
             t(
@@ -191,8 +134,6 @@
         },
         {
           id: 'subagents',
-          labelKey: 'settings.subagents.title',
-          labelFallback: 'Sub-Agents',
           label: () => t('settings.subagents.title', 'Sub-Agents'),
           subtitle: () =>
             t(
@@ -202,8 +143,6 @@
         },
         {
           id: 'reflection',
-          labelKey: 'settings.reflection.title',
-          labelFallback: 'Reflection',
           label: () => t('settings.reflection.title', 'Reflection'),
           subtitle: () =>
             t(
@@ -211,16 +150,8 @@
               'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
             ),
         },
-      ],
-    },
-    {
-      id: 'system',
-      label: () => t('settings.groups.system', 'System'),
-      sections: [
         {
           id: 'appearance',
-          labelKey: 'settings.appearance.title',
-          labelFallback: 'Appearance',
           label: () => t('settings.appearance.title', 'Appearance'),
           subtitle: () =>
             t(
@@ -230,8 +161,6 @@
         },
         {
           id: 'debug',
-          labelKey: 'debug.settings',
-          labelFallback: 'Debug',
           label: () => t('debug.settings', 'Debug'),
           subtitle: () =>
             t(
@@ -241,8 +170,6 @@
         },
         {
           id: 'general',
-          labelKey: 'settings.general.title',
-          labelFallback: 'Server info',
           label: () => t('settings.general.title', 'Server info'),
           subtitle: () =>
             t(
@@ -250,95 +177,102 @@
               'Server address, data directory, and connected clients.',
             ),
         },
-        ...(desktopCapabilities?.serverSelection
-          ? [
-              {
-                id: 'desktop_connection',
-                labelKey: 'settings.desktop.connection.title',
-                labelFallback: 'Connection',
-                label: () =>
-                  t('settings.desktop.connection.title', 'Connection'),
-                subtitle: () =>
-                  t(
-                    'settings.desktop.connection.subtitle',
-                    'Choose which vBot server this Desktop app connects to.',
-                  ),
-              },
-            ]
-          : []),
-      ],
-    },
-  ]);
-
-  // Keep one owner for every editor while topic navigation changes visibility.
-  // This preserves pending drafts and provider authentication across pages.
-  const autosaveContext = useAutosaveContext();
-  let catalog = $derived(
-    new Map(
-      catalogGroups
-        .flatMap((group) => group.sections)
-        .map((panel) => [panel.id, panel]),
+        {
+          id: 'desktop_connection',
+          label: () => t('settings.desktop.connection.title', 'Connection'),
+          subtitle: () =>
+            t(
+              'settings.desktop.connection.subtitle',
+              'Choose which vBot server this Desktop app connects to.',
+            ),
+        },
+      ].map((panel) => [panel.id, panel]),
     ),
   );
   let preferencesPanel = $derived({
     id: 'preferences',
     labelKey: 'settings.preferences.title',
     labelFallback: 'General',
-    label: () => t('settings.preferences.title', 'General'),
+    label: () => t('settings.preferences.title', 'Region & setup'),
     subtitle: () =>
       t('settings.preferences.subtitle', 'Time zone and getting started.'),
   });
   let groups = $derived([
     {
-      id: 'general',
-      label: () => t('settings.groups.general', 'General'),
+      id: 'personal',
+      label: () => t('settings.categories.general', 'General'),
+      description: () =>
+        t(
+          'settings.categories.generalDescription',
+          'Make vBot comfortable to work with.',
+        ),
       sections: [catalog.get('appearance'), preferencesPanel],
     },
     {
-      id: 'models',
-      label: () => t('settings.groups.models', 'Models'),
-      sections: ['providers', 'defaults', 'specialized_models'].map((id) =>
+      id: 'sessions',
+      label: () => t('settings.categories.sessions', 'Sessions & Memory'),
+      description: () =>
+        t(
+          'settings.categories.sessionsDescription',
+          'Name conversations, find earlier work and learn from finished Sessions.',
+        ),
+      sections: ['session_titles', 'recall', 'reflection'].map((id) =>
         catalog.get(id),
       ),
     },
     {
-      id: 'conversation',
-      label: () => t('settings.groups.conversation', 'Conversation'),
-      sections: ['compaction', 'session_titles', 'recall', 'reflection'].map(
+      id: 'tools',
+      label: () => t('settings.categories.tools', 'Tools & Media'),
+      description: () =>
+        t(
+          'settings.categories.toolsDescription',
+          'Set up speech, images, web search and delegation.',
+        ),
+      sections: ['specialized_models', 'voice', 'web_search', 'subagents'].map(
         (id) => catalog.get(id),
       ),
     },
     {
-      id: 'capabilities',
-      label: () => t('settings.groups.capabilities', 'Capabilities'),
-      sections: ['voice', 'web_search', 'subagents'].map((id) =>
+      id: 'connections',
+      label: () => t('settings.categories.connections', 'Connections'),
+      description: () =>
+        t(
+          'settings.categories.connectionsDescription',
+          'Connect Model Providers, messaging Channels and Extensions.',
+        ),
+      sections: ['providers', 'channels', 'extensions'].map((id) =>
         catalog.get(id),
       ),
     },
     {
-      id: 'integrations',
-      label: () => t('settings.groups.integrations', 'Integrations'),
-      sections: ['channels', 'extensions'].map((id) => catalog.get(id)),
-    },
-    {
       id: 'system',
       label: () => t('settings.groups.system', 'System'),
+      description: () =>
+        t(
+          'settings.categories.systemDescription',
+          'Server, connected devices and diagnostics.',
+        ),
       sections: [
         'general',
-        'debug',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
+        'debug',
       ].map((id) => catalog.get(id)),
     },
   ]);
   let panels = $derived(groups.flatMap((group) => group.sections));
   let panelById = $derived(new Map(panels.map((panel) => [panel.id, panel])));
   let mobileSectionOptions = $derived(
-    groups.flatMap((group) =>
-      group.sections.map((panel) => ({
-        value: panel.id,
-        label: panel.label(),
-        secondaryLabel: group.label(),
-      })),
+    groups.map((group) => ({ value: group.id, label: group.label() })),
+  );
+  let expandedSections = $state(
+    new Set(
+      untrack(
+        () =>
+          initialScrollPosition?.expandedSections ?? [
+            'appearance',
+            'preferences',
+          ],
+      ),
     ),
   );
   let settings = $state(null);
@@ -348,7 +282,7 @@
   let scrollContainer = $state(null);
   let documentRoot = $state(null);
   let activeSectionId = $state(
-    untrack(() => initialScrollPosition?.sectionId || 'providers'),
+    untrack(() => initialScrollPosition?.sectionId || 'appearance'),
   );
   let searchQuery = $state('');
   let searchResults = $state([]);
@@ -358,7 +292,6 @@
       group.sections.some((panel) => panel.id === activeSectionId),
     ),
   );
-  let matchCount = $derived(searchResults.length);
   let handledTargetPanelRequestId = -1;
   let restoreTop = untrack(() => Math.max(0, initialScrollPosition?.top || 0));
   let restorePending = untrack(() => Boolean(initialScrollPosition));
@@ -439,6 +372,15 @@
         if (terms.every((term) => text.includes(term))) results.push(panel.id);
       }
     }
+    if (
+      terms.length &&
+      terms.every((term) =>
+        normalizedSearch(
+          'Agent defaults global shared Model Thinking effort temperature fallback compaction',
+        ).includes(term),
+      )
+    )
+      results.push('agent_defaults');
     // Avoid observing our own result-list render as another result change.
     if (results.join('|') !== searchResults.join('|')) searchResults = results;
   }
@@ -462,6 +404,7 @@
       ? {
           top: Math.max(0, scrollContainer.scrollTop),
           sectionId: activeSectionId,
+          expandedSections: [...expandedSections],
         }
       : null;
   }
@@ -476,8 +419,13 @@
     releaseRestore();
     searchQuery = '';
     activeSectionId = panelId;
+    expandedSections = new Set([...expandedSections, panelId]);
     await tick();
-    if (scrollContainer) scrollContainer.scrollTop = 0;
+    const target = documentRoot?.querySelector(
+      `[data-settings-section="${panelId}"]`,
+    );
+    if (scrollContainer && target)
+      scrollContainer.scrollTop = target.offsetTop - documentRoot.offsetTop;
     onScrollPositionChange(captureScrollPosition());
     if (focusHeading)
       documentRoot
@@ -487,6 +435,94 @@
 
   function navigateToSection(panelId) {
     return autosaveContext.requestTransition(() => selectSection(panelId));
+  }
+
+  function navigateToCategory(categoryId) {
+    const group = groups.find((item) => item.id === categoryId);
+    if (!group) return;
+    return autosaveContext.requestTransition(async () => {
+      releaseRestore();
+      searchQuery = '';
+      activeSectionId = group.sections[0].id;
+      await tick();
+      if (scrollContainer) scrollContainer.scrollTop = 0;
+      onScrollPositionChange(captureScrollPosition());
+      documentRoot
+        ?.querySelector('.settings-page-heading h2')
+        ?.focus({ preventScroll: true });
+    });
+  }
+
+  function toggleSection(panelId) {
+    return autosaveContext.requestTransition(() => {
+      activeSectionId = panelId;
+      searchQuery = '';
+      const next = new SvelteSet(expandedSections);
+      if (next.has(panelId)) next.delete(panelId);
+      else next.add(panelId);
+      expandedSections = next;
+      onScrollPositionChange(captureScrollPosition());
+    });
+  }
+
+  function sectionSummary(panelId) {
+    const onOff = (value) =>
+      value ? t('common.enabled', 'Enabled') : t('common.disabled', 'Disabled');
+    switch (panelId) {
+      case 'appearance':
+        return t(
+          'settings.summary.appearance',
+          'Language, reading width and work details',
+        );
+      case 'preferences':
+        return (
+          settings?.general?.timezone ||
+          t('settings.summary.hostTimezone', 'Server time zone')
+        );
+      case 'session_titles':
+        return onOff(settings?.session_titles?.enabled);
+      case 'recall':
+        return settings?.recall?.backend === 'sqlite_fts'
+          ? t('settings.summary.indexedSearch', 'Indexed search')
+          : t('settings.summary.historySearch', 'Session history search');
+      case 'reflection':
+        return onOff(settings?.reflection?.enabled !== false);
+      case 'web_search':
+        return (
+          settings?.web_search?.provider ||
+          t('settings.summary.notConfigured', 'Not configured')
+        );
+      case 'subagents':
+        return t(
+          'settings.summary.delegation',
+          'Depth, parallel work and time limits',
+        );
+      case 'providers':
+        return t(
+          'settings.summary.providers',
+          'Accounts, credentials and available Models',
+        );
+      case 'channels':
+        return t('settings.summary.channels', 'Messaging accounts and access');
+      case 'extensions':
+        return t(
+          'settings.summary.extensions',
+          'Installed capabilities and configuration',
+        );
+      case 'specialized_models':
+        return t('settings.summary.media', 'Speech, images and embeddings');
+      case 'voice':
+        return t('settings.summary.voice', 'Microphone and voice activation');
+      case 'general':
+        return (
+          settings?.general?.server_address ||
+          t('settings.summary.server', 'Server and connected clients')
+        );
+      case 'debug':
+        return onOff(settings?.debug?.enabled);
+      default:
+        return t('settings.summary.connection', 'Current server connection');
+    }
   }
 
   function handleSearchInput(event) {
@@ -540,17 +576,128 @@
   }
 </script>
 
-{#snippet sectionHeader(panel)}
-  <header class="s-section-header">
-    <h2
-      tabindex="-1"
-      class="s-section-title"
-      id={`settings-section-${panel.id}`}
-    >
-      {panel.label()}
-    </h2>
-    <p class="s-section-sub">{panel.subtitle()}</p>
-  </header>
+{#snippet panelContent(panelId)}
+  {#if panelId === 'preferences'}
+    <SettingsGeneralPanel
+      page="preferences"
+      {settings}
+      {onOpenSetupGuide}
+      onCommit={commitSettings}
+      {onToast}
+      onError={reportSettingsError}
+    />
+  {:else if panelId === 'providers'}
+    <SettingsProvidersPanel
+      bind:this={providersPanel}
+      {settings}
+      visible={true}
+      {providerAuthEvent}
+      {connectProvider}
+      {disconnectProvider}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+      onReloadSettings={loadSettings}
+      {modelsRefreshToken}
+    />
+  {:else if panelId === 'channels'}
+    <SettingsChannelsPanel
+      {onToast}
+      {channelsRefreshToken}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'extensions'}
+    <SettingsExtensionsPanel
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'specialized_models'}
+    <SettingsSpecializedModelsPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+      {modelsRefreshToken}
+    />
+  {:else if panelId === 'session_titles'}
+    <SettingsSessionTitlesPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+      {modelsRefreshToken}
+    />
+  {:else if panelId === 'recall'}
+    <SettingsRecallPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'voice'}
+    <div class="settings-related">
+      <Button
+        variant="tertiary"
+        onClick={() => navigateToSection('specialized_models')}
+        >{t('settings.voice.modelsLink', 'Choose speech Models')}</Button
+      >
+    </div>
+    <WakewordVoiceSettings
+      {agents}
+      {settings}
+      wakewordAvailable={desktopCapabilities?.wakeword === true}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'web_search'}
+    <SettingsWebSearchPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'subagents'}
+    <SettingsSubAgentsPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'reflection'}
+    <SettingsReflectionPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'appearance'}
+    <SettingsAppearancePanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'debug'}
+    <SettingsDebugPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+      {onDebugEnabledChange}
+    />
+  {:else if panelId === 'general'}
+    <SettingsGeneralPanel
+      {settings}
+      {clientsRefreshToken}
+      {onOpenSetupGuide}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'desktop_connection'}
+    <DesktopConnectionSettings {onToast} />
+  {/if}
 {/snippet}
 
 <section
@@ -565,19 +712,6 @@
       {t('settings.title', 'Settings')}
     </div>
     <div class="settings-search">
-      <svg
-        class="settings-search-icon"
-        width="13"
-        height="13"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.4"
-        aria-hidden="true"
-      >
-        <circle cx="11" cy="11" r="7" />
-        <path d="M20 20l-4-4" />
-      </svg>
       <input
         class="settings-search-input"
         type="search"
@@ -587,49 +721,46 @@
         aria-label={t('settings.search.label', 'Search settings')}
       />
     </div>
-    <div class="settings-search-count" role="status">
-      {#if searchActive}
-        {t('settings.search.matches', 'Matches: {count}', {
-          count: matchCount,
-        })}
-      {/if}
-    </div>
-
     <div class="settings-desktop-index">
       {#each groups as group (group.id)}
-        <div class="settings-nav-group">{group.label()}</div>
-        {#each group.sections as panel (panel.id)}
-          <button
-            class:snav-item--active={panel.id === activeSectionId}
-            class="snav-item"
-            type="button"
-            aria-current={panel.id === activeSectionId ? 'true' : undefined}
-            aria-label={t(panel.labelKey, panel.labelFallback)}
-            onclick={() => navigateToSection(panel.id)}
-          >
-            {panel.label()}
-          </button>
-        {/each}
+        <button
+          class="snav-item"
+          class:snav-item--active={!searchActive &&
+            group.id === activeGroup?.id}
+          type="button"
+          aria-current={!searchActive && group.id === activeGroup?.id
+            ? 'page'
+            : undefined}
+          onclick={() => navigateToCategory(group.id)}>{group.label()}</button
+        >
       {/each}
     </div>
-
     <div class="settings-mobile-section-picker">
-      <span class="settings-mobile-section-label">
-        {t('settings.sections', 'Settings sections')}
-      </span>
       <Dropdown
         id="settings-mobile-section"
-        value={activeSectionId}
+        value={activeGroup?.id}
         options={mobileSectionOptions}
         ariaLabel={t('settings.sections', 'Settings sections')}
-        triggerClass="settings-mobile-section-dropdown"
-        onValueChange={navigateToSection}
+        onValueChange={navigateToCategory}
       />
     </div>
+    <div class="settings-agents-link">
+      <p>
+        {t(
+          'settings.agentShortcut.description',
+          'Changing an Agent’s Model or Thinking level?',
+        )}
+      </p>
+      <Button
+        variant="secondary"
+        onClick={() => onNavigateToAgentDefaults('agent')}
+        >{t('settings.agentShortcut.action', 'Go to Agents')}
+        <span aria-hidden="true">↗</span></Button
+      >
+    </div>
   </nav>
-
-  <!-- The scroll region needs keyboard focus; interaction releases restored scrolling. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+  <!-- Keyboard interaction releases scroll restoration for this scrollable region. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
     class="settings-content"
     role="region"
@@ -644,39 +775,58 @@
   >
     <div class="s-doc" bind:this={documentRoot}>
       {#if loading}
-        <Banner variant="neutral">
-          {t('settings.loading', 'Loading settings…')}
-        </Banner>
+        <Banner variant="neutral"
+          >{t('settings.loading', 'Loading settings…')}</Banner
+        >
       {:else if loadError}
-        <Banner variant="error">
-          <span>{loadError}</span>
-          <Button variant="secondary" onClick={loadSettings}>
-            {t('common.retry', 'Retry')}
-          </Button>
-        </Banner>
+        <Banner variant="error"
+          ><span>{loadError}</span><Button
+            variant="secondary"
+            onClick={loadSettings}>{t('common.retry', 'Retry')}</Button
+          ></Banner
+        >
       {:else}
+        <header class="settings-page-heading">
+          <div class="settings-page-eyebrow">
+            {t('settings.title', 'Settings')}
+          </div>
+          <h2 tabindex="-1">
+            {searchActive
+              ? t('settings.search.results', 'Search results')
+              : activeGroup?.label()}
+          </h2>
+          <p>
+            {searchActive
+              ? t(
+                  'settings.search.guidance',
+                  'Choose a topic to open its settings.',
+                )
+              : activeGroup?.description()}
+          </p>
+        </header>
         {#if searchActive}
-          <header class="settings-page-heading">
-            <h2>{t('settings.search.results', 'Search results')}</h2>
-            <p>
-              {t(
-                'settings.search.guidance',
-                'Choose a topic to open its settings.',
-              )}
-            </p>
-          </header>
           <div class="settings-search-results">
             {#each searchResults as panelId (panelId)}
               {@const panel = panelById.get(panelId)}
               <Button
                 class="settings-search-result"
-                onClick={() => navigateToSection(panelId)}
+                onClick={() =>
+                  panel
+                    ? navigateToSection(panelId)
+                    : onNavigateToAgentDefaults('defaults')}
               >
                 <span class="settings-search-result__title"
-                  >{panel.label()}</span
+                  >{panel
+                    ? panel.label()
+                    : t('agents.shared.title', 'Shared defaults')}</span
                 >
                 <span class="settings-search-result__description"
-                  >{panel.subtitle()}</span
+                  >{panel
+                    ? panel.subtitle()
+                    : t(
+                        'settings.agentShortcut.search',
+                        'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
+                      )}</span
                 >
               </Button>
             {:else}
@@ -689,283 +839,46 @@
               />
             {/each}
           </div>
-        {:else}
-          <div class="s-doc-group">{activeGroup?.label()}</div>
         {/if}
-
-        <section
-          class="s-section"
-          data-settings-section="preferences"
-          hidden={searchActive || activeSectionId !== 'preferences'}
-          aria-labelledby="settings-section-preferences"
-        >
-          {@render sectionHeader(preferencesPanel)}
-          <SettingsGeneralPanel
-            page="preferences"
-            {settings}
-            {onOpenSetupGuide}
-            onCommit={commitSettings}
-            {onToast}
-            onError={reportSettingsError}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="providers"
-          hidden={searchActive || activeSectionId !== 'providers'}
-          aria-labelledby="settings-section-providers"
-        >
-          {@render sectionHeader(panelById.get('providers'))}
-          <SettingsProvidersPanel
-            bind:this={providersPanel}
-            {settings}
-            visible={true}
-            {providerAuthEvent}
-            {connectProvider}
-            {disconnectProvider}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            onReloadSettings={loadSettings}
-            {modelsRefreshToken}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="channels"
-          hidden={searchActive || activeSectionId !== 'channels'}
-          aria-labelledby="settings-section-channels"
-        >
-          {@render sectionHeader(panelById.get('channels'))}
-          <SettingsChannelsPanel
-            {onToast}
-            {channelsRefreshToken}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="extensions"
-          hidden={searchActive || activeSectionId !== 'extensions'}
-          aria-labelledby="settings-section-extensions"
-        >
-          {@render sectionHeader(panelById.get('extensions'))}
-          <SettingsExtensionsPanel
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="defaults"
-          hidden={searchActive || activeSectionId !== 'defaults'}
-          aria-labelledby="settings-section-defaults"
-        >
-          {@render sectionHeader(panelById.get('defaults'))}
-          <SettingsDefaultsPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            {modelsRefreshToken}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="specialized_models"
-          hidden={searchActive || activeSectionId !== 'specialized_models'}
-          aria-labelledby="settings-section-specialized_models"
-        >
-          {@render sectionHeader(panelById.get('specialized_models'))}
-          <SettingsSpecializedModelsPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            {modelsRefreshToken}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="compaction"
-          hidden={searchActive || activeSectionId !== 'compaction'}
-          aria-labelledby="settings-section-compaction"
-        >
-          {@render sectionHeader(panelById.get('compaction'))}
-          <SettingsCompactionPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            {modelsRefreshToken}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="session_titles"
-          hidden={searchActive || activeSectionId !== 'session_titles'}
-          aria-labelledby="settings-section-session_titles"
-        >
-          {@render sectionHeader(panelById.get('session_titles'))}
-          <SettingsSessionTitlesPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            {modelsRefreshToken}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="recall"
-          hidden={searchActive || activeSectionId !== 'recall'}
-          aria-labelledby="settings-section-recall"
-        >
-          {@render sectionHeader(panelById.get('recall'))}
-          <SettingsRecallPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="voice"
-          hidden={searchActive || activeSectionId !== 'voice'}
-          aria-labelledby="settings-section-voice"
-        >
-          {@render sectionHeader(panelById.get('voice'))}
-          <div class="settings-related">
-            <Button
-              variant="tertiary"
-              onClick={() => navigateToSection('specialized_models')}
-              >{t('settings.voice.modelsLink', 'Choose speech Models')}</Button
+        <div class="settings-feature-grid">
+          {#each panels as panel (panel.id)}
+            <section
+              class="s-section settings-feature"
+              class:settings-feature--expanded={expandedSections.has(panel.id)}
+              data-settings-section={panel.id}
+              hidden={searchActive || !activeGroup?.sections.includes(panel)}
+              aria-labelledby={`settings-section-${panel.id}`}
             >
-          </div>
-          <WakewordVoiceSettings
-            {agents}
-            {settings}
-            wakewordAvailable={desktopCapabilities?.wakeword === true}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="web_search"
-          hidden={searchActive || activeSectionId !== 'web_search'}
-          aria-labelledby="settings-section-web_search"
-        >
-          {@render sectionHeader(panelById.get('web_search'))}
-          <SettingsWebSearchPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="subagents"
-          hidden={searchActive || activeSectionId !== 'subagents'}
-          aria-labelledby="settings-section-subagents"
-        >
-          {@render sectionHeader(panelById.get('subagents'))}
-          <SettingsSubAgentsPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="reflection"
-          hidden={searchActive || activeSectionId !== 'reflection'}
-          aria-labelledby="settings-section-reflection"
-        >
-          {@render sectionHeader(panelById.get('reflection'))}
-          <SettingsReflectionPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="appearance"
-          hidden={searchActive || activeSectionId !== 'appearance'}
-          aria-labelledby="settings-section-appearance"
-        >
-          {@render sectionHeader(panelById.get('appearance'))}
-          <SettingsAppearancePanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="debug"
-          hidden={searchActive || activeSectionId !== 'debug'}
-          aria-labelledby="settings-section-debug"
-        >
-          {@render sectionHeader(panelById.get('debug'))}
-          <SettingsDebugPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-            {onDebugEnabledChange}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="general"
-          hidden={searchActive || activeSectionId !== 'general'}
-          aria-labelledby="settings-section-general"
-        >
-          {@render sectionHeader(panelById.get('general'))}
-          <SettingsGeneralPanel
-            {settings}
-            {clientsRefreshToken}
-            {onOpenSetupGuide}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        {#if desktopCapabilities?.serverSelection}
-          <section
-            class="s-section"
-            data-settings-section="desktop_connection"
-            hidden={searchActive || activeSectionId !== 'desktop_connection'}
-            aria-labelledby="settings-section-desktop_connection"
-          >
-            {@render sectionHeader(panelById.get('desktop_connection'))}
-            <DesktopConnectionSettings {onToast} />
-          </section>
-        {/if}
+              <header class="settings-feature-heading">
+                <div class="settings-feature-summary">
+                  {sectionSummary(panel.id)}
+                </div>
+                <h3>
+                  <button
+                    type="button"
+                    id={`settings-section-${panel.id}`}
+                    aria-label={panel.label()}
+                    aria-expanded={expandedSections.has(panel.id)}
+                    aria-controls={`settings-body-${panel.id}`}
+                    onclick={() => toggleSection(panel.id)}
+                    >{panel.label()}<span
+                      class="settings-feature-indicator"
+                      aria-hidden="true"
+                    ></span></button
+                  >
+                </h3>
+                <p>{panel.subtitle()}</p>
+              </header>
+              <div
+                id={`settings-body-${panel.id}`}
+                class="settings-feature-body"
+                hidden={!expandedSections.has(panel.id)}
+              >
+                {@render panelContent(panel.id)}
+              </div>
+            </section>
+          {/each}
+        </div>
       {/if}
     </div>
   </div>

@@ -370,7 +370,9 @@ export function sidebarNavButton(text) {
 
 export function settingsPanelButton(text) {
   return Array.from(
-    document.querySelectorAll('nav.settings-nav .snav-item'),
+    document.querySelectorAll(
+      'nav.settings-nav .snav-item, .settings-feature-heading h3 button',
+    ),
   ).find((button) => button.textContent?.trim() === text);
 }
 
