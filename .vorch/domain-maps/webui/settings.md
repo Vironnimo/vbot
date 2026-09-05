@@ -62,3 +62,8 @@ Settings-style panels register their pending local draft and save lifecycle with
 - Onboarding: `webui/src/lib/onboarding.js` and onboarding components under `webui/src/components/`
 - Desktop Voice: `webui/src/lib/desktopBridge.js`, `webui/src/lib/wakewordSettings.js`, and the Voice settings panel
 - Focused coverage: the split `webui/src/lib/__tests__/settingsView.test.*.test.js` suites, `taskModelSettings.test.js`, `onboarding.test.js`, `desktopBridge.test.js`, `wakewordSettings.test.js`, plus Settings and onboarding component tests under `webui/src/components/__tests__/`; specialized-model loading is covered by `SettingsSpecializedModelsPanel.test.js`, and OpenRouter routing behavior by `OpenRouterRoutingSettings.test.js`
+
+
+## Extension input outside Settings
+
+`ExtensionRequests.svelte` is mounted in the App content area and polls the shared Extension request projection with owned cleanup. A pending request shows a review banner; the shared Modal displays the external message, schema-derived controls, or a safe HTTP(S) login link and redirected-address field. Accept/decline/cancel use the Extension's declared response operation. Form validity remains server-owned. Polling does not reset an open draft, and a resolved or cancelled request dismisses its dialog. Tests: `ExtensionRequests.test.js` and `extensionInputs.test.js`.

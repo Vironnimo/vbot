@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from collections.abc import Sequence
 from difflib import get_close_matches
 from typing import Any
@@ -503,3 +504,81 @@ def _format_unknown_extension(name: str, candidates: list[str]) -> str:
         if suggestions:
             lines.append(f"did you mean: {suggestions[0]}")
     return "\n".join(lines)
+
+
+def extensions_operation(instance: ServerInstance, name: str, tokens: list[str]) -> CommandResult:
+    """Discover and invoke an Extension's own CLI management surface."""
+    catalog = _rpc_call(instance, "extensions.operation", {"name": name, "operation": "describe"})
+    if not catalog.ok:
+        return catalog.to_command_result()
+    operations = catalog.data.get("operations", [])
+    if tokens in (["operations"], ["--help"]):
+        return CommandResult(
+            ok=True, message=json.dumps({"operations": operations}, indent=2), instance=instance
+        )
+    operation = next((item for item in operations if item["name"] == tokens[0]), None)
+    if operation is None:
+        return CommandResult(
+            ok=False,
+            message=json.dumps(
+                {"unknown_operation": tokens[0], "available": [item["name"] for item in operations]}
+            ),
+            instance=instance,
+        )
+    if "--help" in tokens[1:]:
+        return CommandResult(ok=True, message=json.dumps(operation, indent=2), instance=instance)
+    try:
+        arguments = _operation_arguments(operation, tokens[1:])
+    except (ValueError, UnicodeError) as error:
+        return CommandResult(ok=False, message=str(error), instance=instance)
+    payload = _rpc_call(
+        instance,
+        "extensions.operation",
+        {"name": name, "operation": operation["name"], "arguments": arguments},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    failed = payload.data.get("state") in {"failed", "cancelled"}
+    return CommandResult(
+        ok=not failed,
+        message=json.dumps(dict(payload.data), ensure_ascii=False, indent=2),
+        instance=instance,
+    )
+
+
+def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    remaining = list(tokens)
+    if "--stdin" in remaining:
+        remaining.remove("--stdin")
+        stream = getattr(sys.stdin, "buffer", None)
+        raw = (stream.read().decode("utf-8") if stream is not None else sys.stdin.read()).lstrip(
+            "\ufeff"
+        )
+        arguments = json.loads(raw)
+        if not isinstance(arguments, dict):
+            raise ValueError("Extension input must be a JSON object")
+    elif operation.get("secret"):
+        raise ValueError(
+            "This operation requires --stdin so credentials do not enter shell arguments"
+        )
+    properties = operation["parameters"].get("properties", {})
+    positional = next((key for key in ("id", "request_id", "job_id") if key in properties), None)
+    if remaining and not remaining[0].startswith("--"):
+        if positional is None or positional in arguments:
+            raise ValueError("Unexpected or duplicate positional identifier")
+        arguments[positional] = remaining.pop(0)
+    while remaining:
+        token = remaining.pop(0)
+        key = token.removeprefix("--").replace("-", "_")
+        if not token.startswith("--") or key not in properties or not remaining or key in arguments:
+            raise ValueError("Unknown, duplicate, or incomplete Extension argument; inspect --help")
+        raw = remaining.pop(0)
+        if properties[key].get("type") == "string" or (
+            properties[key].get("enum")
+            and all(isinstance(item, str) for item in properties[key]["enum"])
+        ):
+            arguments[key] = raw
+        else:
+            arguments[key] = json.loads(raw)
+    return arguments

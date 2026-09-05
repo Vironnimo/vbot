@@ -470,6 +470,7 @@ class ToolDefinitionProfileContext:
     """Stable configuration identity used to select model-facing Tool profiles."""
 
     agent_id: str
+    project_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -909,6 +910,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self.revision = 0
         self._families: dict[str, ToolFamily] = {
             family_id: ToolFamily(id=family_id, label=label)
             for family_id, label in BUILTIN_TOOL_FAMILY_LABELS.items()
@@ -989,6 +991,7 @@ class ToolRegistry:
             definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
+        self.revision += 1
         return tool
 
     def register_family(
@@ -1051,9 +1054,23 @@ class ToolRegistry:
         except KeyError:
             raise ToolNotFoundError(f"Tool not found: {name}") from None
 
+    def replace_owned_tools(self, previous: Sequence[Tool], candidates: Sequence[Tool]) -> None:
+        """Atomically publish validated Tools, checking exact previous ownership."""
+        owned = {tool.name: tool for tool in previous}
+        for tool in candidates:
+            existing = self._tools.get(tool.name)
+            if existing is not None and existing is not owned.get(tool.name):
+                raise DuplicateToolError(f"Tool already registered: {tool.name}")
+        for name, tool in owned.items():
+            if self._tools.get(name) is tool:
+                self.unregister(name)
+        self._tools.update({tool.name: tool for tool in candidates})
+        self.revision += 1
+
     def unregister(self, name: str) -> None:
         """Remove a registered tool when it exists."""
-        self._tools.pop(name, None)
+        if self._tools.pop(name, None) is not None:
+            self.revision += 1
         for cache_key in [
             cache_key for cache_key in self._definition_profile_cache if cache_key[0] == name
         ]:

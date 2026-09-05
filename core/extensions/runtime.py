@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.extensions.extensions import ExtensionRegistry, purge_extension_modules
+from core.extensions.operations import ExtensionHost
 from core.storage import StorageManager
 
 
@@ -35,6 +36,7 @@ class ExtensionRuntime:
         reload_skills: Callable[[], None],
         recover_recall: Callable[[set[str]], None],
         logger: Any,
+        make_host: Callable[[], ExtensionHost] | None = None,
     ) -> None:
         self._storage = storage
         self._resources_path = resources_path
@@ -51,6 +53,7 @@ class ExtensionRuntime:
         self._reload_skills = reload_skills
         self._recover_recall = recover_recall
         self._logger = logger
+        self._make_host = make_host
         self._mutation_lock = asyncio.Lock()
 
     async def reload(self) -> None:
@@ -93,6 +96,8 @@ class ExtensionRuntime:
             self._reload_recall()
             self._refresh_prompts()
             self._reload_skills()
+            if self._make_host is not None:
+                new_registry.bind_host(self._make_host())
             await new_registry.fire_startup()
 
             records = new_registry.records()

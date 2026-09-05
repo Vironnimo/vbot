@@ -83,6 +83,7 @@ from cli.extensions_management import (
     extensions_disable,
     extensions_enable,
     extensions_list,
+    extensions_operation,
     extensions_reload,
     extensions_set,
     extensions_show,
@@ -1408,11 +1409,7 @@ def dispatch_extensions_command(
         return show_extension_fn(instance, name)
     if rest[0] == "set":
         return _dispatch_extensions_set(args, instance, name, rest, set_extension_fn)
-    return _extensions_usage(
-        instance,
-        f"unknown command 'extensions {name} {rest[0]}'; "
-        f"use 'extensions {name}' or 'extensions {name} set <field> <value>'",
-    )
+    return extensions_operation(instance, name, rest)
 
 
 def _dispatch_extensions_set(

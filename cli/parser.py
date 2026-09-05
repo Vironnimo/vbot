@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 
 from core.channels import (
@@ -288,7 +289,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)
     _add_doctor_parsers(subparsers)
-    return parser.parse_args(argv)
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    operation_args = _extension_operation_args(tokens)
+    return operation_args if operation_args is not None else parser.parse_args(tokens)
+
+
+def _extension_operation_args(tokens: list[str]) -> argparse.Namespace | None:
+    if not tokens or tokens[0] != "extensions":
+        return None
+    target_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    _add_target_arguments(target_parser)
+    target, remaining = target_parser.parse_known_args(tokens[1:])
+    if len(remaining) < 2 or remaining[0] in {"list", "reload", "enable", "disable"}:
+        return None
+    if remaining[1] == "set":
+        return None
+    return argparse.Namespace(
+        area="extensions",
+        selector=remaining[0],
+        rest=remaining[1:],
+        stdin=False,
+        host=target.host,
+        port=target.port,
+        data_dir=target.data_dir,
+    )
 
 
 def _add_target_arguments(
@@ -1192,7 +1216,9 @@ def _add_extensions_parsers(
             "<name>' shows one extension's settings; 'extensions <name> set <field> "
             "<value>' writes one setting (a secret field is stored in .env, other "
             "fields go to live config, both applied without a restart); 'extensions "
-            "enable|disable <name>' toggles an extension (applied live)."
+            "enable|disable <name>' toggles an extension (applied live). "
+            "Use 'extensions <name> operations' to discover managed operations, "
+            "then 'extensions <name> <operation> --help' for its arguments."
         ),
     )
     _add_target_arguments(extensions_parser)
