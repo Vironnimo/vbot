@@ -465,10 +465,10 @@
     {#each extensions as extension (extension.name)}
       {@const rowBusy = panelBusy}
       {@const isOverridden = extension.status === 'overridden'}
-      {@const capabilities = summarizeExtensionCapabilities(
-        extension.capabilities,
-        t,
-      )}
+      {@const capabilities =
+        extension.name === 'mcp' && extension.status === 'loaded'
+          ? ''
+          : summarizeExtensionCapabilities(extension.capabilities, t)}
       {@const waiting = describeExtensionWaiting(extension, t)}
       <div class="s-ext-card">
         <div class="s-ext-head">
