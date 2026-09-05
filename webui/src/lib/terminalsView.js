@@ -462,7 +462,7 @@ export function createTerminalsController({
         resizeTimer: null,
         pendingResize: null,
         lastResize: null,
-        resizeChain: Promise.resolve(),
+        resizeInFlight: null,
       };
       streamRecords.set(terminalId, stream);
     }
@@ -763,21 +763,34 @@ export function createTerminalsController({
     // Skip resizes that only repeat the terminal's authoritative dimensions.
     // Without this, every tab revisit re-sends the same size on its fresh
     // stream and makes the foreground program repaint for nothing.
-    if (item.columns === columns && item.rows === rows) {
+    if (
+      !stream.resizeInFlight &&
+      item.columns === columns &&
+      item.rows === rows
+    ) {
+      clearPendingResize(stream);
+      setStreamView(terminalId, { gridPending: false });
+      return;
+    }
+    if (
+      !stream.resizeInFlight &&
+      stream.lastResize?.columns === columns &&
+      stream.lastResize.rows === rows
+    ) {
+      // A completed request may have confirmed a different grid. Keep the
+      // mismatch visible instead of starting a reactive resize loop.
       clearPendingResize(stream);
       setStreamView(terminalId, { gridPending: false });
       return;
     }
     stream.pendingResize = { terminalId, columns, rows };
     if (
-      stream.lastResize?.terminalId === stream.pendingResize.terminalId &&
-      stream.lastResize.columns === columns &&
-      stream.lastResize.rows === rows
+      stream.resizeInFlight?.columns === columns &&
+      stream.resizeInFlight.rows === rows
     ) {
-      // The identical request was already sent; repeating it would only
-      // make the program repaint. A still-diverging grid stays visible
-      // through the diagnostics surface instead.
-      stream.pendingResize = null;
+      // The latest intent now matches the active request, replacing any
+      // intermediate size that was waiting behind it.
+      clearPendingResize(stream);
       return;
     }
     // From here a real correction enters the pipeline; until its response
@@ -786,6 +799,9 @@ export function createTerminalsController({
     if (stream.resizeTimer !== null) {
       clearTimeoutFn(stream.resizeTimer);
       stream.resizeTimer = null;
+    }
+    if (stream.resizeInFlight) {
+      return;
     }
     if (immediate) {
       flushResize(stream);
@@ -801,58 +817,68 @@ export function createTerminalsController({
     );
   }
 
-  function flushResize(stream) {
+  async function flushResize(stream) {
     stream.resizeTimer = null;
     const request = stream.pendingResize;
     stream.pendingResize = null;
-    if (!request || !streamRecords.has(request.terminalId)) {
+    if (
+      !request ||
+      streamRecords.get(request.terminalId) !== stream ||
+      stream.terminalEnded
+    ) {
       return;
     }
-    stream.lastResize = request;
-    stream.resizeChain = stream.resizeChain
-      .catch(() => undefined)
-      .then(async () => {
-        if (stream.terminalEnded) {
-          return;
+    stream.resizeInFlight = request;
+    try {
+      const result = await api.resizeTerminal(
+        request.terminalId,
+        request.columns,
+        request.rows,
+      );
+      if (
+        !destroyed &&
+        streamRecords.get(request.terminalId) === stream &&
+        !stream.terminalEnded
+      ) {
+        stream.lastResize = request;
+        // The RPC returns the authoritative summary inside `terminal`.
+        const index = state.terminals.findIndex(
+          (item) => item.terminal_id === request.terminalId,
+        );
+        if (index >= 0) {
+          state.terminals[index] = {
+            ...state.terminals[index],
+            columns: result.terminal.columns,
+            rows: result.terminal.rows,
+          };
         }
-        try {
-          const result = await api.resizeTerminal(
-            request.terminalId,
-            request.columns,
-            request.rows,
-          );
-          if (!destroyed) {
-            // Adopt the server-confirmed dimensions so later fits that
-            // repeat them are recognized as no-ops instead of resending.
-            const index = state.terminals.findIndex(
-              (item) => item.terminal_id === request.terminalId,
-            );
-            if (index >= 0) {
-              state.terminals[index] = {
-                ...state.terminals[index],
-                columns: result?.columns ?? request.columns,
-                rows: result?.rows ?? request.rows,
-              };
-            }
-            setStreamView(request.terminalId, { gridPending: false });
-          }
-          if (!destroyed && state.selectedTerminalId === request.terminalId) {
-            state.actionError = '';
-          }
-        } catch (error) {
-          // Allow a later fit at the same grid to retry the failed request.
-          stream.lastResize = null;
-          // gridPending stays lit: the tile still renders at a size the
-          // PTY never confirmed.
-          if (
-            !destroyed &&
-            !stream.terminalEnded &&
-            state.selectedTerminalId === request.terminalId
-          ) {
-            state.actionError = errorMessage(error);
-          }
+        setStreamView(request.terminalId, {
+          gridPending: stream.pendingResize !== null,
+        });
+        if (state.selectedTerminalId === request.terminalId) {
+          state.actionError = '';
         }
-      });
+      }
+    } catch (error) {
+      stream.lastResize = null;
+      // A failed correction remains visible and can be retried by a later fit.
+      if (
+        !destroyed &&
+        streamRecords.get(request.terminalId) === stream &&
+        !stream.terminalEnded &&
+        state.selectedTerminalId === request.terminalId
+      ) {
+        state.actionError = errorMessage(error);
+      }
+    } finally {
+      stream.resizeInFlight = null;
+      if (
+        streamRecords.get(request.terminalId) === stream &&
+        stream.pendingResize
+      ) {
+        void flushResize(stream);
+      }
+    }
   }
 
   function clearPendingResize(stream) {

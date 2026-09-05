@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import os
 import queue
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
 from collections.abc import AsyncIterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -310,7 +318,7 @@ async def test_manual_command_quotes_arguments_with_spaces(
             cwd=tmp_path,
         )
         await eventually(
-            lambda: factory.adapters[0].writes == ['codex --profile "work space"', "\r"]
+            lambda: factory.adapters[0].writes == ["codex --profile 'work space'", "\r"]
         )
     finally:
         await manager.aclose()
@@ -400,22 +408,87 @@ async def test_manual_command_survives_early_operator_input(
 
 
 def test_shell_command_renders_exact_typed_shell_input() -> None:
-    assert terminal_module._shell_command(None, []) is None
-    assert terminal_module._shell_command("codex", []) == "codex"
-    assert terminal_module._shell_command("codex", ["--profile", "work"]) == (
-        "codex --profile work"
+    for command, arguments in [(None, []), ("", ["arg"]), ("codex", [""])]:
+        assert terminal_module._shell_command(command, arguments, shell="sh") is None
+    arguments = ["--profile", "work space", "$null", "$(echo BAD)", "a'b", 'a"b', "C:\\Tools\\"]
+    rendered = terminal_module._shell_command("/path with spaces/tool", arguments, shell="bash")
+    assert rendered is not None
+    assert shlex.split(rendered) == ["/path with spaces/tool", *arguments]
+
+
+@pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe", "sh", "bash"])
+def test_manual_launch_preserves_arguments_through_real_shell(shell: str) -> None:
+    executable = shutil.which(shell)
+    if executable is None or (os.name == "nt" and shell in {"sh", "bash"}):
+        pytest.skip("Shell is not available for this platform")
+    arguments = [
+        "space value",
+        'a"b',
+        'a\\"b',
+        "trailing space\\",
+        "$null",
+        "$(echo SHOULD_NOT_RUN)",
+        "x`ny",
+        "%VBOT_TERMINAL_TEST_VALUE%",
+        "a,b",
+        "a'b",
+        "x&y",
+        "a|b",
+        "(arg)",
+        "bang!",
+    ]
+    line = terminal_module._shell_command(
+        sys.executable,
+        ["-c", "import sys; print(repr(sys.argv[1:]))", *arguments],
+        shell=executable,
     )
-    assert terminal_module._shell_command("codex", ["--profile", "work space"]) == (
-        'codex --profile "work space"'
-    )
-    assert terminal_module._shell_command("python", ["-c", "print('hi')"]) == (
-        "python -c \"print('hi')\""
-    )
-    assert terminal_module._shell_command("codex", ["C:\\Tools\\codex.exe"]) == (
-        "codex C:\\Tools\\codex.exe"
-    )
-    assert terminal_module._shell_command("", ["arg"]) is None
-    assert terminal_module._shell_command("codex", [""]) is None
+    assert line is not None
+    environment = dict(os.environ, VBOT_TERMINAL_TEST_VALUE="MUST_NOT_EXPAND")
+    if shell == "cmd.exe":
+        result = subprocess.run(
+            [executable, "/d", "/v:off"],
+            input=line + "\nexit\n",
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = next(row for row in result.stdout.splitlines() if row.startswith("["))
+    else:
+        flags = ["-NoProfile", "-NonInteractive", "-Command"] if shell.endswith(".exe") else ["-c"]
+        result = subprocess.run(
+            [executable, *flags, line], env=environment, capture_output=True, text=True, timeout=10
+        )
+        output = result.stdout.strip()
+    assert result.returncode == 0, result.stderr
+    assert ast.literal_eval(output) == arguments
+
+
+@pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe"])
+def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
+    shell_path = shutil.which(shell)
+    program = shutil.which("pwsh.exe")
+    if os.name != "nt" or shell_path is None or program is None or " " not in program:
+        pytest.skip("A Windows executable with a spaced path is required")
+    line = terminal_module._shell_command(program, ["-NoProfile", "-Version"], shell=shell_path)
+    assert line is not None
+    if shell == "cmd.exe":
+        result = subprocess.run(
+            [shell_path, "/d", "/v:off"],
+            input=line + "\nexit\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    else:
+        result = subprocess.run(
+            [shell_path, "-NoProfile", "-NonInteractive", "-Command", line],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    assert result.returncode == 0, result.stderr
+    assert any(row.startswith("PowerShell ") for row in result.stdout.splitlines())
 
 
 def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
@@ -482,6 +555,169 @@ async def test_live_terminal_capacity_is_owner_scoped_and_globally_bounded(
             arguments=[],
             cwd=tmp_path,
         )
+
+
+@pytest.mark.asyncio
+async def test_waiting_reader_does_not_block_input_resize_or_stop(tmp_path, monkeypatch) -> None:
+    reading = threading.Event()
+
+    class WaitingAdapter(FakeTerminalAdapter):
+        def read(self, size: int) -> str:
+            reading.set()
+            return super().read(size)
+
+    adapter = WaitingAdapter()
+    manager = TerminalManager(adapter_factory=lambda *args: adapter)
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(loop, "_default_executor", executor)
+        monkeypatch.setattr(
+            terminal_module, "terminate_process_tree", lambda child: child.terminate()
+        )
+        try:
+            session = await spawn(manager, tmp_path)
+            await eventually(reading.is_set)
+            await asyncio.wait_for(manager.send_operator_input(session.terminal_id, "hello"), 1)
+            await asyncio.wait_for(
+                manager.resize_for_operator(session.terminal_id, columns=90, rows=24), 1
+            )
+            await asyncio.wait_for(manager.kill_for_operator(session.terminal_id), 1)
+            assert adapter.writes == ["hello"]
+            assert adapter.resizes == [(24, 90)]
+            assert not adapter.alive
+        finally:
+            adapter.finish()
+            await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_waits_for_child_cleanup(tmp_path, monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    adapter = FakeTerminalAdapter()
+
+    def factory(*args):
+        entered.set()
+        assert release.wait(5)
+        return adapter
+
+    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    manager = TerminalManager(adapter_factory=factory)
+    task = asyncio.create_task(spawn(manager, tmp_path))
+    try:
+        await eventually(entered.is_set)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert not adapter.alive
+        assert not manager._pending_spawns
+        assert all(session.state == "exited" for session in manager.list_sessions())
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pending_starts_reserve_owner_and_global_capacity(tmp_path, monkeypatch) -> None:
+    release = threading.Event()
+    adapters: list[FakeTerminalAdapter] = []
+
+    def factory(*args):
+        adapter = FakeTerminalAdapter()
+        adapters.append(adapter)
+        assert release.wait(5)
+        return adapter
+
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
+    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    manager = TerminalManager(adapter_factory=factory)
+    tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
+    try:
+        await eventually(lambda: len(adapters) == 2)
+        with pytest.raises(TerminalCapacityError):
+            await asyncio.wait_for(spawn(manager, tmp_path), 1)
+        tasks.append(
+            asyncio.create_task(
+                manager.spawn(
+                    owner("other"), ["fake"], cwd=tmp_path, env=None, origin_run_id="run-other"
+                )
+            )
+        )
+        await eventually(lambda: len(adapters) == 3)
+        with pytest.raises(TerminalCapacityError):
+            await asyncio.wait_for(
+                manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path), 1
+            )
+        release.set()
+        await asyncio.gather(*tasks)
+        assert len(manager.list_sessions()) == 3
+        assert not manager._pending_spawns
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path, monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    adapter = FakeTerminalAdapter()
+
+    def factory(*args):
+        entered.set()
+        assert release.wait(5)
+        return adapter
+
+    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    manager = TerminalManager(adapter_factory=factory)
+    task = asyncio.create_task(spawn(manager, tmp_path))
+    try:
+        await eventually(entered.is_set)
+        closing = asyncio.create_task(manager.aclose())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(closing, 1)
+        result = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(result[0], terminal_module.TerminalLaunchError)
+        assert not adapter.alive
+        assert not manager.list_sessions()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_start_releases_its_capacity_reservation(tmp_path, monkeypatch) -> None:
+    attempts = 0
+    adapter = FakeTerminalAdapter()
+
+    def factory(*args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("test-owned launch failure")
+        return adapter
+
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 1)
+    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    manager = TerminalManager(adapter_factory=factory)
+    try:
+        with pytest.raises(terminal_module.TerminalLaunchError):
+            await spawn(manager, tmp_path)
+        assert not manager._pending_spawns
+        await spawn(manager, tmp_path)
+        assert len(manager.list_sessions()) == 1
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
