@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
 from core.chat import ChatMessage
 from core.chat.chat import _restore_in_run_tool_result_content
@@ -463,14 +465,17 @@ def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_format", ["PNG", "BMP", "TIFF", "AVIF"])
 async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    source_format: str,
 ) -> None:
     class DeletingAdapter(FakeAdapter):
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if len(self.requests) == 1:
+                assert Path(agent.workspace).joinpath("diagram.png").read_bytes() == original_bytes
                 Path(agent.workspace).joinpath("diagram.png").unlink()
             return await super().send(messages, model_id=model_id, **kwargs)
 
@@ -503,7 +508,10 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         agent = runtime.agents.create(
             "coder", "Coder Agent", model="fake-provider/fake-model-vision"
         )
-        Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 12), "blue").save(buffer, format=source_format)
+        original_bytes = buffer.getvalue()
+        Path(agent.workspace).joinpath("diagram.png").write_bytes(original_bytes)
 
         Path(agent.workspace).joinpath("notes.txt").write_text("test", encoding="utf-8")
         stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
@@ -519,7 +527,8 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         media_parts = [part for part in tool_result_parts if part.get("type") == "media"]
         assert len(media_parts) == 1
         assert media_parts[0]["media_type"] == "image/png"
-        assert base64.b64decode(media_parts[0]["base64"]) == _PNG_BYTES
+        if source_format == "PNG":
+            assert base64.b64decode(media_parts[0]["base64"]) == original_bytes
         later_parts = _tool_result_content_parts(adapter.requests[2].messages)
         assert [part for part in later_parts if part.get("type") == "media"] == media_parts
         assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
@@ -527,6 +536,8 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         assert "base64" not in json.dumps(
             [event.payload for run in runtime.chat_runs._runs.values() for event in run.events]
         )
+        with Image.open(io.BytesIO(base64.b64decode(media_parts[0]["base64"]))) as delivered:
+            assert delivered.size == (16, 12)
 
         # The canonical Session persists only the original user turn and the
         # compact Tool envelope; request-only base64 never reaches history.
@@ -667,7 +678,9 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
                 if part["type"] == "media"
             ]
             expected_indices = (
-                list(range(max(0, iteration - 3), iteration)) if iteration <= 14 else [12, 13, 0]
+                list(range(max(0, iteration - 4), iteration))
+                if iteration <= 14
+                else [11, 12, 13, 0]
             )
             assert [base64.b64decode(part["base64"]) for part in images] == [
                 frames[index] for index in expected_indices
@@ -685,7 +698,7 @@ async def test_long_mixed_image_run_is_bounded_and_can_reopen_old_images(
             for part in _tool_result_content_parts(rebuilt_requests[0])
             if part["type"] == "media"
         ]
-        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == frames[7:10]
+        assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == frames[6:10]
         session = runtime.chat_sessions.get(session_address("coder", "session-one"))
         persisted = session.load()
         assert runtime.chat_runs is not None

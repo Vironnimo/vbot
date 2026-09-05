@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
+from core.attachments.images import ImageConverter
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.continuation import (
@@ -1019,6 +1020,7 @@ class ChatLoop:
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
         self._attachment_resolver = attachment_resolver
+        self._tool_image_converter = ImageConverter()
         self._compaction_service = compaction_service
         self._reflection_service = reflection_service
         self._session_title_service = session_title_service
@@ -3086,8 +3088,8 @@ class ChatLoop:
                 block
                 for media_output in matching
                 if "base64" in media_output
-                for block in ContentBlockResolver.resolve_tool_image(
-                    media_output, input_modalities, wire_media_types
+                for block in await ContentBlockResolver.resolve_tool_image(
+                    media_output, input_modalities, wire_media_types, self._tool_image_converter
                 )
             ]
             if local_content:

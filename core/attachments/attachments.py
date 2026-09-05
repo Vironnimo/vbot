@@ -34,6 +34,9 @@ _MIME_ALLOWLIST = frozenset(
         "image/png",
         "image/gif",
         "image/webp",
+        "image/bmp",
+        "image/tiff",
+        "image/avif",
         "application/pdf",
         _OOXML_WILDCARD,
         "application/msword",
@@ -46,6 +49,9 @@ _CANONICAL_EXTENSION_BY_MEDIA_TYPE = {
     "image/png": ".png",
     "image/gif": ".gif",
     "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+    "image/avif": ".avif",
     "audio/ogg": ".ogg",
     "audio/mpeg": ".mp3",
     "audio/wav": ".wav",
@@ -269,6 +275,17 @@ def sniff_media_type(data: bytes, filename: str) -> str:
 
 
 def _sniff_mime(data: bytes, filename: str) -> str:
+    if data.startswith(b"BM") and len(data) >= 14:
+        return "image/bmp"
+    if data.startswith((b"II\x2a\x00", b"MM\x00\x2a", b"II\x2b\x00", b"MM\x00\x2b")):
+        return "image/tiff"
+    if len(data) >= 16 and data[4:8] == b"ftyp":
+        # ISO-BMFF images must be recognized before the generic MP4 fallback.
+        # Inspect only complete brand words in the bounded leading ftyp box.
+        box_end = min(int.from_bytes(data[:4], "big"), len(data), 4096)
+        brands = [data[8:12], *[data[i : i + 4] for i in range(16, box_end - 3, 4)]]
+        if any(brand in {b"avif", b"avis"} for brand in brands):
+            return "image/avif"
     """Detect one allowed MIME type using a bounded magic-bytes strategy."""
 
     if data.startswith(b"\xff\xd8\xff"):
