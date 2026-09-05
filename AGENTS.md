@@ -53,50 +53,11 @@ Runtime Agent-facing text must be self-contained for a fresh Agent that has not 
 
 **Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
 
-**Code quality** — no magic numbers or strings (name the constant: `MAX_RETRIES = 3`, not `3`); comments explain *why*, not *what*; no commented-out code (git keeps history).
-
-- **Naming:** descriptive — `getUserById`, not `getU`. No abbreviations except standards (`id`, `url`, `db`). One human language, never mixed.
-- **Functions:** one thing per function. Max 3 levels of nesting.
-- **Imports:** stdlib → third-party → local. Blank line between groups. Remove unused.
-- **Separation of concerns:** UI displays and takes input only — no business logic. Business logic has no UI, no direct DB queries. Data access owns its I/O. API endpoints route only.
-
-**Security** — never put user input straight into SQL, HTML, shell, or file paths; parameterized queries always; no credentials or secrets in code or logs (env vars only, never commit `.env`); no `innerHTML` with user data (use `textContent`); validate all input server-side.
-
 **Technical Decisions** — when making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long-term maintainability.
-
-## Error Handling
-
-| Type | Examples | Action |
-|---|---|---|
-| **Expected** | invalid input, not found, timeout, rate limit | Handle locally, log `warn`, return meaningful response |
-| **Unexpected** | crashes, null refs, broken assumptions | Do NOT handle — log `error`, rethrow |
-
-Key question: "Did I expect this could happen?" Yes → handle. No → rethrow.
-
-- Never silently swallow errors
-- Handle as close to origin as possible
-- Error messages must be meaningful — "something went wrong" is useless
-
-**Retry transient errors**: network failures and HTTP 429/502/503/504 always; HTTP 500 only for idempotent (safely repeatable) requests — never on action-causing POSTs. Max 3 retries, exponential backoff with jitter. Do NOT retry: other 4xx, auth failures, validation errors.
-
-For project-specific error patterns, log format, and logging setup → `.vorch/PROJECT.md` (Conventions section).
 
 ## Testing
 
 Write tests **together with the feature** — never skip.
-
-| Type | When | How |
-|---|---|---|
-| **Unit** | Business logic, validation, calculations | Isolated, deps mocked |
-| **Integration** | DB queries, API endpoints | Real test DB / real HTTP server |
-
-**What to test:** happy path · edge cases (null, empty, boundary) · error cases. One logical assertion per test — multiple `assert` calls that verify the same behavior are fine.
-
-**Structure (AAA):** Arrange → Act → Assert.
-
-**Rules:** Tests are independent (no shared state) and deterministic (no random, no real timestamps). If a bug is fixed, add a test that would have caught it.
-
-For project-specific test framework, file naming, fixtures, and coverage targets → `.vorch/PROJECT.md` (Testing section).
 
 ## Dependencies
 
@@ -142,6 +103,6 @@ Only project-specific terms — never standard programming terms or anything sel
 - **Worktrees are the default for every task** — create one with the project's worktree tooling (`python scripts/worktree.py create <task-name>` — see PROJECT.md → Development) and work and commit inside it. When the quality gates are green and everything is committed, merge yourself: `python scripts/worktree.py merge <task-name>` lands the branch on `main`, removes the worktree, and serializes safely against other sessions' merges — on conflict it walks you through the protected repair window (see `.vorch/workflows/worktree-workflow.md`). No user confirmation is needed before merging.
 - Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
 - One logical unit per commit; never batch unrelated changes; never commit broken code.
-- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped, non-mutating** gate on what you changed for fast feedback — `python scripts/quality.py --check <paths>` for backend files, `python scripts/quality-frontend.py --check <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. `--check` prevents formatter and linter edits, so a reported failure still refers to the code the Agent just read. Write tests together with the feature.
+- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped, non-mutating** gate on what you changed for fast feedback — `python scripts/quality.py --check <paths>` for backend files, `python scripts/quality-frontend.py --check <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. `--check` prevents formatter and linter edits, so a reported failure still refers to the code the Agent just read.
 - **Before the final commit that closes the task, run the full gate (no args) once for each side you actually touched — and only those.** Pick by what the task changed: backend code (Python, `pyproject.toml`, `scripts/`, `tests/` — anything the backend gate lints or tests) → `python scripts/quality.py`; frontend (anything under `webui/`) → `python scripts/quality-frontend.py`; both sides touched → both gates; a docs-only task (only Markdown / `.vorch/` / other files neither gate touches) → neither, no gate needed. Use the full no-args form, not a scoped one, so it sweeps the whole side; a code task isn't done until its side's gate has run once over the repo. **Don't run a scoped pass right before it — the full run already covers everything a scoped pass would check.** Keep every auto-fix. Any real failure the full run surfaces is now yours to handle: caused by your change or trivially related → fix it, then re-run only the scoped gate over the fixed paths — not the full gate again; genuinely pre-existing and unrelated → you may **not** silently dismiss it ("it was already broken") — report it to the user in your summary **and** append it to `.vorch/FLAGGED.md`.
 - **The quality gates auto-fix (ruff format, prettier, eslint --fix). KEEP every change they make — never revert a gate's auto-fix, even on files you did not touch. Letting the tools do their work across the repo is the whole point of running the full gates. Reverting their output is forbidden.** When a gate reports a real failure (test/type/lint error it cannot auto-fix), fix the underlying problem rather than working around it.
