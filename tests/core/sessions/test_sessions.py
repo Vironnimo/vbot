@@ -22,6 +22,7 @@ from core.runs import RunKind
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_RUN_KINDS_META_KEY,
     ChatSessionManager,
     SessionAddress,
@@ -81,6 +82,67 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
     appended = session.load_since(initial.cursor)
     assert appended is not None
     assert [message.content for message in appended.messages] == ["second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "interrupted"])
+@pytest.mark.parametrize("project_id", [None, "project-one"])
+async def test_reflection_runs_restore_only_own_review_summaries(
+    manager, monkeypatch, status, project_id
+):
+    source = manager.create("coder", session_id="source", project_id=project_id)
+
+    def summary(run_id, result):
+        return ChatMessage.run_summary(
+            run_id=run_id,
+            status=result,
+            iteration_count=1,
+            timing={
+                "started_at": "2026-09-05T10:00:00+00:00",
+                "completed_at": "2026-09-05T10:00:01+00:00",
+                "duration_ms": 1000,
+            },
+        )
+
+    source.append(summary("inherited", "completed"))
+    fork = await manager.fork(
+        source.address,
+        target_project_id=project_id,
+        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    )
+    manager.record_run_kind(fork.address, RunKind.MEMORY_REFLECTION)
+    # An admitted fork with only copied summaries must not fabricate a result.
+    assert source.reflection_runs() == []
+    fork.append(summary("review", status))
+    # Later user work inside the review Session must not replace its review result.
+    manager.record_run_kind(fork.address, RunKind.USER)
+    fork.append(summary("later-user", "completed"))
+    other = manager.create("coder", session_id="other", project_id=project_id)
+    other_fork = await manager.fork(
+        other.address,
+        target_project_id=project_id,
+        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    )
+    manager.record_run_kind(other_fork.address, RunKind.SKILL_REFLECTION)
+    other_fork.append(summary("other-review", "completed"))
+    other_scope = manager.create("coder", session_id="source", project_id="different-project")
+
+    def forbid_history(*args, **kwargs):
+        raise AssertionError("Reflection recovery must not reconstruct chat content")
+
+    monkeypatch.setattr(session_store_module, "message_from_row", forbid_history)
+    assert source.reflection_runs() == [
+        {
+            "session_id": fork.id,
+            "run_id": "review",
+            "status": status,
+            "started_at": "2026-09-05T10:00:00+00:00",
+            "run_kind": "memory_reflection",
+        }
+    ]
+    assert other_scope.reflection_runs() == []
+    await manager.archive(fork.address)
+    assert source.reflection_runs() == []
 
 
 def test_metadata_activity_and_continuation_change_state_not_history(manager) -> None:

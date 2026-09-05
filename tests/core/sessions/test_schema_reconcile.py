@@ -160,6 +160,12 @@ def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:
         "  WHERE status = 'live';\n",
         "",
     )
+    old_schema = old_schema.replace(
+        "CREATE INDEX sessions_live_fork_source\n"
+        "  ON sessions (project_id, agent_id, json_extract(fork_source_json, '$.session_id'))\n"
+        "  WHERE status = 'live';\n",
+        "",
+    )
     database = tmp_path / "sessions.db"
     connection = sqlite3.connect(database)
     connection.executescript(old_schema)

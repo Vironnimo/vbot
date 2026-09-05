@@ -28,6 +28,56 @@ import {
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
 
+  it('renders a restored Reflection in Session info and opens its Session', async () => {
+    const baseRpc = createChatRpcMock({
+      sessionMessages: {
+        'review-session': [
+          {
+            id: 'review-result',
+            role: 'assistant',
+            content: 'Restored review result',
+          },
+        ],
+      },
+    });
+    rpcMock.mockImplementation(async (method, params) => {
+      const result = await baseRpc(method, params);
+      if (method === 'chat.history' && params.session_id === 'session-1') {
+        return {
+          ...result,
+          reflection_runs: [
+            {
+              run_id: 'review-run',
+              session_id: 'review-session',
+              run_kind: 'memory_reflection',
+              status: 'completed',
+              started_at: '2026-09-05T10:00:00Z',
+            },
+          ],
+        };
+      }
+      return result;
+    });
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    document.querySelector('.chat-activity__rail').click();
+    await waitForCondition(
+      () => document.querySelector('.chat-activity__task-link'),
+      100,
+    );
+    const reviewLink = document.querySelector('.chat-activity__task-link');
+    expect(reviewLink.getAttribute('aria-label')).toContain('Completed');
+    reviewLink.click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Restored review result'),
+      100,
+    );
+  });
+
   it('reuses an already empty session and focuses its composer', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({ sessionMessages: { 'session-1': [] } }),
