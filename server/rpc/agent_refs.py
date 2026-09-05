@@ -7,6 +7,7 @@ from typing import Any
 
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
+from core.calendar import CalendarService
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("server.rpc.agent_refs")
@@ -40,6 +41,13 @@ def _agent_reference_lock(state: Any) -> Any:
 def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
     runtime = state.runtime
     references: list[str] = []
+    calendar = getattr(runtime, "calendar_service", None)
+    if isinstance(calendar, CalendarService):
+        references.extend(
+            f"calendar:{action['id']}"
+            for action in calendar.actions.list_actions()
+            if action["target"] == agent_id
+        )
 
     channel_service = getattr(runtime, "channel_service", None)
     if channel_service is not None:
@@ -105,6 +113,8 @@ def _rename_agent_and_retarget_references(
     updated_cron_job_ids: list[str] = []
     updated_bootstrap_job_ids: list[str] = []
     prior_bootstrap_jobs: dict[str, Any] = {}
+    calendar = getattr(runtime, "calendar_service", None)
+    calendar_retargeted = False
 
     channel_service = getattr(runtime, "channel_service", None)
     channels = (
@@ -164,6 +174,9 @@ def _rename_agent_and_retarget_references(
                 prior_bootstrap_jobs[job.id] = job
                 bootstrap_service.update_job(job.id, agent_id=new_agent_id)
                 updated_bootstrap_job_ids.append(job.id)
+        if isinstance(calendar, CalendarService):
+            calendar.actions.retarget_identity(agent_id, new_agent_id)
+            calendar_retargeted = True
     except Exception:
         rollback_errors: list[Exception] = []
         if session_updates:
@@ -180,6 +193,10 @@ def _rename_agent_and_retarget_references(
             )
         if rename_result is not None:
             _attempt_rollback(rollback_errors, runtime.agents.restore_rename, rename_result)
+        if calendar_retargeted and isinstance(calendar, CalendarService):
+            _attempt_rollback(
+                rollback_errors, calendar.actions.retarget_identity, new_agent_id, agent_id
+            )
         if cron_service is not None:
             for job_id in reversed(updated_cron_job_ids):
                 _attempt_rollback(

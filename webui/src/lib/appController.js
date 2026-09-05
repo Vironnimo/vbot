@@ -295,7 +295,11 @@ export function createAppController({
     browserWindow?.addEventListener?.('popstate', handlePopState);
   }
 
-  function navigateToSubAgent(targetOrAgentId, maybeSessionId) {
+  function navigateToSession(
+    targetOrAgentId,
+    maybeSessionId,
+    subAgent = false,
+  ) {
     const agentId =
       typeof targetOrAgentId === 'string'
         ? targetOrAgentId
@@ -308,16 +312,20 @@ export function createAppController({
       return false;
     }
     selectView('chat');
-    handleChatSessionNavigation({ agentId, sessionId, subAgent: true });
+    handleChatSessionNavigation({ agentId, sessionId, subAgent });
     sessionNavigationRequestId += 1;
     state.pendingSessionNavigation = {
       agentId,
       sessionId,
-      subAgent: true,
+      subAgent,
       followSession: true,
       requestId: sessionNavigationRequestId,
     };
     return true;
+  }
+
+  function navigateToSubAgent(targetOrAgentId, maybeSessionId) {
+    return navigateToSession(targetOrAgentId, maybeSessionId, true);
   }
 
   function navigateToSettingsPanel(panelId) {
@@ -526,6 +534,7 @@ export function createAppController({
     navigateToPromptScope,
     navigateToSettingsPanel,
     navigateToSubAgent,
+    navigateToSession,
     selectView,
   };
 }

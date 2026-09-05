@@ -204,3 +204,83 @@ async def test_calendar_add_exdate_rejects_unknown_fields(state: Mock) -> None:
         },
     )
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_calendar_actions_roundtrip(state: Mock) -> None:
+    import asyncio
+
+    state.agent_delete_lock = asyncio.Lock()
+    service = state.runtime.calendar_service
+    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=True)))
+    event = service.create_event(title="Meeting", start="2026-09-10T15:00")
+    created = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_action",
+            "params": {
+                "id": event.id,
+                "when": "start - 1h",
+                "prompt": "prepare",
+                "target": "main",
+                "session": "chosen",
+            },
+        },
+    )
+    assert created["ok"] is True
+    action_id = created["result"]["action"]["id"]
+    updated = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.update_action",
+            "params": {
+                "id": action_id,
+                "session": None,
+                "when": "end",
+            },
+        },
+    )
+    assert updated["result"]["action"]["session"] is None
+    assert updated["result"]["action"]["prompt"] == "prepare"
+    listed = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.window",
+            "params": {
+                "from": "2026-09-10",
+                "to": "2026-09-10",
+            },
+        },
+    )
+    assert listed["result"]["actions"][0]["id"] == action_id
+    assert listed["result"]["executions"][0]["action_id"] == action_id
+    deleted = await dispatch_rpc(
+        state, {"method": "calendar.delete_action", "params": {"id": action_id}}
+    )
+    assert deleted["result"]["deleted"] is True
+    assert service.actions.list_actions() == []
+
+
+@pytest.mark.asyncio
+async def test_calendar_action_rejects_session_of_another_target(state: Mock) -> None:
+    import asyncio
+
+    state.agent_delete_lock = asyncio.Lock()
+    service = state.runtime.calendar_service
+    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=False)))
+    event = service.create_event(title="Meeting", start="2026-09-10T15:00")
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_action",
+            "params": {
+                "id": event.id,
+                "when": "start",
+                "prompt": "prepare",
+                "target": "main",
+                "session": "other",
+            },
+        },
+    )
+    assert result["error"]["code"] == "domain_error"
+    assert service.actions.list_actions() == []

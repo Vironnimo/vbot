@@ -1228,6 +1228,18 @@ export function addCalendarExdate(params = {}, options = {}) {
   return rpc('calendar.add_exdate', params, options);
 }
 
+export function addCalendarAction(params, options = {}) {
+  return rpc('calendar.add_action', params, options);
+}
+
+export function updateCalendarAction(params, options = {}) {
+  return rpc('calendar.update_action', params, options);
+}
+
+export function deleteCalendarAction(id, options = {}) {
+  return rpc('calendar.delete_action', { id }, options);
+}
+
 export function addProject(params = {}, options = {}) {
   requirePlainObject(
     params,

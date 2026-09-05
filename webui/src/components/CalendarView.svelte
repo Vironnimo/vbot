@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import CalendarActions from './CalendarActions.svelte';
 
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -38,6 +39,7 @@
     serverUnavailable = false,
     calendarRefreshToken = 0,
     onOpenCronJob = null,
+    onOpenSession = null,
   } = $props();
 
   let viewState = $state(createCalendarViewState());
@@ -207,7 +209,11 @@
       if (formMode === 'edit') {
         await controller.updateEvent(formEventId, payload);
       } else {
-        await controller.createEvent(payload);
+        const result = await controller.createEvent(payload);
+        const occurrence = viewState.occurrences.find(
+          (item) => item.event_id === result.event?.id,
+        );
+        if (occurrence) openDetail(occurrence);
       }
       formOpen = false;
     } catch (error) {
@@ -387,6 +393,9 @@
     />
   </div>
 
+  {#if viewState.actionError}
+    <Banner variant="error">{viewState.actionError}</Banner>
+  {/if}
   {#if viewState.loadError}
     <Banner variant="error">
       <span
@@ -925,6 +934,17 @@
               {t('calendar.detail.recurring', 'Repeating event')}
             </p>
           {/if}
+          <CalendarActions
+            eventId={detailOccurrence.event_id}
+            occurrenceStart={detailOccurrence.occurrence_start}
+            recurring={detailOccurrence.recurring}
+            actions={viewState.actions}
+            executions={viewState.executions}
+            timeZone={viewState.systemTimeZone}
+            {serverUnavailable}
+            onChanged={() => controller.load({ silent: true })}
+            {onOpenSession}
+          />
         </div>
       </div>
     {/snippet}

@@ -347,6 +347,9 @@ export function createCalendarViewState() {
     occurrences: [],
     events: [],
     cron: [],
+    actions: [],
+    executions: [],
+    actionError: '',
     systemTimeZone: 'UTC',
     timeZoneResolved: false,
     showLocalLayer: true,
@@ -384,6 +387,9 @@ export function createCalendarController({ state }) {
       state.occurrences = result.occurrences ?? [];
       state.events = result.events ?? [];
       state.cron = result.cron ?? [];
+      state.actions = result.actions ?? [];
+      state.executions = result.executions ?? [];
+      state.actionError = result.action_error ?? '';
     } catch (error) {
       if (requestId !== loadRequestId) {
         return;

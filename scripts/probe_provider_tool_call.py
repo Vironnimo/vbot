@@ -312,6 +312,15 @@ CHANNEL_SEND_CASES = (
     "mixed_discord_file",
 )
 CALENDAR_CASES = (
+    "add_action_default",
+    "add_action_target",
+    "add_action_session",
+    "add_action_at_end",
+    "update_action_time",
+    "update_action_prompt",
+    "update_action_target",
+    "update_action_session",
+    "delete_action",
     "list_default",
     "list_when_week",
     "list_when_range",
@@ -997,6 +1006,53 @@ def _image_generation_scenario(case_name: str) -> ProbeScenario:
 
 def _calendar_scenario(case_name: str) -> ProbeScenario:
     calendar_arguments: dict[str, dict[str, Any]] = {
+        "add_action_default": {
+            "action": "add_action",
+            "id": "event-123",
+            "when": "start - 1h",
+            "prompt": "Prepare the meeting notes.",
+        },
+        "add_action_target": {
+            "action": "add_action",
+            "id": "event-123",
+            "when": "end + 30m",
+            "prompt": "Review the meeting.",
+            "target": "builder@project",
+        },
+        "add_action_session": {
+            "action": "add_action",
+            "id": "event-123",
+            "when": "start",
+            "prompt": "Start the meeting.",
+            "session": "session-123",
+        },
+        "add_action_at_end": {
+            "action": "add_action",
+            "id": "event-123",
+            "when": "end",
+            "prompt": "Review the meeting.",
+        },
+        "update_action_time": {
+            "action": "update_action",
+            "id": "action-123",
+            "when": "start - 30m",
+        },
+        "update_action_prompt": {
+            "action": "update_action",
+            "id": "action-123",
+            "prompt": "Prepare the updated notes.",
+        },
+        "update_action_target": {
+            "action": "update_action",
+            "id": "action-123",
+            "target": "builder@project",
+        },
+        "update_action_session": {
+            "action": "update_action",
+            "id": "action-123",
+            "session": "session-123",
+        },
+        "delete_action": {"action": "delete_action", "id": "action-123"},
         "list_default": {"action": "list"},
         "list_when_week": {"action": "list", "when": "this week"},
         "list_when_range": {"action": "list", "when": "2026-09-10..2026-09-14"},
@@ -3046,6 +3102,7 @@ def _start_probe_runtime(runtime: Runtime) -> None:
         "_start_process_manager",
         "_start_channel_service",
         "_start_cron_service",
+        "_start_calendar_service",
         "_start_provider_usage_service",
     ):
         setattr(runtime, hook_name, _do_not_start)
