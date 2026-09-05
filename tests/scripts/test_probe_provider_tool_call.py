@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -23,6 +24,65 @@ def _load_module() -> ModuleType:
 
 
 PROBE = _load_module()
+
+
+def test_mcp_workflow_probe_rejects_an_unsupported_completion_claim():
+    class Adapter:
+        async def send(self, *args, **kwargs):
+            return {"content": "Finished rendering.", "tool_calls": []}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(["--scenario", "mcp_workflow"])
+    result = asyncio.run(PROBE._probe_mcp_workflow(Adapter(), args))
+    assert result["passed"] is False
+    assert result["application_calls"] == []
+
+
+def test_mcp_workflow_probe_dispatches_discovered_targets_through_real_mcp():
+    class Adapter:
+        def __init__(self):
+            self.step = 0
+            self.targets = {}
+
+        async def send(self, messages, **kwargs):
+            self.step += 1
+            if self.step == 1:
+                arguments = {"action": "search"}
+            elif self.step == 2:
+                result = json.loads(messages[-1]["content"])
+                self.targets = {
+                    item["name"]: item["target"] for item in result["data"]["preview"]["matches"]
+                }
+                arguments = {"action": "describe", "target": self.targets["get_scene_info"]}
+            elif self.step == 3:
+                arguments = {"action": "call", "target": self.targets["get_scene_info"]}
+            elif self.step == 4:
+                arguments = {"action": "describe", "target": self.targets["execute_blender_code"]}
+            elif self.step == 5:
+                arguments = {
+                    "action": "call",
+                    "target": self.targets["execute_blender_code"],
+                    "arguments": {"code": "bpy.ops.render.render(write_still=True)"},
+                }
+            else:
+                return {"content": "Completed.", "tool_calls": []}
+            return {
+                "content": None,
+                "tool_calls": [
+                    {"id": str(self.step), "name": "mcp_blender", "arguments": arguments}
+                ],
+            }
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(["--scenario", "mcp_workflow"])
+    result = asyncio.run(PROBE._probe_mcp_workflow(Adapter(), args))
+    assert result["passed"] is True
+    assert result["application_calls"] == ["scene", "code"]
+    assert result["invalid_calls"] == 0
 
 
 def test_messages_from_wire_restores_internal_assistant_tool_call_shape() -> None:

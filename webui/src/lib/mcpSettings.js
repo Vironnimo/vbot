@@ -105,10 +105,12 @@ export function createMcpSettings({
     targetError: '',
     notice: '',
     job: null,
+    inspector: null,
   };
   let disposed = false;
   let timer;
   let generation = 0;
+  let inspectionGeneration = 0;
   const publish = (patch) => {
     state = { ...state, ...patch };
     if (!disposed) onChange(state);
@@ -172,6 +174,35 @@ export function createMcpSettings({
   }
   return {
     refresh,
+    async inspect(id, { query = '', offset = 0 } = {}) {
+      const request = ++inspectionGeneration;
+      publish({
+        inspector: { id, query, offset, loading: true, error: '', data: null },
+      });
+      try {
+        const data = await invoke('inspect', { id, query, offset });
+        if (!disposed && request === inspectionGeneration)
+          publish({
+            inspector: { id, query, offset, loading: false, error: '', data },
+          });
+      } catch (error) {
+        if (!disposed && request === inspectionGeneration)
+          publish({
+            inspector: {
+              id,
+              query,
+              offset,
+              loading: false,
+              error: error.message,
+              data: null,
+            },
+          });
+      }
+    },
+    closeInspector() {
+      ++inspectionGeneration;
+      publish({ inspector: null });
+    },
     async loadTargets() {
       try {
         const [identities, catalog] = await Promise.all([agents(), projects()]);
@@ -260,6 +291,7 @@ export function createMcpSettings({
     dispose() {
       disposed = true;
       ++generation;
+      ++inspectionGeneration;
       clearTimeout(timer);
     },
   };

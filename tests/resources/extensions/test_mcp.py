@@ -778,6 +778,159 @@ async def test_search_and_describe_load_only_the_requested_definition(context_se
 
 
 @pytest.mark.asyncio
+async def test_discovery_leads_with_tools_and_delivers_guidance(context_service, host):
+    service, registry, runner, calls = context_service
+    runner.catalog["prompts"] = [{"name": "workflow", "description": "test-owned-workflow"}]
+    result = await registry.dispatch(context(host), {"action": "search"})
+    preview = result["data"]["preview"]
+    assert preview["matches"][0]["kind"] == "tool"
+    assert preview["server_guidance"]["instructions"] == "test-owned-guidance"
+    prompt = preview["server_guidance"]["prompts"][0]
+    detail = await registry.dispatch(context(host), prompt["describe"])
+    assert detail["data"]["value"]["definition"]["name"] == "workflow"
+    assert detail["data"]["value"]["call"]["target"] == prompt["target"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_match_provides_a_working_capability_browse(context_service, host):
+    service, registry, runner, calls = context_service
+    result = await registry.dispatch(context(host), {"action": "search", "query": "rendern"})
+    preview = result["data"]["preview"]
+    assert preview["matches"] == []
+    assert preview["available"]["tool"] == 1
+    fallback = await registry.dispatch(context(host), preview["next"])
+    assert [item["name"] for item in fallback["data"]["preview"]["matches"]] == ["inspect"]
+
+
+@pytest.mark.asyncio
+async def test_search_ranks_partial_matches_and_paginates(context_service, host):
+    service, registry, runner, calls = context_service
+    runner.catalog["tools"] = [
+        {
+            "name": f"scene_{index:02d}",
+            "description": "material" if index == 12 else "scene",
+            "inputSchema": {"type": "object"},
+        }
+        for index in range(14)
+    ]
+    service._publish(runner, runner.catalog)
+    result = await registry.dispatch(
+        context(host), {"action": "search", "query": "scene material", "kind": "tool"}
+    )
+    preview = result["data"]["preview"]
+    assert preview["total"] == 14
+    assert preview["matches"][0]["name"] == "scene_12"
+    following = await registry.dispatch(context(host), preview["next"])
+    names = [item["name"] for item in preview["matches"] + following["data"]["preview"]["matches"]]
+    assert len(set(names)) == 14
+    assert "next" not in following["data"]["preview"]
+
+
+@pytest.mark.asyncio
+async def test_long_server_guidance_is_explicitly_incomplete_and_readable(context_service, host):
+    service, registry, runner, calls = context_service
+    runner.catalog["instructions"] = "test-owned-guidance " * 500
+    result = await registry.dispatch(context(host), {"action": "search"})
+    guidance = result["data"]["preview"]["server_guidance"]
+    assert guidance["complete"] is False
+    text = guidance["instructions"]
+    next_read = result["data"]["guidance_read"]
+    while next_read:
+        part = await registry.dispatch(context(host), next_read)
+        text += part["data"]["value"]
+        next_read = part["data"].get("next")
+    assert text == runner.catalog["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_first_discovery_includes_tools_published_during_connect(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    catalog = runner.catalog
+    runner.catalog = {}
+    runner.state = "connecting"
+    service._publish(runner, {"tools": []})
+
+    async def connect(*args):
+        runner.catalog = catalog
+        runner.state = "connected"
+        service._publish(runner, catalog)
+
+    monkeypatch.setattr(runner, "invoke", connect)
+    result = await registry.dispatch(context(host), {"action": "search", "kind": "tool"})
+    assert [item["name"] for item in result["data"]["preview"]["matches"]] == ["inspect"]
+
+
+@pytest.mark.asyncio
+async def test_inspection_reports_policy_blocks_without_executing_tools(context_service, host):
+    service, registry, runner, calls = context_service
+    runner.catalog["tools"][0]["description"] = "test-owned-long-description " * 30
+    agent = host.resolve_agent(None, "alice")
+    agent.tool_access = ToolAccess(mode="selected", allowed=[])
+    result = await service.manage("inspect", {"id": "example"})
+    assert result["agent_access"] == [{"agent": "alice", "access": "blocked", "tool_count": 0}]
+    assert result["tools"][0]["name"] == "inspect"
+    assert result["tools"][0]["description"] == runner.catalog["tools"][0]["description"]
+    agent.tool_access = ToolAccess()
+    result = await service.manage("inspect", {"id": "example"})
+    assert result["agent_access"] == [{"agent": "alice", "access": "allowed", "tool_count": 1}]
+    agent.tool_access = ToolAccess(denied=[remote_tool_name("example", "inspect")])
+    result = await service.manage("inspect", {"id": "example"})
+    assert result["agent_access"][0]["tool_count"] == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_grant_revoked_during_connection_does_not_disclose_catalog(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    runner.state = "connecting"
+
+    async def connect(*args):
+        service.connections[runner.id]["agents"] = []
+        runner.state = "connected"
+
+    monkeypatch.setattr(runner, "invoke", connect)
+    result = await registry.dispatch(context(host), {"action": "search"})
+    assert result["ok"] is False
+    assert result["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_match_fallback_does_not_reveal_denied_tools(context_service, host):
+    service, registry, runner, calls = context_service
+    host.resolve_agent(None, "alice").tool_access = ToolAccess(
+        denied=[remote_tool_name("example", "inspect")]
+    )
+    result = await registry.dispatch(context(host), {"action": "search", "query": "missing"})
+    assert result["data"]["preview"]["available"]["tool"] == 0
+    fallback = await registry.dispatch(context(host), result["data"]["preview"]["next"])
+    assert fallback["data"]["preview"]["matches"] == []
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_does_not_claim_remote_call_was_undone(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+
+    async def fail(*args):
+        calls.append(args)
+        raise ValueError("test-owned-timeout")
+
+    monkeypatch.setattr(runner, "invoke", fail)
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+    )
+    assert result["error"]["code"] == "mcp_call_unconfirmed"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_discovered_call_uses_validated_remote_tool(context_service, host):
     service, registry, runner, calls = context_service
     target = service._entries(runner, service._allowed(context(host)))[-1]["target"]

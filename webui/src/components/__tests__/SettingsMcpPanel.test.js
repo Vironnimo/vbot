@@ -68,7 +68,9 @@ beforeEach(() => {
             status: 'loaded',
             disabled: false,
             config: {},
-            capabilities: {},
+            capabilities: {
+              tools: [{ name: 'test-owned-internal-tool', ready: true }],
+            },
           },
         ],
       };
@@ -99,10 +101,77 @@ afterEach(async () => {
 });
 
 describe('MCP management surface', () => {
+  it('opens capabilities, shows blocked grants, and searches without calling remote Tools', async () => {
+    const access = [{ agent: 'alice', access: 'blocked', tool_count: 0 }];
+    records = [
+      {
+        id: 'example',
+        configuration: structuredClone(original),
+        state: 'connected',
+        counts: { tools: 1 },
+        agent_access: access,
+      },
+    ];
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation((method, params) => {
+      if (params?.operation === 'inspect')
+        return Promise.resolve({
+          ...records[0],
+          catalog_available: true,
+          total: 1,
+          offset: 0,
+          previous_offset: null,
+          next_offset: null,
+          tools: [
+            {
+              target: 'test-owned-target',
+              name: 'execute_code',
+              description:
+                'test-owned-capability '.repeat(30) + 'test-owned-tail',
+            },
+          ],
+          instructions: '<script>test-owned-external</script>',
+          prompts: [],
+        });
+      return handler(method, params);
+    });
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Capabilities & access').click();
+    await settle();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain('test-owned-capability');
+    const fullDescription = dialog.querySelector('details');
+    expect(fullDescription.open).toBe(false);
+    fullDescription.querySelector('summary').click();
+    expect(fullDescription.open).toBe(true);
+    expect(fullDescription.textContent).toContain('test-owned-tail');
+    expect(dialog.textContent).toContain('alice');
+    expect(dialog.querySelector('script')).toBeNull();
+    const search = dialog.querySelector('input[aria-label="Search Tools"]');
+    search.value = 'scene';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    dialog
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(rpc).toHaveBeenCalledWith('extensions.operation', {
+      name: 'mcp',
+      operation: 'inspect',
+      arguments: { id: 'example', query: 'scene', offset: 0 },
+    });
+    expect(
+      rpc.mock.calls.some(([, params]) =>
+        ['invoke', 'explore'].includes(params?.operation),
+      ),
+    ).toBe(false);
+  });
   it('is reachable from the loaded MCP Extension without a settings schema', async () => {
     component = mount(Extensions, { target: document.body });
     await settle();
     expect(button('Add MCP connection')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('test-owned-internal-tool');
   });
   it('creates a local connection with an exact Project Agent grant and reads it back', async () => {
     component = mount(Panel, { target: document.body });
