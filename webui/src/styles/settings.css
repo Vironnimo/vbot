@@ -86,6 +86,10 @@
   display: none;
 }
 
+.settings-mobile-section-picker .dropdown {
+  width: 100%;
+}
+
 .settings-desktop-index {
   display: flex;
   flex-direction: column;
@@ -152,10 +156,7 @@
   scrollbar-gutter: stable;
 }
 
-/* The settings document: one scrolling column of section cards, capped to
-   the narrow content measure and centered so label↔control rows stop flying
-   apart on wide monitors. The `.settings-content` scroll container stays
-   full-width (scrollbar at edge). */
+/* Topic pages keep one reading measure while the scrollport fills the pane. */
 .s-doc {
   width: 100%;
   max-width: var(--content-max-narrow);
@@ -163,7 +164,7 @@
 }
 
 .s-doc-group {
-  padding: 26px 2px 10px;
+  padding: 0 2px 12px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -184,16 +185,8 @@
   scroll-margin-top: 8px;
 }
 
-.s-section + .s-section {
-  margin-top: 14px;
-}
-
-/* The document ends with enough quiet space to bring the final section to the
-   same upper-third reading line used by click navigation and scrollspy. Its
-   exact height follows the live scrollport, including Desktop/mobile chrome. */
-.settings-scroll-tail {
-  width: 100%;
-  pointer-events: none;
+.s-section[hidden] {
+  display: none;
 }
 
 .s-section-header {
@@ -209,9 +202,9 @@
 .s-section-title {
   margin-bottom: 3px;
   color: var(--text-hi);
-  font-size: 15px;
+  font-size: var(--fs-heading-lg);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   line-height: 1.3;
 }
 
@@ -944,6 +937,7 @@
    floating buttons between the section header and the list. */
 .s-list-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -958,8 +952,13 @@
 
 .s-list-head-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+
+.s-list-head-actions > button {
+  white-space: nowrap;
 }
 
 .s-provider-add-connection {
@@ -1629,5 +1628,119 @@
 
   .s-row-actions--channel-access {
     justify-content: flex-start;
+  }
+}
+
+.settings-nav-group,
+.settings-search-count,
+.settings-search-icon,
+.settings-search-input::placeholder,
+.s-doc-group {
+  color: var(--text-med);
+}
+.settings-page-heading {
+  margin-bottom: 20px;
+}
+.settings-page-heading h2 {
+  font-size: var(--fs-heading-lg);
+  margin-bottom: 8px;
+}
+.settings-page-heading p {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.settings-search-results {
+  display: grid;
+  gap: 12px;
+}
+.settings-search-result {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 20px;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+}
+.settings-search-result__title {
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+}
+.settings-search-result__description {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  font-weight: 400;
+}
+.settings-related {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.s-row-control--number {
+  flex: 0 0 auto;
+}
+/* Use the compact topic picker as soon as two navigation columns would squeeze
+   the form. Field layout then follows the actual usable space. */
+@media (min-width: 641px) and (max-width: 960px) {
+  .settings-layout.view {
+    flex-direction: column;
+  }
+  .settings-nav.secondary-pane {
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px 20px;
+    padding: 14px 20px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+  .settings-nav-title {
+    display: none;
+  }
+  .settings-desktop-index {
+    display: none;
+  }
+  .settings-search {
+    margin: 0;
+  }
+  .settings-search-count {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    min-height: 0;
+    padding: 0;
+  }
+  .settings-search-count:empty {
+    display: none;
+  }
+  .settings-mobile-section-picker {
+    display: block;
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .settings-mobile-section-label {
+    display: none;
+  }
+  .settings-content {
+    min-height: 0;
+    padding: 20px;
+  }
+}
+@media (max-width: 640px) {
+  .settings-nav-title,
+  .settings-mobile-section-label {
+    display: none;
+  }
+  .settings-mobile-section-picker {
+    display: block;
+  }
+  .s-row-control--number {
+    width: 132px;
+  }
+  .s-section {
+    padding: 16px;
   }
 }

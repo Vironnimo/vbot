@@ -3410,3 +3410,238 @@ kbd {
     height: 40px;
   }
 }
+
+/* Management views share a bounded page header, local topics, and save footer.
+   Scope this grammar to configuration surfaces so Chat keeps its own rhythm. */
+:is(.agents-view, .projects-view) .management-header {
+  flex: 0 0 auto;
+  padding: 24px 30px 0;
+}
+:is(.agents-view, .projects-view) .management-header > * {
+  width: 100%;
+  max-width: var(--content-max-narrow);
+  margin-inline: auto;
+}
+:is(.agents-view, .projects-view) .management-header .detail-top {
+  margin-bottom: 20px;
+}
+:is(.agents-view, .projects-view) .management-topic {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: var(--content-max-narrow);
+  min-width: 0;
+}
+:is(.agents-view, .projects-view) .management-topic[hidden],
+:is(.agents-view, .projects-view) .management-footer[hidden] {
+  display: none;
+}
+:is(.agents-view, .projects-view) .management-topic:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+}
+:is(.agents-view, .projects-view)
+  :is(.agent-detail-footer, .management-footer) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 30px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.management-save-note {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+:is(.agents-view, .projects-view, .settings-layout)
+  :is(.form-field__label, .projects-label) {
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-md);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+}
+:is(.agents-view, .projects-view, .settings-layout)
+  :is(
+    .form-field__help,
+    .projects-help,
+    .detail-sub,
+    .s-row-desc,
+    .projects-effective-source,
+    .projects-team-description
+  ) {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+:is(.agents-view, .projects-view) :is(.detail-group-title, .tl-section-label) {
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-md);
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.4;
+  text-transform: none;
+}
+:is(.agents-view, .projects-view, .settings-layout) .secondary-pane__title {
+  color: var(--text-med);
+}
+.agents-view .agents-view__model-fields {
+  max-width: 640px;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);
+}
+.agents-view .agents-view__model-fields > .form-field--full {
+  max-width: 640px;
+}
+.agents-view .agents-view__thinking-field {
+  max-width: 260px;
+}
+.agents-view .agents-view__temperature-input {
+  max-width: 170px;
+}
+.agents-view .agents-view__fallback-add {
+  width: auto;
+  align-self: flex-start;
+  padding-inline: 14px;
+}
+.agents-view .agents-view__prompt-memory-row {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
+}
+.agents-view .f-label {
+  color: var(--text-med);
+}
+.projects-view .projects-field-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.projects-view .projects-field-grid > .projects-field {
+  min-width: 0;
+}
+.projects-view .projects-field-grid--models {
+  max-width: 640px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.projects-view .projects-field-grid--models > .projects-field:first-child {
+  grid-column: 1 / -1;
+  max-width: 640px;
+}
+.projects-view .projects-field-grid--models > .projects-field:nth-child(2) {
+  max-width: 260px;
+}
+.projects-view
+  .projects-field-grid--models
+  > .projects-field:nth-child(3)
+  .projects-override-controls {
+  max-width: 170px;
+}
+.projects-view .projects-overrides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.projects-view .projects-overrides > :first-child,
+.projects-view .projects-overrides > :nth-child(n + 4) {
+  grid-column: 1 / -1;
+}
+.projects-view .projects-overrides > :nth-child(2) .projects-override-input {
+  flex: 0 1 132px;
+  min-width: 80px;
+}
+.projects-view .projects-overrides > :nth-child(3) .projects-override-input {
+  flex: 0 1 220px;
+}
+.projects-view .projects-override-controls {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.projects-view .projects-overrides .projects-override-row {
+  margin: 0;
+  min-width: 0;
+}
+.projects-view .projects-effective-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 28px;
+  padding-bottom: 16px;
+}
+.projects-view .projects-effective-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.projects-view .projects-effective-label {
+  color: var(--text-med);
+}
+.projects-view .projects-team-summary {
+  font-size: var(--fs-mono-sm);
+}
+@media (max-width: 960px) {
+  :is(.agents-view, .projects-view) :is(.agents-layout, .projects-layout) {
+    flex-direction: column;
+  }
+  :is(.agents-view, .projects-view) :is(.agent-list-pane, .project-list-pane) {
+    width: 100%;
+    min-width: 0;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+  :is(.agents-view, .projects-view)
+    :is(.agent-list-scroll, .project-list-scroll) {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .agents-view .agent-list-row,
+  .projects-view .project-item {
+    width: 180px;
+    flex: 0 0 180px;
+  }
+  :is(.agents-view, .projects-view) .management-header {
+    padding: 16px 18px 0;
+  }
+  :is(.agents-view, .projects-view) .management-header .detail-top {
+    margin-bottom: 14px;
+  }
+  :is(.agents-view, .projects-view)
+    :is(.agent-detail-scroll, .project-detail-scroll) {
+    padding: 20px 18px;
+  }
+  .agents-view .detail-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  :is(.agents-view, .projects-view) .management-header {
+    padding: 14px 16px 0;
+  }
+  :is(.agents-view, .projects-view)
+    :is(.agent-detail-scroll, .project-detail-scroll) {
+    padding: 16px;
+  }
+  :is(.agents-view, .projects-view)
+    :is(.agent-detail-footer, .management-footer) {
+    padding: 10px 16px;
+  }
+  .management-save-note {
+    max-width: 50%;
+  }
+  .agents-view .detail-fields,
+  .agents-view .agents-view__prompt-memory-row,
+  .projects-view .projects-field-grid,
+  .projects-view .projects-overrides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .projects-view .projects-overrides > * {
+    grid-column: 1;
+  }
+}

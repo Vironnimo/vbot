@@ -8,6 +8,7 @@
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import TabList from '../ui/TabList.svelte';
   import FormField from '../ui/FormField.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -92,6 +93,20 @@
     : AGENT_FORM_MODE_CREATE;
   const editorAgentId = initialAgent?.id ?? '';
 
+  let activeDetail = $state('overview');
+  let detailScroll = $state(null);
+  let detailTabs = $derived([
+    { id: 'overview', label: t('management.overview', 'Overview') },
+    { id: 'behavior', label: t('management.behavior', 'Behavior') },
+    { id: 'access', label: t('management.access', 'Tools & Skills') },
+    { id: 'details', label: t('management.details', 'Details') },
+  ]);
+  function selectDetail(id) {
+    return autosaveContext.requestTransition(() => {
+      activeDetail = id;
+      if (detailScroll) detailScroll.scrollTop = 0;
+    });
+  }
   let formMode = $state(initialFormMode);
   let formValues = $state(createAgentFormValues(initialAgent ?? {}));
   let editBaselineValues = $state(createAgentFormValues(initialAgent ?? {}));
@@ -326,6 +341,8 @@
 
     if (!result.isValid) {
       if (source !== 'auto') {
+        activeDetail =
+          result.errors.id || result.errors.workspace ? 'details' : 'overview';
         errorMessage = t(
           'errors.validation',
           'Check the highlighted fields and try again.',
@@ -1277,7 +1294,7 @@
 </script>
 
 <form class="agent-detail-pane" onsubmit={handleAgentSubmit}>
-  <div class="agent-detail-scroll">
+  <div class="management-header">
     <div class="detail-top">
       <div>
         <div class="detail-heading">
@@ -1286,6 +1303,841 @@
             : agent?.name || formValues.name || agent?.id}
         </div>
         <div class="detail-sub">{detailSubtitle}</div>
+      </div>
+    </div>
+    <TabList
+      items={detailTabs}
+      value={activeDetail}
+      idPrefix="agent-detail"
+      ariaLabel={t('management.sections', 'Detail sections')}
+      onChange={selectDetail}
+    />
+  </div>
+  <div class="agent-detail-scroll" bind:this={detailScroll}>
+    {#if errorMessage}
+      <Banner variant="error" role="alert">
+        {errorMessage}
+      </Banner>
+    {/if}
+
+    <div
+      class="management-topic"
+      role="tabpanel"
+      id="agent-detail-panel-overview"
+      aria-labelledby="agent-detail-tab-overview"
+      hidden={activeDetail !== 'overview'}
+      tabindex="0"
+    >
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.identity', 'Identity')}
+        </div>
+        <div class="detail-fields">
+          <FormField
+            controlId="agent-name"
+            label={t('agents.form.name', 'Name')}
+            error={formErrors.name ? fieldError('name') : ''}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                invalid={field.invalid}
+                aria-describedby={field.describedBy}
+                value={formValues.name}
+                onInput={(next) => (formValues.name = next)}
+              />
+            {/snippet}
+          </FormField>
+
+          {#if formMode === AGENT_FORM_MODE_EDIT}
+            <FormField
+              controlId="agent-project"
+              label={t('agents.form.project', 'Project')}
+              help={projectCatalogError
+                ? t(
+                    'agents.form.projectUnavailableHelp',
+                    'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
+                  )
+                : t(
+                    'agents.form.projectHelp',
+                    'Where relative file and shell work runs. Workspace remains the identity and memory home.',
+                  )}
+            >
+              <Dropdown
+                id="agent-project"
+                value={formValues.root_project_id ?? ''}
+                options={projectDropdownOptions}
+                disabled={Boolean(projectCatalogError)}
+                ariaLabel={t('agents.form.project', 'Project')}
+                triggerClass="agents-view__dropdown"
+                onValueChange={(selectedValue) => {
+                  formValues.root_project_id = selectedValue || null;
+                }}
+              />
+            </FormField>
+          {/if}
+        </div>
+      </div>
+      <div class="detail-group agents-view__model-group">
+        <div class="detail-group-title agents-view__group-title-row">
+          <span>{t('agents.detail.model', 'Model')}</span>
+          {#if formMode === AGENT_FORM_MODE_EDIT}
+            <Button
+              variant="tertiary"
+              class="agents-view__inherit-link"
+              onClick={navigateToAgentDefaults}
+            >
+              {t('inherit.editGlobalDefaults', 'Edit global defaults')}
+            </Button>
+          {/if}
+        </div>
+        <div class="detail-fields agents-view__model-fields">
+          <FormField
+            controlId="agent-model"
+            full
+            label={t('agents.form.model', 'Model')}
+          >
+            <SearchableDropdown
+              id="agent-model"
+              value={modelSelectValue}
+              options={modelOptions}
+              placeholder={inheritModelLabel('model')}
+              searchPlaceholder={t(
+                'agents.form.modelSearchPlaceholder',
+                'Filter models…',
+              )}
+              emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
+              ariaLabel={t('agents.form.model', 'Model')}
+              triggerClass="agents-view__dropdown"
+              panelClass="agents-view__search-panel"
+              footerActionLabel={modelFilterFooter}
+              onFooterAction={() => (showAllModels = !showAllModels)}
+              onOpenChange={onModelDropdownOpenChange}
+              onValueChange={(selectedValue) =>
+                updateModelSelection('model', selectedValue)}
+            />
+          </FormField>
+
+          <FormField
+            controlId="agent-thinking-effort"
+            class="agents-view__thinking-field"
+            help={effortDropdownDisabled
+              ? t(
+                  'agents.form.thinkingEffortUnsupported',
+                  'This model does not support reasoning.',
+                )
+              : ''}
+          >
+            {#snippet labelContent()}
+              {t('agents.form.thinkingEffort', 'Thinking effort')}
+              <InfoHint
+                text={t(
+                  'agents.form.thinkingEffortHelp',
+                  'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+                )}
+              />
+            {/snippet}
+            <Dropdown
+              id="agent-thinking-effort"
+              value={formValues.thinking_effort}
+              options={thinkingEffortOptions}
+              disabled={effortDropdownDisabled}
+              ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+              triggerClass="agents-view__dropdown"
+              listClass="agents-view__thinking-list"
+              onValueChange={(selectedValue) => {
+                formValues.thinking_effort = selectedValue;
+              }}
+            />
+          </FormField>
+
+          <FormField
+            controlId="agent-temperature"
+            help={temperatureIsInherit
+              ? inheritSource('temperature') === 'global_default'
+                ? t('inherit.hint', 'Inherited: {value} (global default)', {
+                    value: inheritDisplayValue('temperature'),
+                  })
+                : t(
+                    'inherit.hintProviderDefault',
+                    'Provider default — nothing is set here or in the global defaults.',
+                  )
+              : ''}
+            error={formErrors.temperature ? fieldError('temperature') : ''}
+          >
+            {#snippet labelContent()}
+              {t('agents.form.temperature', 'Temperature')}
+              <InfoHint
+                text={t(
+                  'agents.form.temperatureHelp',
+                  'Sampling randomness, typically 0–2. Leave empty to use the default.',
+                )}
+              />
+            {/snippet}
+            {#snippet children(field)}
+              <div class="agents-view__temperature-input">
+                <TextField
+                  id={field.controlId}
+                  inputmode="decimal"
+                  invalid={field.invalid}
+                  aria-describedby={field.describedBy}
+                  value={formValues.temperature}
+                  onInput={(next) => (formValues.temperature = next)}
+                />
+                {#if !temperatureIsInherit}
+                  <Button
+                    variant="tertiary"
+                    class="agents-view__reset-inherit"
+                    tooltip={t(
+                      'inherit.resetToInherit',
+                      'Reset to inherited value',
+                    )}
+                    ariaLabel={t(
+                      'inherit.resetToInherit',
+                      'Reset to inherited value',
+                    )}
+                    onClick={clearTemperature}
+                  >
+                    {EMPTY_VALUE}
+                  </Button>
+                {/if}
+              </div>
+            {/snippet}
+          </FormField>
+
+          <FormField controlId="agent-fallback-models" full>
+            {#snippet labelContent()}
+              {t('agents.form.fallbackModels', 'Fallback models')}
+              <InfoHint
+                text={t(
+                  'agents.form.fallbackModelsHelp',
+                  'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
+                )}
+              />
+            {/snippet}
+            {#each fallbackModelRows as row, index (index)}
+              <div class="agents-view__fallback-row">
+                <SearchableDropdown
+                  id={`agent-fallback-model-${index}`}
+                  value={row.selectValue}
+                  options={allFallbackModelOptions}
+                  placeholder={t(
+                    'agents.form.fallbackModelPlaceholder',
+                    'None',
+                  )}
+                  searchPlaceholder={t(
+                    'agents.form.modelSearchPlaceholder',
+                    'Filter models…',
+                  )}
+                  emptyLabel={t(
+                    'agents.form.modelSearchEmpty',
+                    'No models match',
+                  )}
+                  ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
+                  triggerClass="agents-view__dropdown"
+                  panelClass="agents-view__search-panel"
+                  onOpenChange={onModelDropdownOpenChange}
+                  onValueChange={(selectedValue) =>
+                    updateFallbackModelEntry(index, selectedValue)}
+                />
+                <button
+                  type="button"
+                  class="agents-view__fallback-remove"
+                  aria-label={t(
+                    'agents.form.removeFallbackModel',
+                    'Remove fallback model',
+                  )}
+                  onclick={() => removeFallbackModelEntry(index)}
+                >
+                  ×
+                </button>
+              </div>
+            {/each}
+            {#if canAddFallbackModelRow}
+              <button
+                type="button"
+                class="agents-view__fallback-add"
+                onclick={addFallbackModelEntry}
+              >
+                {t('agents.form.addFallbackModel', '+ Add fallback model')}
+              </button>
+            {/if}
+          </FormField>
+        </div>
+      </div>
+    </div>
+    <div
+      class="management-topic"
+      role="tabpanel"
+      id="agent-detail-panel-behavior"
+      aria-labelledby="agent-detail-tab-behavior"
+      hidden={activeDetail !== 'behavior'}
+      tabindex="0"
+    >
+      <div class="detail-group agents-view__compaction-group">
+        <div class="detail-group-title">
+          {t('agents.detail.compaction', 'Compaction Policy')}
+        </div>
+        <div class="agents-view__prompt-toggle-row">
+          <div>
+            <div class="agents-view__prompt-toggle-label">
+              {formValues.compaction_policy
+                ? t('compaction.scope.agentOwn', 'Use an Agent Policy')
+                : t(
+                    'compaction.scope.inheritGlobal',
+                    'Inherit the global Policy live',
+                  )}
+            </div>
+            <div class="agents-view__prompt-toggle-desc">
+              {t(
+                'compaction.scope.agentDescription',
+                'Inherited changes apply to this Agent’s existing Sessions unless a Session has its own override.',
+              )}
+            </div>
+          </div>
+          <Toggle
+            checked={formValues.compaction_policy !== null}
+            ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
+            onChange={setOwnCompactionPolicy}
+          />
+        </div>
+        {#if formValues.compaction_policy}
+          <CompactionPolicyEditor
+            value={formValues.compaction_policy}
+            onChange={(next) => (formValues.compaction_policy = next)}
+            idPrefix="agent-compaction"
+          />
+        {/if}
+      </div>
+
+      <div class="detail-group agents-view__prompt-group">
+        <div class="detail-group-title">
+          {t('agents.detail.systemPrompt', 'System Prompt')}
+        </div>
+        <div class="agents-view__prompt-toggle-row">
+          <span class="agents-view__prompt-toggle-label">
+            {t('agents.form.customSystemPrompt', 'Custom system prompt')}
+            <InfoHint
+              text={t(
+                'agents.form.customPromptHelp',
+                'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
+              )}
+            />
+          </span>
+          <div class="agents-view__prompt-toggle-controls">
+            {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
+              <Button
+                variant="tertiary"
+                class="agents-view__inherit-link"
+                onClick={navigateToAgentPrompt}
+              >
+                {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
+              </Button>
+            {/if}
+            <Toggle
+              size="sm"
+              class="agents-view__prompt-toggle"
+              checked={formValues.custom_system_prompt_enabled}
+              ariaLabel={t(
+                'agents.form.customSystemPrompt',
+                'Custom system prompt',
+              )}
+              disabled={formMode === AGENT_FORM_MODE_CREATE}
+              onChange={(next) => {
+                void handleCustomPromptToggle(next);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-group agents-view__memory-group">
+        <div class="detail-group-title">
+          {t('agents.detail.memory', 'Memory')}
+        </div>
+        <div class="agents-view__prompt-memory-row">
+          <span class="agents-view__prompt-toggle-label">
+            {t('agents.form.memoryPromptMode', 'Memory')}
+            <InfoHint
+              text={t(
+                'agents.form.memoryModeHelp',
+                'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
+              )}
+            />
+          </span>
+          <Dropdown
+            id="agent-memory-prompt-mode"
+            value={formValues.memory_prompt_mode}
+            options={memoryPromptOptions}
+            ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
+            triggerClass="agents-view__memory-dropdown"
+            listClass="agents-view__memory-list"
+            onValueChange={(selectedValue) => {
+              formValues.memory_prompt_mode = selectedValue;
+            }}
+          />
+        </div>
+
+        {#if formMode === AGENT_FORM_MODE_EDIT}
+          <div class="agents-view__memory-disclosure">
+            <Button
+              variant="tertiary"
+              class="agents-view__memory-disclosure-toggle"
+              aria-expanded={memoryPanelOpen}
+              aria-controls="agent-memory-manager"
+              ariaLabel={memoryPanelOpen
+                ? t('agents.memory.hide', 'Hide Memory entries')
+                : t('agents.memory.manage', 'Manage Memory entries')}
+              onClick={toggleMemoryPanel}
+            >
+              <span
+                class:agents-view__memory-chevron--open={memoryPanelOpen}
+                class="agents-view__memory-chevron"
+                aria-hidden="true">▸</span
+              >
+              <span>
+                {memoryPanelOpen
+                  ? t('agents.memory.hide', 'Hide Memory entries')
+                  : t('agents.memory.manage', 'Manage Memory entries')}
+              </span>
+              {#if memoriesLoaded}
+                <span class="agents-view__memory-total">
+                  {memoryCountLabel(totalMemoryCount())}
+                </span>
+              {/if}
+            </Button>
+
+            {#if memoryPanelOpen}
+              <div
+                id="agent-memory-manager"
+                class="agents-view__memory-manager"
+              >
+                {#if memoriesLoading && !memoriesLoaded}
+                  <Banner variant="neutral" aria-live="polite">
+                    {t('agents.memory.loading', 'Loading Memory entries…')}
+                  </Banner>
+                {/if}
+
+                {#if memoryError}
+                  <Banner variant="error" role="alert">
+                    <span>{memoryError}</span>
+                    <Button
+                      variant="secondary"
+                      onClick={() => loadAgentMemoryEntries()}
+                    >
+                      {t('common.retry', 'Retry')}
+                    </Button>
+                  </Banner>
+                {/if}
+
+                {#if memoriesLoaded}
+                  <div class="agents-view__memory-scopes">
+                    {#each MEMORY_SCOPES as scope (scope)}
+                      {@const entries = memoryEntries(scope)}
+                      <section
+                        class="agents-view__memory-scope"
+                        class:agents-view__memory-scope--inactive={!memoryScopeActive(
+                          scope,
+                        )}
+                        aria-labelledby={`agent-memory-${scope}-title`}
+                      >
+                        <div class="agents-view__memory-scope-header">
+                          <div class="agents-view__memory-scope-copy">
+                            <div class="agents-view__memory-scope-title-row">
+                              <h3 id={`agent-memory-${scope}-title`}>
+                                {memoryScopeLabel(scope)}
+                              </h3>
+                              <StatusChip
+                                variant={memoryScopeActive(scope)
+                                  ? 'success'
+                                  : 'neutral'}
+                              >
+                                {memoryScopeState(scope)}
+                              </StatusChip>
+                            </div>
+                            <p>{memoryScopeDescription(scope)}</p>
+                          </div>
+                          <span class="agents-view__memory-count">
+                            {memoryCountLabel(entries.length)}
+                          </span>
+                        </div>
+
+                        {#if entries.length === 0}
+                          <EmptyState
+                            density="compact"
+                            class="agents-view__memory-empty"
+                            title={t('agents.memory.emptyTitle', 'No memories')}
+                            description={t(
+                              'agents.memory.emptyDescription',
+                              'This category has no saved Memory entries.',
+                            )}
+                          />
+                        {:else}
+                          <ol class="agents-view__memory-list">
+                            {#each entries as entry (entry.id)}
+                              <li class="agents-view__memory-entry">
+                                <span class="agents-view__memory-entry-id">
+                                  {entry.id}
+                                </span>
+                                {#if editingMemory?.scope === scope && editingMemory?.id === entry.id}
+                                  <div class="agents-view__memory-entry-editor">
+                                    <TextArea
+                                      rows={3}
+                                      value={editingMemory.content}
+                                      ariaLabel={t(
+                                        'agents.memory.editLabel',
+                                        'Edit Memory entry',
+                                      )}
+                                      onInput={(next) => {
+                                        editingMemory.content = next;
+                                      }}
+                                      disabled={Boolean(memoryMutation)}
+                                    />
+                                    <div
+                                      class="agents-view__memory-entry-actions"
+                                    >
+                                      <Button
+                                        variant="secondary"
+                                        onClick={cancelEditingMemory}
+                                        disabled={Boolean(memoryMutation)}
+                                      >
+                                        {t('common.cancel', 'Cancel')}
+                                      </Button>
+                                      <Button
+                                        variant="primary"
+                                        onClick={saveEditedMemory}
+                                        loading={memoryMutation.startsWith(
+                                          'replace:',
+                                        )}
+                                        disabled={!editingMemory.content.trim()}
+                                      >
+                                        {t('common.save', 'Save')}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                {:else}
+                                  <p class="agents-view__memory-entry-content">
+                                    {entry.content}
+                                  </p>
+                                  <div
+                                    class="agents-view__memory-entry-actions"
+                                  >
+                                    <Button
+                                      variant="tertiary"
+                                      onClick={() =>
+                                        startEditingMemory(scope, entry)}
+                                      disabled={Boolean(memoryMutation)}
+                                    >
+                                      {t('common.edit', 'Edit')}
+                                    </Button>
+                                    <Button
+                                      variant="danger"
+                                      onClick={() =>
+                                        requestDeleteMemory(scope, entry)}
+                                      disabled={Boolean(memoryMutation)}
+                                    >
+                                      {t('common.delete', 'Delete')}
+                                    </Button>
+                                  </div>
+                                {/if}
+                              </li>
+                            {/each}
+                          </ol>
+                        {/if}
+
+                        <div class="agents-view__memory-add">
+                          <TextArea
+                            rows={2}
+                            value={memoryDrafts[scope]}
+                            placeholder={t(
+                              'agents.memory.addPlaceholder',
+                              'Add a durable fact…',
+                            )}
+                            ariaLabel={t(
+                              'agents.memory.addLabel',
+                              'New {category} entry',
+                              { category: memoryScopeLabel(scope) },
+                            )}
+                            onInput={(next) => {
+                              memoryDrafts[scope] = next;
+                            }}
+                            disabled={Boolean(memoryMutation)}
+                          />
+                          <Button
+                            variant="secondary"
+                            onClick={() => addMemoryEntry(scope)}
+                            loading={memoryMutation === `add:${scope}`}
+                            disabled={!memoryDrafts[scope].trim()}
+                          >
+                            {t('agents.memory.add', 'Add Memory')}
+                          </Button>
+                        </div>
+                      </section>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </div>
+    <div
+      class="management-topic"
+      role="tabpanel"
+      id="agent-detail-panel-access"
+      aria-labelledby="agent-detail-tab-access"
+      hidden={activeDetail !== 'access'}
+      tabindex="0"
+    >
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.access', 'Access')}
+        </div>
+
+        <div class="tl-section">
+          <div class="tl-section-header">
+            <span class="tl-section-label">
+              {t('agents.form.toolAccess', 'Tool access')}
+            </span>
+            <InfoHint
+              text={t(
+                'agents.form.toolAccessHelp',
+                'Choose all Tools, your own selection, or none. Click a Tool name or a family switch to change access. Dashed Tools activate automatically when their condition is met.',
+              )}
+            />
+          </div>
+          <div class="agents-view__tool-access-content">
+            <ToolAccessEditor
+              value={formValues.tool_access}
+              tools={availableTools}
+              memoryPromptMode={formValues.memory_prompt_mode}
+              onChange={(next) => (formValues.tool_access = next)}
+              onOpenExtensions={navigateToExtensions}
+            />
+          </div>
+        </div>
+
+        {#if subagentToolEnabled}
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">
+                {t('agents.form.subagentSettings', 'Sub-Agent settings')}
+                <InfoHint
+                  text={t(
+                    'agents.form.allowedAgentsHelp',
+                    'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
+                  )}
+                />
+              </span>
+            </div>
+            <ToggleChipList
+              items={agentTargetChipItems}
+              emptyLabel={t(
+                'agents.access.noAgentTargets',
+                'No additional Agent targets are available.',
+              )}
+              note={agentsAreWildcard && visibleAgentTargetItems.length > 0
+                ? t(
+                    'agents.form.agentWildcardNote',
+                    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
+                  )
+                : t(
+                    'agents.form.agentAddressNote',
+                    'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
+                  )}
+              ariaToggleLabel={(name) =>
+                t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
+              onToggle={(name, next) =>
+                updateAccessItem('allowed_agents', name, next)}
+              onSetAll={(next) => setAccessItems('allowed_agents', next)}
+            />
+            {#if agentTargetCatalogError}
+              <p class="agents-view__placeholder-row" role="status">
+                {agentTargetCatalogError}
+              </p>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="tl-section">
+          <div class="tl-section-header">
+            <span class="tl-section-label">
+              {t('agents.form.allowedSkills', 'Allowed skills')}
+            </span>
+          </div>
+          <ToggleChipList
+            items={skillChipItems}
+            emptyLabel={t(
+              'agents.access.noSkills',
+              'No loadable skills are available.',
+            )}
+            note={skillsAreWildcard && visibleSkillItems.length > 0
+              ? t(
+                  'agents.form.wildcardNote',
+                  'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+                )
+              : ''}
+            ariaToggleLabel={(name) =>
+              t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
+            onToggle={(name, next) =>
+              updateAccessItem('allowed_skills', name, next)}
+            onSetAll={(next) => setAccessItems('allowed_skills', next)}
+          />
+          {#if invalidSkills.length > 0}
+            <div class="agents-view__invalid-skills">
+              <div class="agents-view__invalid-skills-title">
+                {t('agents.access.invalidSkillsTitle', 'Unavailable skills')}
+              </div>
+              <div class="agents-view__invalid-skills-list">
+                {#each invalidSkills as item (item.path || item.name)}
+                  <div class="agents-view__invalid-skill">
+                    <div class="agents-view__access-copy">
+                      <span class="tl-item-name">
+                        {item.name ||
+                          t('agents.access.unknownSkillName', 'Unknown skill')}
+                      </span>
+                      {#if item.path}
+                        <span class="agents-view__invalid-skill-path">
+                          {item.path}
+                        </span>
+                      {/if}
+                      {#if Array.isArray(item.warnings) && item.warnings.length > 0}
+                        <div class="agents-view__skill-warnings">
+                          <span class="agents-view__warning-label">
+                            {t('agents.access.skillWarnings', 'Warnings')}
+                          </span>
+                          <ul>
+                            {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
+                              <li>{warning}</li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    </div>
+                    <StatusChip variant="warn">
+                      {t('agents.access.notLoadable', 'not loadable')}
+                    </StatusChip>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+    <div
+      class="management-topic"
+      role="tabpanel"
+      id="agent-detail-panel-details"
+      aria-labelledby="agent-detail-tab-details"
+      hidden={activeDetail !== 'details'}
+      tabindex="0"
+    >
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('management.details', 'Details')}
+        </div>
+        <div class="detail-fields">
+          <FormField
+            controlId="agent-id"
+            label={t('agents.form.id', 'Agent ID')}
+            required
+            help={t(
+              'agents.form.idHelp',
+              'Used to address this Identity Agent in Sessions, Channels, Cron jobs, and delegation.',
+            )}
+            error={formErrors.id ? fieldError('id') : ''}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                invalid={field.invalid}
+                value={formValues.id}
+                onInput={(next) => (formValues.id = next)}
+                disabled={formMode === AGENT_FORM_MODE_EDIT}
+                aria-describedby={field.describedBy}
+              />
+            {/snippet}
+            {#snippet actions()}
+              {#if formMode === AGENT_FORM_MODE_EDIT}
+                <Button
+                  variant="tertiary"
+                  onClick={openRenameDialog}
+                  disabled={isSaving || isDeleting}
+                >
+                  {t('agents.rename.action', 'Change ID')}
+                </Button>
+              {/if}
+            {/snippet}
+          </FormField>
+          <FormField
+            controlId="agent-workspace"
+            full
+            label={t('agents.form.workspace', 'Workspace')}
+            help={formMode === AGENT_FORM_MODE_CREATE
+              ? t(
+                  'agents.form.workspaceAssignedByServer',
+                  'Workspace is assigned by the server when the agent is created.',
+                )
+              : t(
+                  'agents.form.workspaceEditableHelp',
+                  "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
+                )}
+            error={formErrors.workspace ? fieldError('workspace') : ''}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                class="mono"
+                invalid={field.invalid}
+                value={formValues.workspace}
+                onInput={(next) => (formValues.workspace = next)}
+                disabled={formMode === AGENT_FORM_MODE_CREATE}
+                aria-describedby={field.describedBy}
+              />
+            {/snippet}
+            {#snippet actions()}
+              {#if workspaceIsCustom}
+                <Button
+                  variant="tertiary"
+                  class="agents-view__reset-inherit"
+                  disabled={isSaving || isDeleting}
+                  onClick={resetWorkspaceToDefault}
+                >
+                  {t('agents.form.workspaceSetToDefault', 'Set to default')}
+                </Button>
+              {/if}
+            {/snippet}
+          </FormField>
+        </div>
+      </div>
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.metadata', 'Metadata')}
+        </div>
+        <div class="detail-fields">
+          <div class="f wide">
+            <div class="f-label">
+              {t('agents.detail.sessionId', 'Current session ID')}
+            </div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayValue(agent?.current_session_id)}
+            </div>
+          </div>
+          <div class="f">
+            <div class="f-label">{t('agents.detail.created', 'Created')}</div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayTimestamp(agent?.created_at)}
+            </div>
+          </div>
+          <div class="f">
+            <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayTimestamp(agent?.updated_at)}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="detail-btns">
@@ -1315,803 +2167,19 @@
         {/if}
       </div>
     </div>
-
-    {#if errorMessage}
-      <Banner variant="error" role="alert">
-        {errorMessage}
-      </Banner>
-    {/if}
-
-    <div class="detail-group">
-      <div class="detail-group-title">
-        {t('agents.detail.identity', 'Identity')}
-      </div>
-      <div class="detail-fields">
-        <FormField
-          controlId="agent-id"
-          label={t('agents.form.id', 'Agent ID')}
-          required
-          help={t(
-            'agents.form.idHelp',
-            'Used to address this Identity Agent in Sessions, Channels, Cron jobs, and delegation.',
-          )}
-          error={formErrors.id ? fieldError('id') : ''}
-        >
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              invalid={field.invalid}
-              value={formValues.id}
-              onInput={(next) => (formValues.id = next)}
-              disabled={formMode === AGENT_FORM_MODE_EDIT}
-              aria-describedby={field.describedBy}
-            />
-          {/snippet}
-          {#snippet actions()}
-            {#if formMode === AGENT_FORM_MODE_EDIT}
-              <Button
-                variant="tertiary"
-                onClick={openRenameDialog}
-                disabled={isSaving || isDeleting}
-              >
-                {t('agents.rename.action', 'Change ID')}
-              </Button>
-            {/if}
-          {/snippet}
-        </FormField>
-
-        <FormField
-          controlId="agent-name"
-          label={t('agents.form.name', 'Name')}
-          error={formErrors.name ? fieldError('name') : ''}
-        >
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              invalid={field.invalid}
-              aria-describedby={field.describedBy}
-              value={formValues.name}
-              onInput={(next) => (formValues.name = next)}
-            />
-          {/snippet}
-        </FormField>
-
-        <FormField
-          controlId="agent-workspace"
-          full
-          label={t('agents.form.workspace', 'Workspace')}
-          help={formMode === AGENT_FORM_MODE_CREATE
-            ? t(
-                'agents.form.workspaceAssignedByServer',
-                'Workspace is assigned by the server when the agent is created.',
-              )
-            : t(
-                'agents.form.workspaceEditableHelp',
-                "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
-              )}
-          error={formErrors.workspace ? fieldError('workspace') : ''}
-        >
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              class="mono"
-              invalid={field.invalid}
-              value={formValues.workspace}
-              onInput={(next) => (formValues.workspace = next)}
-              disabled={formMode === AGENT_FORM_MODE_CREATE}
-              aria-describedby={field.describedBy}
-            />
-          {/snippet}
-          {#snippet actions()}
-            {#if workspaceIsCustom}
-              <Button
-                variant="tertiary"
-                class="agents-view__reset-inherit"
-                disabled={isSaving || isDeleting}
-                onClick={resetWorkspaceToDefault}
-              >
-                {t('agents.form.workspaceSetToDefault', 'Set to default')}
-              </Button>
-            {/if}
-          {/snippet}
-        </FormField>
-
-        {#if formMode === AGENT_FORM_MODE_EDIT}
-          <FormField
-            controlId="agent-project"
-            label={t('agents.form.project', 'Project')}
-            help={projectCatalogError
-              ? t(
-                  'agents.form.projectUnavailableHelp',
-                  'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
-                )
-              : t(
-                  'agents.form.projectHelp',
-                  'Where relative file and shell work runs. Workspace remains the identity and memory home.',
-                )}
-          >
-            <Dropdown
-              id="agent-project"
-              value={formValues.root_project_id ?? ''}
-              options={projectDropdownOptions}
-              disabled={Boolean(projectCatalogError)}
-              ariaLabel={t('agents.form.project', 'Project')}
-              triggerClass="agents-view__dropdown"
-              onValueChange={(selectedValue) => {
-                formValues.root_project_id = selectedValue || null;
-              }}
-            />
-          </FormField>
-        {/if}
-      </div>
-    </div>
-
-    <div class="detail-group agents-view__model-group">
-      <div class="detail-group-title agents-view__group-title-row">
-        <span>{t('agents.detail.model', 'Model')}</span>
-        {#if formMode === AGENT_FORM_MODE_EDIT}
-          <Button
-            variant="tertiary"
-            class="agents-view__inherit-link"
-            onClick={navigateToAgentDefaults}
-          >
-            {t('inherit.editGlobalDefaults', 'Edit global defaults')}
-          </Button>
-        {/if}
-      </div>
-      <div class="detail-fields agents-view__model-fields">
-        <FormField
-          controlId="agent-model"
-          full
-          label={t('agents.form.model', 'Model')}
-        >
-          <SearchableDropdown
-            id="agent-model"
-            value={modelSelectValue}
-            options={modelOptions}
-            placeholder={inheritModelLabel('model')}
-            searchPlaceholder={t(
-              'agents.form.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-            ariaLabel={t('agents.form.model', 'Model')}
-            triggerClass="agents-view__dropdown"
-            panelClass="agents-view__search-panel"
-            footerActionLabel={modelFilterFooter}
-            onFooterAction={() => (showAllModels = !showAllModels)}
-            onOpenChange={onModelDropdownOpenChange}
-            onValueChange={(selectedValue) =>
-              updateModelSelection('model', selectedValue)}
-          />
-        </FormField>
-
-        <FormField controlId="agent-fallback-models">
-          {#snippet labelContent()}
-            {t('agents.form.fallbackModels', 'Fallback models')}
-            <InfoHint
-              text={t(
-                'agents.form.fallbackModelsHelp',
-                'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
-              )}
-            />
-          {/snippet}
-          {#each fallbackModelRows as row, index (index)}
-            <div class="agents-view__fallback-row">
-              <SearchableDropdown
-                id={`agent-fallback-model-${index}`}
-                value={row.selectValue}
-                options={allFallbackModelOptions}
-                placeholder={t('agents.form.fallbackModelPlaceholder', 'None')}
-                searchPlaceholder={t(
-                  'agents.form.modelSearchPlaceholder',
-                  'Filter models…',
-                )}
-                emptyLabel={t(
-                  'agents.form.modelSearchEmpty',
-                  'No models match',
-                )}
-                ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
-                triggerClass="agents-view__dropdown"
-                panelClass="agents-view__search-panel"
-                onOpenChange={onModelDropdownOpenChange}
-                onValueChange={(selectedValue) =>
-                  updateFallbackModelEntry(index, selectedValue)}
-              />
-              <button
-                type="button"
-                class="agents-view__fallback-remove"
-                aria-label={t(
-                  'agents.form.removeFallbackModel',
-                  'Remove fallback model',
-                )}
-                onclick={() => removeFallbackModelEntry(index)}
-              >
-                ×
-              </button>
-            </div>
-          {/each}
-          {#if canAddFallbackModelRow}
-            <button
-              type="button"
-              class="agents-view__fallback-add"
-              onclick={addFallbackModelEntry}
-            >
-              {t('agents.form.addFallbackModel', '+ Add fallback model')}
-            </button>
-          {/if}
-        </FormField>
-
-        <FormField
-          controlId="agent-thinking-effort"
-          class="agents-view__thinking-field"
-          help={effortDropdownDisabled
-            ? t(
-                'agents.form.thinkingEffortUnsupported',
-                'This model does not support reasoning.',
-              )
-            : ''}
-        >
-          {#snippet labelContent()}
-            {t('agents.form.thinkingEffort', 'Thinking effort')}
-            <InfoHint
-              text={t(
-                'agents.form.thinkingEffortHelp',
-                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
-              )}
-            />
-          {/snippet}
-          <Dropdown
-            id="agent-thinking-effort"
-            value={formValues.thinking_effort}
-            options={thinkingEffortOptions}
-            disabled={effortDropdownDisabled}
-            ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
-            triggerClass="agents-view__dropdown"
-            listClass="agents-view__thinking-list"
-            onValueChange={(selectedValue) => {
-              formValues.thinking_effort = selectedValue;
-            }}
-          />
-        </FormField>
-
-        <FormField
-          controlId="agent-temperature"
-          help={temperatureIsInherit
-            ? inheritSource('temperature') === 'global_default'
-              ? t('inherit.hint', 'Inherited: {value} (global default)', {
-                  value: inheritDisplayValue('temperature'),
-                })
-              : t(
-                  'inherit.hintProviderDefault',
-                  'Provider default — nothing is set here or in the global defaults.',
-                )
-            : ''}
-          error={formErrors.temperature ? fieldError('temperature') : ''}
-        >
-          {#snippet labelContent()}
-            {t('agents.form.temperature', 'Temperature')}
-            <InfoHint
-              text={t(
-                'agents.form.temperatureHelp',
-                'Sampling randomness, typically 0–2. Leave empty to use the default.',
-              )}
-            />
-          {/snippet}
-          {#snippet children(field)}
-            <div class="agents-view__temperature-input">
-              <TextField
-                id={field.controlId}
-                inputmode="decimal"
-                invalid={field.invalid}
-                aria-describedby={field.describedBy}
-                value={formValues.temperature}
-                onInput={(next) => (formValues.temperature = next)}
-              />
-              {#if !temperatureIsInherit}
-                <Button
-                  variant="tertiary"
-                  class="agents-view__reset-inherit"
-                  tooltip={t(
-                    'inherit.resetToInherit',
-                    'Reset to inherited value',
-                  )}
-                  ariaLabel={t(
-                    'inherit.resetToInherit',
-                    'Reset to inherited value',
-                  )}
-                  onClick={clearTemperature}
-                >
-                  {EMPTY_VALUE}
-                </Button>
-              {/if}
-            </div>
-          {/snippet}
-        </FormField>
-      </div>
-    </div>
-
-    <div class="detail-group agents-view__compaction-group">
-      <div class="detail-group-title">
-        {t('agents.detail.compaction', 'Compaction Policy')}
-      </div>
-      <div class="agents-view__prompt-toggle-row">
-        <div>
-          <div class="agents-view__prompt-toggle-label">
-            {formValues.compaction_policy
-              ? t('compaction.scope.agentOwn', 'Use an Agent Policy')
-              : t(
-                  'compaction.scope.inheritGlobal',
-                  'Inherit the global Policy live',
-                )}
-          </div>
-          <div class="agents-view__prompt-toggle-desc">
-            {t(
-              'compaction.scope.agentDescription',
-              'Inherited changes apply to this Agent’s existing Sessions unless a Session has its own override.',
-            )}
-          </div>
-        </div>
-        <Toggle
-          checked={formValues.compaction_policy !== null}
-          ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
-          onChange={setOwnCompactionPolicy}
-        />
-      </div>
-      {#if formValues.compaction_policy}
-        <CompactionPolicyEditor
-          value={formValues.compaction_policy}
-          onChange={(next) => (formValues.compaction_policy = next)}
-          idPrefix="agent-compaction"
-        />
-      {/if}
-    </div>
-
-    <div class="detail-group agents-view__prompt-group">
-      <div class="detail-group-title">
-        {t('agents.detail.systemPrompt', 'System Prompt')}
-      </div>
-      <div class="agents-view__prompt-toggle-row">
-        <span class="agents-view__prompt-toggle-label">
-          {t('agents.form.customSystemPrompt', 'Custom system prompt')}
-          <InfoHint
-            text={t(
-              'agents.form.customPromptHelp',
-              'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
-            )}
-          />
-        </span>
-        <div class="agents-view__prompt-toggle-controls">
-          {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
-            <Button
-              variant="tertiary"
-              class="agents-view__inherit-link"
-              onClick={navigateToAgentPrompt}
-            >
-              {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
-            </Button>
-          {/if}
-          <Toggle
-            size="sm"
-            class="agents-view__prompt-toggle"
-            checked={formValues.custom_system_prompt_enabled}
-            ariaLabel={t(
-              'agents.form.customSystemPrompt',
-              'Custom system prompt',
-            )}
-            disabled={formMode === AGENT_FORM_MODE_CREATE}
-            onChange={(next) => {
-              void handleCustomPromptToggle(next);
-            }}
-          />
-        </div>
-      </div>
-    </div>
-
-    <div class="detail-group agents-view__memory-group">
-      <div class="detail-group-title">
-        {t('agents.detail.memory', 'Memory')}
-      </div>
-      <div class="agents-view__prompt-memory-row">
-        <span class="agents-view__prompt-toggle-label">
-          {t('agents.form.memoryPromptMode', 'Memory')}
-          <InfoHint
-            text={t(
-              'agents.form.memoryModeHelp',
-              'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
-            )}
-          />
-        </span>
-        <Dropdown
-          id="agent-memory-prompt-mode"
-          value={formValues.memory_prompt_mode}
-          options={memoryPromptOptions}
-          ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
-          triggerClass="agents-view__memory-dropdown"
-          listClass="agents-view__memory-list"
-          onValueChange={(selectedValue) => {
-            formValues.memory_prompt_mode = selectedValue;
-          }}
-        />
-      </div>
-
-      {#if formMode === AGENT_FORM_MODE_EDIT}
-        <div class="agents-view__memory-disclosure">
-          <Button
-            variant="tertiary"
-            class="agents-view__memory-disclosure-toggle"
-            aria-expanded={memoryPanelOpen}
-            aria-controls="agent-memory-manager"
-            ariaLabel={memoryPanelOpen
-              ? t('agents.memory.hide', 'Hide Memory entries')
-              : t('agents.memory.manage', 'Manage Memory entries')}
-            onClick={toggleMemoryPanel}
-          >
-            <span
-              class:agents-view__memory-chevron--open={memoryPanelOpen}
-              class="agents-view__memory-chevron"
-              aria-hidden="true">▸</span
-            >
-            <span>
-              {memoryPanelOpen
-                ? t('agents.memory.hide', 'Hide Memory entries')
-                : t('agents.memory.manage', 'Manage Memory entries')}
-            </span>
-            {#if memoriesLoaded}
-              <span class="agents-view__memory-total">
-                {memoryCountLabel(totalMemoryCount())}
-              </span>
-            {/if}
-          </Button>
-
-          {#if memoryPanelOpen}
-            <div id="agent-memory-manager" class="agents-view__memory-manager">
-              {#if memoriesLoading && !memoriesLoaded}
-                <Banner variant="neutral" aria-live="polite">
-                  {t('agents.memory.loading', 'Loading Memory entries…')}
-                </Banner>
-              {/if}
-
-              {#if memoryError}
-                <Banner variant="error" role="alert">
-                  <span>{memoryError}</span>
-                  <Button
-                    variant="secondary"
-                    onClick={() => loadAgentMemoryEntries()}
-                  >
-                    {t('common.retry', 'Retry')}
-                  </Button>
-                </Banner>
-              {/if}
-
-              {#if memoriesLoaded}
-                <div class="agents-view__memory-scopes">
-                  {#each MEMORY_SCOPES as scope (scope)}
-                    {@const entries = memoryEntries(scope)}
-                    <section
-                      class="agents-view__memory-scope"
-                      class:agents-view__memory-scope--inactive={!memoryScopeActive(
-                        scope,
-                      )}
-                      aria-labelledby={`agent-memory-${scope}-title`}
-                    >
-                      <div class="agents-view__memory-scope-header">
-                        <div class="agents-view__memory-scope-copy">
-                          <div class="agents-view__memory-scope-title-row">
-                            <h3 id={`agent-memory-${scope}-title`}>
-                              {memoryScopeLabel(scope)}
-                            </h3>
-                            <StatusChip
-                              variant={memoryScopeActive(scope)
-                                ? 'success'
-                                : 'neutral'}
-                            >
-                              {memoryScopeState(scope)}
-                            </StatusChip>
-                          </div>
-                          <p>{memoryScopeDescription(scope)}</p>
-                        </div>
-                        <span class="agents-view__memory-count">
-                          {memoryCountLabel(entries.length)}
-                        </span>
-                      </div>
-
-                      {#if entries.length === 0}
-                        <EmptyState
-                          density="compact"
-                          class="agents-view__memory-empty"
-                          title={t('agents.memory.emptyTitle', 'No memories')}
-                          description={t(
-                            'agents.memory.emptyDescription',
-                            'This category has no saved Memory entries.',
-                          )}
-                        />
-                      {:else}
-                        <ol class="agents-view__memory-list">
-                          {#each entries as entry (entry.id)}
-                            <li class="agents-view__memory-entry">
-                              <span class="agents-view__memory-entry-id">
-                                {entry.id}
-                              </span>
-                              {#if editingMemory?.scope === scope && editingMemory?.id === entry.id}
-                                <div class="agents-view__memory-entry-editor">
-                                  <TextArea
-                                    rows={3}
-                                    value={editingMemory.content}
-                                    ariaLabel={t(
-                                      'agents.memory.editLabel',
-                                      'Edit Memory entry',
-                                    )}
-                                    onInput={(next) => {
-                                      editingMemory.content = next;
-                                    }}
-                                    disabled={Boolean(memoryMutation)}
-                                  />
-                                  <div
-                                    class="agents-view__memory-entry-actions"
-                                  >
-                                    <Button
-                                      variant="secondary"
-                                      onClick={cancelEditingMemory}
-                                      disabled={Boolean(memoryMutation)}
-                                    >
-                                      {t('common.cancel', 'Cancel')}
-                                    </Button>
-                                    <Button
-                                      variant="primary"
-                                      onClick={saveEditedMemory}
-                                      loading={memoryMutation.startsWith(
-                                        'replace:',
-                                      )}
-                                      disabled={!editingMemory.content.trim()}
-                                    >
-                                      {t('common.save', 'Save')}
-                                    </Button>
-                                  </div>
-                                </div>
-                              {:else}
-                                <p class="agents-view__memory-entry-content">
-                                  {entry.content}
-                                </p>
-                                <div class="agents-view__memory-entry-actions">
-                                  <Button
-                                    variant="tertiary"
-                                    onClick={() =>
-                                      startEditingMemory(scope, entry)}
-                                    disabled={Boolean(memoryMutation)}
-                                  >
-                                    {t('common.edit', 'Edit')}
-                                  </Button>
-                                  <Button
-                                    variant="danger"
-                                    onClick={() =>
-                                      requestDeleteMemory(scope, entry)}
-                                    disabled={Boolean(memoryMutation)}
-                                  >
-                                    {t('common.delete', 'Delete')}
-                                  </Button>
-                                </div>
-                              {/if}
-                            </li>
-                          {/each}
-                        </ol>
-                      {/if}
-
-                      <div class="agents-view__memory-add">
-                        <TextArea
-                          rows={2}
-                          value={memoryDrafts[scope]}
-                          placeholder={t(
-                            'agents.memory.addPlaceholder',
-                            'Add a durable fact…',
-                          )}
-                          ariaLabel={t(
-                            'agents.memory.addLabel',
-                            'New {category} entry',
-                            { category: memoryScopeLabel(scope) },
-                          )}
-                          onInput={(next) => {
-                            memoryDrafts[scope] = next;
-                          }}
-                          disabled={Boolean(memoryMutation)}
-                        />
-                        <Button
-                          variant="secondary"
-                          onClick={() => addMemoryEntry(scope)}
-                          loading={memoryMutation === `add:${scope}`}
-                          disabled={!memoryDrafts[scope].trim()}
-                        >
-                          {t('agents.memory.add', 'Add Memory')}
-                        </Button>
-                      </div>
-                    </section>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    <div class="detail-group">
-      <div class="detail-group-title">
-        {t('agents.detail.access', 'Access')}
-      </div>
-
-      <div class="tl-section">
-        <div class="tl-section-header">
-          <span class="tl-section-label">
-            {t('agents.form.toolAccess', 'Tool access')}
-          </span>
-          <InfoHint
-            text={t(
-              'agents.form.toolAccessHelp',
-              'Choose all Tools, your own selection, or none. Click a Tool name or a family switch to change access. Dashed Tools activate automatically when their condition is met.',
-            )}
-          />
-        </div>
-        <div class="agents-view__tool-access-content">
-          <ToolAccessEditor
-            value={formValues.tool_access}
-            tools={availableTools}
-            memoryPromptMode={formValues.memory_prompt_mode}
-            onChange={(next) => (formValues.tool_access = next)}
-            onOpenExtensions={navigateToExtensions}
-          />
-        </div>
-      </div>
-
-      {#if subagentToolEnabled}
-        <div class="tl-section">
-          <div class="tl-section-header">
-            <span class="tl-section-label">
-              {t('agents.form.subagentSettings', 'Sub-Agent settings')}
-              <InfoHint
-                text={t(
-                  'agents.form.allowedAgentsHelp',
-                  'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
-                )}
-              />
-            </span>
-          </div>
-          <ToggleChipList
-            items={agentTargetChipItems}
-            emptyLabel={t(
-              'agents.access.noAgentTargets',
-              'No additional Agent targets are available.',
-            )}
-            note={agentsAreWildcard && visibleAgentTargetItems.length > 0
-              ? t(
-                  'agents.form.agentWildcardNote',
-                  'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
-                )
-              : t(
-                  'agents.form.agentAddressNote',
-                  'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
-                )}
-            ariaToggleLabel={(name) =>
-              t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
-            onToggle={(name, next) =>
-              updateAccessItem('allowed_agents', name, next)}
-            onSetAll={(next) => setAccessItems('allowed_agents', next)}
-          />
-          {#if agentTargetCatalogError}
-            <p class="agents-view__placeholder-row" role="status">
-              {agentTargetCatalogError}
-            </p>
-          {/if}
-        </div>
-      {/if}
-
-      <div class="tl-section">
-        <div class="tl-section-header">
-          <span class="tl-section-label">
-            {t('agents.form.allowedSkills', 'Allowed skills')}
-          </span>
-        </div>
-        <ToggleChipList
-          items={skillChipItems}
-          emptyLabel={t(
-            'agents.access.noSkills',
-            'No loadable skills are available.',
-          )}
-          note={skillsAreWildcard && visibleSkillItems.length > 0
-            ? t(
-                'agents.form.wildcardNote',
-                'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-              )
-            : ''}
-          ariaToggleLabel={(name) =>
-            t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
-          onToggle={(name, next) =>
-            updateAccessItem('allowed_skills', name, next)}
-          onSetAll={(next) => setAccessItems('allowed_skills', next)}
-        />
-        {#if invalidSkills.length > 0}
-          <div class="agents-view__invalid-skills">
-            <div class="agents-view__invalid-skills-title">
-              {t('agents.access.invalidSkillsTitle', 'Unavailable skills')}
-            </div>
-            <div class="agents-view__invalid-skills-list">
-              {#each invalidSkills as item (item.path || item.name)}
-                <div class="agents-view__invalid-skill">
-                  <div class="agents-view__access-copy">
-                    <span class="tl-item-name">
-                      {item.name ||
-                        t('agents.access.unknownSkillName', 'Unknown skill')}
-                    </span>
-                    {#if item.path}
-                      <span class="agents-view__invalid-skill-path">
-                        {item.path}
-                      </span>
-                    {/if}
-                    {#if Array.isArray(item.warnings) && item.warnings.length > 0}
-                      <div class="agents-view__skill-warnings">
-                        <span class="agents-view__warning-label">
-                          {t('agents.access.skillWarnings', 'Warnings')}
-                        </span>
-                        <ul>
-                          {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
-                            <li>{warning}</li>
-                          {/each}
-                        </ul>
-                      </div>
-                    {/if}
-                  </div>
-                  <StatusChip variant="warn">
-                    {t('agents.access.notLoadable', 'not loadable')}
-                  </StatusChip>
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <div class="detail-group">
-      <div class="detail-group-title">
-        {t('agents.detail.metadata', 'Metadata')}
-      </div>
-      <div class="detail-fields">
-        <div class="f wide">
-          <div class="f-label">
-            {t('agents.detail.sessionId', 'Current session ID')}
-          </div>
-          <div class="f-value mono agents-view__wrap-value">
-            {displayValue(agent?.current_session_id)}
-          </div>
-        </div>
-        <div class="f">
-          <div class="f-label">{t('agents.detail.created', 'Created')}</div>
-          <div class="f-value mono agents-view__wrap-value">
-            {displayTimestamp(agent?.created_at)}
-          </div>
-        </div>
-        <div class="f">
-          <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
-          <div class="f-value mono agents-view__wrap-value">
-            {displayTimestamp(agent?.updated_at)}
-          </div>
-        </div>
-      </div>
-    </div>
-
-    {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
-      <p class="agents-view__placeholder-row">
-        {t(
-          'agents.deleteDisabledMinimum',
-          'The last remaining agent cannot be deleted.',
-        )}
-      </p>
-    {/if}
-
-    <div class="agent-detail-footer">
-      <Button variant="secondary" type="submit" disabled={isSaving}>
-        {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-      </Button>
-    </div>
+  </div>
+  <div class="agent-detail-footer">
+    <span class="management-save-note"
+      >{isSaving
+        ? t('common.saving', 'Saving…')
+        : t(
+            'management.savedAutomatically',
+            'Changes save automatically',
+          )}</span
+    >
+    <Button variant="secondary" type="submit" disabled={isSaving}>
+      {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+    </Button>
   </div>
 </form>
 

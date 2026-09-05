@@ -162,10 +162,8 @@ export function defaultTriggerRect() {
   };
 }
 
-export function setTextInputValue(index, value) {
-  const input = Array.from(
-    document.body.querySelectorAll('input.s-input[type="text"]'),
-  )[index];
+export function setTextInputValue(controlId, value) {
+  const input = document.getElementById(controlId);
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -250,12 +248,8 @@ export async function flushAsyncUpdates(iterations = 4) {
   }
 }
 
-export function textInputValue(index) {
-  const input = Array.from(
-    document.body.querySelectorAll('input.s-input[type="text"]'),
-  )[index];
-  expect(input).toBeTruthy();
-  return input.value;
+export function textInputValue(controlId) {
+  return document.getElementById(controlId)?.value;
 }
 
 export function createAgentsRpcMock(options = {}) {

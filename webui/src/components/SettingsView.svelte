@@ -1,6 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
+  import { onMount, tick, untrack } from 'svelte';
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
@@ -25,6 +24,7 @@
   import { getSettings } from '$lib/api.js';
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import { init, t } from '$lib/i18n.js';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -55,35 +55,7 @@
     return captureScrollPosition();
   }
 
-  // The whole Settings surface is one scrolling document. The index on the
-  // left is a table of contents (click scrolls, scrolling highlights), not a
-  // panel switcher — every section below is always mounted and rendered.
-  // Filtering hides sections/rows via the DOM `hidden` attribute so the
-  // panels' own component state is never disturbed by a search.
-
-  // Elements the search treats as one show/hide unit inside a section. Nested
-  // matches collapse into their outermost unit (a row inside a provider card
-  // is covered by the card).
-  const SEARCH_UNIT_SELECTOR = [
-    '.s-row',
-    '.s-provider-card',
-    '.s-channel-card',
-    '.s-ext-card',
-    '.s-client-row',
-    '.s-skill-directory-item',
-  ].join(', ');
-  // The section under the upper-third reading line is the one the user is
-  // most likely reading. Click navigation and scrollspy share this exact
-  // anchor so the index cannot disagree with the document position.
-  const READING_LINE_RATIO = 0.32;
-  // Layout can land a target a sub-pixel below the computed line. Treat that
-  // browser rounding as aligned instead of selecting the previous section.
-  const READING_LINE_TOLERANCE_PX = 1;
-  // Ignore scroll-driven highlight updates while a click-triggered smooth
-  // scroll is in flight, so intermediate sections do not flicker in the index.
-  const SCROLLSPY_SUPPRESS_MS = 700;
-
-  let groups = $derived([
+  let catalogGroups = $derived([
     {
       id: 'connect',
       label: () => t('settings.groups.connect', 'Connect'),
@@ -298,9 +270,68 @@
     },
   ]);
 
+  // Keep one owner for every editor while topic navigation changes visibility.
+  // This preserves pending drafts and provider authentication across pages.
+  const autosaveContext = useAutosaveContext();
+  let catalog = $derived(
+    new Map(
+      catalogGroups
+        .flatMap((group) => group.sections)
+        .map((panel) => [panel.id, panel]),
+    ),
+  );
+  let preferencesPanel = $derived({
+    id: 'preferences',
+    labelKey: 'settings.preferences.title',
+    labelFallback: 'General',
+    label: () => t('settings.preferences.title', 'General'),
+    subtitle: () =>
+      t('settings.preferences.subtitle', 'Time zone and getting started.'),
+  });
+  let groups = $derived([
+    {
+      id: 'general',
+      label: () => t('settings.groups.general', 'General'),
+      sections: [catalog.get('appearance'), preferencesPanel],
+    },
+    {
+      id: 'models',
+      label: () => t('settings.groups.models', 'Models'),
+      sections: ['providers', 'defaults', 'specialized_models'].map((id) =>
+        catalog.get(id),
+      ),
+    },
+    {
+      id: 'conversation',
+      label: () => t('settings.groups.conversation', 'Conversation'),
+      sections: ['compaction', 'session_titles', 'recall', 'reflection'].map(
+        (id) => catalog.get(id),
+      ),
+    },
+    {
+      id: 'capabilities',
+      label: () => t('settings.groups.capabilities', 'Capabilities'),
+      sections: ['voice', 'web_search', 'subagents'].map((id) =>
+        catalog.get(id),
+      ),
+    },
+    {
+      id: 'integrations',
+      label: () => t('settings.groups.integrations', 'Integrations'),
+      sections: ['channels', 'extensions'].map((id) => catalog.get(id)),
+    },
+    {
+      id: 'system',
+      label: () => t('settings.groups.system', 'System'),
+      sections: [
+        'general',
+        'debug',
+        ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
+      ].map((id) => catalog.get(id)),
+    },
+  ]);
   let panels = $derived(groups.flatMap((group) => group.sections));
   let panelById = $derived(new Map(panels.map((panel) => [panel.id, panel])));
-  let groupById = $derived(new Map(groups.map((group) => [group.id, group])));
   let mobileSectionOptions = $derived(
     groups.flatMap((group) =>
       group.sections.map((panel) => ({
@@ -310,460 +341,158 @@
       })),
     ),
   );
-
   let settings = $state(null);
   let loading = $state(true);
   let loadError = $state('');
   let providersPanel = $state(null);
-  let handledTargetPanelRequestId = -1;
-
   let scrollContainer = $state(null);
   let documentRoot = $state(null);
-  let activeSectionId = $state('providers');
+  let activeSectionId = $state(
+    untrack(() => initialScrollPosition?.sectionId || 'providers'),
+  );
   let searchQuery = $state('');
-  let matchCount = $state(0);
-  const hiddenSectionIds = new SvelteSet();
-  let scrollSpyFrame = null;
-  let scrollRestoreFrame = null;
-  let scrollSpySuppressedUntil = 0;
-  let searchFilterQueued = false;
-  let scrollTailHeight = $state(0);
-  let pinnedScrollRestore = null;
-
+  let searchResults = $state([]);
   let searchActive = $derived(searchQuery.trim().length > 0);
+  let activeGroup = $derived(
+    groups.find((group) =>
+      group.sections.some((panel) => panel.id === activeSectionId),
+    ),
+  );
+  let matchCount = $derived(searchResults.length);
+  let handledTargetPanelRequestId = -1;
+  let restoreTop = untrack(() => Math.max(0, initialScrollPosition?.top || 0));
+  let restorePending = untrack(() => Boolean(initialScrollPosition));
+  let restoreFrame = null;
 
   onMount(() => {
-    pinnedScrollRestore = normalizeScrollPosition(initialScrollPosition);
     loadSettings();
-
     return () => {
-      if (scrollSpyFrame !== null) {
-        cancelAnimationFrame(scrollSpyFrame);
-        scrollSpyFrame = null;
-      }
-      if (scrollRestoreFrame !== null) {
-        cancelAnimationFrame(scrollRestoreFrame);
-        scrollRestoreFrame = null;
-      }
+      if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
     };
   });
 
   $effect(() => {
-    if (!loading && !panelById.has(activeSectionId)) {
-      activeSectionId = panels[0]?.id ?? 'providers';
-    }
+    if (!loading && !panelById.has(activeSectionId))
+      activeSectionId = panels[0].id;
   });
 
-  // Deep links (e.g. the agent editor's "Edit global defaults") scroll to the
-  // requested section once the document is rendered.
   $effect(() => {
-    if (loading) {
-      return;
-    }
     if (
+      !loading &&
       targetPanelId &&
       targetPanelRequestId !== handledTargetPanelRequestId &&
       panelById.has(targetPanelId)
     ) {
       handledTargetPanelRequestId = targetPanelRequestId;
-      // An existing restore belongs to a normal tab return. App clears it for
-      // a fresh deep link, which then deliberately wins here.
-      if (!pinnedScrollRestore) {
-        scrollToSection(targetPanelId);
-      }
+      // A deliberate deep link replaces the remembered page; an ordinary
+      // return carries its saved page and may still have an old target prop.
+      if (!initialScrollPosition) void selectSection(targetPanelId, false);
     }
   });
 
-  // A restored position stays pinned while the independently loading panels
-  // settle. Real user input releases the pin; programmatic scroll events do
-  // not, so late content above the reading point cannot steal the position.
-  $effect(() => {
-    if (!loading && scrollContainer && documentRoot && pinnedScrollRestore) {
-      queuePinnedScrollRestore();
-    }
-  });
-
-  $effect(() => {
-    const container = scrollContainer;
-    if (!container) {
-      return undefined;
-    }
-
-    const handleResize = () => {
-      syncReadingGeometry();
-      queuePinnedScrollRestore();
-    };
-    const releaseRestore = () => releasePinnedScrollRestore();
-    const observer =
-      typeof ResizeObserver === 'function'
-        ? new ResizeObserver(handleResize)
-        : null;
-
-    syncReadingGeometry();
-    observer?.observe(container);
-    window.addEventListener('resize', handleResize);
-    container.addEventListener('wheel', releaseRestore, { passive: true });
-    container.addEventListener('touchstart', releaseRestore, {
-      passive: true,
-    });
-    container.addEventListener('pointerdown', releaseRestore);
-    container.addEventListener('keydown', releaseRestore);
-
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener('resize', handleResize);
-      container.removeEventListener('wheel', releaseRestore);
-      container.removeEventListener('touchstart', releaseRestore);
-      container.removeEventListener('pointerdown', releaseRestore);
-      container.removeEventListener('keydown', releaseRestore);
-    };
-  });
-
-  // Re-apply the search filter whenever the query changes or the document is
-  // (re)built after loading. Runs post-flush, so the DOM is current.
   $effect(() => {
     void searchQuery;
     void loading;
-    if (documentRoot) {
-      applySearchFilter();
-    }
+    void panels;
+    if (documentRoot) untrack(updateSearchResults);
   });
 
-  // Panels load their own data after mount and re-render rows over time; a
-  // childList observer re-applies an active search filter to nodes Svelte
-  // recreated. Setting `hidden` is an attribute mutation, so the observer
-  // never re-fires on the filter's own work.
   $effect(() => {
-    if (!documentRoot) {
-      return;
-    }
+    if (!documentRoot) return;
     const observer = new MutationObserver(() => {
-      if (searchQuery.trim().length > 0) {
-        queueSearchFilter();
-      }
-      queuePinnedScrollRestore();
+      if (searchQuery.trim()) updateSearchResults();
+      queueRestore();
     });
-    const layoutObserver =
-      typeof ResizeObserver === 'function'
-        ? new ResizeObserver(() => queuePinnedScrollRestore())
-        : null;
     observer.observe(documentRoot, { childList: true, subtree: true });
-    layoutObserver?.observe(documentRoot);
+    const resizeObserver =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(queueRestore)
+        : null;
+    resizeObserver?.observe(documentRoot);
+    queueRestore();
     return () => {
       observer.disconnect();
-      layoutObserver?.disconnect();
+      resizeObserver?.disconnect();
     };
   });
 
-  function queueSearchFilter() {
-    if (searchFilterQueued) {
-      return;
-    }
-    searchFilterQueued = true;
-    queueMicrotask(() => {
-      searchFilterQueued = false;
-      applySearchFilter();
-    });
+  function normalizedSearch(value) {
+    return value
+      .normalize('NFKD')
+      .toLocaleLowerCase()
+      .replace(/[\p{M}\s\p{P}\p{S}]/gu, '');
   }
 
-  function collectSearchUnits(sectionElement) {
-    return Array.from(
-      sectionElement.querySelectorAll(SEARCH_UNIT_SELECTOR),
-    ).filter(
-      (element) =>
-        element.parentElement?.closest(SEARCH_UNIT_SELECTOR) === null,
-    );
-  }
-
-  function applySearchFilter() {
-    if (!documentRoot) {
-      return;
-    }
-    const query = searchQuery.trim().toLowerCase();
-    const nextHiddenIds = [];
-    let visibleUnits = 0;
-
-    for (const sectionElement of documentRoot.querySelectorAll(
-      '[data-settings-section]',
-    )) {
-      const units = collectSearchUnits(sectionElement);
-      if (!query) {
-        sectionElement.hidden = false;
-        for (const unit of units) {
-          unit.hidden = false;
-        }
-        continue;
-      }
-
-      const headerText =
-        sectionElement
-          .querySelector('.s-section-header')
-          ?.textContent.toLowerCase() ?? '';
-      let sectionVisible;
-      if (headerText.includes(query)) {
-        // The section itself is the match — keep all of its content.
-        sectionVisible = true;
-        for (const unit of units) {
-          unit.hidden = false;
-        }
-        visibleUnits += Math.max(units.length, 1);
-      } else {
-        let anyUnitVisible = false;
-        for (const unit of units) {
-          const matches = unit.textContent.toLowerCase().includes(query);
-          unit.hidden = !matches;
-          if (matches) {
-            anyUnitVisible = true;
-            visibleUnits += 1;
-          }
-        }
-        if (!anyUnitVisible && units.length === 0) {
-          // Sections without row-shaped content fall back to full-text match.
-          anyUnitVisible = sectionElement.textContent
-            .toLowerCase()
-            .includes(query);
-          if (anyUnitVisible) {
-            visibleUnits += 1;
-          }
-        }
-        sectionVisible = anyUnitVisible;
-      }
-
-      sectionElement.hidden = !sectionVisible;
-      if (!sectionVisible) {
-        nextHiddenIds.push(sectionElement.dataset.settingsSection);
-      }
-    }
-
-    for (const labelElement of documentRoot.querySelectorAll(
-      '[data-settings-group]',
-    )) {
-      const group = groups.find(
-        (candidate) => candidate.id === labelElement.dataset.settingsGroup,
-      );
-      const groupHidden =
-        Boolean(query) &&
-        (group?.sections ?? []).every((section) =>
-          nextHiddenIds.includes(section.id),
+  function updateSearchResults() {
+    const terms = searchQuery
+      .trim()
+      .split(/\s+/)
+      .map(normalizedSearch)
+      .filter(Boolean);
+    const results = [];
+    if (terms.length) {
+      for (const panel of panels) {
+        const section = documentRoot?.querySelector(
+          `[data-settings-section="${panel.id}"]`,
         );
-      labelElement.hidden = groupHidden;
+        const text = normalizedSearch(section?.textContent ?? '');
+        if (terms.every((term) => text.includes(term))) results.push(panel.id);
+      }
     }
-
-    hiddenSectionIds.clear();
-    for (const sectionId of nextHiddenIds) {
-      hiddenSectionIds.add(sectionId);
-    }
-    matchCount = visibleUnits;
+    // Avoid observing our own result-list render as another result change.
+    if (results.join('|') !== searchResults.join('|')) searchResults = results;
   }
 
-  function handleContentScroll() {
-    if (scrollSpyFrame !== null) {
+  function queueRestore() {
+    if (!restorePending || loading || !scrollContainer || restoreFrame !== null)
       return;
-    }
-    scrollSpyFrame = requestAnimationFrame(() => {
-      scrollSpyFrame = null;
-      if (!pinnedScrollRestore) {
-        rememberScrollPosition();
-      }
-      updateActiveSectionFromScroll();
+    restoreFrame = requestAnimationFrame(() => {
+      restoreFrame = null;
+      if (restorePending && scrollContainer)
+        scrollContainer.scrollTop = restoreTop;
     });
   }
 
-  function updateActiveSectionFromScroll() {
-    if (!scrollContainer || !documentRoot) {
-      return;
-    }
-    if (Date.now() < scrollSpySuppressedUntil) {
-      return;
-    }
-    // Fully scrolled down, the last section's top may never cross the spy
-    // offset (short sections) — treat bottom-of-scroll as "last section".
-    const scrolledToBottom =
-      scrollContainer.scrollTop + scrollContainer.clientHeight >=
-      scrollContainer.scrollHeight - 2;
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const readingLine = readingLineOffset();
-    let currentId = '';
-    for (const sectionElement of documentRoot.querySelectorAll(
-      '[data-settings-section]',
-    )) {
-      if (sectionElement.hidden) {
-        continue;
-      }
-      const sectionTop =
-        sectionElement.getBoundingClientRect().top - containerTop;
-      if (
-        !currentId ||
-        scrolledToBottom ||
-        sectionTop <= readingLine + READING_LINE_TOLERANCE_PX
-      ) {
-        currentId = sectionElement.dataset.settingsSection;
-      }
-    }
-    if (currentId) {
-      activeSectionId = currentId;
-    }
-  }
-
-  function scrollToSection(panelId) {
-    releasePinnedScrollRestore();
-    activeSectionId = panelId;
-    const sectionElement = documentRoot?.querySelector(
-      `[data-settings-section="${panelId}"]`,
-    );
-    if (!sectionElement || !scrollContainer) {
-      return;
-    }
-
-    const behavior = preferredScrollBehavior();
-    scrollSpySuppressedUntil =
-      Date.now() + (behavior === 'smooth' ? SCROLLSPY_SUPPRESS_MS : 0);
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const sectionTop = sectionElement.getBoundingClientRect().top;
-    const targetTop = Math.max(
-      0,
-      scrollContainer.scrollTop +
-        sectionTop -
-        containerTop -
-        readingLineOffset(),
-    );
-    if (typeof scrollContainer.scrollTo === 'function') {
-      scrollContainer.scrollTo({ top: targetTop, behavior });
-    } else {
-      scrollContainer.scrollTop = targetTop;
-    }
-  }
-
-  function handleSearchInput(event) {
-    releasePinnedScrollRestore();
-    searchQuery = event.currentTarget.value;
-  }
-
-  function readingLineOffset() {
-    return Math.max(0, scrollContainer?.clientHeight ?? 0) * READING_LINE_RATIO;
-  }
-
-  function syncReadingGeometry() {
-    const height = Math.max(0, scrollContainer?.clientHeight ?? 0);
-    scrollTailHeight = Math.ceil(height * (1 - READING_LINE_RATIO));
-  }
-
-  function preferredScrollBehavior() {
-    if (
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
-      return 'auto';
-    }
-    return 'smooth';
-  }
-
-  function normalizeScrollPosition(position) {
-    if (!position || !Number.isFinite(position.top)) {
-      return null;
-    }
-    return {
-      top: Math.max(0, position.top),
-      sectionId:
-        typeof position.sectionId === 'string' ? position.sectionId : '',
-      sectionOffset: Number.isFinite(position.sectionOffset)
-        ? position.sectionOffset
-        : 0,
-    };
+  function releaseRestore() {
+    restorePending = false;
   }
 
   function captureScrollPosition() {
-    if (!scrollContainer) {
-      return null;
-    }
-
-    const position = {
-      top: Math.max(0, scrollContainer.scrollTop),
-      sectionId: '',
-      sectionOffset: 0,
-    };
-    if (!documentRoot || scrollContainer.clientHeight <= 0) {
-      return position;
-    }
-
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const readingLine = readingLineOffset();
-    let anchor = null;
-    for (const sectionElement of documentRoot.querySelectorAll(
-      '[data-settings-section]',
-    )) {
-      if (sectionElement.hidden) {
-        continue;
-      }
-      const sectionTop =
-        sectionElement.getBoundingClientRect().top - containerTop;
-      if (!anchor || sectionTop <= readingLine + READING_LINE_TOLERANCE_PX) {
-        anchor = { element: sectionElement, top: sectionTop };
-      }
-    }
-    if (anchor) {
-      position.sectionId = anchor.element.dataset.settingsSection ?? '';
-      position.sectionOffset = readingLine - anchor.top;
-    }
-    return position;
-  }
-
-  function rememberScrollPosition() {
-    const position = captureScrollPosition();
-    if (position) {
-      onScrollPositionChange(position);
-    }
-  }
-
-  function releasePinnedScrollRestore() {
-    pinnedScrollRestore = null;
-    scrollSpySuppressedUntil = 0;
-    if (scrollRestoreFrame !== null) {
-      cancelAnimationFrame(scrollRestoreFrame);
-      scrollRestoreFrame = null;
-    }
-  }
-
-  function queuePinnedScrollRestore() {
-    if (
-      !pinnedScrollRestore ||
-      loading ||
-      !scrollContainer ||
-      !documentRoot ||
-      scrollRestoreFrame !== null
-    ) {
-      return;
-    }
-    scrollRestoreFrame = requestAnimationFrame(() => {
-      scrollRestoreFrame = null;
-      restorePinnedScrollPosition();
-    });
-  }
-
-  function restorePinnedScrollPosition() {
-    if (!pinnedScrollRestore || !scrollContainer || !documentRoot) {
-      return;
-    }
-
-    let targetTop = pinnedScrollRestore.top;
-    const anchor = pinnedScrollRestore.sectionId
-      ? documentRoot.querySelector(
-          `[data-settings-section="${pinnedScrollRestore.sectionId}"]`,
-        )
+    return scrollContainer
+      ? {
+          top: Math.max(0, scrollContainer.scrollTop),
+          sectionId: activeSectionId,
+        }
       : null;
-    if (anchor && scrollContainer.clientHeight > 0) {
-      const containerTop = scrollContainer.getBoundingClientRect().top;
-      const sectionDocumentTop =
-        scrollContainer.scrollTop +
-        anchor.getBoundingClientRect().top -
-        containerTop;
-      targetTop =
-        sectionDocumentTop -
-        readingLineOffset() +
-        pinnedScrollRestore.sectionOffset;
-      activeSectionId = pinnedScrollRestore.sectionId;
-    }
-    scrollContainer.scrollTop = Math.max(0, targetTop);
+  }
+
+  function handleContentScroll() {
+    if (!restorePending && !searchActive)
+      onScrollPositionChange(captureScrollPosition());
+  }
+
+  async function selectSection(panelId, focusHeading = true) {
+    if (!panelById.has(panelId)) return;
+    releaseRestore();
+    searchQuery = '';
+    activeSectionId = panelId;
+    await tick();
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+    onScrollPositionChange(captureScrollPosition());
+    if (focusHeading)
+      documentRoot
+        ?.querySelector(`#settings-section-${panelId}`)
+        ?.focus({ preventScroll: true });
+  }
+
+  function navigateToSection(panelId) {
+    return autosaveContext.requestTransition(() => selectSection(panelId));
+  }
+
+  function handleSearchInput(event) {
+    releaseRestore();
+    searchQuery = event.currentTarget.value;
+    if (scrollContainer) scrollContainer.scrollTop = 0;
   }
 
   // The single settings error seam: a panel's `onError` funnels here. A
@@ -813,7 +542,11 @@
 
 {#snippet sectionHeader(panel)}
   <header class="s-section-header">
-    <h2 class="s-section-title" id={`settings-section-${panel.id}`}>
+    <h2
+      tabindex="-1"
+      class="s-section-title"
+      id={`settings-section-${panel.id}`}
+    >
       {panel.label()}
     </h2>
     <p class="s-section-sub">{panel.subtitle()}</p>
@@ -868,13 +601,11 @@
         {#each group.sections as panel (panel.id)}
           <button
             class:snav-item--active={panel.id === activeSectionId}
-            class:snav-item--dimmed={searchActive &&
-              hiddenSectionIds.has(panel.id)}
             class="snav-item"
             type="button"
             aria-current={panel.id === activeSectionId ? 'true' : undefined}
             aria-label={t(panel.labelKey, panel.labelFallback)}
-            onclick={() => scrollToSection(panel.id)}
+            onclick={() => navigateToSection(panel.id)}
           >
             {panel.label()}
           </button>
@@ -892,15 +623,24 @@
         options={mobileSectionOptions}
         ariaLabel={t('settings.sections', 'Settings sections')}
         triggerClass="settings-mobile-section-dropdown"
-        onValueChange={scrollToSection}
+        onValueChange={navigateToSection}
       />
     </div>
   </nav>
 
+  <!-- The scroll region needs keyboard focus; interaction releases restored scrolling. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
   <div
     class="settings-content"
+    role="region"
+    aria-label={t('settings.content', 'Settings content')}
+    tabindex="0"
     bind:this={scrollContainer}
     onscroll={handleContentScroll}
+    onwheel={releaseRestore}
+    ontouchstart={releaseRestore}
+    onpointerdown={releaseRestore}
+    onkeydown={releaseRestore}
   >
     <div class="s-doc" bind:this={documentRoot}>
       {#if loading}
@@ -915,23 +655,65 @@
           </Button>
         </Banner>
       {:else}
-        {#if searchActive && matchCount === 0}
-          <EmptyState
-            density="compact"
-            description={t(
-              'settings.search.noMatches',
-              'No settings match your search.',
-            )}
-          />
+        {#if searchActive}
+          <header class="settings-page-heading">
+            <h2>{t('settings.search.results', 'Search results')}</h2>
+            <p>
+              {t(
+                'settings.search.guidance',
+                'Choose a topic to open its settings.',
+              )}
+            </p>
+          </header>
+          <div class="settings-search-results">
+            {#each searchResults as panelId (panelId)}
+              {@const panel = panelById.get(panelId)}
+              <Button
+                class="settings-search-result"
+                onClick={() => navigateToSection(panelId)}
+              >
+                <span class="settings-search-result__title"
+                  >{panel.label()}</span
+                >
+                <span class="settings-search-result__description"
+                  >{panel.subtitle()}</span
+                >
+              </Button>
+            {:else}
+              <EmptyState
+                density="compact"
+                description={t(
+                  'settings.search.noMatches',
+                  'No settings match your search.',
+                )}
+              />
+            {/each}
+          </div>
+        {:else}
+          <div class="s-doc-group">{activeGroup?.label()}</div>
         {/if}
 
-        <div class="s-doc-group" data-settings-group="connect">
-          {groupById.get('connect').label()}
-        </div>
+        <section
+          class="s-section"
+          data-settings-section="preferences"
+          hidden={searchActive || activeSectionId !== 'preferences'}
+          aria-labelledby="settings-section-preferences"
+        >
+          {@render sectionHeader(preferencesPanel)}
+          <SettingsGeneralPanel
+            page="preferences"
+            {settings}
+            {onOpenSetupGuide}
+            onCommit={commitSettings}
+            {onToast}
+            onError={reportSettingsError}
+          />
+        </section>
 
         <section
           class="s-section"
           data-settings-section="providers"
+          hidden={searchActive || activeSectionId !== 'providers'}
           aria-labelledby="settings-section-providers"
         >
           {@render sectionHeader(panelById.get('providers'))}
@@ -953,6 +735,7 @@
         <section
           class="s-section"
           data-settings-section="channels"
+          hidden={searchActive || activeSectionId !== 'channels'}
           aria-labelledby="settings-section-channels"
         >
           {@render sectionHeader(panelById.get('channels'))}
@@ -966,6 +749,7 @@
         <section
           class="s-section"
           data-settings-section="extensions"
+          hidden={searchActive || activeSectionId !== 'extensions'}
           aria-labelledby="settings-section-extensions"
         >
           {@render sectionHeader(panelById.get('extensions'))}
@@ -975,13 +759,10 @@
           />
         </section>
 
-        <div class="s-doc-group" data-settings-group="models">
-          {groupById.get('models').label()}
-        </div>
-
         <section
           class="s-section"
           data-settings-section="defaults"
+          hidden={searchActive || activeSectionId !== 'defaults'}
           aria-labelledby="settings-section-defaults"
         >
           {@render sectionHeader(panelById.get('defaults'))}
@@ -997,6 +778,7 @@
         <section
           class="s-section"
           data-settings-section="specialized_models"
+          hidden={searchActive || activeSectionId !== 'specialized_models'}
           aria-labelledby="settings-section-specialized_models"
         >
           {@render sectionHeader(panelById.get('specialized_models'))}
@@ -1009,13 +791,10 @@
           />
         </section>
 
-        <div class="s-doc-group" data-settings-group="conversation">
-          {groupById.get('conversation').label()}
-        </div>
-
         <section
           class="s-section"
           data-settings-section="compaction"
+          hidden={searchActive || activeSectionId !== 'compaction'}
           aria-labelledby="settings-section-compaction"
         >
           {@render sectionHeader(panelById.get('compaction'))}
@@ -1031,6 +810,7 @@
         <section
           class="s-section"
           data-settings-section="session_titles"
+          hidden={searchActive || activeSectionId !== 'session_titles'}
           aria-labelledby="settings-section-session_titles"
         >
           {@render sectionHeader(panelById.get('session_titles'))}
@@ -1046,6 +826,7 @@
         <section
           class="s-section"
           data-settings-section="recall"
+          hidden={searchActive || activeSectionId !== 'recall'}
           aria-labelledby="settings-section-recall"
         >
           {@render sectionHeader(panelById.get('recall'))}
@@ -1057,16 +838,20 @@
           />
         </section>
 
-        <div class="s-doc-group" data-settings-group="behavior">
-          {groupById.get('behavior').label()}
-        </div>
-
         <section
           class="s-section"
           data-settings-section="voice"
+          hidden={searchActive || activeSectionId !== 'voice'}
           aria-labelledby="settings-section-voice"
         >
           {@render sectionHeader(panelById.get('voice'))}
+          <div class="settings-related">
+            <Button
+              variant="tertiary"
+              onClick={() => navigateToSection('specialized_models')}
+              >{t('settings.voice.modelsLink', 'Choose speech Models')}</Button
+            >
+          </div>
           <WakewordVoiceSettings
             {agents}
             {settings}
@@ -1080,6 +865,7 @@
         <section
           class="s-section"
           data-settings-section="web_search"
+          hidden={searchActive || activeSectionId !== 'web_search'}
           aria-labelledby="settings-section-web_search"
         >
           {@render sectionHeader(panelById.get('web_search'))}
@@ -1094,6 +880,7 @@
         <section
           class="s-section"
           data-settings-section="subagents"
+          hidden={searchActive || activeSectionId !== 'subagents'}
           aria-labelledby="settings-section-subagents"
         >
           {@render sectionHeader(panelById.get('subagents'))}
@@ -1108,6 +895,7 @@
         <section
           class="s-section"
           data-settings-section="reflection"
+          hidden={searchActive || activeSectionId !== 'reflection'}
           aria-labelledby="settings-section-reflection"
         >
           {@render sectionHeader(panelById.get('reflection'))}
@@ -1119,13 +907,10 @@
           />
         </section>
 
-        <div class="s-doc-group" data-settings-group="system">
-          {groupById.get('system').label()}
-        </div>
-
         <section
           class="s-section"
           data-settings-section="appearance"
+          hidden={searchActive || activeSectionId !== 'appearance'}
           aria-labelledby="settings-section-appearance"
         >
           {@render sectionHeader(panelById.get('appearance'))}
@@ -1140,6 +925,7 @@
         <section
           class="s-section"
           data-settings-section="debug"
+          hidden={searchActive || activeSectionId !== 'debug'}
           aria-labelledby="settings-section-debug"
         >
           {@render sectionHeader(panelById.get('debug'))}
@@ -1155,6 +941,7 @@
         <section
           class="s-section"
           data-settings-section="general"
+          hidden={searchActive || activeSectionId !== 'general'}
           aria-labelledby="settings-section-general"
         >
           {@render sectionHeader(panelById.get('general'))}
@@ -1172,18 +959,13 @@
           <section
             class="s-section"
             data-settings-section="desktop_connection"
+            hidden={searchActive || activeSectionId !== 'desktop_connection'}
             aria-labelledby="settings-section-desktop_connection"
           >
             {@render sectionHeader(panelById.get('desktop_connection'))}
             <DesktopConnectionSettings {onToast} />
           </section>
         {/if}
-
-        <div
-          class="settings-scroll-tail"
-          style={`height: ${scrollTailHeight}px`}
-          aria-hidden="true"
-        ></div>
       {/if}
     </div>
   </div>
