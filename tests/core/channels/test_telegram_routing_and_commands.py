@@ -511,7 +511,7 @@ async def test_new_command_starts_fresh_session(
         SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
     )
     new_session_id = anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY]
-    assert new_session_id.startswith("ch-tg-assistant-12345-")
+    assert new_session_id.startswith("ses_")
     assert chat_sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
     )

@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, cast
-from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tzlocal import get_localzone
@@ -47,6 +46,7 @@ from core.config_validation import (
     warn_unknown_keys,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("calendar.service")
@@ -734,7 +734,7 @@ class CalendarService:
             else:
                 wall_start = parsed_start.astimezone(zone).replace(tzinfo=None)
             event = CalendarEvent(
-                id=str(uuid4()),
+                id=new_id("evt", claim=lambda candidate: candidate not in self._events),
                 title=title,
                 all_day=False,
                 notes=notes,
@@ -760,7 +760,7 @@ class CalendarService:
                 "exdates are only valid on recurring events; delete the event instead"
             )
         event = CalendarEvent(
-            id=str(uuid4()),
+            id=new_id("evt", claim=lambda candidate: candidate not in self._events),
             title=title,
             all_day=False,
             notes=notes,
@@ -791,7 +791,7 @@ class CalendarService:
     ) -> CalendarEvent:
         validated_duration = _validate_duration_days(duration_days)
         event = CalendarEvent(
-            id=str(uuid4()),
+            id=new_id("evt", claim=lambda candidate: candidate not in self._events),
             title=title,
             all_day=True,
             notes=notes,

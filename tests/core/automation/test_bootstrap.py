@@ -6,7 +6,6 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any, cast
-from uuid import UUID
 
 import pytest
 
@@ -159,8 +158,8 @@ async def test_shutdown_cancellation_leaves_once_job_retryable(tmp_path: Path) -
 async def test_same_session_jobs_run_sequentially(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    job_ids = iter((UUID(int=2), UUID(int=1)))
-    monkeypatch.setattr(bootstrap_module, "uuid4", lambda: next(job_ids))
+    job_ids = iter(("boot_000000000002", "boot_000000000001"))
+    monkeypatch.setattr(bootstrap_module, "new_id", lambda *_args, **_kwargs: next(job_ids))
     monkeypatch.setattr(
         bootstrap_module,
         "_utc_now_iso",

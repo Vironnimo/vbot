@@ -23,6 +23,7 @@ from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
+from core.utils.ids import write_id_file
 
 from .runtime import BrowserRuntime, SetupError
 
@@ -899,7 +900,7 @@ class BrowserService:
                         break
             return {"files": files}
         if action == "screenshot":
-            path = session.directory / (uuid.uuid4().hex + ".png")
+            path = write_id_file(session.directory, "shot", ".png", b"")
             self._call(
                 context,
                 session,

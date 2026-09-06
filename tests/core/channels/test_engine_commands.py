@@ -386,9 +386,9 @@ async def test_new_session_command_starts_fresh_session_and_redirects_followups(
     new_session_id = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
     )[engine_module.ACTIVE_SESSION_METADATA_KEY]
-    # A distinct session, anchored to the conversation for grouping, was created.
+    # A distinct Session was created; Channel grouping comes from its metadata.
     assert new_session_id != SESSION_ID
-    assert new_session_id.startswith(f"{SESSION_ID}-")
+    assert new_session_id.startswith("ses_")
     assert chat_sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
     )

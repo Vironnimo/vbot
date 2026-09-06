@@ -6,7 +6,7 @@ Lets an Agent inspect and control only its own background processes created by t
 
 ### Tracked Process
 **Definition:** One OS subprocess spawned through `ProcessManager` (always by the `bash` Tool today), identified by an opaque `process_id` and tracked in memory until exit plus a TTL sweep. The Agent addresses it in Tool results and `process` actions exclusively as `process_id`.
-**Not:** A Chat Session or its id - those are separate namespaces despite both being UUID-ish strings. Also not an arbitrary operating-system process: the Tool cannot discover or control anything `ProcessManager` did not spawn.
+**Not:** A Chat Session or its id - those are separate namespaces even though both are opaque strings. Also not an arbitrary operating-system process: the Tool cannot discover or control anything `ProcessManager` did not spawn.
 
 ## Data Model
 
@@ -15,6 +15,8 @@ Lets an Agent inspect and control only its own background processes created by t
 - A tracked process never outlives the server process that owns its in-memory record. `server.main` activates the shared OS containment boundary before Runtime startup: Windows descendants inherit a kill-on-close Job Object, while POSIX Process Manager children run through `core/tools/process_guardian.py` and receive server death through one parent-liveness pipe. systemd adds a service-cgroup boundary (see `cli.md`).
 - A handed-off Bash process may carry one tracked automatic completion-notification task plus a manual-acknowledgement bit. `register_completion_notification(...)` attaches the watcher task; `acknowledge_completion(...)` requires a terminal process, records manual delivery, and cancels the watcher. If the watcher already submitted its result to the shared completion coordinator, cancellation withdraws that still-pending notice.
 - Runtime injects Storage's `TemporaryFileManager`. Every tracked process then leases one file under `<data_dir>/artifacts/temp/bash/` and writes combined output incrementally - decoded via an incremental UTF-8 decoder (chunk-split multibyte safe), ANSI-stripped, and flushed per chunk so the file is readable while the process runs. The file is the complete record and is not subject to the in-memory buffer cap. `TrackedProcess.log_file` exposes the path (`None` without a temporary-file manager or after a write error, which disables file logging for that process best-effort). The lease remains active through process exit and both stream readers, then starts Storage's 72-hour retention; ProcessManager does not own file cleanup.
+
+New process ids use `proc_` plus 12 lowercase base32 characters; allocation checks retained processes immediately before synchronous publication (`process_manager.py`, `test_process_manager.py`).
 
 ## Interfaces
 

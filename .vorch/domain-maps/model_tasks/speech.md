@@ -13,7 +13,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 - `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` - validates non-empty bytes, resolves the `speech_to_text` binding, converts the source through PyAV to the live transcription-audio profile, then calls the selected local executor or provider speech client with a canonical `recording.wav` / `audio/wav` or `recording.flac` / `audio/flac` payload. Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber to degrade audio attachments to text (see `.vorch/domain-maps/attachments.md`).
 - `SpeechService.synthesize(text) -> SpeechSynthesisResult` - trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` - calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
-- `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` - accepts only 32-character lowercase hex IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
+- `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` - accepts bounded safe opaque IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
 - `ProviderSpeechClient.transcribe(...)` / `ProviderSpeechClient.synthesize(...)` - small speech-specific HTTP clients built from runtime provider config, connection auth, credentials, and the target model ID.
 - `LocalSpeechExecutor.transcribe(...)` / `LocalSpeechExecutor.synthesize(...)` - optional extension hooks; the default executor raises `LocalSpeechError` for every target.
 
@@ -67,7 +67,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 
 ## Artifacts
 
-TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
+TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. New artifact IDs use `aud_` plus 12 lowercase base32 characters, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
 
 ## Errors
 
@@ -88,5 +88,5 @@ Missing STT bindings and Provider request failures are logged through `vbot.spee
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.
-- Artifact persistence (shared `TaskArtifactStore`) writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
+- Artifact persistence (shared `TaskArtifactStore`) exclusively reserves the sidecar name before writing the audio file and complete metadata; interrupted writes can leave invalid sidecars or orphaned audio blobs, whose names remain occupied.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.

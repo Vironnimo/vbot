@@ -342,3 +342,16 @@ async def test_invalid_event_storage_never_deletes_action_definitions(tmp_path, 
         await reloaded.actions.tick(now)
     stored = json.loads(service.actions._path.read_text())
     assert stored["actions"][0]["id"] == action["id"]
+
+
+def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    service, event, _, _ = setup(tmp_path)
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first = service.actions.add(event.id, when="start", prompt="first", target="main")
+    second = service.actions.add(event.id, when="end", prompt="second", target="main")
+    assert first["id"] == "act_000000000001"
+    assert second["id"] == "act_000000000002"
+    assert service.actions._actions[first["id"]]["prompt"] == "first"

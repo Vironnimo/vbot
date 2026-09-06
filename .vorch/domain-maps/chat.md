@@ -33,6 +33,8 @@ Exact role fields, request rendering, Content Blocks, Continuation state, events
 - `core/chat/usage.py` owns canonical whole-Session Usage aggregation. Provider adapters own wire normalization; the WebUI consumes the server projection rather than recalculating it.
 - `core/chat/events.py` projects visible message/Tool/error events and strips opaque Provider data. Run sequencing and terminal lifecycle remain owned by `runs.md`.
 
+New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random bits), including checkpoint Messages. Explicit and persisted ids remain exact; duplicate checkpoint ids remain valid. Messages are constructed before storage, so allocation does not introduce a global registry or a database uniqueness constraint (`messages.py`, `tests/core/utils/test_ids.py`).
+
 ## Invariants and conventions
 
 - Chat remains Provider-agnostic. It may inspect declared adapter capabilities/policies but never Provider-specific wire payloads or raw SSE events.

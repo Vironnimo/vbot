@@ -2002,3 +2002,16 @@ async def test_deleting_a_group_kills_every_terminal_in_it(
             await manager.delete_group_for_operator(group_id)
     finally:
         await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_parallel_terminal_ids_skip_collisions(terminal_manager, tmp_path, monkeypatch):
+    from core.utils import ids
+
+    manager, _ = terminal_manager
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first, second = await asyncio.gather(spawn(manager, tmp_path), spawn(manager, tmp_path))
+    assert {first.terminal_id, second.terminal_id} == {"term_000000000001", "term_000000000002"}
+    assert manager.get_session(first.terminal_id, owner()) is first
+    assert manager.get_session(second.terminal_id, owner()) is second
