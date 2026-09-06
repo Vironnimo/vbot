@@ -376,3 +376,44 @@ def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
         release.set()
         hotkey.close()
     assert not hotkey._worker.is_alive()
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refuse):
+    client = CuaDriver.__new__(CuaDriver)
+    calls = []
+    geometry = [1]
+    client._background_frames = {}
+    client._original_images = True
+    client.desktop = SimpleNamespace(
+        window_geometry=lambda args: tuple(geometry), foreground_window=lambda: 99
+    )
+    client.schemas = {"get_window_state": {}, "click": {}}
+    client._session = SimpleNamespace(call_tool=object())
+
+    def query(function, name, args):
+        calls.append((name, args))
+        assert "_background_capture" not in args
+        result = {"elements": []}
+        if name == "click":
+            assert args["delivery_mode"] == "background"
+            result = {
+                "effect": "refused" if refuse else "unverifiable",
+                "route": "synthetic_events",
+            }
+        return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": result})
+
+    client._portal = SimpleNamespace(call=query)
+    monkeypatch.setattr(client, "connect", lambda: None)
+    target = {"pid": 1, "window_id": 2, "session": "s"}
+    client.call("get_window_state", {**target, "_background_capture": True})
+    if refuse:
+        with pytest.raises(ComputerUseError):
+            client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
+    else:
+        client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
+    assert [name for name, _ in calls] == ["get_window_state", "click"]
+    geometry[0] = 2
+    with pytest.raises(ComputerUseError) as caught:
+        client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
+    assert caught.value.code == "capture_required" and len(calls) == 2

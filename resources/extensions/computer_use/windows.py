@@ -266,6 +266,15 @@ class WindowsDesktop:
     def _target(args: dict[str, Any]) -> tuple[Any, ...]:
         return (args.get("session"), args.get("pid"), args.get("window_id"), args.get("monitor"))
 
+    def foreground_window(self) -> int:
+        return int(self.user.GetForegroundWindow() or 0)
+
+    def window_geometry(self, args: dict[str, Any]) -> tuple[int, ...]:
+        """Bind another window capture backend to the same physical geometry checks."""
+        self._check()
+        with self._physical():
+            return self._geometry(args)[1]
+
     def capture(self, args: dict[str, Any]) -> dict[str, Any]:
         self._check()
         with self._physical():
