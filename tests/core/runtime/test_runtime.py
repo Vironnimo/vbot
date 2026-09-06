@@ -81,7 +81,9 @@ HOME_ASSISTANT_TOOLS = [
     "ha_list_entities",
     "ha_list_services",
 ]
-CANONICAL_REGISTERED_TOOLS = sorted(CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["computer"])
+CANONICAL_REGISTERED_TOOLS = sorted(
+    CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["browser", "computer"]
+)
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
