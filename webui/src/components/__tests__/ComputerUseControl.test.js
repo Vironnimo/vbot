@@ -20,12 +20,13 @@ const ready = {
   available: true,
   paused: false,
   active: false,
+  controlling: true,
   hotkey_available: true,
   stop_token: 'test-owned-stop',
 };
 const button = (label) =>
   [...document.querySelectorAll('button')].find(
-    (item) => item.textContent.trim() === label,
+    (item) => item.getAttribute('aria-label') === label,
   );
 async function settle() {
   flushSync();
@@ -131,8 +132,49 @@ it('keeps Stop accessible if status polling fails', async () => {
   operation.mockRejectedValue(new Error('test-owned-disconnect'));
   await vi.advanceTimersByTimeAsync(2000);
   flushSync();
-  expect(document.querySelector('[role="alert"]').textContent).toBe(
-    'test-owned-disconnect',
-  );
   expect(button('Stop computer control').disabled).toBe(false);
+});
+
+it('adds no surface when computer control is merely available', async () => {
+  operation.mockResolvedValue({ ...ready, controlling: false });
+  component = mount(ComputerUseControl, { target: document.body });
+  await settle();
+  expect(document.querySelector('button')).toBeNull();
+  expect(document.body.textContent.trim()).toBe('');
+  operation.mockResolvedValue(ready);
+  await vi.advanceTimersByTimeAsync(2000);
+  flushSync();
+  expect(button('Stop computer control')).toBeDefined();
+  expect(document.querySelector('.banner')).toBeNull();
+  operation.mockResolvedValue({ ...ready, controlling: false });
+  await vi.advanceTimersByTimeAsync(2000);
+  flushSync();
+  expect(document.querySelector('button')).toBeNull();
+});
+
+it('shows only the recovery control after stop and reports mutation failures', async () => {
+  operation.mockResolvedValue({ ...ready, controlling: false, paused: true });
+  const onError = vi.fn();
+  component = mount(ComputerUseControl, {
+    target: document.body,
+    props: { onError },
+  });
+  await settle();
+  expect(button('Allow computer control')).toBeDefined();
+  expect(button('Stop computer control')).toBeUndefined();
+  operation.mockRejectedValue(new Error('test-owned-resume-error'));
+  button('Allow computer control').click();
+  await settle();
+  expect(onError).toHaveBeenCalledWith('test-owned-resume-error');
+  expect(button('Allow computer control').disabled).toBe(false);
+});
+
+it('cleans up polling when its composer is removed', async () => {
+  component = mount(ComputerUseControl, { target: document.body });
+  await settle();
+  await unmount(component);
+  component = null;
+  const count = operation.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(operation).toHaveBeenCalledTimes(count);
 });

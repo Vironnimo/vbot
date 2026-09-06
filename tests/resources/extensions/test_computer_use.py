@@ -1127,3 +1127,54 @@ def test_verified_window_disappearance_survives_capture_failure(computer):
     result = call(computer, "verify", expect=[{"window": {"exists": False}}], timeout_ms=0)
     assert result["ok"] and result["data"]["verification"]["verified"]
     assert result["data"]["observation_error"]
+
+
+def test_double_escape_stays_armed_between_calls_and_until_last_run_ends(computer):
+    service, context, client, _ = computer
+    assert not asyncio.run(service.control({}))["controlling"]
+    assert service.handle(context, {"action": "status"})["ok"]
+    assert not asyncio.run(service.control({}))["controlling"]
+    capture(computer)
+    other = replace(context, run_id="other-run")
+    assert service.handle(other, {"action": "capture"})["ok"]
+    status = asyncio.run(service.control({}))
+    assert status["controlling"] and not status["active"]
+    service.run_end(context)
+    assert asyncio.run(service.control({}))["controlling"]
+    service.run_end(other)
+    assert not asyncio.run(service.control({}))["controlling"]
+    service._hotkey._key_event(0x1B, True, 0)
+    service._hotkey._key_event(0x1B, False, 0)
+    service._hotkey._key_event(0x1B, True, 0)
+    assert not service._hotkey.pending
+
+
+def test_double_escape_blocks_input_even_before_stop_worker_dispatch(computer):
+    service, _, client, _ = computer
+    capture(computer)
+    service._hotkey._key_event(0x1B, True, 0)
+    service._hotkey._key_event(0x1B, False, 0)
+    service._hotkey._key_event(0x1B, True, 0)
+    before = list(client.calls)
+    result = call(computer, "type", text="must not reach desktop", apply=True)
+    assert result["error"]["code"] == "computer_use_stopped"
+    assert client.calls == before
+    # The normal worker applies the durable user-only interlock.
+    service.stop()
+    service._hotkey._requested.clear()
+    status = asyncio.run(service.control({}))
+    assert status["paused"] and not status["controlling"]
+    assert service._stop_file.exists()
+    assert asyncio.run(service.control({"action": "resume", "stop_token": "old"}))["paused"]
+    status = asyncio.run(service.control({"action": "resume", "stop_token": status["stop_token"]}))
+    assert not status["paused"] and status["controlling"]
+    # A new pair is required after re-arming.
+    service._hotkey._key_event(0x1B, True, 0)
+    assert not service._hotkey.pending
+
+
+def test_explicit_close_retires_emergency_detection_for_the_run(computer):
+    service, _, _, _ = computer
+    capture(computer)
+    assert service.handle(computer[1], {"action": "close"})["ok"]
+    assert not asyncio.run(service.control({}))["controlling"]
