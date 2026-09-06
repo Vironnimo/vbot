@@ -1,1 +1,1 @@
-{"name":"Computer Use","version":"1.0.0","description":"Operate application windows on the vBot server host. Requires explicit permission per Agent and an installed cua-driver.","api_version":5}
+{"name":"Computer Use","version":"2.0.0","description":"Operate application windows on the vBot server host. Requires explicit permission per Agent and an installed cua-driver.","api_version":5}
