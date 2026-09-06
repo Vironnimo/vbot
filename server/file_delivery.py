@@ -17,13 +17,32 @@ JsonObject = dict[str, Any]
 FILE_URL_PREFIX = "/api/files/"
 FILE_SNIFF_BYTES = 65_536
 MAX_FILE_TOKEN_LENGTH = 16_384
-SAFE_INLINE_MEDIA_TYPES = frozenset(
+CHAT_IMAGE_MEDIA_TYPES = frozenset(
     {
+        "image/avif",
+        "image/bmp",
         "image/gif",
         "image/jpeg",
         "image/png",
         "image/webp",
     }
+)
+BROWSER_MEDIA_TYPES = CHAT_IMAGE_MEDIA_TYPES | {
+    "application/pdf",
+    "text/plain",
+    "text/html",
+    "image/svg+xml",
+}
+ACTIVE_DOCUMENT_TYPES = {"text/html", "image/svg+xml"}
+# Scripts can power self-contained reports without inheriting the app's origin.
+# HTTPS assets support styles/fonts/chart libraries; application requests, nested
+# documents and form submissions are blocked. No filesystem-relative assets.
+DOCUMENT_CSP = (
+    "sandbox allow-scripts allow-downloads; default-src 'none'; "
+    "script-src https: 'unsafe-inline'; style-src https: 'unsafe-inline'; "
+    "img-src https: data: blob:; font-src https: data:; media-src https: data: blob:; "
+    "connect-src 'none'; frame-src 'none'; object-src 'none'; "
+    "base-uri 'none'; form-action 'none'"
 )
 
 
@@ -34,6 +53,17 @@ class DeliveredFile:
     path: Path
     media_type: str
     inline: bool
+
+    @property
+    def response_headers(self) -> dict[str, str]:
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        }
+        if self.media_type in ACTIVE_DOCUMENT_TYPES:
+            headers["Content-Security-Policy"] = DOCUMENT_CSP
+        return headers
 
 
 class FileDelivery:
@@ -94,7 +124,7 @@ class FileDelivery:
             label = _escape_markdown_label(presentation.path.name)
             markdown = (
                 f"![{label}]({FILE_URL_PREFIX}{token})"
-                if presentation.inline
+                if presentation.media_type in CHAT_IMAGE_MEDIA_TYPES
                 else f"[{label}]({FILE_URL_PREFIX}{token})"
             )
             replacements_by_line.setdefault(line_index, []).append(
@@ -176,11 +206,30 @@ class FileDelivery:
                 probe = file_handle.read(FILE_SNIFF_BYTES)
         except (OSError, RuntimeError, ValueError):
             return None
+        # A bounded probe may split the final UTF-8 character of a large report.
+        if len(probe) == FILE_SNIFF_BYTES:
+            try:
+                probe.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                if exc.reason == "unexpected end of data":
+                    probe = probe[: exc.start]
         media_type = sniff_media_type(probe, resolved.name)
+        if media_type == "text/plain" and b"\0" in probe:
+            media_type = "application/octet-stream"
+        # The storage sniffer intentionally labels all UTF-8 source as plain text.
+        # Refine only verified text here; never let a suffix override binary magic.
+        if media_type == "text/plain":
+            media_type = {
+                ".html": "text/html",
+                ".htm": "text/html",
+                ".svg": "image/svg+xml",
+            }.get(resolved.suffix.lower(), media_type)
         return DeliveredFile(
             path=resolved,
             media_type=media_type,
-            inline=media_type in SAFE_INLINE_MEDIA_TYPES,
+            inline=(
+                media_type in BROWSER_MEDIA_TYPES or media_type.startswith(("audio/", "video/"))
+            ),
         )
 
 
