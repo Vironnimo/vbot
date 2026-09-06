@@ -597,7 +597,7 @@ def test_stop_during_post_input_delay_preserves_dispatch_without_replay(computer
         service.stop()
         result = future.result(timeout=0.5)
     assert result["data"]["applied"]
-    assert result["data"]["observation_error"]["code"] == "computer_use_stopped"
+    assert result["data"]["observation_error"]["code"] == "computer_use_interrupted"
     assert client.inputs == 1 and client.snapshots == 1
 
 
@@ -816,11 +816,27 @@ def test_transport_timeout_never_replays_uncertain_input():
     assert calls == ["click"] and client.broken and client._session is None
 
 
-def test_cancel_interrupts_inflight_driver_and_latches_until_operator_resume(computer):
+@pytest.mark.parametrize("source", ["tool_cancel", "control", "double_escape"])
+def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
+    computer, monkeypatch, source
+):
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
     service, context, client, _ = computer
+    service.executable = "test-owned-driver"
+    service._driver = client
+    monkeypatch.setattr(
+        service, "_client", computer_use.ComputerUseService._client.__get__(service)
+    )
+    replacements = []
+
+    def new_client(executable):
+        replacement = DesktopClient()
+        replacements.append(replacement)
+        return replacement
+
+    monkeypatch.setattr(computer_use, "CuaDriver", new_client)
     callbacks = []
     context = replace(context, cancel_registration_hook=callbacks.append)
     entered = threading.Event()
@@ -843,17 +859,28 @@ def test_cancel_interrupts_inflight_driver_and_latches_until_operator_resume(com
     with ThreadPoolExecutor() as pool:
         future = pool.submit(service.handle, context, {"action": "apps"})
         assert entered.wait(3)
-        callbacks[0]()
-        assert not future.result(timeout=2)["ok"]
-    assert service._stop_file.exists()
-    calls = len(client.calls)
-    result = service.handle(context, {"action": "apps"})
-    assert result["error"]["code"] == "computer_use_stopped"
-    assert len(client.calls) == calls
-    client.hook = None
-    status = asyncio.run(service.control({"action": "resume", "stop_token": service._stop_token}))
-    assert not status["paused"] and not service._stop_file.exists()
+        if source == "tool_cancel":
+            callbacks[0]()
+        elif source == "control":
+            status = asyncio.run(service.control({}))
+            asyncio.run(service.control({"action": "stop", "call_id": status["call_id"]}))
+        else:
+            service._hotkey._key_event(0x1B, True, 0)
+            service._hotkey._key_event(0x1B, False, 0)
+            service._hotkey._key_event(0x1B, True, 0)
+            owner = service._hotkey.pending_owner
+            assert owner is service._active
+            service._hotkey.callback(owner)
+        result = future.result(timeout=2)
+        assert result["error"]["code"] == "computer_use_interrupted"
+    assert client.broken and client.closed and service._driver is None
+    assert not (context.data_root / "computer-use-stopped").exists()
+    assert not asyncio.run(service.control({}))["active"]
     assert service.handle(context, {"action": "apps"})["ok"]
+    other = replace(context, agent_id="other", session_id="other-session", run_id="other-run")
+    assert service.handle(other, {"action": "apps"})["ok"]
+    assert len(replacements) == 1
+    assert not replacements[0].broken
 
 
 def test_late_cancel_does_not_stop_next_call(computer):
@@ -863,37 +890,56 @@ def test_late_cancel_does_not_stop_next_call(computer):
     assert service.handle(context, {"action": "apps"})["ok"]
     client.hook = lambda name: callbacks[0]()
     assert service.handle(context, {"action": "apps"})["ok"]
-    assert not asyncio.run(service.control({}))["paused"]
+    assert not asyncio.run(service.control({}))["stopping"]
     assert not client.broken
 
 
-def test_global_stop_persists_across_reload_and_resume_waits_for_active_call(computer):
-    service, _, _, _ = computer
-    service._active = object()
-    asyncio.run(service.control({"action": "stop"}))
-    assert asyncio.run(service.control({"action": "resume", "stop_token": service._stop_token}))[
-        "paused"
-    ]
-    service._active = None
+def test_old_stop_file_has_no_runtime_effect_after_reload(computer, monkeypatch):
+    service, context, _, _ = computer
+    marker = context.data_root / "computer-use-stopped"
+    marker.touch()
     replacement = computer_use.ComputerUseService(service.api)
+    replacement.executable = "test-owned-driver"
+    monkeypatch.setattr(computer_use, "CuaDriver", lambda executable: DesktopClient())
     asyncio.run(replacement.start(service.host))
-    assert asyncio.run(replacement.control({}))["paused"]
-    asyncio.run(replacement.control({"action": "resume", "stop_token": replacement._stop_token}))
-    replacement.close()
+    try:
+        assert replacement.handle(context, {"action": "apps"})["ok"]
+        assert set(asyncio.run(replacement.control({}))) == {
+            "available",
+            "active",
+            "stopping",
+            "hotkey_available",
+        }
+    finally:
+        replacement.close()
 
 
-def test_stale_operator_resume_cannot_undo_a_newer_stop(computer):
-    service, _, _, _ = computer
-    first = asyncio.run(service.control({"action": "stop"}))
-    second = asyncio.run(service.control({"action": "stop"}))
-    assert first["stop_token"] != second["stop_token"]
-    stale = asyncio.run(service.control({"action": "resume", "stop_token": first["stop_token"]}))
-    assert stale["paused"]
-    current = asyncio.run(service.control({"action": "resume", "stop_token": second["stop_token"]}))
-    assert not current["paused"]
+def test_control_rejects_release_and_untargeted_stop(computer):
+    service, context, client, _ = computer
+    for arguments in ({"action": "resume"}, {"action": "stop"}):
+        with pytest.raises(ValueError):
+            asyncio.run(service.api.operations.invoke("control", arguments))
+    # A stop after the targeted call completed is a no-op, not an idle lock.
+    asyncio.run(service.control({"action": "stop", "call_id": "test-owned-expired-call"}))
+    assert not client.broken
+    assert service.handle(context, {"action": "apps"})["ok"]
 
 
-def test_os_interrupt_failure_still_persists_stop(computer):
+def test_stale_control_request_does_not_cancel_next_call(computer):
+    service, context, client, _ = computer
+    status = []
+    client.hook = lambda name: status.append(asyncio.run(service.control({})))
+    assert service.handle(context, {"action": "apps"})["ok"]
+    old = status[-1]
+    client.hook = lambda name: asyncio.run(
+        service.control({"action": "stop", "call_id": old["call_id"]})
+    )
+    # Provider call ids can be reused; the control reference still changes.
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert not client.broken
+
+
+def test_os_interrupt_failure_stops_remaining_work_without_latching(computer):
     service, context, client, _ = computer
 
     def denied():
@@ -901,10 +947,14 @@ def test_os_interrupt_failure_still_persists_stop(computer):
 
     client.interrupt = denied
     service._driver = client
-    service.stop()
-    assert service._stop_file.exists()
-    assert service.handle(context, {"action": "apps"})["error"]["code"] == "computer_use_stopped"
-    assert not client.calls
+    client.hook = lambda name: service.stop()
+    assert (
+        service.handle(context, {"action": "apps"})["error"]["code"] == "computer_use_interrupted"
+    )
+    assert client.broken and client.closed
+    client.hook = None
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert not (context.data_root / "computer-use-stopped").exists()
 
 
 def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch):
@@ -927,7 +977,7 @@ def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch
     client.desktop = None
     with pytest.raises(ComputerUseError) as failure:
         client.connect()
-    assert failure.value.code == "computer_use_stopped"
+    assert failure.value.code == "computer_use_interrupted"
     assert client.broken and client._session is None and closed == [True]
 
 
@@ -1097,7 +1147,7 @@ def test_wait_interrupts_immediately_without_recapture(computer, monkeypatch):
         future = executor.submit(call, computer, "wait", duration_ms=10_000)
         assert waiting.wait(1)
         service.stop()
-        assert future.result(timeout=0.5)["error"]["code"] == "computer_use_stopped"
+        assert future.result(timeout=0.5)["error"]["code"] == "computer_use_interrupted"
     assert client.snapshots == 0
 
 
@@ -1229,55 +1279,75 @@ def test_verified_window_disappearance_survives_capture_failure(computer):
     assert result["data"]["observation_error"]
 
 
-def test_double_escape_stays_armed_between_calls_and_until_last_run_ends(computer):
+def test_idle_stop_and_escape_do_not_affect_later_calls(computer):
     service, context, client, _ = computer
-    assert not asyncio.run(service.control({}))["controlling"]
-    assert service.handle(context, {"action": "status"})["ok"]
-    assert not asyncio.run(service.control({}))["controlling"]
     capture(computer)
-    other = replace(context, run_id="other-run")
-    assert service.handle(other, {"action": "capture"})["ok"]
-    status = asyncio.run(service.control({}))
-    assert status["controlling"] and not status["active"]
+    assert not asyncio.run(service.control({}))["active"]
+    service.stop()
+    for _ in range(2):
+        service._hotkey._key_event(0x1B, True, 0)
+        service._hotkey._key_event(0x1B, False, 0)
+    assert service._hotkey.pending_owner is None
+    assert not client.broken
     service.run_end(context)
-    assert asyncio.run(service.control({}))["controlling"]
-    service.run_end(other)
-    assert not asyncio.run(service.control({}))["controlling"]
-    service._hotkey._key_event(0x1B, True, 0)
-    service._hotkey._key_event(0x1B, False, 0)
-    service._hotkey._key_event(0x1B, True, 0)
-    assert not service._hotkey.pending
+    assert service.handle(replace(context, run_id="new-run"), {"action": "apps"})["ok"]
 
 
-def test_double_escape_blocks_input_even_before_stop_worker_dispatch(computer):
+@pytest.mark.parametrize("capture_after", [False, True])
+def test_pending_escape_stops_sequence_but_not_next_call(computer, capture_after):
+    service, context, client, _ = computer
+    capture(computer)
+
+    def escape(name):
+        if name == "type_text":
+            service._hotkey._key_event(0x1B, True, 0)
+            service._hotkey._key_event(0x1B, False, 0)
+            service._hotkey._key_event(0x1B, True, 0)
+
+    client.hook = escape
+    result = call(
+        computer,
+        "sequence",
+        capture_after=capture_after,
+        steps=[
+            {"action": "type", "text": "first"},
+            {"action": "type", "text": "must not reach application"},
+        ],
+    )
+    data = result["data"]
+    assert data["completed_steps"] == 1 and data["stopped_step"] == 2
+    assert data["partial"] and data["error"]["code"] == "computer_use_interrupted"
+    assert data["observation_error"]["code"] == "computer_use_interrupted"
+    assert sum(name == "type_text" for name, _ in client.calls) == 1
+    # Even an undrained hotkey notification belongs only to the previous call.
+    owner = service._hotkey.pending_owner
+    assert owner is not None
+    client.hook = lambda name: service._hotkey.callback(owner)
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert not client.broken
+
+
+@pytest.mark.parametrize("capture_after", [False, True])
+def test_interrupted_single_input_keeps_effect_and_notifies_agent(computer, capture_after):
     service, _, client, _ = computer
     capture(computer)
-    service._hotkey._key_event(0x1B, True, 0)
-    service._hotkey._key_event(0x1B, False, 0)
-    service._hotkey._key_event(0x1B, True, 0)
-    before = list(client.calls)
-    result = call(computer, "type", text="must not reach desktop", apply=True)
-    assert result["error"]["code"] == "computer_use_stopped"
-    assert client.calls == before
-    # The normal worker applies the durable user-only interlock.
-    service.stop()
-    service._hotkey._requested.clear()
-    status = asyncio.run(service.control({}))
-    assert status["paused"] and not status["controlling"]
-    assert service._stop_file.exists()
-    assert asyncio.run(service.control({"action": "resume", "stop_token": "old"}))["paused"]
-    status = asyncio.run(service.control({"action": "resume", "stop_token": status["stop_token"]}))
-    assert not status["paused"] and status["controlling"]
-    # A new pair is required after re-arming.
-    service._hotkey._key_event(0x1B, True, 0)
-    assert not service._hotkey.pending
+    client.hook = lambda name: service.stop() if name == "type_text" else None
+    result = call(computer, "type", text="draft", capture_after=capture_after)
+    assert result["ok"] and result["data"]["applied"]
+    error = result["data"]["observation_error" if capture_after else "error"]
+    assert error["code"] == "computer_use_interrupted"
+    assert sum(name == "type_text" for name, _ in client.calls) == 1
+    client.hook = None
+    assert call(computer, "capture")["ok"]
 
 
-def test_explicit_close_retires_emergency_detection_for_the_run(computer):
-    service, _, _, _ = computer
+def test_run_completion_and_shutdown_never_persist_a_stop(computer):
+    service, context, _, _ = computer
     capture(computer)
-    assert service.handle(computer[1], {"action": "close"})["ok"]
-    assert not asyncio.run(service.control({}))["controlling"]
+    service.run_end(context)
+    assert not service._sessions
+    service.close()
+    assert not (context.data_root / "computer-use-stopped").exists()
 
 
 def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, monkeypatch):
@@ -1294,7 +1364,7 @@ def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, 
     original = original_path.read_bytes()
     # Force the displayed-image allocation to collide with the previous view.
     sequence = iter((value, value, (value + 1) % (1 << 60)))
-    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(sequence))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda bits: 1 if bits == 80 else next(sequence))
     second = capture(computer)["data"]
     assert second["view_id"] != first["view_id"]
     assert original_path.read_bytes() == original

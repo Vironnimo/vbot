@@ -18,11 +18,10 @@ const { default: ComputerUseControl } =
 let component;
 const ready = {
   available: true,
-  paused: false,
-  active: false,
-  controlling: true,
+  active: true,
+  stopping: false,
   hotkey_available: true,
-  stop_token: 'test-owned-stop',
+  call_id: 'test-owned-call',
 };
 const button = (label) =>
   [...document.querySelectorAll('button')].find(
@@ -60,56 +59,59 @@ it('stops immediately and ignores a stale status response', async () => {
       ? new Promise((resolve) => {
           stale = resolve;
         })
-      : Promise.resolve({ ...ready, paused: true }),
+      : Promise.resolve({ ...ready, active: false }),
   );
   await vi.advanceTimersByTimeAsync(2000);
   button('Stop computer control').click();
   await settle();
   expect(operation).toHaveBeenCalledWith('computer_use', 'control', {
     action: 'stop',
+    call_id: 'test-owned-call',
   });
-  expect(button('Allow computer control')).toBeDefined();
+  expect(document.querySelector('button')).toBeNull();
   stale(ready);
   await settle();
-  expect(button('Allow computer control')).toBeDefined();
+  expect(document.querySelector('button')).toBeNull();
 });
 
-it('does not allow resume until interrupted work has drained', async () => {
-  operation.mockResolvedValue({ ...ready, paused: true, active: true });
+it('disables Stop while the interrupted call drains and allows the next call', async () => {
+  operation.mockResolvedValue({ ...ready, stopping: true });
   component = mount(ComputerUseControl, { target: document.body });
   await settle();
-  expect(button('Allow computer control').disabled).toBe(true);
-  operation.mockResolvedValue({ ...ready, paused: true });
+  expect(button('Stop computer control').disabled).toBe(true);
+  operation.mockResolvedValue({ ...ready, active: false });
   await vi.advanceTimersByTimeAsync(2000);
   flushSync();
-  button('Allow computer control').click();
-  await settle();
-  expect(operation).toHaveBeenCalledWith('computer_use', 'control', {
-    action: 'resume',
-    stop_token: 'test-owned-stop',
-  });
-});
-
-it('keeps Stop available during resume and ignores a late resume response', async () => {
-  operation.mockResolvedValue({ ...ready, paused: true });
-  component = mount(ComputerUseControl, { target: document.body });
-  await settle();
-  let resume;
-  operation.mockImplementation((_extension, _name, { action }) =>
-    action === 'resume'
-      ? new Promise((resolve) => {
-          resume = resolve;
-        })
-      : Promise.resolve({ ...ready, paused: true }),
-  );
-  button('Allow computer control').click();
-  await settle();
+  expect(document.querySelector('button')).toBeNull();
+  operation.mockResolvedValue({ ...ready, call_id: 'test-owned-next-call' });
+  await vi.advanceTimersByTimeAsync(2000);
+  flushSync();
   expect(button('Stop computer control').disabled).toBe(false);
   button('Stop computer control').click();
   await settle();
-  resume(ready);
+  expect(operation).toHaveBeenLastCalledWith('computer_use', 'control', {
+    action: 'stop',
+    call_id: 'test-owned-next-call',
+  });
+});
+
+it('disables Stop immediately until its request settles', async () => {
+  component = mount(ComputerUseControl, { target: document.body });
   await settle();
-  expect(button('Allow computer control')).toBeDefined();
+  let stop;
+  operation.mockImplementation((_extension, _name, { action }) =>
+    action === 'stop'
+      ? new Promise((resolve) => {
+          stop = resolve;
+        })
+      : Promise.resolve(ready),
+  );
+  button('Stop computer control').click();
+  await settle();
+  expect(button('Stop computer control').disabled).toBe(true);
+  stop({ ...ready, active: false });
+  await settle();
+  expect(document.querySelector('button')).toBeNull();
 });
 
 it('does not call missing extensions and discovers them on a later poll', async () => {
@@ -136,7 +138,7 @@ it('keeps Stop accessible if status polling fails', async () => {
 });
 
 it('adds no surface when computer control is merely available', async () => {
-  operation.mockResolvedValue({ ...ready, controlling: false });
+  operation.mockResolvedValue({ ...ready, active: false });
   component = mount(ComputerUseControl, { target: document.body });
   await settle();
   expect(document.querySelector('button')).toBeNull();
@@ -146,27 +148,24 @@ it('adds no surface when computer control is merely available', async () => {
   flushSync();
   expect(button('Stop computer control')).toBeDefined();
   expect(document.querySelector('.banner')).toBeNull();
-  operation.mockResolvedValue({ ...ready, controlling: false });
+  operation.mockResolvedValue({ ...ready, active: false });
   await vi.advanceTimersByTimeAsync(2000);
   flushSync();
   expect(document.querySelector('button')).toBeNull();
 });
 
-it('shows only the recovery control after stop and reports mutation failures', async () => {
-  operation.mockResolvedValue({ ...ready, controlling: false, paused: true });
+it('reports a failed stop request and keeps Stop accessible', async () => {
   const onError = vi.fn();
   component = mount(ComputerUseControl, {
     target: document.body,
     props: { onError },
   });
   await settle();
-  expect(button('Allow computer control')).toBeDefined();
-  expect(button('Stop computer control')).toBeUndefined();
-  operation.mockRejectedValue(new Error('test-owned-resume-error'));
-  button('Allow computer control').click();
+  operation.mockRejectedValue(new Error('test-owned-stop-error'));
+  button('Stop computer control').click();
   await settle();
-  expect(onError).toHaveBeenCalledWith('test-owned-resume-error');
-  expect(button('Allow computer control').disabled).toBe(false);
+  expect(onError).toHaveBeenCalledWith('test-owned-stop-error');
+  expect(button('Stop computer control').disabled).toBe(false);
 });
 
 it('cleans up polling when its composer is removed', async () => {

@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import ImageGrab
 
-from .driver import ComputerUseError
+from .driver import ComputerUseError, ComputerUseInterruptedError
 
 
 class Rect(ct.Structure):
@@ -137,10 +137,7 @@ class WindowsDesktop:
 
     def _check(self) -> None:
         if self._stopped.is_set():
-            raise ComputerUseError(
-                "Computer control is stopped. Wait for the user to resume it.",
-                "computer_use_stopped",
-            )
+            raise ComputerUseInterruptedError()
 
     def _send_raw(self, events: list[Input]) -> None:
         batch = (Input * len(events))(*events)
