@@ -138,6 +138,43 @@ function skillManageCall(action, args) {
 }
 
 function plannedToolResponse(prompt, results, offeredTools) {
+  if (
+    prompt.includes("E2E_HTML_PREVIEW") ||
+    prompt.includes("Create a small website for the preview demo.")
+  ) {
+    const written = resultsFor(results, "write").filter((result) =>
+      result.envelope?.data?.path?.includes("preview-demo-"),
+    );
+    if (written.length > 0) {
+      const entry = written.find((result) =>
+        result.envelope.data.path.endsWith("/index.html"),
+      );
+      return {
+        text: entry
+          ? `Your website is ready. Open it here:\n\nfile:${entry.envelope.data.path}`
+          : "The website files could not be completed.",
+      };
+    }
+    const directory = `preview-demo-${Date.now()}`;
+    const files = {
+      "index.html":
+        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio Notes</title><link rel="stylesheet" href="style.css"><script src="main.js" defer></script><body><nav>STUDIO NOTES <a href="pages/about.html">About this website →</a></nav><main><p class="eyebrow">CREATED BY YOUR AGENT</p><h1>Made in this<br>conversation.</h1><p>A small website, ready to explore. Opened directly from the file in your Chat.</p><img src="landscape.svg" alt="A quiet green landscape"><section><h2>Try something.</h2><p>This interaction comes from a separate JavaScript file.</p><button id="counter">Try it · 0</button></section><a href="pages/about.html">Visit the second page →</a></main></body></html>',
+      "style.css":
+        "body{margin:0;background:#f2f0e8;color:#203d36;font:16px/1.6 system-ui,sans-serif}nav{display:flex;justify-content:space-between;gap:20px;padding:25px 32px;border-bottom:1px solid #d6d8cb;font-size:12px;font-weight:600}main{max-width:740px;padding:36px 32px;margin:auto}h1{font:normal clamp(36px,5vw,56px)/1.1 Georgia,serif;letter-spacing:-1.5px}h2{font:normal 26px Georgia,serif}a{color:inherit}.eyebrow{font-size:11px;letter-spacing:2px}img{display:block;width:100%;margin:30px 0;border-radius:8px}section{border:1px solid #d6d8cb;border-radius:8px;padding:20px;margin-bottom:24px}button{background:#426749;color:white;border:0;border-radius:5px;padding:12px 20px;cursor:pointer}",
+      "main.js":
+        'let count=0;document.querySelector("#counter").addEventListener("click",event=>{event.currentTarget.textContent=`Try it · ${++count}`});',
+      "landscape.svg":
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 220"><rect width="800" height="220" fill="#dce3ba"/><circle cx="620" cy="90" r="45" fill="#fcf8d8"/><path d="M0 135Q200 60 400 130T800 130V220H0Z" fill="#7b9161"/><path d="M0 120Q220 190 410 140T800 170V220H0Z" fill="#426749"/></svg>',
+      "pages/about.html":
+        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>About · Studio Notes</title><link rel="stylesheet" href="../style.css"><body><nav>STUDIO NOTES <a href="../index.html">← Back home</a></nav><main><p class="eyebrow">A SECOND PAGE</p><h1>Room for<br>the details.</h1><p id="live-copy">This page belongs to the same website.</p><img src="../landscape.svg" alt="A quiet green landscape"><section><h2>Still connected.</h2><p>Changes to the website files refresh this page automatically.</p></section></main></body></html>',
+    };
+    return {
+      calls: Object.entries(files).map(([name, content]) =>
+        toolCall("write", { path: `${directory}/${name}`, content }),
+      ),
+    };
+  }
+
   if (prompt.includes("E2E_MEMORY_PROMPT_SEED")) {
     if (resultsFor(results, "memory").length === 0) {
       return {

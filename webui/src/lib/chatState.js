@@ -159,6 +159,7 @@ export function createChatController({
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
   onAgentsChanged = () => {},
+  preserveSessionSelection = false,
   onAgentSelected = () => {},
   onRestartQueueDiscarded = () => {},
 }) {
@@ -694,8 +695,10 @@ export function createChatController({
       if (preferred) {
         selectAgent(chatState, preferred);
       }
-      selectedAgentId = setAgents(chatState, result?.agents ?? []);
-      onAgentsChanged(chatState.agents);
+      selectedAgentId = setAgents(chatState, result?.agents ?? [], {
+        preserveSessionSelection,
+      });
+      onAgentsChanged(result?.agents ?? []);
       if (selectedAgentId) {
         onAgentSelected(selectedAgentId);
       }
@@ -1447,8 +1450,19 @@ function commandSwitchFromResponse(response) {
   return { sessionId, targetAgentId };
 }
 
-export function setAgents(state, agents) {
-  state.agents = Array.isArray(agents) ? agents : [];
+export function setAgents(
+  state,
+  agents,
+  { preserveSessionSelection = false } = {},
+) {
+  const previous = new Map(
+    state.agents.map((agent) => [agent.id, agent.current_session_id]),
+  );
+  state.agents = (Array.isArray(agents) ? agents : []).map((agent) =>
+    preserveSessionSelection && previous.get(agent.id)
+      ? { ...agent, current_session_id: previous.get(agent.id) }
+      : agent,
+  );
   if (!state.selectedAgentId && state.agents.length > 0) {
     state.selectedAgentId = state.agents[0].id;
   }

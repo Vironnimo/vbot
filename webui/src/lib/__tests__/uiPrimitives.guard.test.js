@@ -448,7 +448,9 @@ describe('UI primitive guard', () => {
     // would bring back the unstyled, delayed, touch-less browser tooltip.
     // Capitalized Svelte components are unaffected — their `title` props are
     // real headings (Modal, ConfirmDialog), not native tooltips.
-    const NATIVE_TITLE = /<[a-z][\w-]*\b[^>]*\stitle\s*=/g;
+    // An iframe's title names its browsing context for assistive technology;
+    // it is not a hover-help substitute.
+    const NATIVE_TITLE = /<(?!iframe\b)[a-z][\w-]*\b[^>]*\stitle\s*=/g;
     const violations = [];
 
     for (const filePath of SVELTE_FILES) {

@@ -782,7 +782,7 @@ describe('ChatView', () => {
       100,
     );
 
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     expect(composerInput).toBeTruthy();
     setInputValue(composerInput, '/stop');
     flushSync();

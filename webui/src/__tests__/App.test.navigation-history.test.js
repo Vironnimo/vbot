@@ -346,14 +346,14 @@ describe('App', () => {
     flushSync();
 
     await waitForCondition(() => {
-      expect(document.querySelector('#chat-composer-input')).toBeTruthy();
+      expect(document.querySelector('.msg-input')).toBeTruthy();
       expect(
         rpcMock.mock.calls.some(([method]) => method === 'chat.history'),
       ).toBe(true);
       expect(listSessionActivityMock).toHaveBeenCalled();
     });
 
-    const composer = document.querySelector('#chat-composer-input');
+    const composer = document.querySelector('.msg-input');
     const chatView = document.querySelector('.chat-view');
     const timeline = document.querySelector('.messages');
     composer.value = 'Draft kept across views';
@@ -374,15 +374,15 @@ describe('App', () => {
       expect(document.querySelector('#logs-title')).toBeTruthy();
       expect(document.querySelector('.chat-view')).toBe(chatView);
       expect(chatView.hidden).toBe(true);
-      expect(document.querySelector('#chat-composer-input')).toBe(composer);
+      expect(document.querySelector('.msg-input')).toBe(composer);
     });
 
     sidebarNavButton('Chat')?.click();
     await waitForCondition(() => {
       expect(document.querySelector('.chat-view')).toBe(chatView);
       expect(chatView.hidden).toBe(false);
-      expect(document.querySelector('#chat-composer-input')).toBe(composer);
-      expect(document.querySelector('#chat-composer-input')?.value).toBe(
+      expect(document.querySelector('.msg-input')).toBe(composer);
+      expect(document.querySelector('.msg-input')?.value).toBe(
         'Draft kept across views',
       );
       expect(document.querySelector('.messages')?.scrollTop).toBe(137);

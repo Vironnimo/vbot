@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
 
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
@@ -54,6 +54,12 @@
 
   let {
     active = true,
+    workspaceActions,
+    interactive = true,
+    composerAvailable = true,
+    preserveSessionSelection = false,
+    initialSessionDrawer = false,
+    onDisplayedSession = () => {},
     sharedAgents = [],
     sharedSelectedAgentId = '',
     // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
@@ -126,7 +132,9 @@
   let displayedSessionGeneration = 0;
   let generationSessionKey = '';
   let transientCardSeq = 0;
-  let showSessionDrawer = $state(false);
+  let showSessionDrawer = $state(untrack(() => initialSessionDrawer));
+  const componentId = $props.id();
+  const chatTitleId = `${componentId}-title`;
   // Live height of the floating composer stack over the timeline. The
   // surface exposes it as a CSS variable so the timeline reserves matching
   // bottom space and content scrolls out from behind the composer. Measured
@@ -164,6 +172,7 @@
   let chatToastTimeoutId = null;
 
   const requestComposerFocus = ({ includeMobile = false } = {}) => {
+    if (!active || !interactive) return;
     const mobile =
       typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function' &&
@@ -720,7 +729,7 @@
   $effect(() => {
     if (sharedAgents.length > 0 && sharedAgents !== lastSharedAgents) {
       lastSharedAgents = sharedAgents;
-      setAgents(chatState, sharedAgents);
+      setAgents(chatState, sharedAgents, { preserveSessionSelection });
     }
   });
 
@@ -866,6 +875,7 @@
     const sessionState = activeSessionState;
     const unreadRunId = sessionState?.unreadRunId ?? '';
     if (
+      !active ||
       !unreadRunId ||
       sessionState.markReadFailedRunId === unreadRunId ||
       !isDisplayedSession(sessionState.agentId, sessionState.sessionId) ||
@@ -1416,6 +1426,7 @@
       isOwnAgent && normalizedSessionId === ownCurrentSessionId
         ? ''
         : normalizedSessionId;
+    if (preserveSessionSelection) showSessionDrawer = false;
     reportSessionNavigation();
     await loadHistoryForSession(agentAddress, normalizedSessionId);
     requestComposerFocus();
@@ -1549,7 +1560,7 @@
     // Repeating it on an already blank Session is therefore idempotent, while
     // a local draft still counts as work that deserves its own Session.
     requestComposerFocus({ includeMobile: true });
-    if (displayedSessionIsEmpty()) {
+    if (composerAvailable && displayedSessionIsEmpty()) {
       return;
     }
     if (projectAgentActive) {
@@ -1932,6 +1943,7 @@
   });
   chatController = createChatController({
     chatState,
+    preserveSessionSelection: untrack(() => preserveSessionSelection),
     runStream,
     translate: t,
     isDisplayedSession,
@@ -1959,15 +1971,26 @@
       projectId: displayedSessionProjectId(),
     });
   });
+
+  $effect(() => {
+    const session = activeSessionState;
+    const agent = activeAgent;
+    const selection = {
+      agentId: session?.agentId || activeAgentAddress,
+      sessionId: session?.sessionId || agent?.current_session_id || '',
+    };
+    untrack(() => onDisplayedSession(selection));
+  });
 </script>
 
 <section
   class="view view-chat active chat-view"
   data-chat-width={chatWidth}
-  aria-labelledby="chat-title"
+  aria-labelledby={chatTitleId}
   hidden={!active}
 >
   <ChatHeader
+    titleId={chatTitleId}
     agents={chatState.agents}
     agentStatuses={identityAgentStatuses}
     selectedAgentId={displayedIdentityAgentId}
@@ -2098,6 +2121,11 @@
               <path d="M12 5v14M5 12h14" />
             </svg>
           </Button>
+          {#if workspaceActions}
+            <span class="chat-view__session-bar-divider" aria-hidden="true"
+            ></span>
+            {@render workspaceActions()}
+          {/if}
         </div>
         {#if showSessionDrawer}
           <SessionListDrawer
@@ -2288,24 +2316,33 @@
                 <p class="chat-view__command-toast-message">{chatToast}</p>
               </div>
             {/if}
-            <ChatComposer
-              disabled={composerDisabled}
-              isRunning={isRunActive(activeSessionState)}
-              cancelling={chatState.cancellingRun}
-              draftKey={composerDraftKey}
-              historyKey={composerHistoryKey}
-              focusRequest={composerFocusRequest}
-              availableSkills={chatState.availableSkills}
-              contextUsage={activeSessionState?.contextUsage}
-              contextWindow={activeAgent?.context_window}
-              usage={activeSessionState?.usage}
-              sessionUsage={activeSessionState?.sessionUsage}
-              onSendMessage={composerSendMessage}
-              onCancelRun={handleCancelRun}
-              onTranscriptionError={handleTranscriptionError}
-              onListFiles={composerListFiles}
-              onLoadModelCatalog={composerLoadModelCatalog}
-            />
+            {#if composerAvailable}
+              <ChatComposer
+                disabled={composerDisabled}
+                isRunning={isRunActive(activeSessionState)}
+                cancelling={chatState.cancellingRun}
+                draftKey={composerDraftKey}
+                historyKey={composerHistoryKey}
+                focusRequest={composerFocusRequest}
+                availableSkills={chatState.availableSkills}
+                contextUsage={activeSessionState?.contextUsage}
+                contextWindow={activeAgent?.context_window}
+                usage={activeSessionState?.usage}
+                sessionUsage={activeSessionState?.sessionUsage}
+                onSendMessage={composerSendMessage}
+                onCancelRun={handleCancelRun}
+                onTranscriptionError={handleTranscriptionError}
+                onListFiles={composerListFiles}
+                onLoadModelCatalog={composerLoadModelCatalog}
+              />
+            {:else}
+              <Banner class="chat-view__footer-banner">
+                {t(
+                  'split.sameSession',
+                  'This Session is open in the other area. Choose another Session or start a new one to chat here.',
+                )}
+              </Banner>
+            {/if}
           </div>
         </div>
       </div>
@@ -2403,7 +2440,8 @@
     color: var(--accent);
   }
 
-  :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+  :global(.btn-secondary.btn-icon.chat-view__new-session-fab),
+  :global(.btn-secondary.btn-icon.chat-view__workspace-action) {
     border: 0;
     border-radius: 0;
     width: 36px;
@@ -2414,6 +2452,9 @@
 
   :global(
     .btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled)
+  ),
+  :global(
+    .btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled)
   ) {
     background: var(--accent-08);
     color: var(--accent);
