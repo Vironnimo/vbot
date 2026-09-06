@@ -379,24 +379,31 @@ def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
 
 
 @pytest.mark.parametrize("refuse", [False, True])
-def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refuse):
+@pytest.mark.parametrize("action", ["click", "drag"])
+def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refuse, action):
     client = CuaDriver.__new__(CuaDriver)
     calls = []
     geometry = [1]
     client._background_frames = {}
     client._original_images = True
     client.desktop = SimpleNamespace(
-        window_geometry=lambda args: tuple(geometry), foreground_window=lambda: 99
+        window_geometry=lambda args: tuple(geometry),
+        foreground_window=lambda: 99,
+        resolve_window=lambda args: {key: args[key] for key in ("pid", "window_id")},
     )
-    client.schemas = {"get_window_state": {}, "click": {}}
+    client.schemas = {"get_window_state": {}, action: {"properties": {"target": {}}}}
     client._session = SimpleNamespace(call_tool=object())
 
     def query(function, name, args):
         calls.append((name, args))
         assert "_background_capture" not in args
         result = {"elements": []}
-        if name == "click":
+        if name == action:
             assert args["delivery_mode"] == "background"
+            assert args["target"] == {"kind": "window", "pid": 1, "window_id": 2}
+            assert "pid" not in args and "window_id" not in args
+            if action == "drag":
+                assert args["duration_ms"] == 1800
             result = {
                 "effect": "refused" if refuse else "unverifiable",
                 "route": "synthetic_events",
@@ -407,13 +414,125 @@ def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refu
     monkeypatch.setattr(client, "connect", lambda: None)
     target = {"pid": 1, "window_id": 2, "session": "s"}
     client.call("get_window_state", {**target, "_background_capture": True})
+    coordinates = (
+        {"x": 10, "y": 20}
+        if action == "click"
+        else {"from_x": 10, "from_y": 20, "to_x": 30, "to_y": 40, "duration_ms": 1800}
+    )
+    request = {**target, **coordinates, "delivery_mode": "background"}
     if refuse:
         with pytest.raises(ComputerUseError):
-            client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
+            client.call(action, request)
     else:
-        client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
-    assert [name for name, _ in calls] == ["get_window_state", "click"]
+        client.call(action, request)
+    assert [name for name, _ in calls] == ["get_window_state", action]
     geometry[0] = 2
     with pytest.raises(ComputerUseError) as caught:
-        client.call("click", {**target, "x": 10, "y": 20, "delivery_mode": "background"})
+        client.call(action, request)
     assert caught.value.code == "capture_required" and len(calls) == 2
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_modal_window_resolution_never_uses_an_unrelated_foreground_window(
+    native, monkeypatch, foreign
+):
+    desktop, sent, _, _ = native
+    monkeypatch.setattr(desktop, "window_geometry", lambda args: (0, 0, 100, 100))
+    desktop.user.IsWindowEnabled = lambda hwnd: hwnd != 10
+    desktop.user.GetLastActivePopup = lambda hwnd: 20
+    desktop.user.IsWindowVisible = lambda hwnd: True
+    desktop.user.GetForegroundWindow = lambda: 900
+
+    def process(hwnd, pointer):
+        pointer._obj.value = 2 if foreign else 1
+        return 1
+
+    desktop.user.GetWindowThreadProcessId = process
+    result = desktop.resolve_window({"pid": 1, "window_id": 10})
+    assert result == {"pid": 1, "window_id": 10 if foreign else 20}
+    assert sent == []
+
+
+def test_background_dialog_blocks_input_before_cua_or_native_dispatch(native, monkeypatch):
+    desktop, sent, _, _ = native
+    client = CuaDriver.__new__(CuaDriver)
+    client.desktop = desktop
+    monkeypatch.setattr(client, "connect", lambda: None)
+    monkeypatch.setattr(desktop, "resolve_window", lambda args: {"pid": 1, "window_id": 20})
+    with pytest.raises(ComputerUseError) as caught:
+        client.call(
+            "type_text",
+            {
+                "pid": 1,
+                "window_id": 10,
+                "text": "must not type",
+                "delivery_mode": "background",
+            },
+        )
+    assert caught.value.code == "target_blocked" and sent == []
+
+
+def test_agent_cursor_uses_the_cua_target_contract_without_shared_pointer_fields(monkeypatch):
+    from jsonschema import validate
+
+    client = CuaDriver.__new__(CuaDriver)
+    client.desktop = None
+    client.schemas = {
+        "move_cursor": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "target": {"type": "object", "required": ["kind", "pid", "window_id"]},
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+                "session": {"type": "string"},
+            },
+            "required": ["target", "x", "y"],
+        }
+    }
+    client._session = SimpleNamespace(call_tool=object())
+    sent = []
+
+    def query(function, name, args):
+        validate(args, client.schemas[name])
+        sent.append(args)
+        return SimpleNamespace(
+            model_dump=lambda **kwargs: {"structuredContent": {"effect": "unverifiable"}}
+        )
+
+    client._portal = SimpleNamespace(call=query)
+    monkeypatch.setattr(client, "connect", lambda: None)
+    client.call(
+        "move_cursor",
+        {
+            "pid": 1,
+            "window_id": 2,
+            "x": 10,
+            "y": 20,
+            "delivery_mode": "background",
+            "session": "owned",
+        },
+    )
+    assert sent == [
+        {
+            "target": {"kind": "window", "pid": 1, "window_id": 2},
+            "x": 10,
+            "y": 20,
+            "session": "owned",
+        }
+    ]
+
+
+@pytest.mark.parametrize("switch_during_capture", [False, True])
+def test_foreground_capture_never_labels_another_apps_pixels_as_the_target(
+    native, monkeypatch, switch_during_capture
+):
+    desktop, sent, _, grabs = native
+    monkeypatch.setattr(desktop, "_geometry", lambda args: ((0, 0, 100, 100), (0, 0, 100, 100)))
+    calls = iter((10, 900) if switch_during_capture else (900,))
+    desktop.user.GetForegroundWindow = lambda: next(calls)
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.capture({"pid": 1, "window_id": 10})
+    assert caught.value.code == "target_not_foreground"
+    assert len(grabs) == int(switch_during_capture)
+    assert not desktop._frames and sent == []
