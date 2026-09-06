@@ -59,7 +59,7 @@ describe('HtmlPreview', () => {
     await settle();
     const frame = document.querySelector('iframe');
     const reload = vi.spyOn(frame, 'src', 'set');
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-downloads');
     expect(document.querySelector('input, form')).toBeNull();
     await vi.advanceTimersByTimeAsync(1500);
     expect(reload).not.toHaveBeenCalled();

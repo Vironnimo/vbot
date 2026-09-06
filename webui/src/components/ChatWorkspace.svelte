@@ -6,8 +6,12 @@
   import Button from './ui/Button.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
+  import {
+    isDesktopAccessor,
+    openDesktopExternalUrl,
+  } from '$lib/desktopBridge.js';
 
-  let { active = true, ...chatProps } = $props();
+  let { active = true, onToast = () => {}, ...chatProps } = $props();
   const id = $props.id();
   const paneIds = [0, 1];
   let root = $state(null);
@@ -45,31 +49,48 @@
   );
   let lastNavigation = null;
   let menuPane = $state(null);
+  let menuFile = $state(null);
   let menuTrigger = null;
   let menu = $state(null);
   let menuStyle = $state('visibility: hidden');
 
   function closeMenu(restoreFocus = false) {
     menuPane = null;
+    menuFile = null;
+    menuTrigger?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) menuTrigger?.focus();
   }
 
-  async function toggleMenu(index, trigger) {
-    if (menuPane === index) {
+  async function toggleMenu(index, trigger, file = null, point = null) {
+    if (!point && menuPane === index && menuTrigger === trigger) {
       closeMenu(true);
       return;
     }
+    closeMenu();
     menuTrigger = trigger;
+    menuTrigger.setAttribute('aria-expanded', 'true');
     menuPane = index;
+    menuFile = file;
     menuStyle = 'visibility: hidden';
     await tick();
-    if (menuPane !== index || !menu) return;
-    const position = computePanelPosition(trigger, {
+    if (menuPane !== index || menuTrigger !== trigger || !menu) return;
+    const anchor = point
+      ? {
+          getBoundingClientRect: () => ({
+            left: point.x,
+            right: point.x,
+            top: point.y,
+            bottom: point.y,
+            width: 0,
+          }),
+        }
+      : trigger;
+    const position = computePanelPosition(anchor, {
       panelWidth: 200,
       contentHeight: menu.scrollHeight,
     });
     menuStyle = `left: ${position.left}px; ${position.verticalRule}; width: ${position.width}px; max-height: ${position.optionsMaxHeight}px`;
-    menu.querySelector('button')?.focus();
+    menu.querySelector('[role="menuitem"]')?.focus();
   }
 
   function menuKeydown(event) {
@@ -82,7 +103,7 @@
       closeMenu(true);
       return;
     }
-    const items = [...menu.querySelectorAll('button')];
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
     const current = items.indexOf(document.activeElement);
     let next;
     if (event.key === 'ArrowDown') next = (current + 1) % items.length;
@@ -168,6 +189,7 @@
   }
 
   function openPreview(index, source) {
+    closeMenu();
     const target = 1 - index;
     createSecond();
     split = true;
@@ -177,6 +199,11 @@
 
   function interceptFiles(node, index) {
     const handleClick = (event) => {
+      const external = event.target.closest?.('a[data-file-external]');
+      if (external) {
+        openExternal(event, external.href);
+        return;
+      }
       if (
         event.defaultPrevented ||
         event.button !== 0 ||
@@ -193,8 +220,53 @@
       event.preventDefault();
       openPreview(index, href);
     };
+    const handleContext = (event) => {
+      const link = event.target.closest?.('a[data-preview-file]');
+      if (!link) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleMenu(
+        index,
+        link,
+        {
+          source: link.dataset.previewFile,
+          filename: link.dataset.fileName,
+        },
+        event.type === 'contextmenu' && (event.clientX || event.clientY)
+          ? { x: event.clientX, y: event.clientY }
+          : null,
+      );
+    };
+    const handleKey = (event) => {
+      if (
+        event.key === 'ContextMenu' ||
+        (event.shiftKey && event.key === 'F10')
+      )
+        handleContext(event);
+    };
     node.addEventListener('click', handleClick);
-    return { destroy: () => node.removeEventListener('click', handleClick) };
+    node.addEventListener('contextmenu', handleContext);
+    node.addEventListener('keydown', handleKey);
+    return {
+      destroy: () => {
+        node.removeEventListener('click', handleClick);
+        node.removeEventListener('contextmenu', handleContext);
+        node.removeEventListener('keydown', handleKey);
+      },
+    };
+  }
+
+  function openExternal(event, url) {
+    if (!isDesktopAccessor()) return;
+    event.preventDefault();
+    void openDesktopExternalUrl(new URL(url, window.location.href).href).catch(
+      () => {
+        onToast({
+          title: t('preview.externalFailed', 'Could not open the browser'),
+          variant: 'error',
+        });
+      },
+    );
   }
 
   function moveDivider(event) {
@@ -283,8 +355,10 @@
     ariaLabel={t('split.actions', 'Area actions')}
     tooltip={t('split.actions', 'Area actions')}
     aria-haspopup="menu"
-    aria-expanded={menuPane === index}
-    aria-controls={menuPane === index ? `${id}-actions` : undefined}
+    aria-expanded={menuPane === index && !menuFile}
+    aria-controls={menuPane === index && !menuFile
+      ? `${id}-actions`
+      : undefined}
     onClick={(event) => toggleMenu(index, event.currentTarget)}
     onkeydown={(event) => {
       if (event.key === 'ArrowDown') {
@@ -315,37 +389,71 @@
     id={`${id}-actions`}
     role="menu"
     tabindex="-1"
-    aria-label={t('split.actions', 'Area actions')}
+    aria-label={menuFile
+      ? t('preview.fileActions', 'Actions for {filename}', {
+          filename: menuFile.filename,
+        })
+      : t('split.actions', 'Area actions')}
     style={menuStyle}
     onkeydown={menuKeydown}
   >
-    {#if !split}
-      <Button variant="tertiary" role="menuitem" onClick={openSplit}
-        >{t('split.open', 'Split view')}</Button
-      >
-    {/if}
-    {#if kinds[menuPane] === 'preview' || previews[menuPane]}
+    {#if menuFile}
       <Button
         variant="tertiary"
         role="menuitem"
-        onClick={() =>
-          changeContent(
-            menuPane,
-            kinds[menuPane] === 'chat' ? 'preview' : 'chat',
-          )}
+        onClick={() => openPreview(menuPane, menuFile.source)}
+        >{t('split.showPreview', 'Show preview')}</Button
       >
-        {kinds[menuPane] === 'chat'
-          ? t('split.showPreview', 'Show preview')
-          : t('split.backToChat', 'Back to chat')}
-      </Button>
-    {/if}
-    {#if split}
-      <Button
-        variant="tertiary"
+      <a
         role="menuitem"
-        onClick={() => closePane(menuPane)}
-        >{t('split.close', 'Close area')}</Button
+        href={menuFile.source}
+        target="_blank"
+        rel="noopener noreferrer"
+        onclick={(event) => {
+          openExternal(event, menuFile.source);
+          closeMenu(true);
+        }}>{t('preview.openBrowser', 'Open in browser')}</a
       >
+      <a
+        role="menuitem"
+        href={`${menuFile.source}?download=true`}
+        target="_blank"
+        rel="noopener noreferrer"
+        download={menuFile.filename}
+        onclick={(event) => {
+          openExternal(event, `${menuFile.source}?download=true`);
+          closeMenu(true);
+        }}>{t('preview.download', 'Download')}</a
+      >
+    {:else}
+      {#if !split}
+        <Button variant="tertiary" role="menuitem" onClick={openSplit}
+          >{t('split.open', 'Split view')}</Button
+        >
+      {/if}
+      {#if kinds[menuPane] === 'preview' || previews[menuPane]}
+        <Button
+          variant="tertiary"
+          role="menuitem"
+          onClick={() =>
+            changeContent(
+              menuPane,
+              kinds[menuPane] === 'chat' ? 'preview' : 'chat',
+            )}
+        >
+          {kinds[menuPane] === 'chat'
+            ? t('split.showPreview', 'Show preview')
+            : t('split.backToChat', 'Back to chat')}
+        </Button>
+      {/if}
+      {#if split}
+        <Button
+          variant="tertiary"
+          role="menuitem"
+          onClick={() => closePane(menuPane)}
+          >{t('split.close', 'Close area')}</Button
+        >
+      {/if}
     {/if}
   </div>
 {/if}
@@ -494,12 +602,24 @@
     background: var(--surface-2);
     box-shadow: var(--dropdown-elevation);
   }
-  .chat-workspace__menu :global(button) {
+  .chat-workspace__menu :global(button),
+  .chat-workspace__menu a {
+    display: flex;
+    align-items: center;
     justify-content: flex-start;
     min-height: 36px;
     padding: 8px 12px;
     font-family: var(--font-ui);
     text-transform: none;
+    text-decoration: none;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    border-radius: var(--r-sm);
+  }
+  .chat-workspace__menu a:hover,
+  .chat-workspace__menu a:focus-visible {
+    color: var(--text-hi);
+    background: var(--surface-3);
   }
   .chat-workspace__body {
     display: flex;
