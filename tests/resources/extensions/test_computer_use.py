@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -50,6 +51,7 @@ class DesktopClient:
                 "end_session",
                 "get_window_state",
                 "capture_pixels",
+                "resolve_window",
                 "list_monitors",
                 "move_cursor",
                 "get_desktop_state",
@@ -89,6 +91,8 @@ class DesktopClient:
             self.hook(name)
         if name == self.fail:
             raise ComputerUseError("test-owned failure")
+        if name == "resolve_window":
+            return {key: arguments[key] for key in ("pid", "window_id")}
         if name in {"get_window_state", "get_desktop_state", "capture_pixels"}:
             if self.fail_capture_after_input and self.inputs:
                 raise ComputerUseError("test-owned capture failure")
@@ -178,7 +182,7 @@ def computer(tmp_path, monkeypatch):
 
 def capture(computer, **kwargs):
     service, context, _, _ = computer
-    args = {"action": "capture", "pid": 1, "window_id": 2, **kwargs}
+    args = {"action": "capture", "pid": 1, "window_id": 2, "mode": "som", **kwargs}
     return service.handle(context, args)
 
 
@@ -196,7 +200,7 @@ def test_input_returns_fresh_capture_and_does_not_echo_text(computer):
     result = call(computer, "type", text="private draft", element="1", apply=True)
     assert result["ok"] and result["data"]["applied"]
     assert result["data"]["observation"]["view_id"]
-    assert result["data"]["backend"]["effect"] == "unverifiable"
+    assert result["data"]["effect"] == "unverifiable"
     assert "backend-echo" not in str(result) and "private draft" not in str(result)
     assert call(computer, "key", shortcut="enter", apply=True)["ok"]
     assert len(computer[1].result_media) == 3
@@ -205,7 +209,7 @@ def test_input_returns_fresh_capture_and_does_not_echo_text(computer):
 def test_preview_sends_no_input_and_does_not_consume_capture(computer):
     assert capture(computer)["ok"]
     before = len(computer[2].calls)
-    assert call(computer, "type", text="private draft")["data"]["preview"]
+    assert call(computer, "type", text="private draft", apply=False)["data"]["preview"]
     assert len(computer[2].calls) == before
     assert call(computer, "type", text="private draft", apply=True)["ok"]
 
@@ -228,7 +232,7 @@ def test_scaled_image_coordinates_and_native_crop_round_trip(computer):
     computer[2].size = (3840, 2160)
     result = capture(computer)["data"]
     assert (result["image_width"], result["image_height"]) == (1600, 900)
-    assert Image.open(result["original"]).size == (3840, 2160)
+    assert Image.open(computer[1].presentation_images[-1]["path"]).size == (3840, 2160)
     zoom = call(
         computer, "zoom", view_id=result["view_id"], coordinate=[100, 100], to_coordinate=[200, 200]
     )["data"]
@@ -272,7 +276,7 @@ def test_capture_authority_never_crosses_context(computer, change):
             "apply": True,
         },
     )
-    assert result["error"]["code"] == "capture_required"
+    assert result["error"]["code"] == "stale_view"
     assert not any(name == "click" for name, _ in client.calls)
 
 
@@ -557,20 +561,19 @@ def test_post_input_capture_delay_is_bounded_without_screen_polling(
         service._wake, "wait", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
     )
     original_call = client.call
+    observed_states = []
 
     def response(name, args):
         result = original_call(name, args)
-        if name == "get_window_state":
-            # Simulate delayed canvas rendering alongside an unrelated animated element.
-            result["canvas_updated"] = clock[0] >= render_after
-            result["animation_frame"] = client.snapshots
+        if name == "capture_pixels":
+            observed_states.append(clock[0] >= render_after)
         return result
 
     client.call = response
     result = call(computer, "type", text="draft", apply=True)
     assert result["ok"]
     assert result["data"]["observation_delay_ms"] == 1000
-    assert result["data"]["observation"]["canvas_updated"] is (render_after <= 1.0)
+    assert observed_states == [render_after <= 1.0]
     assert "verification" not in result["data"]
     assert clock[0] == pytest.approx(1.0)
     assert client.inputs == 1 and client.snapshots == 2
@@ -763,7 +766,7 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
             return SimpleNamespace(
                 tools=[
                     SimpleNamespace(name="get_config", input_schema={}),
-                    SimpleNamespace(name="click", input_schema={}),
+                    SimpleNamespace(name="click", input_schema={"properties": {"target": {}}}),
                 ]
             )
 
@@ -807,7 +810,7 @@ def test_transport_timeout_never_replays_uncertain_input():
 
     client._portal = Portal()
     client._session = SimpleNamespace(call_tool=None)
-    client.schemas = {"click": {}}
+    client.schemas = {"click": {"properties": {"target": {}}}}
     with pytest.raises(ComputerUseError):
         client.call("click", {})
     assert calls == ["click"] and client.broken and client._session is None
@@ -950,7 +953,8 @@ for line in sys.stdin:
         result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "test-owned", "version": "0.23.2"}}
     elif method == "tools/list":
-        result = {"tools": [{"name": "click", "inputSchema": {"type": "object"}}]}
+        result = {"tools": [{"name": "click", "inputSchema": {
+            "type": "object", "properties": {"target": {}}}}]}
     elif request["params"]["name"] == "get_config":
         result = {"content": [], "structuredContent": {"max_image_dimension": 0}}
     else:
@@ -1006,13 +1010,19 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             continue
         target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
         observed = service.handle(
-            context, {"action": "capture", **target, "foreground": args.get("foreground", True)}
+            context,
+            {
+                "action": "capture",
+                **target,
+                "mode": "som" if "pid" in target else "vision",
+                "foreground": args.get("foreground", "pid" not in target),
+            },
         )
         assert observed["ok"], case
         if "view_id" in args:
             args["view_id"] = observed["data"]["view_id"]
         if ":" in args.get("element", ""):
-            args["element"] = observed["data"]["elements"][0]["element_token"]
+            args["element"] = observed["data"]["elements"][0]["element"]
         result = service.handle(context, args)
         assert result["ok"], (case, result)
 
@@ -1120,7 +1130,7 @@ def test_compact_contract_rejects_bad_values_before_connect(computer, arguments)
 
 
 def test_pointer_modifiers_are_forwarded_and_prevalidated_for_every_step(computer):
-    data = capture(computer)["data"]
+    data = capture(computer, foreground=True)["data"]
     result = call(
         computer,
         "click",
@@ -1179,7 +1189,7 @@ def test_transport_loss_during_recapture_retires_all_sessions(computer):
     original_call = client.call
 
     def response(name, args):
-        if name == "get_window_state":
+        if name in {"get_window_state", "capture_pixels"}:
             client.broken = True
             raise ComputerUseError("test-owned transport failure")
         return original_call(name, args)
@@ -1213,7 +1223,7 @@ def test_cleanup_after_stop_does_not_start_a_replacement_worker(computer):
 
 
 def test_verified_window_disappearance_survives_capture_failure(computer):
-    computer[2].fail = "get_window_state"
+    computer[2].fail = "capture_pixels"
     result = call(computer, "verify", expect=[{"window": {"exists": False}}], timeout_ms=0)
     assert result["ok"] and result["data"]["verification"]["verified"]
     assert result["data"]["observation_error"]
@@ -1280,13 +1290,14 @@ def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, 
     value = 0
     for char in first["view_id"].removeprefix("view_"):
         value = value * 32 + alphabet.index(char)
-    original = Path(first["original"]).read_bytes()
+    original_path = Path(computer[1].presentation_images[-1]["path"])
+    original = original_path.read_bytes()
     # Force the displayed-image allocation to collide with the previous view.
     sequence = iter((value, value, (value + 1) % (1 << 60)))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(sequence))
     second = capture(computer)["data"]
     assert second["view_id"] != first["view_id"]
-    assert Path(first["original"]).read_bytes() == original
+    assert original_path.read_bytes() == original
     result = call(computer, "click", view_id=first["view_id"], coordinate=[1, 1], apply=True)
     assert result["error"]["code"] == "stale_view"
 
@@ -1322,7 +1333,7 @@ def test_switching_capture_delivery_refuses_before_any_input(computer, sequence)
         if sequence
         else pointer
     )
-    result = call(computer, **arguments, apply=True)
+    result = call(computer, **arguments, apply=True, foreground=True)
     assert result["error"]["code"] == "capture_required"
     assert computer[2].inputs == 0
 
@@ -1369,3 +1380,317 @@ def test_background_focus_change_stops_sequence_after_dispatched_step(computer):
     assert result["data"]["partial"]
     assert result["data"]["error"]["code"] == "background_focus_changed"
     assert client.inputs == 1
+
+
+def test_window_defaults_execute_once_in_background_with_a_compact_image(computer):
+    service, context, client, _ = computer
+    original = client.call
+
+    def shallow_capture(name, args):
+        payload = original(name, args)
+        if name == "capture_pixels":
+            payload.update(elements_complete=False, degraded=True)
+        return payload
+
+    client.call = shallow_capture
+    first = service.handle(context, {"action": "capture", "pid": 1, "window_id": 2})
+    assert first["data"]["foreground"] is False
+    assert first["data"]["mode"] == "vision"
+    assert "elements" not in first["data"]
+    assert "degraded" not in first["data"] and "elements_complete" not in first["data"]
+    result = service.handle(
+        context,
+        {
+            "action": "click",
+            "view_id": first["data"]["view_id"],
+            "coordinate": [10, 20],
+        },
+    )
+    assert result["ok"] and result["data"]["applied"]
+    assert client.inputs == 1
+    inputs = [args for name, args in client.calls if name == "click"]
+    assert inputs[0]["delivery_mode"] == "background"
+    assert inputs[0]["pid"] == 1 and inputs[0]["window_id"] == 2
+    assert len(context.result_media) == 2
+    assert len(json.dumps(result)) < 1000
+    assert result["data"]["observation"]["target"] == {"pid": 1, "window_id": 2}
+
+
+def test_launch_without_apply_is_not_a_silent_preview(computer):
+    service, context, client, _ = computer
+    result = service.handle(context, {"action": "launch", "app": "test-owned-app"})
+    assert result["ok"] and result["data"]["applied"]
+    assert client.inputs == 1
+
+
+@pytest.mark.parametrize("duration", [None, 1800])
+@pytest.mark.parametrize("sequence", [False, True])
+def test_background_drawing_preserves_the_requested_duration(computer, duration, sequence):
+    data = capture(computer)["data"]
+    step = {"action": "drag", "coordinate": [10, 20], "to_coordinate": [50, 60]}
+    if duration is not None:
+        step["duration_ms"] = duration
+    args = {"action": "sequence", "steps": [step]} if sequence else step
+    result = call(computer, **args, view_id=data["view_id"])
+    assert result["ok"] and result["data"]["applied"]
+    inputs = [args for name, args in computer[2].calls if name == "drag"]
+    assert len(inputs) == 1
+    assert inputs[0]["delivery_mode"] == "background"
+    assert inputs[0]["duration_ms"] == (250 if duration is None else duration)
+
+
+def test_zoom_infers_window_keeps_parent_view_and_maps_nested_crops(computer):
+    service, context, client, _ = computer
+    client.size = (3840, 2160)
+    initial = capture(computer)["data"]
+    first = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": initial["view_id"],
+            "coordinate": [100, 100],
+            "to_coordinate": [200, 200],
+        },
+    )
+    assert first["ok"]
+    assert first["data"]["target"] == initial["target"]
+    second = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": first["data"]["view_id"],
+            "coordinate": [10, 20],
+            "to_coordinate": [100, 110],
+        },
+    )
+    assert second["ok"] and second["data"]["image_width"] == 90
+    parent_again = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": initial["view_id"],
+            "coordinate": [200, 100],
+            "to_coordinate": [300, 200],
+        },
+    )
+    assert parent_again["ok"] and client.inputs == 0
+    result = service.handle(
+        context,
+        {
+            "action": "click",
+            "view_id": second["data"]["view_id"],
+            "coordinate": [5, 6],
+        },
+    )
+    assert result["ok"]
+    sent = next(args for name, args in client.calls if name == "click")
+    assert (sent["x"], sent["y"]) == (255, 266)
+    assert sent["delivery_mode"] == "background"
+    assert (
+        service.handle(
+            context,
+            {
+                "action": "click",
+                "view_id": initial["view_id"],
+                "coordinate": [1, 1],
+            },
+        )["error"]["code"]
+        == "stale_view"
+    )
+
+
+def test_sequence_inherits_one_view_and_reports_each_outcome(computer):
+    service, context, client, _ = computer
+    data = capture(computer)["data"]
+    result = service.handle(
+        context,
+        {
+            "action": "sequence",
+            "view_id": data["view_id"],
+            "steps": [
+                {"action": "click", "coordinate": [10, 20]},
+                {"action": "drag", "coordinate": [20, 30], "to_coordinate": [40, 50]},
+            ],
+        },
+    )
+    assert result["ok"] and result["data"]["completed_steps"] == 2
+    assert result["data"]["total_steps"] == 2
+    assert [step["step"] for step in result["data"]["step_results"]] == [1, 2]
+    assert all(step["effect"] == "unverifiable" for step in result["data"]["step_results"])
+    assert client.inputs == 2 and client.snapshots == 2
+    assert len(json.dumps(result)) < 1400
+
+
+def test_sequence_infers_target_from_first_step_view_before_element_validation(computer):
+    service, context, client, _ = computer
+    data = capture(computer)["data"]
+    result = service.handle(
+        context,
+        {
+            "action": "sequence",
+            "steps": [
+                {"action": "click", "element": data["elements"][0]["element"]},
+                {
+                    "action": "drag",
+                    "view_id": data["view_id"],
+                    "coordinate": [20, 30],
+                    "to_coordinate": [40, 50],
+                },
+            ],
+        },
+    )
+    assert result["ok"] and client.inputs == 2
+
+
+def test_foreign_view_and_mixed_target_sequence_fail_before_input(computer):
+    service, context, client, _ = computer
+    first = capture(computer)["data"]
+    second = capture(computer, window_id=3)["data"]
+    mismatch = call(computer, "click", window_id=3, view_id=first["view_id"], coordinate=[1, 1])
+    assert mismatch["error"]["code"] == "invalid_arguments"
+    result = service.handle(
+        context,
+        {
+            "action": "sequence",
+            "view_id": first["view_id"],
+            "steps": [
+                {"action": "click", "coordinate": [1, 1]},
+                {"action": "click", "view_id": second["view_id"], "coordinate": [1, 1]},
+            ],
+        },
+    )
+    assert result["error"]["code"] == "invalid_arguments" and client.inputs == 0
+
+
+def test_bad_coordinates_do_not_destroy_the_valid_observation(computer):
+    data = capture(computer)["data"]
+    bad = call(computer, "click", view_id=data["view_id"], coordinate=[9999, 10])
+    assert bad["error"]["code"] == "invalid_coordinates"
+    assert call(computer, "click", view_id=data["view_id"], coordinate=[10, 10])["ok"]
+    assert computer[2].inputs == 1
+
+
+def test_next_elements_can_be_requested_with_input_and_keep_control_state(computer):
+    capture(computer)
+    result = call(computer, "key", shortcut="tab", mode="som", query="Draft", limit=10)
+    assert result["ok"]
+    element = result["data"]["observation"]["elements"][0]
+    assert element["role"] == "Edit" and element["label"] == "Draft"
+    assert "element_token" not in element and "element_index" not in element
+    assert call(computer, "set_value", element=element["element"], text="test-owned")["ok"]
+
+
+@pytest.mark.parametrize("effect", ["suspected_noop", "partial"])
+def test_uncertain_effect_stops_later_steps_and_preserves_verification(computer, effect):
+    capture(computer)
+    client = computer[2]
+    original = client.call
+
+    def respond(name, args):
+        payload = original(name, args)
+        if name == "click":
+            payload.update(effect=effect, verified=False, escalation={"rung": "px"})
+        return payload
+
+    client.call = respond
+    result = call(
+        computer,
+        "sequence",
+        steps=[
+            {"action": "click", "element": "1"},
+            {"action": "type", "text": "must not type"},
+        ],
+    )
+    data = result["data"]
+    assert data["partial"] and data["completed_steps"] == 1 and data["stopped_step"] == 1
+    assert data["step_results"][0]["verified"] is False
+    assert data["step_results"][0]["escalation"] == {"rung": "px"}
+    assert data["error"]["code"] == "effect_uncertain" and client.inputs == 1
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_blocked_input_returns_a_usable_dialog_observation_without_extra_capture(
+    computer, sequence
+):
+    service, context, client, _ = computer
+    capture(computer)
+    original = client.call
+    blocked = [True]
+
+    def respond(name, args):
+        if name == "type_text" and args["window_id"] == 2:
+            raise ComputerUseError("test-owned blocked window", "target_blocked")
+        if name == "resolve_window" and blocked[0]:
+            return {"pid": 1, "window_id": 3}
+        return original(name, args)
+
+    client.call = respond
+    result = (
+        call(computer, "sequence", steps=[{"action": "type", "text": "draft"}])
+        if sequence
+        else call(computer, "type", text="draft")
+    )
+    assert not result["ok"] and result["error"]["code"] == "target_blocked"
+    recovery = result["artifacts"][0]
+    assert recovery["applied"] is False and client.inputs == 0
+    observed = recovery["observation"]
+    assert observed["target"] == {"pid": 1, "window_id": 3}
+    assert observed["requested_target"] == {"pid": 1, "window_id": 2}
+    blocked[0] = False
+    assert service.handle(
+        context,
+        {
+            "action": "click",
+            "view_id": observed["view_id"],
+            "coordinate": [10, 10],
+        },
+    )["ok"]
+    assert client.inputs == 1
+
+
+def test_computer_skill_is_discoverable_from_the_loaded_extension():
+    from core.skills import SkillRegistry
+
+    root = Path(computer_use.__file__).parent / "skills"
+    registry = SkillRegistry.load(root)
+    skill = registry.get("computer-use")
+    assert skill is not None and skill.name == "computer-use"
+
+
+def test_query_requests_elements_and_partial_target_stays_invalid(computer):
+    service, context, client, _ = computer
+    data = service.handle(
+        context,
+        {
+            "action": "capture",
+            "pid": 1,
+            "window_id": 2,
+            "query": "Draft",
+        },
+    )["data"]
+    assert data["mode"] == "som" and data["elements"]
+    result = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "pid": 1,
+            "view_id": data["view_id"],
+            "coordinate": [1, 1],
+            "to_coordinate": [50, 50],
+        },
+    )
+    assert result["error"]["code"] == "invalid_arguments" and client.inputs == 0
+
+
+def test_stale_sequence_root_view_cannot_fall_back_to_the_desktop(computer):
+    service, context, client, _ = computer
+    service.handle(context, {"action": "capture"})
+    result = service.handle(
+        context,
+        {
+            "action": "sequence",
+            "view_id": "view_missing",
+            "steps": [{"action": "type", "text": "must not type"}],
+        },
+    )
+    assert result["error"]["code"] == "stale_view" and client.inputs == 0
