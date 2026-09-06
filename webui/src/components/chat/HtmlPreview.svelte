@@ -9,7 +9,12 @@
   import Toggle from '../ui/Toggle.svelte';
   import { tooltip } from '$lib/tooltip.js';
 
-  let { active = true, request = null, onSourceChange = () => {} } = $props();
+  let {
+    active = true,
+    request = null,
+    onSourceChange = () => {},
+    workspaceActions,
+  } = $props();
   let source = $state('');
   let preview = $state(null);
   let loading = $state(false);
@@ -171,6 +176,7 @@
     >
       {t('preview.open', 'Open')}
     </Button>
+    {@render workspaceActions?.()}
   </form>
   {#if preview}
     <div class="html-preview__toolbar">
