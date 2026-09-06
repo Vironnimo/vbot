@@ -9,7 +9,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
-from uuid import uuid4
 
 from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter
@@ -31,6 +30,7 @@ from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import ConfigError, TaskError, VBotError
+from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -765,24 +765,17 @@ def _write_image_artifact(
     """Write one generated image without overwriting an existing workspace file."""
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        while True:
-            artifact_id = uuid4().hex
-            filename = f"{artifact_id}.{extension}"
-            file_path = output_dir / filename
-            try:
-                with file_path.open("xb") as image_file:
-                    image_file.write(payload)
-            except FileExistsError:
-                continue
-            return ImageArtifact(
-                id=artifact_id,
-                filename=filename,
-                media_type=media_type,
-                size_bytes=len(payload),
-                file_path=file_path,
-                index=index,
-            )
+        file_path = write_id_file(output_dir, "img", f".{extension}", payload)
+        artifact_id = file_path.stem
+        filename = file_path.name
+        return ImageArtifact(
+            id=artifact_id,
+            filename=filename,
+            media_type=media_type,
+            size_bytes=len(payload),
+            file_path=output_dir / filename,
+            index=index,
+        )
     except OSError as exc:
         raise ImageExecutionError(str(exc)) from exc
 

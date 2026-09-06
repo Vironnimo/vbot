@@ -10,7 +10,6 @@ import os
 import signal
 import subprocess
 import sys
-import uuid
 from asyncio import StreamWriter
 from asyncio.subprocess import PIPE, Process
 from collections.abc import Callable, Sequence
@@ -22,6 +21,7 @@ from typing import Any, Literal, TextIO, cast
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -449,7 +449,7 @@ class ProcessManager:
             start_new_session=start_new_session,
             pass_fds=pass_fds,
         )
-        process_id = uuid.uuid4().hex
+        process_id = new_id("proc", claim=lambda candidate: candidate not in self._processes)
         tracked = TrackedProcess(
             process_id=process_id,
             agent_id=agent_id,

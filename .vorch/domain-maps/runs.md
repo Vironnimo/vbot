@@ -66,6 +66,8 @@ Run event payload ownership stays with the domain that emits the event. `core/ch
 - `ChatRunManager.active_runs() -> list[Run]` returns a snapshot (fresh list) of all entries in `_active_by_session` whose `status == RunStatus.RUNNING`. Public accessor mirroring `active_run(...)`; the `/ws` `connection_ready.active_runs` projection includes each Run's canonical `created_at` as `started_at` so reconnecting accessors can resume live elapsed time rather than restarting a timer locally.
 - `ChatRunManager.all_queued() -> list[tuple[SessionAddress, QueuedRunItem]]` returns a fresh cross-session Queue snapshot in per-session FIFO order. The `/ws` handshake groups its non-internal items by Project, Agent, and Session; internal queued work remains server-only.
 
+New Run/Queue references use `run_`/`que_` plus 16 lowercase base32 characters (80 random bits). Allocation has no permanent registry: retained Run state is bounded and Queue ids are created before admission. Internal waiting-work reservation ids retain their private format (`runs.py`).
+
 ## Cross-Domain Contracts
 
 - `core/chat/` owns provider calls, tool execution, message persistence, retry/fallback behavior, and which Run events to emit. New chat execution paths should call the manager instead of constructing `Run` directly.

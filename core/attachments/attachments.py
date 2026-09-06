@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import io
 import json
-import re
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
+from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -27,7 +26,6 @@ _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
 # gigabytes from a within-upload-limit file (a zip bomb), so the sniff decompresses
 # at most this many bytes and treats any overflow as "not OOXML".
 _MAX_OOXML_CONTENT_TYPES_BYTES = 1_048_576
-_UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _MIME_ALLOWLIST = frozenset(
     {
         "image/jpeg",
@@ -152,10 +150,28 @@ class AttachmentStore:
         canonical_extension = canonical_extension_for_media_type(media_type)
         stored_filename = _filename_with_extension(filename, canonical_extension)
 
-        attachment_id = str(uuid4())
         stored_at = datetime.now(UTC).isoformat()
-
         self._attachments_dir.mkdir(parents=True, exist_ok=True)
+
+        def claim(candidate: str) -> bool:
+            # Reserve the shared sidecar name, independent of blob extension.
+            try:
+                with self._sidecar_path(candidate).open("x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                return False
+            if any(
+                path != self._sidecar_path(candidate)
+                for path in self._attachments_dir.glob(f"{candidate}.*")
+            ):
+                self._sidecar_path(candidate).unlink()
+                return False
+            return True
+
+        try:
+            attachment_id = new_id("att", claim=claim)
+        except OSError as exc:
+            raise AttachmentError(str(exc)) from exc
 
         blob_path = self._blob_path(attachment_id, media_type)
         sidecar_path = self._sidecar_path(attachment_id)
@@ -168,11 +184,12 @@ class AttachmentStore:
             file_path=str(blob_path),
         )
 
-        self._write_blob(blob_path, data)
         try:
+            self._write_blob(blob_path, data)
             self._write_sidecar(sidecar_path, asdict(record))
         except AttachmentError:
             self._safe_remove_path(blob_path)
+            self._safe_remove_path(sidecar_path)
             raise
 
         _LOGGER.debug("Stored attachment %s (%s, %d bytes)", attachment_id, media_type, size_bytes)
@@ -351,7 +368,7 @@ def _sniff_audio_video_media_type(data: bytes) -> str | None:
 
 
 def _normalize_attachment_id(attachment_id: str) -> str:
-    if not isinstance(attachment_id, str) or not _UUID4_RE.match(attachment_id.lower()):
+    if not isinstance(attachment_id, str) or not is_safe_id(attachment_id.lower()):
         raise AttachmentNotFoundError(f"Invalid attachment id: {attachment_id}")
     return attachment_id.lower()
 

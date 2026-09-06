@@ -43,6 +43,8 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 - Runtime configures, starts, stops, and awaits the action scheduler. It admits ordinary visible `RunKind.CALENDAR` Runs through `TriggerService`, with a new Session per execution unless an owned Session is selected. Identity rename retargets action references; Identity/Project removal checks them under the server reference lock.
 - Cron projection: `CronService.project_occurrences(window_start, window_end)` returns `CronOccurrence` dataclasses (read-only; respects `remaining_runs` budget, capped per job). The calendar tool's `list`/`find_free` ignore cron jobs - cron is a UI layer only.
 
+New event/action ids use `evt_`/`act_` plus 12 lowercase base32 characters, with collision checks against the loaded owning catalog before synchronous publication. Event updates keep the existing id. Coverage: `tests/core/calendar/test_service.py`, `test_actions.py`.
+
 ## Conventions
 
 - Recurring timed events anchor wall-clock in the server timezone (09:00 stays 09:00 across DST; test-verified over the Berlin transition). Single timed events persist as UTC instants; all-day events are dates in the server zone. Clearing a recurrence re-resolves the event as a single timed event from its wall-clock start and drops any exdates (exceptions are meaningless on a single event).

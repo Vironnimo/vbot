@@ -6,7 +6,6 @@ import asyncio
 import os
 import re
 import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -14,6 +13,7 @@ from pathlib import Path
 from threading import RLock
 
 from core.storage.layout import DataDirectoryLayout
+from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("storage.temp_files")
@@ -81,14 +81,7 @@ class TemporaryFileManager:
             raise ValueError(f"Invalid temporary-file suffix: {suffix!r}")
 
         category_dir = self.root / category
-        category_dir.mkdir(parents=True, exist_ok=True)
-        while True:
-            path = category_dir / f"{uuid.uuid4().hex}{suffix}"
-            try:
-                path.touch(exist_ok=False)
-            except FileExistsError:
-                continue
-            break
+        path = write_id_file(category_dir, "tmp", suffix, b"")
 
         with self._lock:
             self._active.add(path)

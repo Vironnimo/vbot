@@ -64,6 +64,7 @@ from core.sessions.sqlite_runtime import (
     SQLiteRuntime,
     classify_write_error,
 )
+from core.utils.ids import new_id
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -1703,10 +1704,15 @@ class SessionStore:
             "incident": active_incident,
         }
 
-    def create(self, address: SessionAddress, created_at: str | None = None) -> None:
+    def create(
+        self, address: SessionAddress, created_at: str | None = None, *, generate_id: bool = False
+    ) -> SessionAddress:
         timestamp = created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
         def _fn(connection: sqlite3.Connection) -> None:
+            nonlocal address
+            if generate_id:
+                address = self._allocate_address(connection, address)
             try:
                 connection.execute(
                     "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, "
@@ -1718,6 +1724,23 @@ class SessionStore:
                 raise ChatSessionError(f"session already exists: {address.session_id}") from exc
 
         self._execute_write(_fn)
+        return address
+
+    def _allocate_address(
+        self, connection: sqlite3.Connection, scope: SessionAddress
+    ) -> SessionAddress:
+        from core.sessions.sessions import SessionAddress
+
+        def available(candidate: str) -> bool:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? LIMIT 1",
+                    self._scope(SessionAddress(scope.project_id, scope.agent_id, candidate)),
+                ).fetchone()
+                is None
+            )
+
+        return SessionAddress(scope.project_id, scope.agent_id, new_id("ses", claim=available))
 
     def import_generation(
         self,
@@ -3162,10 +3185,15 @@ class SessionStore:
         source: SessionAddress,
         target: SessionAddress,
         prepare_metadata: Callable[[JsonObject, int], None],
-    ) -> None:
+        *,
+        generate_id: bool = False,
+    ) -> SessionAddress:
         """Copy canonical history to a new live Session without activity/journal state."""
 
         def _fn(connection: sqlite3.Connection) -> None:
+            nonlocal target
+            if generate_id:
+                target = self._allocate_address(connection, target)
             state = self._require_live(connection, source)
             metadata = _session_metadata_from_state(state)
             prepare_metadata(metadata, int(state["message_count"]))
@@ -3208,6 +3236,7 @@ class SessionStore:
             _mark_fts_write(connection)
 
         self._execute_write(_fn)
+        return target
 
     def restore(self, address: SessionAddress) -> None:
         def _fn(connection: sqlite3.Connection) -> None:

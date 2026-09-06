@@ -8,14 +8,14 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Data Model
 
-- `AttachmentRecord`: `id` (UUID, blob basename), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (informational - recomputed on read), optional cached `transcription` written on first STT.
-- Blob at `<uuid><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<uuid>.json`. No index, no DB, no cleanup pass.
+- `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (informational - recomputed on read), optional cached `transcription` written on first STT.
+- Blob at `<id><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<id>.json`. No index, no DB, no cleanup pass.
 
 ## Contracts
 
 - Store rejects non-positive limits and exposes `max_size_bytes` so transports reject oversized payloads before materializing bodies. `ensure_within_limit(reported_size)` pre-checks platform-reported sizes before download (`None` skips, leaving the post-download check as backstop).
-- `store(filename, data)` checks size, sniffs MIME, enforces the allowlist, appends the canonical extension when the display filename lacks one, writes extension-bearing blob then sidecar atomically in that order - a failed sidecar rolls back the blob, so a present sidecar implies a present blob.
-- `get(id)` accepts only lower-cased UUID4 ids (anything else is `AttachmentNotFoundError`/404, not a validation error), re-checks blob existence and sidecar id match, and **recomputes** `file_path` from current data-dir + id + persisted type instead of trusting the stored path - moving the data directory cannot break resolution.
+- `store(filename, data)` checks size, sniffs MIME, enforces the allowlist, appends the canonical extension when the display filename lacks one, reserves the sidecar filename exclusively, then publishes the extension-bearing blob and valid sidecar atomically in that order. Collisions across extensions and orphan blobs retry without replacing files; a failed write removes the new blob and reservation. An interrupted reservation is invalid metadata, never a readable attachment.
+- `get(id)` accepts bounded lowercase alphanumeric/underscore/hyphen basenames (normalizing case) (anything else is `AttachmentNotFoundError`/404, not a validation error), re-checks blob existence and sidecar id match, and **recomputes** `file_path` from current data-dir + id + persisted type instead of trusting the stored path - moving the data directory cannot break resolution.
 - `sniff_media_type(data, filename)` is the public side-effect-free wrapper (no disk, no allowlist) used by tools to branch before storing; `set_transcription` caches STT results rejecting empty text; expected errors are `AttachmentError`/`NotFound`/`TooLarge`/`TypeNotAllowed`.
 
 ## Sniffing & conventions

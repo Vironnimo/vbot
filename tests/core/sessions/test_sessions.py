@@ -978,3 +978,45 @@ def test_create_rejects_invalid_agent_ids(manager, agent_id) -> None:
 def test_create_rejects_invalid_session_ids(manager, session_id) -> None:
     with pytest.raises(ChatSessionError):
         manager.create("coder", session_id=session_id)
+
+
+@pytest.mark.asyncio
+async def test_generated_session_ids_skip_live_and_archived_collisions(manager, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2, 1, 2, 3))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first = manager.create("agent")
+    second = manager.create("agent")
+    await manager.archive(_address("agent", first.id))
+    third = manager.create("agent")
+    assert (first.id, second.id, third.id) == (
+        "ses_000000000001",
+        "ses_000000000002",
+        "ses_000000000003",
+    )
+    assert manager.get(_address("agent", second.id)).id == second.id
+
+
+@pytest.mark.asyncio
+async def test_fork_allocates_a_short_id_without_reusing_an_archived_address(manager, monkeypatch):
+    from core.utils import ids
+
+    source = manager.create("agent", "ses_000000000001")
+    manager.create("agent", "ses_000000000002")
+    await manager.archive(_address("agent", "ses_000000000002"))
+    values = iter((1, 2, 3))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    forked = await manager.fork(_address("agent", source.id))
+    assert forked.id == "ses_000000000003"
+    assert manager.get(_address("agent", source.id)).id == source.id
+
+
+def test_parallel_generated_sessions_claim_ids_in_the_write_transaction(manager, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        sessions = list(pool.map(lambda _: manager.create("agent"), range(2)))
+    assert {session.id for session in sessions} == {"ses_000000000001", "ses_000000000002"}

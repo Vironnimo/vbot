@@ -362,3 +362,17 @@ class TestPersistence:
         unsubscribe()
         service.create_event(title="Y", start="2026-09-15")
         assert calls == [1, 1, 1]
+
+
+def test_short_event_ids_skip_collisions_after_reload(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    service = CalendarService(tmp_path, tz="Europe/Berlin")
+    first = service.create_event(title="first", start="2026-09-07")
+    reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
+    second = reloaded.create_event(title="second", start="2026-09-07")
+    assert first.id == "evt_000000000001"
+    assert second.id == "evt_000000000002"
+    assert reloaded.get_event(first.id).title == "first"

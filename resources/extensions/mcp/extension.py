@@ -28,6 +28,7 @@ from core.tools.tools import (
 )
 from core.utils.config import VBOT_ROOT
 from core.utils.errors import VBotError
+from core.utils.ids import new_id
 
 from .client import ConnectionRunner, operation_schema
 from .config import CONNECTION_SCHEMA, ConnectionStore, validate_connection
@@ -913,7 +914,7 @@ class MCPService:
         completed = [identifier for identifier, task in self.jobs.items() if task.done()]
         for identifier in completed[:-MAX_FINISHED_JOBS]:
             self.jobs.pop(identifier)
-        identifier = str(uuid.uuid4())
+        identifier = new_id("job", claim=lambda candidate: candidate not in self.jobs)
         self.jobs[identifier] = asyncio.create_task(coroutine)
         self.jobs[identifier].add_done_callback(self._observe_job)
         return self._job_status(identifier)

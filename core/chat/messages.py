@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -32,6 +31,7 @@ from core.sessions import (
     is_skill_context_note,
     skill_tool_activation,
 )
+from core.utils.ids import new_id
 
 INTERRUPTION_CAUSES = frozenset(
     {
@@ -1208,7 +1208,7 @@ def usage_token_is_estimated(
 
 
 def _new_message_id() -> str:
-    return str(uuid.uuid4())
+    return new_id("msg")
 
 
 def _format_timestamp(timestamp: datetime | None) -> str:

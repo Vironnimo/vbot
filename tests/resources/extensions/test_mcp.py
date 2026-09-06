@@ -1251,3 +1251,28 @@ async def test_oversized_object_keys_return_file_without_unbounded_context(host)
     assert len(json.dumps(result)) < 6000
     assert result["result_file"] == receipt["result_file"]
     assert saved["payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_short_result_ids_claim_files_across_concurrent_stores(host, monkeypatch):
+    from core.utils import ids
+
+    store = ContentStore(host, host.data_dir / "content")
+    other = ContentStore(host, host.data_dir / "content")
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first, second = await asyncio.gather(
+        store.present({"sentinel": "first"}, context(host), "example"),
+        other.present({"sentinel": "second"}, context(host), "example"),
+    )
+    assert {first[0]["result_id"], second[0]["result_id"]} == {
+        "res_000000000001",
+        "res_000000000002",
+    }
+    restored = ContentStore(host, host.data_dir / "content")
+    assert (await restored.load_result(first[0]["result_id"], context(host), "example"))[
+        "payload"
+    ] == {"sentinel": "first"}
+    assert (await restored.load_result(second[0]["result_id"], context(host), "example"))[
+        "payload"
+    ] == {"sentinel": "second"}
