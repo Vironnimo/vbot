@@ -568,7 +568,9 @@ def create_app(
         )
 
     @app.get("/api/files/{token}")
-    async def get_assistant_file(request: Request, token: str) -> FileResponse:
+    async def get_assistant_file(
+        request: Request, token: str, download: bool = False
+    ) -> FileResponse:
         delivered = request.app.state.file_delivery.resolve_token(token)
         if delivered is None:
             raise HTTPException(status_code=404)
@@ -576,11 +578,10 @@ def create_app(
             delivered.path,
             media_type=delivered.media_type,
             filename=delivered.path.name,
-            content_disposition_type="inline" if delivered.inline else "attachment",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Content-Type-Options": "nosniff",
-            },
+            content_disposition_type=(
+                "inline" if delivered.inline and not download else "attachment"
+            ),
+            headers=delivered.response_headers,
         )
 
     @app.get("/api/runs/{run_id}/events")
