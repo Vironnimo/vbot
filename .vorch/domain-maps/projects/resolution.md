@@ -48,7 +48,7 @@ With `overrides.<agent_id>.tool_access`, effective Tool policy is instead:
 vBot Tool Access Policy  AND  Project allowed_tools
 ```
 
-The override fully replaces repository denials and may therefore re-enable a repo-denied Tool, but it cannot grant a directly configurable Tool omitted by the Project. `mode: all` means the complete Project Tool Whitelist, `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active in-ceiling lead and absolute `denied` names apply after every activation source. Keep source-format permission parsing in scanners and this final policy construction in the resolver.
+The override fully replaces repository denials and may therefore re-enable a repo-denied Tool, but it cannot grant a directly configurable Tool omitted by the Project. `mode: all` means the complete Project Tool Whitelist subject to explicit opt-in. `tool_access.granted` survives this materialization, must stay inside the ceiling, and never comes from whitelist membership. `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active in-ceiling lead and absolute `denied` names apply after every activation source. Keep source-format permission parsing in scanners and this final policy construction in the resolver.
 
 Effective Skills are:
 

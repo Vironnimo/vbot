@@ -607,3 +607,55 @@ def test_extension_with_skipped_interaction_prefix_stays_loaded(tmp_path: Path) 
     assert loser.status == "loaded"
     assert loser not in registry.diagnostics()
     assert loser.capability_errors != []
+
+
+@pytest.mark.asyncio
+async def test_extension_opt_in_is_enforced_in_definitions_and_dispatch(tmp_path):
+    from core.tools.availability import ToolAccess, resolve_tool_access
+    from core.tools.tools import ToolNotAllowedError
+
+    root = tmp_path / "extensions"
+    source = _tool_extension_source("computer_test", "called")
+    source = source.replace("}, _handler)", "}, _handler, requires_opt_in=True)")
+    _write_single_file(root, "opt_in", source)
+    extensions = ExtensionRegistry.load(root)
+    tools = ToolRegistry()
+    extensions.apply_tools(tools)
+    tool = tools.get("computer_test")
+    assert tool.requires_opt_in
+    context = _tool_context(tool.name, tmp_path)
+    for policy in (ToolAccess(), ToolAccess(mode="selected", allowed=(tool.name,))):
+        allowed = resolve_tool_access(policy, tools.list_tools(), "off").allowed_tools
+        assert tools.provider_definitions(allowed_tools=allowed) == []
+        assert tools.prompt_definitions(allowed_tools=allowed) == []
+        with pytest.raises(ToolNotAllowedError):
+            await tools.dispatch(context, {}, allowed_tools=allowed)
+    assert tools.provider_definitions() == []
+    with pytest.raises(ToolNotAllowedError):
+        await tools.dispatch(context, {})
+    allowed = resolve_tool_access(
+        ToolAccess(granted=(tool.name,)), tools.list_tools(), "off"
+    ).allowed_tools
+    assert [
+        definition["name"] for definition in tools.provider_definitions(allowed_tools=allowed)
+    ] == [tool.name]
+    assert (await tools.dispatch(context, {}, allowed_tools=allowed))["data"]["marker"] == "called"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"requires_opt_in": "true"},
+        {"requires_opt_in": True, "internal": True},
+        {"requires_opt_in": True, "activation": "follows", "activation_source": "read"},
+    ],
+)
+def test_invalid_opt_in_registration_fails_before_publication(options):
+    from core.tools import tool_success
+
+    tools = ToolRegistry()
+    with pytest.raises(ValueError):
+        tools.register(
+            "test", "test-owned", {"type": "object"}, lambda c, a: tool_success({}), **options
+        )
+    assert tools.list_tools() == []

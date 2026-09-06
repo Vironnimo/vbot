@@ -1,6 +1,8 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'toolAccess.requiresOptIn':
+    'Requires explicit permission, including in All mode. Turn this Tool on to grant it.',
   'skills.descriptionLabel': 'When to use this skill',
   'skills.descriptionHelp':
     'Agents use this description to decide when this playbook is relevant.',

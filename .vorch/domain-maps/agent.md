@@ -8,7 +8,7 @@ Persisted agent configuration and workspace lifecycle management.
 
 ## Data Model
 
-Tool permission persists as root `tool_access`: mode `all`/`selected`/`none`, `selected` requires `allowed`, any mode may carry absolute `denied` names winning after activation and grants; the retired root `allowed_tools` rejects on load. `memory_prompt_mode` stays independent (prompt Memory, not permission). `<data_dir>/agents/order.json` holds `{revision, agent_ids}` collection metadata: missing preserves id-sort until first materialization, absent valid agents append, stale ids filter out, malformed files never hide agents (`doctor config` reports; explicit reorder replaces).
+Tool permission persists as root `tool_access`: mode `all`/`selected`/`none`, `selected` requires `allowed`, any mode may carry explicit opt-ins in `granted` and absolute `denied` names winning after activation and grants; the retired root `allowed_tools` rejects on load. `memory_prompt_mode` stays independent (prompt Memory, not permission). `<data_dir>/agents/order.json` holds `{revision, agent_ids}` collection metadata: missing preserves id-sort until first materialization, absent valid agents append, stale ids filter out, malformed files never hide agents (`doctor config` reports; explicit reorder replaces).
 
 `id` is the only load-required field - every other field defaults when missing/null while present-but-malformed values invalidate that one Agent. Key fields:
 

@@ -271,3 +271,38 @@ def test_nested_subagent_tool_settings_expose_explicit_targets() -> None:
     assert subagent_allowed_agents(
         {"subagent": {"allowed_agents": ["worker", "builder@vbot"]}}
     ) == ["worker", "builder@vbot"]
+
+
+@pytest.mark.parametrize("mode", ["all", "selected", "none"])
+@pytest.mark.parametrize("granted", [False, True])
+@pytest.mark.parametrize("denied", [False, True])
+def test_explicit_opt_in_never_comes_from_mode_or_whitelist(mode, granted, denied):
+    computer = _tool("computer")
+    computer.requires_opt_in = True
+    follower = _tool("computer_read", activation="follows", activation_source="computer")
+    policy = ToolAccess(
+        mode=mode,
+        allowed=("computer",),
+        granted=("computer",) if granted else (),
+        denied=("computer",) if denied else (),
+    )
+    result = resolve_tool_access(policy, [computer, follower], "off")
+    assert ("computer" in result.allowed_tools) == (mode != "none" and granted and not denied)
+    assert ("computer_read" in result.allowed_tools) == ("computer" in result.allowed_tools)
+
+
+@pytest.mark.parametrize("mode", ["all", "selected", "none"])
+def test_explicit_grants_round_trip_and_preserve_unavailable_tools(mode):
+    value = {"mode": mode, "granted": ["offline_extension"]}
+    if mode == "selected":
+        value["allowed"] = ["offline_extension"]
+    policy = normalize_tool_access(value)
+    assert policy.to_dict() == value
+    assert normalize_tool_access(policy) == policy
+    assert resolve_tool_access(policy, [], "off").allowed_tools == ()
+
+
+@pytest.mark.parametrize("granted", ["computer", ["*"], ["computer", "computer"], [False]])
+def test_invalid_explicit_grants_are_rejected(granted):
+    with pytest.raises(ValueError):
+        normalize_tool_access({"mode": "all", "granted": granted})

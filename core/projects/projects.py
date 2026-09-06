@@ -345,12 +345,13 @@ def _validate_override_ceiling_diagnostics(
             continue
         if policy is None:
             continue
-        for tool_name in sorted(set(policy.allowed) - ceiling):
-            add_error(
-                diagnostics,
-                child_path(child_path("$.overrides", agent_id), "tool_access.allowed"),
-                f"Tool is outside the Project Tool Whitelist: {tool_name}",
-            )
+        for policy_field in ("allowed", "granted"):
+            for tool_name in sorted(set(getattr(policy, policy_field)) - ceiling):
+                add_error(
+                    diagnostics,
+                    child_path(child_path("$.overrides", agent_id), f"tool_access.{policy_field}"),
+                    f"Tool is outside the Project Tool Whitelist: {tool_name}",
+                )
 
 
 @dataclass(frozen=True)
@@ -722,13 +723,14 @@ def _validate_tool_access_override_ceilings(
         if raw_policy is None:
             continue
         policy = _normalize_tool_access_policy(raw_policy)
-        outside = sorted(set(policy.allowed) - ceiling)
-        if outside:
-            names = ", ".join(outside)
-            raise ProjectError(
-                f"overrides[{agent_id!r}].tool_access.allowed contains Tools outside "
-                f"the Project Tool Whitelist: {names}"
-            )
+        for policy_field in ("allowed", "granted"):
+            outside = sorted(set(getattr(policy, policy_field)) - ceiling)
+            if outside:
+                names = ", ".join(outside)
+                raise ProjectError(
+                    f"overrides[{agent_id!r}].tool_access.{policy_field} contains Tools outside "
+                    f"the Project Tool Whitelist: {names}"
+                )
 
 
 def _validate_override_temperature(agent_id: str, value: Any) -> float:

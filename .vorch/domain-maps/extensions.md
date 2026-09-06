@@ -34,7 +34,7 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 - Filesystem name is Extension identity. Cross-root conflicts are first-wins: the first occurrence claims the name; later copies become visible `overridden` records and are never imported or registered. A disabled earlier copy still claims the name, so disabling cannot silently activate a later copy.
 - Loading is two-phase. `register(api)` only collects declarations into an `ExtensionRecord`; successful async registrations finish deterministically before loaded records are applied in load order, while each async registration that exceeds the hard 10-second deadline becomes a failed record without blocking the remaining Extensions. Extension code never writes live registry tables directly.
 - Record status is one of `loaded`, `failed`, `disabled`, or `overridden`. Import, manifest (including I/O, malformed JSON, or UTF-8 decoding), or registration failure isolates that Extension; a collision or apply error for one capability stays a non-fatal `capability_errors` diagnostic while the record remains loaded.
-- `API_VERSION` is the public contract version and is currently 4; API v2 adds Slash Command declarations, API v3 adds Extension-owned Tool Family declarations, and API v4 adds management operations, host capabilities, and live Tool catalogs. An optional directory-form `extension.json` may add display metadata and an `api_version`; a manifest requiring a newer version fails that Extension.
+- `API_VERSION` is the public contract version and is currently 5; API v2 adds Slash Command declarations, API v3 adds Extension-owned Tool Family declarations, and API v4 adds management operations, host capabilities, and live Tool catalogs; API v5 adds explicit opt-in Tools. An optional directory-form `extension.json` may add display metadata and an `api_version`; a manifest requiring a newer version fails that Extension.
 
 ## Cross-task contracts
 
@@ -70,6 +70,7 @@ Read these only when your task matches - not by default.
 
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
+- Changing Computer Use, its opt-in Tool, driver sessions, capture ownership, or desktop input -> `extensions/computer-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled MCP client, transports, Agent grants, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Informing the Model about a background event or state change -> `model-communication.md`
