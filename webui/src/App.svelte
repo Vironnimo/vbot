@@ -81,7 +81,7 @@
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
-  import ChatView from './components/ChatView.svelte';
+  import ChatWorkspace from './components/ChatWorkspace.svelte';
   import CronView from './components/CronView.svelte';
   import CalendarView from './components/CalendarView.svelte';
   import DebugView from './components/DebugView.svelte';
@@ -1189,7 +1189,8 @@
         onToast={showToast}
       />
     {:else}
-      <ChatView
+      <ChatWorkspace
+        onToast={showToast}
         active={activeViewId === 'chat'}
         sharedAgents={agents}
         sharedSelectedAgentId={selectedAgentId}

@@ -20,6 +20,216 @@ from tests.server.test_rpc import StubAdapter, StubRuntime
 _FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)\)")
 
 
+def test_browser_and_embedded_preview_share_website_and_download_original(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    original = b'<!doctype html><link rel="stylesheet" href="style.css"><h1>Website</h1>'
+    entry.write_bytes(original)
+    (site / "style.css").write_text("h1 { color: red; }")
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+    with TestClient(app) as client:
+        delivery = cast(Any, client.app).state.file_delivery
+        url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
+        preview = client.post(
+            "/api/rpc", json={"method": "file.preview_open", "params": {"source": url}}
+        ).json()["result"]
+        redirect = client.get(url, follow_redirects=False)
+        assert redirect.status_code == 307
+        assert redirect.headers["location"] == preview["url"]
+        external = client.get(url)
+        embedded = client.get(preview["url"])
+        assert external.content == embedded.content
+        policy = external.headers["content-security-policy"]
+        assert policy == embedded.headers["content-security-policy"]
+        directives = dict(part.split(" ", 1) for part in policy.split("; "))
+        for kind in ("script-src", "style-src", "img-src", "font-src", "media-src"):
+            assert "https:" in directives[kind]
+        assert "https:" not in directives["connect-src"]
+        assert "allow-same-origin" not in directives["sandbox"]
+        revision_url = preview["url"].rsplit("/", 1)[0] + "/.revision"
+        assert revision_url in external.text
+        assert client.get(revision_url, headers={"Origin": "null"}).json() == {
+            "revision": preview["revision"]
+        }
+        (site / "style.css").write_text("h1 { color: blue; }")
+        changed = client.get(revision_url, headers={"Origin": "null"})
+        assert changed.json()["revision"] != preview["revision"]
+        assert changed.headers["access-control-allow-origin"] == "null"
+        assert changed.headers["cache-control"] == "no-store"
+        assert (
+            client.get(revision_url, headers={"Origin": "https://other.example"}).status_code == 403
+        )
+        assert (
+            client.get(
+                "/api/preview-assets/invalid/.revision", headers={"Origin": "null"}
+            ).status_code
+            == 404
+        )
+        download = client.get(url + "?download=true")
+        assert download.content == original
+        assert download.headers["content-disposition"] == 'attachment; filename="index.html"'
+
+
+def test_website_preview_serves_assets_and_subpages_with_opaque_origin(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    entry.write_text('<!doctype html><link rel="stylesheet" href="style.css"><h1>Sentinel</h1>')
+    (site / "style.css").write_text("h1 { color: red; }")
+    (site / "main.mjs").write_text("export const value = 7;")
+    (site / "sub").mkdir()
+    (site / "sub" / "index.html").write_text("<h1>Subpage</h1>")
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+    with TestClient(app) as client:
+        opened = client.post(
+            "/api/rpc", json={"method": "file.preview_open", "params": {"source": str(entry)}}
+        )
+        assert opened.json()["ok"] is True
+        preview = opened.json()["result"]
+        base = preview["url"].rsplit("/", 1)[0]
+        html = client.get(preview["url"])
+        css = client.get(f"{base}/style.css", headers={"Origin": "null"})
+        module = client.get(f"{base}/main.mjs", headers={"Origin": "null"})
+        subpage = client.get(f"{base}/sub/", headers={"Origin": "null"})
+        assert (
+            html.status_code == css.status_code == module.status_code == subpage.status_code == 200
+        )
+        assert "Sentinel" in html.text and "vbot-preview-ready" in html.text
+        assert html.text.startswith("<!doctype html>")
+        assert css.headers["content-type"].startswith("text/css")
+        assert module.headers["content-type"].startswith("text/javascript")
+        assert css.headers["access-control-allow-origin"] == "null"
+        assert "Subpage" in subpage.text
+        redirect = client.get(f"{base}/sub", follow_redirects=False)
+        assert redirect.status_code == 307
+        assert redirect.headers["location"].endswith("/sub/")
+        assert client.get(f"{base}/", follow_redirects=False).status_code == 200
+        unavailable = client.get(f"{base}/missing.html")
+        assert unavailable.status_code == 404
+        assert "vbot-preview-unavailable" in unavailable.text
+        assert "sandbox allow-scripts" in unavailable.headers["content-security-policy"]
+        policy = html.headers["content-security-policy"]
+        assert "sandbox allow-scripts" in policy
+        assert "allow-same-origin" not in policy
+        assert "default-src 'none'" in policy and "form-action 'none'" in policy
+        assert f"http://testserver{base}/" in policy
+        assert html.headers["cache-control"] == "no-store"
+        assert html.headers["referrer-policy"] == "no-referrer"
+        assert client.get("/health", headers={"Origin": "null"}).status_code == 403
+        assert (
+            client.post(
+                "/api/rpc", headers={"Origin": "null"}, json={"method": "agent.list"}
+            ).status_code
+            == 403
+        )
+        assert client.post(f"{base}/style.css", headers={"Origin": "null"}).status_code == 403
+        assert (
+            client.get(
+                f"{base}/style.css", headers={"Origin": "https://attacker.example"}
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                "/api/preview-assets/invalid/style.css", headers={"Origin": "null"}
+            ).status_code
+            == 404
+        )
+
+
+def test_preview_changes_track_assets_additions_and_removal(tmp_path: Path) -> None:
+    entry = tmp_path / "index.html"
+    entry.write_text("<h1>one</h1>")
+    delivery = FileDelivery()
+    preview = delivery.open_preview(str(entry))
+    token = preview["token"]
+    assert delivery.preview_revision(token) == preview["revision"]
+    dependency = tmp_path / "NODE_MODULES"
+    dependency.mkdir()
+    (dependency / "index.js").write_text("private dependency sentinel")
+    assert delivery.preview_revision(token) == preview["revision"]
+    with pytest.raises(ValueError):
+        delivery.preview_file(token, "NODE_MODULES/index.js")
+    asset = tmp_path / "style.css"
+    asset.write_text("body {}")
+    added = delivery.preview_revision(token)
+    assert added != preview["revision"]
+    asset.write_text("body { color:red; }")
+    changed = delivery.preview_revision(token)
+    assert changed != added
+    asset.unlink()
+    assert delivery.preview_revision(token) != changed
+    # Non-website private files are neither served nor part of the watch set.
+    (tmp_path / ".env").write_text("SECRET=sentinel")
+    assert delivery.preview_revision(token) == preview["revision"]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "../outside.html",
+        "/outside.html",
+        "..\\outside.html",
+        "C:/outside.html",
+        ".env",
+        "secret.py",
+        "sub/.private/data.json",
+        "node_modules/test.js",
+    ],
+)
+def test_preview_rejects_traversal_private_and_unsupported_paths(
+    tmp_path: Path, relative: str
+) -> None:
+    entry = tmp_path / "index.html"
+    entry.write_text("site")
+    delivery = FileDelivery()
+    preview = delivery.open_preview(str(entry))
+    with pytest.raises(ValueError):
+        delivery.preview_file(preview["token"], relative)
+
+
+def test_preview_capabilities_cannot_be_replayed_as_file_tokens_or_after_restart(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "index.html"
+    entry.write_text("site")
+    delivery = FileDelivery()
+    file_url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
+    preview = delivery.open_preview(file_url)
+    assert delivery.resolve_token(preview["token"]) is None
+    for token in [file_url.removeprefix(FILE_URL_PREFIX), preview["token"] + "x", "bad.\u00e4"]:
+        with pytest.raises(ValueError):
+            delivery.preview_revision(token)
+    with pytest.raises(ValueError):
+        FileDelivery().preview_revision(preview["token"])
+
+
+def test_preview_rejects_symlink_escape_and_oversized_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    entry.write_text("site")
+    outside = tmp_path / "private.html"
+    outside.write_text("private sentinel")
+    delivery = FileDelivery()
+    token = delivery.open_preview(str(entry))["token"]
+    link = site / "escape.html"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        # Windows without symlink permission still tests the bounded scan.
+        pass
+    else:
+        with pytest.raises(ValueError):
+            delivery.preview_file(token, "escape.html")
+    monkeypatch.setattr("server.file_delivery.PREVIEW_MAX_ENTRIES", 0)
+    with pytest.raises(ValueError):
+        delivery.preview_revision(token)
+
+
 def test_file_endpoint_serves_current_original_and_rejects_tampering(tmp_path: Path) -> None:
     image = tmp_path / "live image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
@@ -107,10 +317,15 @@ def test_file_browser_delivery_and_explicit_download(
         response = client.get(url)
         download = client.get(url, params={"download": "true"})
         assert response.status_code == download.status_code == 200
-        assert response.content == download.content == body
+        assert download.content == body
+        if media_type == "text/html":
+            assert response.content.startswith(body)
+            assert "vbot-preview-ready" in response.text
+        else:
+            assert response.content == body
         assert response.headers["content-type"].split(";")[0] == media_type
-        assert response.headers["content-disposition"].startswith(
-            "inline;" if inline else "attachment;"
+        assert response.headers["content-disposition"].split(";")[0] == (
+            "inline" if inline else "attachment"
         )
         assert download.headers["content-disposition"].startswith("attachment;")
         assert filename in download.headers["content-disposition"]
@@ -120,9 +335,14 @@ def test_file_browser_delivery_and_explicit_download(
             directives = dict(directive.strip().split(" ", 1) for directive in policy.split(";"))
             assert "allow-scripts" in directives["sandbox"].split()
             assert "allow-same-origin" not in directives["sandbox"].split()
-            for directive in ("connect-src", "frame-src", "object-src", "base-uri", "form-action"):
+            for directive in ("frame-src", "object-src", "form-action"):
                 assert directives[directive] == "'none'"
-            assert download.headers["content-security-policy"] == policy
+            if media_type == "text/html":
+                assert "/api/preview-assets/" in directives["connect-src"]
+                assert directives["base-uri"] == directives["connect-src"]
+            else:
+                assert directives["connect-src"] == directives["base-uri"] == "'none'"
+                assert download.headers["content-security-policy"] == policy
 
 
 def test_large_html_probe_can_end_inside_utf8_character(tmp_path: Path) -> None:

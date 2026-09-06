@@ -45,7 +45,7 @@ from server.events import (
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
-from server.file_delivery import FileDelivery
+from server.file_delivery import PREVIEW_URL_PREFIX, FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
@@ -54,6 +54,7 @@ from server.rpc.event_bridge import (
     reflection_source_session_id,
 )
 from server.rpc.methods import dispatch_rpc
+from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.payloads import remove_opaque_provider_metadata
 from server.rpc.statistics_methods import statistics_service
 
@@ -80,6 +81,7 @@ try:
     )
     from fastapi.responses import (  # type: ignore[import-not-found]
         FileResponse,
+        RedirectResponse,
         Response,
         StreamingResponse,
     )
@@ -195,6 +197,16 @@ class _BrowserOriginGuardMiddleware:
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
+        # Sandboxed documents have an opaque Origin. Only read-only preview
+        # asset routes admit it; their handler still validates the capability.
+        if (
+            scope_type == "http"
+            and scope.get("method") in {"GET", "HEAD"}
+            and str(scope.get("path", "")).startswith(PREVIEW_URL_PREFIX)
+            and _scope_header_values(scope, ORIGIN_HEADER_NAME) == ["null"]
+        ):
+            await self._app(scope, receive, send)
+            return
         if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(
             scope,
             self._allowed_origins,
@@ -568,12 +580,22 @@ def create_app(
         )
 
     @app.get("/api/files/{token}")
-    async def get_assistant_file(
-        request: Request, token: str, download: bool = False
-    ) -> FileResponse:
-        delivered = request.app.state.file_delivery.resolve_token(token)
+    async def get_assistant_file(request: Request, token: str, download: bool = False) -> Response:
+        delivery = request.app.state.file_delivery
+        delivered = await FILE_PREVIEW_WORKERS.run(delivery.resolve_token, token)
         if delivered is None:
             raise HTTPException(status_code=404)
+        if delivered.media_type == "text/html" and not download:
+            try:
+                preview = await FILE_PREVIEW_WORKERS.run(
+                    delivery.open_preview, f"/api/files/{token}"
+                )
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=404) from exc
+            return RedirectResponse(
+                preview["url"],
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
         return FileResponse(
             delivered.path,
             media_type=delivered.media_type,
@@ -583,6 +605,58 @@ def create_app(
             ),
             headers=delivered.response_headers,
         )
+
+    @app.get("/api/preview-assets/{token}/.revision")
+    async def get_preview_revision(request: Request, token: str) -> Response:
+        delivery = request.app.state.file_delivery
+        try:
+            revision = await FILE_PREVIEW_WORKERS.run(delivery.preview_revision, token)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=404) from exc
+        return Response(
+            json.dumps({"revision": revision}),
+            media_type="application/json",
+            headers=delivery.preview_headers(str(request.base_url), token),
+        )
+
+    @app.api_route("/api/preview-assets/{token}/{asset_path:path}", methods=["GET", "HEAD"])
+    async def get_preview_asset(request: Request, token: str, asset_path: str) -> Response:
+        delivery = request.app.state.file_delivery
+        try:
+            delivered = await FILE_PREVIEW_WORKERS.run(delivery.preview_file, token, asset_path)
+            headers = delivery.preview_headers(str(request.base_url), token)
+            if (
+                delivered.path.name == "index.html"
+                and asset_path
+                and not asset_path.endswith("/")
+                and asset_path.rsplit("/", 1)[-1] != "index.html"
+            ):
+                return RedirectResponse(
+                    str(request.url.replace(path=request.url.path + "/")), headers=headers
+                )
+            if delivered.media_type == "text/html":
+                headers["Content-Disposition"] = "inline"
+                content = await FILE_PREVIEW_WORKERS.run(
+                    delivery.preview_html, delivered.path, f"{PREVIEW_URL_PREFIX}{token}/.revision"
+                )
+                return Response(content, media_type="text/html", headers=headers)
+            return FileResponse(delivered.path, media_type=delivered.media_type, headers=headers)
+        except (ValueError, OSError):
+            # The parent renders localized shared feedback, rather than exposing
+            # a transport error as raw JSON inside the website frame.
+            return Response(
+                "<!doctype html><script>parent.postMessage("
+                '{type:"vbot-preview-unavailable",url:location.href},"*")</script>',
+                status_code=404,
+                media_type="text/html",
+                headers={
+                    "Content-Security-Policy": "default-src 'none'; sandbox allow-scripts; "
+                    "script-src 'unsafe-inline'; frame-ancestors 'self'",
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:

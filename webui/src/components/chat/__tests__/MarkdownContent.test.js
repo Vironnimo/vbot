@@ -85,6 +85,34 @@ describe('MarkdownContent', () => {
     );
     expect(document.querySelector('.msg-code__copy')).toBeNull();
   });
+
+  it('keeps delivered HTML as a link with one external hint and no menu button', async () => {
+    mountedComponent = mount(MarkdownContent, {
+      target: document.body,
+      props: {
+        source:
+          '[site.HTML](/api/files/signed-token) [report.pdf](/api/files/pdf-token) [remote.html](https://example.com/site.html)',
+        class: 'msg-markdown',
+      },
+    });
+    flushSync();
+    expect(document.querySelectorAll('[data-file-external]')).toHaveLength(1);
+    expect(document.querySelector('button')).toBeNull();
+    const external = document.querySelector('[data-file-external]');
+    expect(external.getAttribute('href')).toBe('/api/files/signed-token');
+    expect(external.target).toBe('_blank');
+    expect(external.rel).toContain('noopener');
+    expect(external.getAttribute('aria-label')).toContain('site.HTML');
+    const menu = document.querySelector(
+      'a[data-preview-file]:not([data-file-external])',
+    );
+    expect(menu.dataset.previewFile).toBe('/api/files/signed-token');
+    expect(menu.dataset.fileName).toBe('site.HTML');
+    expect(menu.getAttribute('aria-haspopup')).toBe('menu');
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(document.querySelector('[data-file-external]')).toBeNull();
+  });
 });
 
 async function flushAsync() {

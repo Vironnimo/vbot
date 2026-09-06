@@ -1,4 +1,4 @@
-"""Log and prompt RPC handlers."""
+"""File preview, log and prompt RPC handlers."""
 
 from __future__ import annotations
 
@@ -29,6 +29,28 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.prompts")
 _PROMPT_RPC_WORKERS = BoundedWorkerPool(name="prompt-rpc", max_workers=4)
+FILE_PREVIEW_WORKERS = BoundedWorkerPool(name="file-preview", max_workers=2)
+
+
+async def _open_file_preview(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"source"}, "file.preview_open")
+    source = _required_string(params, "source")
+    try:
+        return cast(
+            JsonObject, await FILE_PREVIEW_WORKERS.run(state.file_delivery.open_preview, source)
+        )
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+async def _file_preview_revision(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"token"}, "file.preview_revision")
+    token = _required_string(params, "token")
+    try:
+        revision = await FILE_PREVIEW_WORKERS.run(state.file_delivery.preview_revision, token)
+        return {"revision": revision}
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 async def _run_prompt_method(
@@ -366,9 +388,11 @@ def _prompt_manager(state: Any) -> SystemPromptManager:
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
-    """Return log and prompt RPC handlers."""
+    """Return file preview, log and prompt RPC handlers."""
 
     return {
+        "file.preview_open": _open_file_preview,
+        "file.preview_revision": _file_preview_revision,
         "log.list": _list_logs,
         "log.read": _read_log,
         "prompt.list": _list_prompts,

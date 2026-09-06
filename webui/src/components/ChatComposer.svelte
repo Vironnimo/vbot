@@ -1497,7 +1497,6 @@
     use:focusInputFromWrapAction
   >
     <textarea
-      id="chat-composer-input"
       bind:this={inputElement}
       bind:value={content}
       class="msg-input"
