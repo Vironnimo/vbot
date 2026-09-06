@@ -3,18 +3,11 @@
   import { openFilePreview, getFilePreviewRevision } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
-  import TextField from '../ui/TextField.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import Banner from '../ui/Banner.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { tooltip } from '$lib/tooltip.js';
 
-  let {
-    active = true,
-    request = null,
-    onSourceChange = () => {},
-    workspaceActions,
-  } = $props();
+  let { active = true, request = null, workspaceActions } = $props();
   let source = $state('');
   let preview = $state(null);
   let loading = $state(false);
@@ -55,12 +48,10 @@
       });
       if (generation !== openGeneration) return;
       preview = next;
-      source = next.source;
       currentUrl = next.url;
       frameUnavailable = false;
       pageLabel = next.filename;
       refreshCount = 0;
-      onSourceChange(next.source);
     } catch (cause) {
       if (generation === openGeneration) openError = cause.message;
     } finally {
@@ -155,34 +146,11 @@
 </script>
 
 <div class="html-preview" hidden={!active}>
-  <form
-    class="html-preview__address"
-    onsubmit={(event) => {
-      event.preventDefault();
-      void open();
-    }}
-  >
-    <TextField
-      value={source}
-      onInput={(value) => (source = value)}
-      ariaLabel={t('preview.path', 'HTML file on the server')}
-      placeholder={t('preview.pathPlaceholder', 'Absolute path to index.html')}
-    />
-    <Button
-      type="submit"
-      variant="secondary"
-      disabled={!source.trim()}
-      {loading}
+  <div class="html-preview__toolbar">
+    <span class="html-preview__filename"
+      >{pageLabel || preview?.filename || t('split.preview', 'Preview')}</span
     >
-      {t('preview.open', 'Open')}
-    </Button>
-    {@render workspaceActions?.()}
-  </form>
-  {#if preview}
-    <div class="html-preview__toolbar">
-      <span class="html-preview__filename" use:tooltip={preview.root}
-        >{pageLabel || preview.filename}</span
-      >
+    {#if preview}
       <span class="html-preview__live" aria-live="polite">
         <span class:paused={!autoRefresh} class="html-preview__dot"></span>
         {autoRefresh
@@ -235,8 +203,9 @@
           ><path d="m3 11 9-8 9 8M5 9v12h14V9M9 21v-8h6v8" /></svg
         >
       </Button>
-    </div>
-  {/if}
+    {/if}
+    {@render workspaceActions?.()}
+  </div>
   {#if error}
     <Banner variant="error" role="alert" class="html-preview__feedback">
       {t('preview.failed', 'Preview could not be updated.')}
@@ -265,7 +234,7 @@
       title={t('preview.emptyTitle', 'Your website, beside the conversation')}
       description={t(
         'preview.emptyDescription',
-        'Open an HTML file from a Chat link, or enter its absolute server path above. Relative styles, scripts, images and subpages load from the same folder.',
+        'Choose an HTML file shared by the agent in the conversation to preview it here.',
       )}
     >
       {#snippet icon()}<svg
@@ -295,17 +264,6 @@
   }
   .html-preview[hidden] {
     display: none;
-  }
-  .html-preview__address {
-    display: flex;
-    gap: 8px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  .html-preview__address :global(input) {
-    min-width: 0;
-    flex: 1;
-    font-size: 12px;
   }
   .html-preview__toolbar {
     display: flex;

@@ -324,19 +324,21 @@
         >{t('split.open', 'Split view')}</Button
       >
     {/if}
-    <Button
-      variant="tertiary"
-      role="menuitem"
-      onClick={() =>
-        changeContent(
-          menuPane,
-          kinds[menuPane] === 'chat' ? 'preview' : 'chat',
-        )}
-    >
-      {kinds[menuPane] === 'chat'
-        ? t('split.showPreview', 'Show preview')
-        : t('split.backToChat', 'Back to chat')}
-    </Button>
+    {#if kinds[menuPane] === 'preview' || previews[menuPane]}
+      <Button
+        variant="tertiary"
+        role="menuitem"
+        onClick={() =>
+          changeContent(
+            menuPane,
+            kinds[menuPane] === 'chat' ? 'preview' : 'chat',
+          )}
+      >
+        {kinds[menuPane] === 'chat'
+          ? t('split.showPreview', 'Show preview')
+          : t('split.backToChat', 'Back to chat')}
+      </Button>
+    {/if}
     {#if split}
       <Button
         variant="tertiary"
