@@ -35,16 +35,6 @@ class Observation:
     origin: tuple[int, int] = (0, 0)
     source_size: tuple[int, int] = (0, 0)
     display_size: tuple[int, int] = (0, 0)
-    browser_scale: tuple[float, float] | None = None
-
-    def browser_point(self, view_id: str, x: int, y: int) -> tuple[float, float]:
-        px, py = self.point(view_id, x, y)
-        if self.browser_scale is None:
-            raise ComputerUseError(
-                "Browser state is incomplete. Use browser_capture with the returned "
-                "target and tab identifiers."
-            )
-        return px * self.browser_scale[0], py * self.browser_scale[1]
 
     def point(self, view_id: str, x: int, y: int, *, edge: bool = False) -> tuple[int, int]:
         if not self.view_id or view_id != self.view_id:
@@ -136,7 +126,7 @@ def _present(
     if display_size != image.size:
         image = image.resize(display_size, Image.Resampling.LANCZOS)
     stream = io.BytesIO()
-    image.save(stream, format="PNG")
+    image.save(stream, format="PNG", compress_level=1)
     raw = stream.getvalue()
     if len(raw) > MAX_BYTES:
         raise ComputerUseError(
@@ -187,16 +177,7 @@ def capture(
     for key in ("_note", "screenshot_width", "screenshot_height"):
         payload.pop(key, None)
     observation = Observation(target)
-    metadata = payload.pop("screenshot", None)
-    if target[0] == "browser" and isinstance(metadata, dict):
-        scales: tuple[Any, Any] = (
-            metadata.get("pixel_to_css_scale_x"),
-            metadata.get("pixel_to_css_scale_y"),
-        )
-        if metadata.get("coordinate_space") == "viewport_css_px" and all(
-            type(value) in (int, float) and math.isfinite(value) and value > 0 for value in scales
-        ):
-            observation.browser_scale = (float(scales[0]), float(scales[1]))
+    payload.pop("screenshot", None)
     result: dict[str, Any] = {}
     if mode != "ax":
         if raw is None:
@@ -228,8 +209,7 @@ def capture(
         payload.pop("tree_markdown", None)
     elif mode == "ax" and not payload:
         raise ComputerUseError(
-            "Browser state is incomplete. Use browser_capture with the returned "
-            "target and tab identifiers."
+            "No window elements were returned. Capture with mode vision to inspect the pixels."
         )
     result.update(bounded(context, payload))
     return observation, result
@@ -280,5 +260,4 @@ def zoom(
     crop = original.crop((left, top, right, bottom))
     zoomed = Observation(observation.target, observation.elements.copy(), observation.original)
     zoomed.origin = (left, top)
-    zoomed.browser_scale = observation.browser_scale
     return zoomed, _present(context, zoomed, crop, "original")
