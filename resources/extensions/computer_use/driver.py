@@ -596,7 +596,15 @@ class CuaDriver:
                 request.pop("delivery_mode", None)
         try:
             assert self._session is not None
+            if "session" not in request and name not in {"start_session", "end_session"}:
+                # Tools such as list_apps/list_windows cannot accept a public label.
+                # Explicitly revive their implicit transport session after idle expiry;
+                # do this before dispatch, never by replaying a failed action.
+                started = self._portal.call(self._session.call_tool, "start_session", {})
+                unpack(started.model_dump(by_alias=True, exclude_none=True))
             response = self._portal.call(self._session.call_tool, name, request)
+        except ComputerUseError:
+            raise
         except Exception as exc:
             self.broken = True
             with suppress(Exception):  # Preserve the dispatch failure; never replay input.

@@ -641,6 +641,196 @@ def test_owned_session_cleanup_and_retirement(computer):
     assert len(client.calls) == count
 
 
+@pytest.fixture
+def lifecycle_connection(computer, monkeypatch):
+    """Exercise the real adapter with Cua's named and implicit MCP lifecycles."""
+    from contextlib import asynccontextmanager
+
+    from resources.extensions.computer_use import driver
+
+    connections = []
+    schemas = {
+        "get_config": {},
+        "start_session": {"session": {"type": "string"}},
+        "end_session": {"session": {"type": "string"}},
+        # Cua 0.23.2 Windows discovery schemas do not accept session labels.
+        "list_apps": {},
+        "list_windows": {"pid": {"type": "integer"}, "on_screen_only": {"type": "boolean"}},
+    }
+
+    @asynccontextmanager
+    async def stdio(self, environment):
+        yield None, None
+
+    class Session:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+            self.ended = set()
+            self.closed = False
+            self.fail_start = False
+            self.fail_transport_on = None
+            connections.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            self.closed = True
+
+        async def initialize(self):
+            return SimpleNamespace(server_info=SimpleNamespace(version="0.23.2"))
+
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name=name,
+                        input_schema={
+                            "type": "object",
+                            "properties": properties,
+                            "additionalProperties": False,
+                        },
+                    )
+                    for name, properties in schemas.items()
+                ]
+            )
+
+        async def call_tool(self, name, arguments):
+            assert not self.closed
+            assert arguments.keys() <= schemas[name].keys()
+            self.calls.append((name, arguments))
+            if name == self.fail_transport_on:
+                raise ConnectionError("test-owned transport loss")
+            session = arguments.get("session", "implicit")
+            failed = False
+            if name == "start_session":
+                failed = self.fail_start
+                if not failed:
+                    self.ended.discard(session)
+            elif name == "end_session":
+                self.ended.add(session)
+            else:
+                failed = session in self.ended
+            payload = (
+                {
+                    "isError": True,
+                    "structuredContent": {"code": "session_ended"},
+                    "content": [{"type": "text", "text": "test-owned ended session"}],
+                }
+                if failed
+                else {"structuredContent": {"max_image_dimension": 0, "apps": [], "windows": []}}
+            )
+            return SimpleNamespace(model_dump=lambda **kwargs: payload)
+
+    def client(executable):
+        connection = driver.CuaDriver(executable)
+        connection.desktop = None
+        return connection
+
+    service = computer[0]
+    service.executable = "test-owned-driver"
+    monkeypatch.setattr(driver.CuaDriver, "_stdio", stdio)
+    monkeypatch.setattr(driver, "ClientSession", Session)
+    monkeypatch.setattr(computer_use, "CuaDriver", client)
+    monkeypatch.setattr(
+        service, "_client", computer_use.ComputerUseService._client.__get__(service)
+    )
+    return connections
+
+
+@pytest.mark.parametrize("finish", ["run_end", "cancel_between_tools", "close"])
+def test_next_run_gets_fresh_connection_after_last_session_ends(
+    computer, lifecycle_connection, finish
+):
+    service, context, _, _ = computer
+    callbacks = []
+    context = replace(context, cancel_registration_hook=callbacks.append)
+    assert service.handle(context, {"action": "apps"})["ok"]
+    previous = lifecycle_connection[0]
+    # Simulate Cua's five-minute idle expiry without a wait or desktop access.
+    previous.ended.add("implicit")
+    if finish == "close":
+        assert service.handle(context, {"action": "close"})["ok"]
+    else:
+        if finish == "cancel_between_tools":
+            callbacks[0]()
+        service.run_end(context)
+    assert previous.closed and service._driver is None and not service._sessions
+
+    following = replace(context, agent_id="b", session_id="s2", run_id="r2")
+    assert service.handle(following, {"action": "apps"})["ok"]
+    assert service.handle(following, {"action": "windows"})["ok"]
+    assert len(lifecycle_connection) == 2
+
+
+def test_implicit_session_expiry_and_run_cleanup_preserve_other_run(computer, lifecycle_connection):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    connection = lifecycle_connection[0]
+    other = replace(context, agent_id="b", session_id="s2", run_id="r2")
+    assert service.handle(other, {"action": "apps"})["ok"]
+    service.run_end(context)
+    assert not connection.closed and len(service._sessions) == 1
+
+    connection.ended.add("implicit")
+    before = len(connection.calls)
+    assert service.handle(other, {"action": "windows"})["ok"]
+    assert connection.calls[before:] == [("start_session", {}), ("list_windows", {})]
+    service.run_end(context)  # A late completion must not close the surviving Run.
+    assert not connection.closed and len(lifecycle_connection) == 1
+    service.run_end(other)
+    assert connection.closed and service._driver is None
+
+
+def test_failed_implicit_start_prevents_dispatch(computer, lifecycle_connection):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    connection = lifecycle_connection[0]
+    connection.fail_start = True
+    before = len(connection.calls)
+    assert not service.handle(context, {"action": "windows"})["ok"]
+    assert connection.calls[before:] == [("start_session", {})]
+    connection.fail_start = False
+    assert service.handle(context, {"action": "windows"})["ok"]
+    assert len(lifecycle_connection) == 1
+
+
+def test_failed_session_start_is_not_cached(computer):
+    service, context, client, _ = computer
+    client.fail = "start_session"
+    assert not service.handle(context, {"action": "apps"})["ok"]
+    assert not service._sessions
+    client.fail = None
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert [name for name, _ in client.calls].count("start_session") == 2
+
+
+def test_broken_worker_replaces_cached_session_before_dispatch(computer, lifecycle_connection):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    previous = next(iter(service._sessions.values())).name
+    service._driver.broken = True
+    assert service.handle(context, {"action": "windows"})["ok"]
+    current = next(iter(service._sessions.values())).name
+    assert current != previous
+    assert lifecycle_connection[0].closed and len(lifecycle_connection) == 2
+    assert ("start_session", {"session": current}) in lifecycle_connection[1].calls
+
+
+def test_cleanup_transport_loss_does_not_connect_to_close_remaining_sessions(
+    computer, lifecycle_connection
+):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    other = replace(context, session_id="s2", run_id="r2")
+    assert service.handle(other, {"action": "apps"})["ok"]
+    connection = lifecycle_connection[0]
+    connection.fail_transport_on = "end_session"
+    service._close_sessions()
+    assert connection.closed and service._driver is None and not service._sessions
+    assert len(lifecycle_connection) == 1
+
+
 def test_failed_capture_retires_old_view(computer):
     capture(computer)
     computer[2].fail = "get_window_state"
@@ -787,8 +977,8 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
             with pytest.raises(ComputerUseError, match=expected):
                 client.connect()
         else:
-            client.call("click", {})
-            client.call("click", {})
+            client.call("click", {"session": "test-owned"})
+            client.call("click", {"session": "test-owned"})
             assert events == ["open", "get_config", "click", "click"]
     finally:
         client.close()
@@ -812,7 +1002,7 @@ def test_transport_timeout_never_replays_uncertain_input():
     client._session = SimpleNamespace(call_tool=None)
     client.schemas = {"click": {"properties": {"target": {}}}}
     with pytest.raises(ComputerUseError):
-        client.call("click", {})
+        client.call("click", {"session": "test-owned"})
     assert calls == ["click"] and client.broken and client._session is None
 
 
