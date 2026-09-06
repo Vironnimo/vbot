@@ -20,7 +20,7 @@ from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 
 from . import observations
-from .driver import ComputerUseError, CuaDriver
+from .driver import ComputerUseError, CuaDriver, EmergencyHotkey
 
 
 class InvalidComputerArgumentsError(ComputerUseError):
@@ -690,9 +690,66 @@ class ComputerUseService:
         self._sessions: dict[tuple[str | None, str, str, str], DesktopSession] = {}
         self._driver: CuaDriver | None = None
         self._closed = False
+        self._control_lock = threading.RLock()
+        self._paused = False
+        self._stop_token = uuid.uuid4().hex
+        self._active: object | None = None
+        self._active_driver: CuaDriver | None = None
+        self._stop_file: Path | None = None
+        self._hotkey = EmergencyHotkey(self.stop)
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
+        self._stop_file = host.data_dir / "computer-use-stopped"
+        self._paused = self._stop_file.exists()
+        if self.executable:
+            self._hotkey.start()
+
+    def stop(self, owner: object | None = None) -> None:
+        # This lock is never held while waiting for a Driver call or the service lock.
+        with self._control_lock:
+            if owner is not None and self._active is not owner:
+                return
+            changed = not self._paused
+            self._paused = True
+            self._stop_token = uuid.uuid4().hex
+            driver = self._active_driver or self._driver
+            if driver is not None:
+                try:
+                    driver.interrupt()
+                except OSError:
+                    # Keep the interlock and hotkey alive even if the OS refuses termination.
+                    self.api.logger.exception("Could not interrupt the Computer Use worker")
+            if self._stop_file is not None:
+                try:
+                    self._stop_file.touch()
+                except OSError:
+                    self.api.logger.exception("Could not persist Computer Use stop")
+            if changed:
+                self.api.logger.info("Computer Use stopped by operator")
+
+    async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        action = arguments.get("action", "status")
+        if action == "stop":
+            self.stop()
+        with self._control_lock:
+            if (
+                action == "resume"
+                and self._paused
+                and self._active is None
+                and arguments.get("stop_token") == self._stop_token
+            ):
+                if self._stop_file is not None:
+                    self._stop_file.unlink(missing_ok=True)
+                self._paused = False
+                self.api.logger.info("Computer Use allowed by operator")
+            return {
+                "available": self.ready(),
+                "paused": self._paused,
+                "active": self._active is not None,
+                "hotkey_available": self._hotkey.available,
+                "stop_token": self._stop_token,
+            }
 
     def ready(self) -> bool:
         return bool(self.executable) and not self._closed
@@ -703,11 +760,21 @@ class ComputerUseService:
                 "Computer Use is unavailable. Install cua-driver on the server host "
                 "and reload Extensions."
             )
+        if self._driver is not None and self._driver.broken:
+            self._driver.close()
+            self._driver = None
+            self._sessions.clear()
         if self._driver is None:
             self._driver = CuaDriver(self.executable)
         return self._driver
 
     def _check_access(self, context: ToolContext) -> None:
+        if self._paused:
+            raise ComputerUseError(
+                "Computer Use was stopped by the user. "
+                "Wait for the user to allow computer control again.",
+                "computer_use_stopped",
+            )
         if self._closed or self.host is None or self.api.operations.tool_registry is None:
             raise ComputerUseError(
                 "Computer Use has stopped. Retry after Extensions have reloaded."
@@ -1087,9 +1154,15 @@ class ComputerUseService:
         except InvalidComputerArgumentsError as error:
             return tool_failure("invalid_arguments", str(error))
         with self._lock:
+            owner = object()
             try:
                 self._check_access(context)
                 client = self._client()
+                with self._control_lock:
+                    self._active = owner
+                    self._active_driver = client
+                context.on_cancel(lambda: self.stop(owner))
+                self._check_access(context)
                 client.connect()
                 self._check_access(context)
                 if args["action"] == "status":
@@ -1139,8 +1212,16 @@ class ComputerUseService:
                     retryable=False,
                 )
             finally:
-                if self._driver is not None and self._driver.broken:
-                    self._sessions.clear()
+                try:
+                    if self._driver is not None and self._driver.broken:
+                        self._sessions.clear()
+                        driver, self._driver = self._driver, None
+                        driver.close()
+                finally:
+                    with self._control_lock:
+                        if self._active is owner:
+                            self._active = None
+                            self._active_driver = None
 
     def _close_sessions(self, run_id: str | None = None) -> None:
         for key, session in list(self._sessions.items()):
@@ -1158,8 +1239,12 @@ class ComputerUseService:
             self._close_sessions(context.run_id)
 
     def close(self) -> None:
+        self._closed = True
+        self._hotkey.close()
+        with self._control_lock:
+            if self._active_driver is not None:
+                self._active_driver.interrupt()
         with self._lock:
-            self._closed = True
             self._close_sessions()
             if self._driver is not None:
                 self._driver.close()
@@ -1168,6 +1253,19 @@ class ComputerUseService:
 def register(api: ExtensionAPI) -> None:
     service = ComputerUseService(api)
     api.operations.startup.append(service.start)
+    api.operations.register(
+        "control",
+        "Inspect, stop, or allow Computer Use on the server host.",
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "stop", "resume"]},
+                "stop_token": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        service.control,
+    )
     api.on_shutdown(service.close)
     api.on("run_end", service.run_end)
     api.register_tool(
