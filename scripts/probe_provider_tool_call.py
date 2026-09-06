@@ -504,7 +504,6 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
 }
 
 _COMPUTER_WINDOW = {"pid": 101, "window_id": 202}
-_COMPUTER_TAB = {"target_id": "b1", "tab_id": "t1"}
 COMPUTER_CASE_ARGUMENTS.update(
     {
         "capture_original": {"action": "capture", **_COMPUTER_WINDOW, "resolution": "original"},
@@ -592,122 +591,38 @@ COMPUTER_CASE_ARGUMENTS.update(
                 {"action": "type", "text": "draft"},
             ],
         },
-        "browser_discover": {"action": "browser_prepare", **_COMPUTER_WINDOW},
-        "browser_isolated_preview": {"action": "browser_prepare", "profile": "isolated"},
-        "browser_isolated": {"action": "browser_prepare", "profile": "isolated", "apply": True},
-        "browser_existing": {
-            "action": "browser_prepare",
-            **_COMPUTER_WINDOW,
-            "profile": "existing",
-            "apply": True,
-        },
-        "browser_bind": {"action": "browser_capture", **_COMPUTER_WINDOW},
-        **{
-            f"browser_capture_{mode}": {"action": "browser_capture", **_COMPUTER_TAB, "mode": mode}
-            for mode in ("som", "ax", "vision")
-        },
-        "browser_query": {
-            "action": "browser_capture",
-            **_COMPUTER_TAB,
-            "query": "Draft",
-            "resolution": "original",
-        },
-        "browser_navigate": {
-            "action": "browser_navigate",
-            **_COMPUTER_TAB,
-            "url": "https://example.com",
-            "apply": True,
-        },
-        "browser_type": {
-            "action": "browser_type",
-            **_COMPUTER_TAB,
-            "ref": "r1",
-            "text": "draft",
-            "apply": True,
-        },
-        **{
-            f"browser_click_{button}_{count}": {
-                "action": "browser_click",
-                **_COMPUTER_TAB,
-                "ref": "r1",
-                "button": button,
-                "count": count,
-                "apply": True,
-            }
-            for button, count in (("left", 1), ("left", 2), ("right", 1))
-        },
-        "browser_click_pixels": {
-            "action": "browser_click",
-            **_COMPUTER_TAB,
-            "view_id": "vtest",
-            "x": 20,
-            "y": 30,
-            "apply": True,
-        },
-        "browser_hover": {"action": "browser_hover", **_COMPUTER_TAB, "ref": "r1", "apply": True},
-        "browser_drag": {
-            "action": "browser_drag",
-            **_COMPUTER_TAB,
-            "ref": "r1",
-            "destination_ref": "r2",
-            "apply": True,
-        },
-        **{
-            f"browser_scroll_{direction}": {
-                "action": "browser_scroll",
-                **_COMPUTER_TAB,
-                "ref": "r1",
-                "direction": direction,
-                "amount": 5,
-                "apply": True,
-            }
-            for direction in ("up", "down", "left", "right")
-        },
-        "browser_dialog_inspect": {"action": "browser_dialog", **_COMPUTER_TAB},
-        "browser_dialog_accept": {
-            "action": "browser_dialog",
-            **_COMPUTER_TAB,
-            "dialog_action": "accept",
-            "dialog_id": "d1",
-            "text": "draft",
-            "apply": True,
-        },
-        "browser_dialog_dismiss": {
-            "action": "browser_dialog",
-            **_COMPUTER_TAB,
-            "dialog_action": "dismiss",
-            "dialog_id": "d1",
-            "apply": True,
-        },
-        "browser_upload": {
-            "action": "browser_upload",
-            **_COMPUTER_TAB,
-            "ref": "r1",
-            "files": [str(Path(__file__).resolve())],
-            "apply": True,
-        },
-        "browser_download": {
-            "action": "browser_download",
-            **_COMPUTER_TAB,
-            "ref": "r1",
-            "directory": str(Path(__file__).resolve().parent),
-            "apply": True,
-        },
         "invalid_sequence": {
             "action": "sequence",
             **_COMPUTER_WINDOW,
             "steps": [{"action": "key", "shortcut": "enter"}, {"action": "click", "element": "1"}],
         },
         "invalid_view": {"action": "click", **_COMPUTER_WINDOW, "x": 1, "y": 1},
-        "invalid_browser_button": {
-            "action": "browser_click",
-            **_COMPUTER_TAB,
-            "ref": "r1",
-            "button": "middle",
-        },
     }
 )
 
+
+COMPUTER_CASE_ARGUMENTS.update(
+    {
+        "monitors": {"action": "monitors"},
+        "capture_monitor": {"action": "capture", "monitor": 1},
+        "move": {
+            "action": "move",
+            **_COMPUTER_WINDOW,
+            "view_id": "vtest",
+            "x": 20,
+            "y": 30,
+            "apply": True,
+        },
+        "hold_key": {
+            "action": "key",
+            **_COMPUTER_WINDOW,
+            "shortcut": "shift",
+            "duration_ms": 100,
+            "apply": True,
+        },
+        "invalid_duration": {"action": "key", "shortcut": "shift", "duration_ms": 3000},
+    }
+)
 
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
