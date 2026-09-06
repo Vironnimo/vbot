@@ -449,8 +449,8 @@ class CuaDriver:
                 return self.desktop.capture(arguments)
             if name == "get_window_state" and arguments.get("include_screenshot", True):
                 # One native screenshot; request UIA separately only when needed.
-                pixels = self.desktop.capture(arguments)
                 state = self.call(name, {**arguments, "include_screenshot": False})
+                pixels = self.desktop.capture(arguments)
                 return {**state, **pixels}
             if (
                 name
