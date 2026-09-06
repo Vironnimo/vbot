@@ -340,6 +340,8 @@ class CuaDriver:
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.connect()
         arguments = dict(arguments)
+        if "modifiers" in arguments and (self.desktop is None or "element_token" in arguments):
+            raise ComputerUseError("Invalid value for modifiers.", "invalid_arguments")
         if self.desktop is not None:
             if name == "list_monitors":
                 return {"monitors": self.desktop.monitors()}

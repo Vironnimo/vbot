@@ -161,12 +161,12 @@ class WindowsDesktop:
             self._held.append(up)
             self._send_raw([down])
 
-    def release(self) -> None:
+    def release(self, keep: int = 0) -> None:
         with self._lock:
-            if self._held:
+            if self._held[keep:]:
                 # Retain releases on failure so stop/close can try cleanup again.
-                self._send_raw(list(reversed(self._held)))
-                self._held.clear()
+                self._send_raw(list(reversed(self._held[keep:])))
+                del self._held[keep:]
 
     def interrupt(self) -> None:
         self._stopped.set()
@@ -344,6 +344,11 @@ class WindowsDesktop:
 
     def input(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         self._check()
+        modifiers = self._keys(args.get("modifiers", []))
+        if any(self.user.GetAsyncKeyState(key) & 0x8000 for key in modifiers):
+            raise ComputerUseError(
+                "A requested key is already held. Release it before continuing.", "input_busy"
+            )
         with self._physical():
             bounds, geometry = self._geometry(args)
             previous = self._frames.get(self._target(args))
@@ -372,6 +377,8 @@ class WindowsDesktop:
                         "focus_refused",
                     )
             try:
+                for key in modifiers:
+                    self._press(keyboard(key), keyboard(key, up=True))
                 if "x" in args:
                     self._move(bounds[0] + args["x"], bounds[1] + args["y"])
                 if name == "move_cursor":
@@ -382,7 +389,7 @@ class WindowsDesktop:
                         if index:
                             self._wait(0.05)
                         self._press(mouse(down), mouse(up))
-                        self.release()
+                        self.release(keep=len(modifiers))
                 elif name == "type_text":
                     self._text(args["text"])
                 elif name in {"press_key", "hotkey"}:
