@@ -131,6 +131,8 @@ class DesktopClient:
 
 @pytest.fixture
 def computer(tmp_path, monkeypatch):
+    # Timing is exercised explicitly below; unrelated integration tests need no real pause.
+    monkeypatch.setattr(computer_use, "_POST_INPUT_OBSERVATION_MS", 0)
     monkeypatch.setattr(computer_use.EmergencyHotkey, "start", lambda self: None)
     declarations = ExtensionDeclarations()
     api = ExtensionAPI(
@@ -542,6 +544,85 @@ def test_verify_reports_structured_result_and_fresh_observation(computer):
     assert result["data"]["observation"]
 
 
+@pytest.mark.parametrize("render_after", [0.4, 2.0])
+def test_post_input_capture_delay_is_bounded_without_screen_polling(
+    computer, monkeypatch, render_after
+):
+    service, _, client, _ = computer
+    capture(computer)
+    clock = [0.0]
+    monkeypatch.setattr(computer_use, "_POST_INPUT_OBSERVATION_MS", 1000)
+    monkeypatch.setattr(computer_use.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        service._wake, "wait", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    original_call = client.call
+
+    def response(name, args):
+        result = original_call(name, args)
+        if name == "get_window_state":
+            # Simulate delayed canvas rendering alongside an unrelated animated element.
+            result["canvas_updated"] = clock[0] >= render_after
+            result["animation_frame"] = client.snapshots
+        return result
+
+    client.call = response
+    result = call(computer, "type", text="draft", apply=True)
+    assert result["ok"]
+    assert result["data"]["observation_delay_ms"] == 1000
+    assert result["data"]["observation"]["canvas_updated"] is (render_after <= 1.0)
+    assert "verification" not in result["data"]
+    assert clock[0] == pytest.approx(1.0)
+    assert client.inputs == 1 and client.snapshots == 2
+
+
+def test_stop_during_post_input_delay_preserves_dispatch_without_replay(computer, monkeypatch):
+    service, _, client, _ = computer
+    capture(computer)
+    monkeypatch.setattr(computer_use, "_POST_INPUT_OBSERVATION_MS", 1000)
+    waiting = threading.Event()
+    original_wait = service._wake.wait
+
+    def wait(seconds):
+        waiting.set()
+        return original_wait(seconds)
+
+    monkeypatch.setattr(service._wake, "wait", wait)
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(call, computer, "type", text="draft", apply=True)
+        assert waiting.wait(1)
+        service.stop()
+        result = future.result(timeout=0.5)
+    assert result["data"]["applied"]
+    assert result["data"]["observation_error"]["code"] == "computer_use_stopped"
+    assert client.inputs == 1 and client.snapshots == 1
+
+
+def test_verify_waits_for_exact_postcondition_before_capturing(computer, monkeypatch):
+    service, _, client, _ = computer
+    clock = [0.0]
+    monkeypatch.setattr(computer_use.time, "monotonic", lambda: clock[0])
+    original_call = client.call
+    expectation = [{"element": {"selector": {"role": "Edit"}, "value_equals": "done"}}]
+    statuses = iter(["unknown", "unsatisfied", "satisfied"])
+
+    def response(name, args):
+        result = original_call(name, args)
+        if name == "verify_state":
+            assert args["expect"] == expectation
+            assert args["timeout_ms"] <= 250
+            clock[0] += 0.25
+            return {"status": next(statuses)}
+        if name == "get_window_state":
+            assert clock[0] == 0.75
+        return result
+
+    client.call = response
+    result = call(computer, "verify", expect=expectation, timeout_ms=1000)
+    assert result["data"]["verification"]["status"] == "satisfied"
+    assert client.inputs == 0 and client.snapshots == 1
+
+
 def test_owned_session_cleanup_and_retirement(computer):
     service, context, client, _ = computer
     capture(computer)
@@ -924,7 +1005,9 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             assert len(client.calls) == before, case
             continue
         target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
-        observed = service.handle(context, {"action": "capture", **target})
+        observed = service.handle(
+            context, {"action": "capture", **target, "foreground": args.get("foreground", True)}
+        )
         assert observed["ok"], case
         if "view_id" in args:
             args["view_id"] = observed["data"]["view_id"]
@@ -934,9 +1017,15 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
         assert result["ok"], (case, result)
 
 
-def test_skip_capture_preserves_outcome_and_retires_view(computer):
+def test_skip_capture_preserves_outcome_and_retires_view(computer, monkeypatch):
     capture(computer)
-    result = call(computer, "type", text="draft", apply=True, capture_after=False)
+    with monkeypatch.context() as scoped:
+
+        def unexpected_wait(*args):
+            pytest.fail("Skipping capture must also skip the observation delay")
+
+        scoped.setattr(computer[0], "_wait", unexpected_wait)
+        result = call(computer, "type", text="draft", apply=True, capture_after=False)
     assert result["ok"] and result["data"]["applied"]
     assert "observation" not in result["data"]
     assert "Capture" in result["data"]["next_action"]
@@ -1200,3 +1289,83 @@ def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, 
     assert Path(first["original"]).read_bytes() == original
     result = call(computer, "click", view_id=first["view_id"], coordinate=[1, 1], apply=True)
     assert result["error"]["code"] == "stale_view"
+
+
+def test_background_capture_input_and_zoom_keep_one_coordinate_space(computer):
+    data = capture(computer, foreground=False)["data"]
+    assert data["foreground"] is False
+    client = computer[2]
+    assert client.calls[-1][1]["_background_capture"] is True
+    zoomed = call(
+        computer, "zoom", view_id=data["view_id"], coordinate=[0, 0], to_coordinate=[100, 100]
+    )
+    result = call(
+        computer,
+        "click",
+        view_id=zoomed["data"]["view_id"],
+        coordinate=[10, 20],
+        foreground=False,
+        apply=True,
+    )
+    assert result["ok"]
+    args = next(args for name, args in client.calls if name == "click")
+    assert args["delivery_mode"] == "background" and args["x"] == 10 and args["y"] == 20
+    assert result["data"]["observation"]["foreground"] is False
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_switching_capture_delivery_refuses_before_any_input(computer, sequence):
+    data = capture(computer, foreground=False)["data"]
+    pointer = {"action": "click", "view_id": data["view_id"], "coordinate": [10, 20]}
+    arguments = (
+        {"action": "sequence", "steps": [{"action": "type", "text": "never"}, pointer]}
+        if sequence
+        else pointer
+    )
+    result = call(computer, **arguments, apply=True)
+    assert result["error"]["code"] == "capture_required"
+    assert computer[2].inputs == 0
+
+
+def test_background_timed_sequence_rejects_before_any_input(computer):
+    capture(computer, foreground=False)
+    result = call(
+        computer,
+        "sequence",
+        foreground=False,
+        apply=True,
+        steps=[
+            {"action": "type", "text": "never"},
+            {"action": "key", "shortcut": "enter", "duration_ms": 100},
+        ],
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert computer[2].inputs == 0
+
+
+def test_background_focus_change_stops_sequence_after_dispatched_step(computer):
+    data = capture(computer, foreground=False)["data"]
+    client = computer[2]
+    original = client.call
+
+    def response(name, args):
+        result = original(name, args)
+        if name == "click":
+            result["target_became_foreground"] = True
+        return result
+
+    client.call = response
+    result = call(
+        computer,
+        "sequence",
+        foreground=False,
+        apply=True,
+        steps=[
+            {"action": "click", "view_id": data["view_id"], "coordinate": [10, 20]},
+            {"action": "type", "text": "never"},
+        ],
+    )
+    assert result["data"]["completed_steps"] == 1
+    assert result["data"]["partial"]
+    assert result["data"]["error"]["code"] == "background_focus_changed"
+    assert client.inputs == 1

@@ -131,8 +131,9 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
         "foreground": {
             "type": "boolean",
             "description": (
-                "Omit for visible mouse and keyboard input. Set false for background "
-                "window elements."
+                "Omit for visible mouse and keyboard input. Set false to capture and control "
+                "a window in the background when supported. Use the same setting for capture "
+                "and coordinate input; capture again when switching."
             ),
         },
         "view_id": {
@@ -312,11 +313,11 @@ _FIELDS = {
     "apps": set(),
     "windows": set(),
     "close": set(),
-    "capture": _TARGET | _OBSERVE,
+    "capture": _TARGET | _OBSERVE | {"foreground"},
     "zoom": _TARGET | {"view_id", "coordinate", "to_coordinate"},
     "click": _INPUT | {"element", "view_id", "coordinate", "button", "count", "modifiers"},
     "type": _INPUT | {"text", "element"},
-    "set_value": (_INPUT - {"foreground"}) | {"text", "element"},
+    "set_value": _INPUT | {"text", "element"},
     "key": _INPUT | {"shortcut", "duration_ms"},
     "scroll": _INPUT | {"direction", "amount", "element", "view_id", "coordinate", "modifiers"},
     "drag": _INPUT
@@ -324,9 +325,9 @@ _FIELDS = {
     "menu": _WINDOW | _OBSERVE | {"menu_path", "apply", "capture_after"},
     "resize": _WINDOW | _OBSERVE | {"coordinate", "size", "apply", "capture_after"},
     "launch": {"app", "apply"},
-    "verify": _WINDOW | _OBSERVE | {"expect", "timeout_ms"},
+    "verify": _WINDOW | _OBSERVE | {"expect", "timeout_ms", "foreground"},
     "sequence": _INPUT | {"steps"},
-    "wait": _TARGET | _OBSERVE | {"duration_ms"},
+    "wait": _TARGET | _OBSERVE | {"duration_ms", "foreground"},
 }
 _MUTATIONS = set(_FIELDS) - {
     "monitors",
@@ -354,6 +355,11 @@ _DEFAULTS = {
 _VALIDATOR = Draft202012Validator(COMPUTER_PARAMETERS)
 _ELEMENT = re.compile(r"^(?:[0-9]+|[A-Za-z0-9_-]+:[0-9]+)$")
 _READINESS_HINT = "Install cua-driver on the server host and reload Extensions."
+# A bounded observation delay, never a claim that the application has completed work.
+_POST_INPUT_OBSERVATION_MS = 1000
+_BACKGROUND_FOCUS_HINT = (
+    "The target became foreground during background input. Capture the desktop before continuing."
+)
 
 
 def _invalid(field_name: str) -> None:
@@ -434,6 +440,8 @@ def _validate_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
         10_000 if action == "wait" else 2000
     ):
         _invalid("monitor or duration_ms")
+    if not args["foreground"] and "duration_ms" in arguments and action != "wait":
+        _invalid("duration_ms")
     for name in {"coordinate", "to_coordinate", "size"} & arguments.keys():
         values = arguments[name]
         if len(values) != 2 or any(type(value) is not int for value in values):
@@ -514,6 +522,7 @@ def _validate_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
             _validate_arguments(
                 {
                     **{key: args[key] for key in _TARGET if key in args},
+                    "foreground": args["foreground"],
                     **step,
                 }
             )
@@ -702,6 +711,8 @@ class ComputerUseService:
             }
             if args.get("query"):
                 request["query"] = args["query"]
+            if not args["foreground"]:
+                request["_background_capture"] = True
             name = "capture_pixels" if mode == "vision" else "get_window_state"
             payload = self._call(context, session, name, request)
         else:
@@ -709,8 +720,9 @@ class ComputerUseService:
         observation, result = observations.capture(
             context, target, payload, mode=mode, resolution=args.get("resolution", "auto")
         )
+        observation.foreground = args["foreground"]
         session.observations[target] = observation
-        return {**result, "target": _target_fields(target)}
+        return {**result, "target": _target_fields(target), "foreground": observation.foreground}
 
     def _observation(
         self, session: DesktopSession, target: tuple[Any, ...]
@@ -734,8 +746,7 @@ class ComputerUseService:
             return self._call(context, session, "launch_app", {"name": args["app"]})
         target = _target(args)
         payload = _target_fields(target)
-        if args.get("foreground"):
-            payload["delivery_mode"] = "foreground"
+        payload["delivery_mode"] = "foreground" if args["foreground"] else "background"
         if "duration_ms" in args:
             payload["duration_ms"] = args["duration_ms"]
         if "modifiers" in args:
@@ -745,6 +756,12 @@ class ComputerUseService:
             payload["element_token"] = observation.token(args["element"])
         if "view_id" in args:
             assert observation is not None
+            if observation.foreground != args["foreground"]:
+                raise ComputerUseError(
+                    "Capture this target with the requested foreground setting before "
+                    "coordinate input.",
+                    "capture_required",
+                )
             x, y = observation.point(args["view_id"], *args["coordinate"])
             if action == "drag":
                 x2, y2 = observation.point(args["view_id"], *args["to_coordinate"])
@@ -790,6 +807,12 @@ class ComputerUseService:
             )
         else:
             _invalid("action")
+        if (
+            name in {"set_value", "invoke_menu", "set_window_frame"}
+            and "delivery_mode" not in self._client().schemas.get(name, {}).get("properties", {})
+            and payload.pop("delivery_mode", None) == "background"
+        ):
+            payload["_background_input"] = True
         return self._call(context, session, name, payload)
 
     def _after_input(
@@ -803,13 +826,23 @@ class ComputerUseService:
         if not args["capture_after"] and not result.get("partial"):
             return {
                 **result,
-                "next_action": (
+                "next_action": result.get(
+                    "next_action",
                     "Input was dispatched without a new observation. Capture the target "
-                    "before further input."
+                    "before further input.",
                 ),
             }
         try:
+            # SendInput and UIA acknowledgements do not await application rendering.
+            # Do not infer completion from changing or quiet pixels (animations/carets).
+            self._wait(context, {"duration_ms": _POST_INPUT_OBSERVATION_MS})
             result["observation"] = self._observe(context, session, target, args)
+            result["observation_delay_ms"] = _POST_INPUT_OBSERVATION_MS
+            result["observation_note"] = (
+                "Input was dispatched. This observation does not confirm that application "
+                "work has finished. If the expected result is missing, use wait or verify "
+                "before repeating input."
+            )
         except (ComputerUseError, OSError) as error:
             result.update(
                 observation_error={
@@ -831,6 +864,12 @@ class ComputerUseService:
         target = _target(args)
         observation = self._observation(session, target)
         for step in args["steps"]:
+            if "view_id" in step and observation.foreground != args["foreground"]:
+                raise ComputerUseError(
+                    "Capture this target with the requested foreground setting before "
+                    "coordinate input.",
+                    "capture_required",
+                )
             if "view_id" in step:
                 observation.point(step["view_id"], *step["coordinate"])
                 if step["action"] == "drag":
@@ -849,7 +888,10 @@ class ComputerUseService:
                 if step["action"] == "wait":
                     self._wait(context, step_args)
                 else:
-                    self._mutation(context, session, step_args, observation)
+                    outcome = self._mutation(context, session, step_args, observation)
+                    if outcome.get("target_became_foreground"):
+                        completed += 1
+                        raise ComputerUseError(_BACKGROUND_FOCUS_HINT, "background_focus_changed")
                 completed += 1
             except ComputerUseError as error:
                 result.update(
@@ -957,11 +999,14 @@ class ComputerUseService:
         finally:
             self._invalidate()
         metadata: dict[str, Any] = {
-            key: payload[key] for key in ("delivery", "effect", "route", "status") if key in payload
+            key: payload[key]
+            for key in ("delivery", "effect", "route", "status", "target_became_foreground")
+            if key in payload
         }
-        return self._after_input(
-            context, session, target, args, {"action": action, "applied": True, "backend": metadata}
-        )
+        result = {"action": action, "applied": True, "backend": metadata}
+        if metadata.get("target_became_foreground"):
+            result["next_action"] = _BACKGROUND_FOCUS_HINT
+        return self._after_input(context, session, target, args, result)
 
     def handle(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -35,6 +35,7 @@ class Observation:
     origin: tuple[int, int] = (0, 0)
     source_size: tuple[int, int] = (0, 0)
     display_size: tuple[int, int] = (0, 0)
+    foreground: bool = True
 
     def point(self, view_id: str, x: int, y: int, *, edge: bool = False) -> tuple[int, int]:
         if not self.view_id or view_id != self.view_id:
@@ -256,5 +257,6 @@ def zoom(
     original = _image(observation.original.read_bytes())
     crop = original.crop((left, top, right, bottom))
     zoomed = Observation(observation.target, observation.elements.copy(), observation.original)
+    zoomed.foreground = observation.foreground
     zoomed.origin = (left, top)
     return zoomed, _present(context, zoomed, crop, "original")
