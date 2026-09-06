@@ -1005,7 +1005,9 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             assert len(client.calls) == before, case
             continue
         target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
-        observed = service.handle(context, {"action": "capture", **target})
+        observed = service.handle(
+            context, {"action": "capture", **target, "foreground": args.get("foreground", True)}
+        )
         assert observed["ok"], case
         if "view_id" in args:
             args["view_id"] = observed["data"]["view_id"]
@@ -1287,3 +1289,83 @@ def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, 
     assert Path(first["original"]).read_bytes() == original
     result = call(computer, "click", view_id=first["view_id"], coordinate=[1, 1], apply=True)
     assert result["error"]["code"] == "stale_view"
+
+
+def test_background_capture_input_and_zoom_keep_one_coordinate_space(computer):
+    data = capture(computer, foreground=False)["data"]
+    assert data["foreground"] is False
+    client = computer[2]
+    assert client.calls[-1][1]["_background_capture"] is True
+    zoomed = call(
+        computer, "zoom", view_id=data["view_id"], coordinate=[0, 0], to_coordinate=[100, 100]
+    )
+    result = call(
+        computer,
+        "click",
+        view_id=zoomed["data"]["view_id"],
+        coordinate=[10, 20],
+        foreground=False,
+        apply=True,
+    )
+    assert result["ok"]
+    args = next(args for name, args in client.calls if name == "click")
+    assert args["delivery_mode"] == "background" and args["x"] == 10 and args["y"] == 20
+    assert result["data"]["observation"]["foreground"] is False
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_switching_capture_delivery_refuses_before_any_input(computer, sequence):
+    data = capture(computer, foreground=False)["data"]
+    pointer = {"action": "click", "view_id": data["view_id"], "coordinate": [10, 20]}
+    arguments = (
+        {"action": "sequence", "steps": [{"action": "type", "text": "never"}, pointer]}
+        if sequence
+        else pointer
+    )
+    result = call(computer, **arguments, apply=True)
+    assert result["error"]["code"] == "capture_required"
+    assert computer[2].inputs == 0
+
+
+def test_background_timed_sequence_rejects_before_any_input(computer):
+    capture(computer, foreground=False)
+    result = call(
+        computer,
+        "sequence",
+        foreground=False,
+        apply=True,
+        steps=[
+            {"action": "type", "text": "never"},
+            {"action": "key", "shortcut": "enter", "duration_ms": 100},
+        ],
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert computer[2].inputs == 0
+
+
+def test_background_focus_change_stops_sequence_after_dispatched_step(computer):
+    data = capture(computer, foreground=False)["data"]
+    client = computer[2]
+    original = client.call
+
+    def response(name, args):
+        result = original(name, args)
+        if name == "click":
+            result["target_became_foreground"] = True
+        return result
+
+    client.call = response
+    result = call(
+        computer,
+        "sequence",
+        foreground=False,
+        apply=True,
+        steps=[
+            {"action": "click", "view_id": data["view_id"], "coordinate": [10, 20]},
+            {"action": "type", "text": "never"},
+        ],
+    )
+    assert result["data"]["completed_steps"] == 1
+    assert result["data"]["partial"]
+    assert result["data"]["error"]["code"] == "background_focus_changed"
+    assert client.inputs == 1

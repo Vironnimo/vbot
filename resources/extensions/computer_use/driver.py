@@ -276,6 +276,8 @@ class CuaDriver:
         self._session: ClientSession | None = None
         self.schemas: dict[str, dict[str, Any]] = {}
         self.version = ""
+        self._original_images = False
+        self._background_frames: dict[tuple[Any, ...], tuple[int, ...]] = {}
         self.broken = False
         self._process: Any = None
         self._process_lock = threading.Lock()
@@ -387,6 +389,7 @@ class CuaDriver:
                 self.schemas[name] = {"properties": {"session": {}}}
             config = await session.call_tool("get_config", {})
             values = unpack(config.model_dump(by_alias=True, exclude_none=True))
+            self._original_images = values.get("max_image_dimension") == 0
             if self.desktop is None and values.get("max_image_dimension") != 0:
                 raise ComputerUseError(
                     "Set cua-driver max_image_dimension to 0 and reload Extensions so "
@@ -440,9 +443,42 @@ class CuaDriver:
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.connect()
         arguments = dict(arguments)
+        background_capture = arguments.pop("_background_capture", False)
+        background_input = arguments.pop("_background_input", False)
+        background = (
+            background_capture or background_input or arguments.get("delivery_mode") == "background"
+        )
+        frame_key = (arguments.get("session"), arguments.get("pid"), arguments.get("window_id"))
+        geometry = None
+        foreground_before = None
+        if self.desktop is not None and background and "window_id" in arguments:
+            geometry = self.desktop.window_geometry(arguments)
+            if not background_capture:
+                foreground_before = self.desktop.foreground_window()
+            if (
+                not background_capture
+                and ({"x", "from_x"} & arguments.keys())
+                and self._background_frames.get(frame_key) != geometry
+            ):
+                raise ComputerUseError(
+                    "Capture this target again before sending input.", "capture_required"
+                )
+        if background_capture:
+            if arguments.get("include_screenshot", True) and not self._original_images:
+                raise ComputerUseError(
+                    "Set cua-driver max_image_dimension to 0 and reload Extensions so "
+                    "original screenshots remain available."
+                )
+            if name == "capture_pixels":
+                name = "get_window_state"
+                arguments.update(max_elements=1, max_depth=1)
+        if background and ({"duration_ms", "modifiers"} & arguments.keys()):
+            raise ComputerUseError(
+                "Invalid value for duration_ms or modifiers.", "invalid_arguments"
+            )
         if "modifiers" in arguments and (self.desktop is None or "element_token" in arguments):
             raise ComputerUseError("Invalid value for modifiers.", "invalid_arguments")
-        if self.desktop is not None:
+        if self.desktop is not None and not background:
             if name == "list_monitors":
                 return {"monitors": self.desktop.monitors()}
             if name in {"capture_pixels", "get_desktop_state"}:
@@ -498,7 +534,26 @@ class CuaDriver:
             raise ComputerUseError(
                 "The driver connection was lost. Capture the target again before sending input."
             ) from exc
-        return unpack(response.model_dump(by_alias=True, exclude_none=True))
+        result = unpack(response.model_dump(by_alias=True, exclude_none=True))
+        if foreground_before is not None and self.desktop is not None:
+            result["target_became_foreground"] = (
+                foreground_before != arguments["window_id"]
+                and self.desktop.foreground_window() == arguments["window_id"]
+            )
+        if background_capture and self.desktop is not None:
+            if geometry != self.desktop.window_geometry(arguments):
+                raise ComputerUseError(
+                    "Capture this target again before sending input.", "capture_required"
+                )
+            assert geometry is not None
+            self._background_frames[frame_key] = geometry
+        if name == "end_session":
+            self._background_frames = {
+                key: value
+                for key, value in self._background_frames.items()
+                if key[0] != arguments.get("session")
+            }
+        return result
 
     def close(self) -> None:
         if self.desktop is not None:
