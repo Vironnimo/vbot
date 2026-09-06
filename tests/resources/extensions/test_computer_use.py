@@ -118,9 +118,13 @@ class DesktopClient:
     def close(self):
         self.closed = True
 
+    def interrupt(self):
+        self.broken = True
+
 
 @pytest.fixture
 def computer(tmp_path, monkeypatch):
+    monkeypatch.setattr(computer_use.EmergencyHotkey, "start", lambda self: None)
     declarations = ExtensionDeclarations()
     api = ExtensionAPI(
         "computer_use", declarations, config={}, logger=logging.getLogger("test.computer")
@@ -143,7 +147,9 @@ def computer(tmp_path, monkeypatch):
         memory_prompt_mode="off",
         workspace=str(tmp_path),
     )
-    asyncio.run(service.start(SimpleNamespace(resolve_agent=lambda project, name: agent)))
+    asyncio.run(
+        service.start(SimpleNamespace(data_dir=tmp_path, resolve_agent=lambda project, name: agent))
+    )
     client = DesktopClient()
     monkeypatch.setattr(service, "_client", lambda: client)
     context = ToolContext(
@@ -699,8 +705,8 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
     events = []
 
     @asynccontextmanager
-    async def stdio(parameters, errlog):
-        assert parameters.args == ["mcp"]
+    async def stdio(self, environment):
+        assert environment["CUA_DRIVER_RS_TELEMETRY_ENABLED"] == "0"
         events.append("open")
         try:
             yield None, None
@@ -736,7 +742,7 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
                 }
             )
 
-    monkeypatch.setattr(driver, "stdio_client", stdio)
+    monkeypatch.setattr(driver.CuaDriver, "_stdio", stdio)
     monkeypatch.setattr(driver, "ClientSession", Session)
     client = driver.CuaDriver("test-owned-driver")
     try:
@@ -770,6 +776,183 @@ def test_transport_timeout_never_replays_uncertain_input():
     with pytest.raises(ComputerUseError):
         client.call("click", {})
     assert calls == ["click"] and client.broken and client._session is None
+
+
+def test_cancel_interrupts_inflight_driver_and_latches_until_operator_resume(computer):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    service, context, client, _ = computer
+    callbacks = []
+    context = replace(context, cancel_registration_hook=callbacks.append)
+    entered = threading.Event()
+    stopped = threading.Event()
+    original = client.interrupt
+
+    def interrupt():
+        original()
+        stopped.set()
+
+    client.interrupt = interrupt
+
+    def block(name):
+        if name == "list_apps":
+            entered.set()
+            assert stopped.wait(3)
+            raise ComputerUseError("test-owned interrupted input")
+
+    client.hook = block
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(service.handle, context, {"action": "apps"})
+        assert entered.wait(3)
+        callbacks[0]()
+        assert not future.result(timeout=2)["ok"]
+    assert service._stop_file.exists()
+    calls = len(client.calls)
+    result = service.handle(context, {"action": "apps"})
+    assert result["error"]["code"] == "computer_use_stopped"
+    assert len(client.calls) == calls
+    client.hook = None
+    status = asyncio.run(service.control({"action": "resume", "stop_token": service._stop_token}))
+    assert not status["paused"] and not service._stop_file.exists()
+    assert service.handle(context, {"action": "apps"})["ok"]
+
+
+def test_late_cancel_does_not_stop_next_call(computer):
+    service, context, client, _ = computer
+    callbacks = []
+    context = replace(context, cancel_registration_hook=callbacks.append)
+    assert service.handle(context, {"action": "apps"})["ok"]
+    client.hook = lambda name: callbacks[0]()
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert not asyncio.run(service.control({}))["paused"]
+    assert not client.broken
+
+
+def test_global_stop_persists_across_reload_and_resume_waits_for_active_call(computer):
+    service, _, _, _ = computer
+    service._active = object()
+    asyncio.run(service.control({"action": "stop"}))
+    assert asyncio.run(service.control({"action": "resume", "stop_token": service._stop_token}))[
+        "paused"
+    ]
+    service._active = None
+    replacement = computer_use.ComputerUseService(service.api)
+    asyncio.run(replacement.start(service.host))
+    assert asyncio.run(replacement.control({}))["paused"]
+    asyncio.run(replacement.control({"action": "resume", "stop_token": replacement._stop_token}))
+    replacement.close()
+
+
+def test_stale_operator_resume_cannot_undo_a_newer_stop(computer):
+    service, _, _, _ = computer
+    first = asyncio.run(service.control({"action": "stop"}))
+    second = asyncio.run(service.control({"action": "stop"}))
+    assert first["stop_token"] != second["stop_token"]
+    stale = asyncio.run(service.control({"action": "resume", "stop_token": first["stop_token"]}))
+    assert stale["paused"]
+    current = asyncio.run(service.control({"action": "resume", "stop_token": second["stop_token"]}))
+    assert not current["paused"]
+
+
+def test_os_interrupt_failure_still_persists_stop(computer):
+    service, context, client, _ = computer
+
+    def denied():
+        raise PermissionError("test-owned termination failure")
+
+    client.interrupt = denied
+    service._driver = client
+    service.stop()
+    assert service._stop_file.exists()
+    assert service.handle(context, {"action": "apps"})["error"]["code"] == "computer_use_stopped"
+    assert not client.calls
+
+
+def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from resources.extensions.computer_use.driver import CuaDriver
+
+    closed = []
+
+    @asynccontextmanager
+    async def connection(self):
+        self.interrupt()
+        try:
+            yield SimpleNamespace()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(CuaDriver, "_connection", connection)
+    client = CuaDriver("test-owned-driver")
+    with pytest.raises(ComputerUseError) as failure:
+        client.connect()
+    assert failure.value.code == "computer_use_stopped"
+    assert client.broken and client._session is None and closed == [True]
+
+
+def test_real_owned_process_is_killed_without_waiting_for_rpc(tmp_path, monkeypatch):
+    import sys
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from resources.extensions.computer_use import driver
+
+    entered = threading.Event()
+    real_open = driver.anyio.open_process
+    processes = []
+    script = """
+import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "test-owned", "version": "0.23.2"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "click", "inputSchema": {"type": "object"}}]}
+    elif request["params"]["name"] == "get_config":
+        result = {"content": [], "structuredContent": {"max_image_dimension": 0}}
+    else:
+        time.sleep(120)
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"""
+
+    async def launch(command, **kwargs):
+        assert command == ["test-owned-driver", "mcp", "--direct"]
+        process = await real_open([sys.executable, "-u", "-c", script], **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(driver.anyio, "open_process", launch)
+    client = driver.CuaDriver("test-owned-driver")
+    client.connect()
+
+    def call():
+        entered.set()
+        with pytest.raises(ComputerUseError):
+            client.call("click", {})
+
+    try:
+        with ThreadPoolExecutor() as pool:
+            result = pool.submit(call)
+            assert entered.wait(3)
+            start = time.monotonic()
+            client.interrupt()
+            result.result(timeout=3)
+            assert time.monotonic() - start < 3
+        assert processes[0].returncode is not None
+        assert len(processes) == 1
+        with pytest.raises(ComputerUseError):
+            client.connect()
+    finally:
+        client.interrupt()
+        client.close()
 
 
 def test_complete_provider_matrix_runs_through_real_handler(computer):
