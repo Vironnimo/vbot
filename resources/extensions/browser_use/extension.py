@@ -1,0 +1,1004 @@
+"""Session-owned browser automation with explicit Agent grants."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
+from urllib.parse import urlsplit
+
+from core.extensions import ExtensionAPI
+from core.extensions.operations import ExtensionHost
+from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
+from core.tools.availability import resolve_tool_access
+
+BROWSER_DESCRIPTION = (
+    "Use the configured browser to navigate websites, read pages, fill forms, "
+    "and inspect visual content. Start with open or tabs. Use element refs from "
+    "the latest snapshot; refresh after page changes. Fill accepts several "
+    "fields in order and stops on the first failure. Screenshots are returned "
+    "as images. Close disconnects a user-owned browser and closes a browser "
+    "started for this Session."
+)
+BROWSER_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "status",
+                "open",
+                "back",
+                "forward",
+                "reload",
+                "snapshot",
+                "read",
+                "click",
+                "fill",
+                "press",
+                "select",
+                "hover",
+                "scroll",
+                "wait",
+                "screenshot",
+                "tabs",
+                "new_tab",
+                "switch_tab",
+                "close_tab",
+                "dialog",
+                "upload",
+                "downloads",
+                "close",
+            ],
+            "description": "Browser operation.",
+        },
+        "url": {
+            "type": "string",
+            "description": "Web address for open or new_tab. Omit for a blank new tab.",
+        },
+        "target": {
+            "type": "string",
+            "description": (
+                "Element ref from the latest snapshot. Required for click, select, "
+                "hover, and upload. Omit for whole-page read or scrolling."
+            ),
+        },
+        "fields": {
+            "type": "array",
+            "description": (
+                "Form fields for fill, in execution order. Earlier completed fields "
+                "remain filled if a later field fails."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Element ref from the latest snapshot.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": (
+                            "Text to fill, including an empty string to clear the field."
+                        ),
+                    },
+                },
+                "required": ["target", "text"],
+            },
+        },
+        "text": {
+            "type": "string",
+            "description": (
+                "Key combination for press, option value for select, visible text for wait, "
+                "or prompt response for dialog. Omit when accepting a dialog without a response."
+            ),
+        },
+        "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"],
+            "description": "Scroll direction. Omit to scroll down.",
+        },
+        "amount": {
+            "type": "integer",
+            "description": "Scroll distance in pixels. Omit for 600 pixels.",
+        },
+        "full": {
+            "type": "boolean",
+            "description": (
+                "Include noninteractive content in snapshot, or the whole page in screenshot. "
+                "Omit for interactive elements or the visible viewport."
+            ),
+        },
+        "selector": {
+            "type": "string",
+            "description": (
+                "CSS selector limiting snapshot to a page section. Omit for the whole page."
+            ),
+        },
+        "observe": {
+            "type": "boolean",
+            "description": (
+                "Return a fresh snapshot after the action. "
+                "Omit to observe after navigation and tab switching only."
+            ),
+        },
+        "tab": {"type": "string", "description": "Tab id from tabs, for switch_tab or close_tab."},
+        "accept": {
+            "type": "boolean",
+            "description": "Whether to accept the dialog. Omit to dismiss it.",
+        },
+        "files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Absolute file paths on the browser's computer, for upload.",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Character offset for read. Omit to start at zero.",
+        },
+        "limit": {"type": "integer", "description": "Maximum characters for read. Omit for 12000."},
+    },
+    "required": ["action"],
+}
+MESSAGES = {
+    "invalid": "Invalid browser arguments. Check the selected action's fields and required values.",
+    "unavailable": (
+        "Browser Use requires agent-browser 0.36.0 or newer on the server. "
+        "Install it and reload Extensions."
+    ),
+    "config": (
+        "Browser settings are invalid. Ask the user to check the Browser Use Extension settings."
+    ),
+    "denied": (
+        "Browser Use is not permitted for this Agent. Ask the user to grant the browser Tool."
+    ),
+    "stopped": "Browser Use has stopped. Retry after Extensions have reloaded.",
+    "session": "Browser Use requires an active Session.",
+    "cancelled": "Browser Use was cancelled. Inspect the page before repeating any input.",
+    "not_open": "No browser is connected for this Session. Use open or tabs first.",
+    "stale": "The element ref is no longer current. Take a new snapshot before using the element.",
+    "failed": (
+        "The browser command failed and its effect may be uncertain. "
+        "Inspect the page before repeating input. If the browser is disconnected, "
+        "ask the user to check its connection and any Chrome permission dialog."
+    ),
+    "tab_gone": "The selected tab is closed. Use tabs and switch_tab, or create a new_tab.",
+    "changed": "Browser configuration changed. Use open or tabs to connect with the new settings.",
+    "shortened": (
+        "Snapshot shortened. Use a selector to inspect a smaller page section, "
+        "or read for page text."
+    ),
+    "media": (
+        "The screenshot is missing, invalid, or too large. Try capturing only the visible viewport."
+    ),
+    "tab": "The tab id is not current. Use tabs before selecting or closing a tab.",
+    "busy": (
+        "The tab is in use by another vBot Session. Select a different tab or create a new_tab."
+    ),
+    "local_download": (
+        "Download files can be listed only for a browser managed by vBot. "
+        "In a connected browser, downloads stay on its computer."
+    ),
+    "partial": "Some fields may already be filled. Inspect the page before continuing.",
+}
+MAX_TEXT = 16000
+MAX_MEDIA = 32 * 1024 * 1024
+MAX_OUTPUT = 4 * 1024 * 1024
+MIN_VERSION = (0, 36, 0)
+SAFE_ENV = {
+    "APPDATA",
+    "COMSPEC",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+}
+# This is an action inventory, not a second model-facing schema.
+FIELDS = {
+    "status": (),
+    "open": ("url", "observe"),
+    "back": ("observe",),
+    "forward": ("observe",),
+    "reload": ("observe",),
+    "snapshot": ("full", "selector"),
+    "read": ("target", "offset", "limit"),
+    "click": ("target", "observe"),
+    "fill": ("fields", "observe"),
+    "press": ("text", "observe"),
+    "select": ("target", "text", "observe"),
+    "hover": ("target", "observe"),
+    "scroll": ("target", "direction", "amount", "observe"),
+    "wait": ("text", "observe"),
+    "screenshot": ("full",),
+    "tabs": (),
+    "new_tab": ("url", "observe"),
+    "switch_tab": ("tab", "observe"),
+    "close_tab": ("tab",),
+    "dialog": ("accept", "text", "observe"),
+    "upload": ("target", "files", "observe"),
+    "downloads": (),
+    "close": (),
+}
+REQUIRED = {
+    "open": ("url",),
+    "click": ("target",),
+    "fill": ("fields",),
+    "press": ("text",),
+    "select": ("target", "text"),
+    "hover": ("target",),
+    "wait": ("text",),
+    "switch_tab": ("tab",),
+    "close_tab": ("tab",),
+    "upload": ("target", "files"),
+}
+NAVIGATION = {"open", "back", "forward", "reload", "new_tab", "switch_tab"}
+READ_ACTIONS = {"status", "snapshot", "read", "screenshot", "tabs", "wait", "downloads"}
+
+
+class BrowserError(Exception):
+    """Expected failure without raw credentials, page text, or CLI arguments."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(MESSAGES[code])
+
+
+def validate_arguments(arguments: Any) -> dict[str, Any]:
+    """Validate all input before starting a browser or applying a form field."""
+    if not isinstance(arguments, dict):
+        raise BrowserError("invalid")
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in FIELDS:
+        raise BrowserError("invalid")
+    if set(arguments) - {"action", *FIELDS[action]}:
+        raise BrowserError("invalid")
+    if any(key not in arguments for key in REQUIRED.get(action, ())):
+        raise BrowserError("invalid")
+    for key, value in arguments.items():
+        if key in {"full", "observe", "accept"}:
+            valid = type(value) is bool
+        elif key in {"amount", "offset", "limit"}:
+            lower, upper = {"amount": (1, 5000), "offset": (0, 10000000), "limit": (1, MAX_TEXT)}[
+                key
+            ]
+            valid = type(value) is int and lower <= value <= upper
+        elif key == "fields":
+            valid = isinstance(value, list) and 1 <= len(value) <= 30
+            if valid:
+                valid = all(
+                    isinstance(item, dict)
+                    and set(item) == {"target", "text"}
+                    and isinstance(item["target"], str)
+                    and bool(item["target"])
+                    and isinstance(item["text"], str)
+                    and len(item["text"]) <= 100000
+                    and "\x00" not in item["text"]
+                    for item in value
+                )
+        elif key == "files":
+            valid = (
+                isinstance(value, list)
+                and 1 <= len(value) <= 20
+                and all(
+                    isinstance(item, str) and bool(item) and "\x00" not in item for item in value
+                )
+            )
+        else:
+            valid = (
+                isinstance(value, str)
+                and bool(value)
+                and len(value) <= 100000
+                and "\x00" not in value
+            )
+        if not valid:
+            raise BrowserError("invalid")
+    if "direction" in arguments and arguments["direction"] not in {"up", "down", "left", "right"}:
+        raise BrowserError("invalid")
+    if "text" in arguments and action == "dialog" and not arguments.get("accept", False):
+        raise BrowserError("invalid")
+    if "url" in arguments:
+        validate_url(arguments["url"])
+    return dict(arguments)
+
+
+def validate_url(url: str) -> None:
+    if url == "about:blank":
+        return
+    try:
+        parsed = urlsplit(url)
+        valid = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+        )
+        _ = parsed.port
+    except ValueError:
+        valid = False
+    if not valid or any(character.isspace() for character in url):
+        raise BrowserError("invalid")
+
+
+def executable_path() -> str | None:
+    executable = shutil.which("agent-browser")
+    if executable and os.name == "nt":
+        # Invoke the native binary, never a .cmd/.ps1 wrapper or a shell.
+        arch = "arm64" if os.environ.get("PROCESSOR_ARCHITECTURE", "").lower() == "arm64" else "x64"
+        native = (
+            Path(executable).parent
+            / "node_modules"
+            / "agent-browser"
+            / "bin"
+            / f"agent-browser-win32-{arch}.exe"
+        )
+        if native.is_file():
+            return str(native)
+        if Path(executable).suffix.lower() != ".exe":
+            return None
+    return executable
+
+
+@dataclass
+class BrowserSession:
+    key: tuple[str | None, str, str]
+    name: str
+    directory: Path
+    config: tuple[str, str, bool]
+    lock: Any = field(default_factory=threading.RLock)
+    refs: dict[str, str] = field(default_factory=dict)
+    tabs: dict[str, str] = field(default_factory=dict)
+    active_target: str | None = None
+    connected: bool = False
+    last_used: float = field(default_factory=time.monotonic)
+    last_run: str = ""
+    client: Any = None
+
+
+class BrowserClient:
+    """Bounded native CLI transport; daemon handles never own our pipe EOF."""
+
+    def __init__(self, executable: str, session: BrowserSession, namespace: str):
+        self.executable = executable
+        self.session = session
+        self.namespace = namespace
+
+    def version(self) -> str:
+        return self._invoke(["--version"]).strip()
+
+    def call(self, arguments: list[str]) -> dict[str, Any]:
+        mode, endpoint, headed = self.session.config
+        options = ["--pin-tab", "--no-auto-dialog", "--no-webmcp", "--idle-timeout", "15m"]
+        if mode == "existing":
+            options += ["--auto-connect"]
+        elif mode == "remote":
+            options += ["--cdp", endpoint]
+        else:
+            options += ["--download-path", str(self.session.directory / "downloads")]
+            if headed:
+                options += ["--headed"]
+        raw = self._invoke(
+            [
+                "--namespace",
+                self.namespace,
+                "--session",
+                self.session.name,
+                "--config",
+                str(self.session.directory / "config.json"),
+                *options,
+                "batch",
+                "--bail",
+                "--json",
+            ],
+            json.dumps([arguments]).encode("utf-8"),
+        )
+        try:
+            results = json.loads(raw)
+            if not isinstance(results, list) or len(results) != 1:
+                raise BrowserError("failed")
+            payload = results[0]
+        except (ValueError, TypeError) as error:
+            raise BrowserError("failed") from error
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            code = payload.get("code") if isinstance(payload, dict) else None
+            raise BrowserError("tab_gone" if code == "tab_gone" else "failed")
+        data = payload.get("result")
+        if not isinstance(data, dict):
+            raise BrowserError("failed")
+        return data
+
+    def _invoke(self, arguments: list[str], input_data: bytes = b"") -> str:
+        environment = {key: value for key, value in os.environ.items() if key.upper() in SAFE_ENV}
+        environment.update(NO_COLOR="1", AGENT_BROWSER_DEFAULT_TIMEOUT="20000")
+        try:
+            with (
+                tempfile.TemporaryFile() as stdout,
+                tempfile.TemporaryFile() as stderr,
+                tempfile.TemporaryFile() as stdin,
+            ):
+                stdin.write(input_data)
+                stdin.seek(0)
+                result = subprocess.run(
+                    [self.executable, *arguments],
+                    stdout=stdout,
+                    stderr=stderr,
+                    stdin=stdin,
+                    env=environment,
+                    cwd=self.session.directory,
+                    timeout=45,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                if result.returncode and not stdout.tell():
+                    # Never forward command echoes, profile paths, endpoint tokens or form values.
+                    raise BrowserError("failed")
+                if stdout.tell() > MAX_OUTPUT:
+                    raise BrowserError("failed")
+                stdout.seek(0)
+                return stdout.read(MAX_OUTPUT + 1).decode("utf-8")
+        except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+            raise BrowserError("failed") from error
+
+
+class BrowserService:
+    """Own the complete capability, using existing Extension/Tool policy seams."""
+
+    def __init__(self, api: ExtensionAPI):
+        self.api = api
+        self.host: ExtensionHost | None = None
+        self.executable = executable_path()
+        self._version: str | None = None
+        self._guard = threading.RLock()
+        self._external_lock = threading.RLock()
+        self._sessions: dict[tuple[str | None, str, str], BrowserSession] = {}
+        self._closed = False
+
+    async def start(self, host: ExtensionHost) -> None:
+        self.host = host
+
+    def ready(self) -> bool:
+        return bool(self.executable) and not self._closed
+
+    def _config(self) -> tuple[str, str, bool]:
+        config = self.api.get_config()
+        mode = config.get("mode", "managed")
+        headed = config.get("headed", False)
+        endpoint = self.api.resolve_credential("BROWSER_USE_CDP_URL") if mode == "remote" else ""
+        if (
+            not isinstance(mode, str)
+            or mode not in {"managed", "existing", "remote"}
+            or type(headed) is not bool
+        ):
+            raise BrowserError("config")
+        if mode == "remote":
+            try:
+                url = urlsplit(endpoint)
+                valid = (
+                    url.scheme in {"http", "https", "ws", "wss"}
+                    and url.hostname
+                    and not url.username
+                    and not url.password
+                )
+                _ = url.port
+            except ValueError:
+                valid = False
+            if not valid or any(character.isspace() for character in endpoint):
+                raise BrowserError("config")
+        return mode, endpoint, headed
+
+    def _check_access(self, context: ToolContext) -> None:
+        if self._closed or self.host is None:
+            raise BrowserError("stopped")
+        if not context.session_id or not context.run_id:
+            raise BrowserError("session")
+        if context.is_cancelled() or context.was_cancelled_by_user():
+            raise BrowserError("cancelled")
+        if context.tool_restriction is not None and "browser" not in context.tool_restriction:
+            raise BrowserError("denied")
+        if context.tool_denial_resolver and context.tool_denial_resolver("browser"):
+            raise BrowserError("denied")
+        registry = self.api.operations.tool_registry
+        if registry is None:
+            raise BrowserError("stopped")
+        agent = self.host.resolve_agent(context.project_id, context.agent_id)
+        allowed = resolve_tool_access(
+            agent.tool_access,
+            registry.list_tools(),
+            agent.memory_prompt_mode,
+            workspace=str(agent.workspace or ""),
+        ).allowed_tools
+        if "browser" not in allowed:
+            raise BrowserError("denied")
+
+    def _call(
+        self, context: ToolContext, session: BrowserSession, command: list[str]
+    ) -> dict[str, Any]:
+        self._check_access(context)
+        if session.config != self._config():
+            raise BrowserError("changed")
+        result: dict[str, Any] = session.client.call(command)
+        return result
+
+    def _get_session(self, context: ToolContext) -> BrowserSession:
+        key = (context.project_id, context.agent_id, context.session_id)
+        with self._guard:
+            session = self._sessions.get(key)
+            if session is None:
+                name = "vbot-" + uuid.uuid4().hex
+                directory = context.data_root.resolve() / "tmp" / "browser-use" / name
+                if not directory.resolve().is_relative_to(context.data_root.resolve()):
+                    raise BrowserError("config")
+                directory.mkdir(parents=True, exist_ok=True)
+                if not directory.resolve().is_relative_to(context.data_root.resolve()):
+                    raise BrowserError("config")
+                (directory / "config.json").write_text("{}\n", encoding="utf-8")
+                (directory / "downloads").mkdir(exist_ok=True)
+                config = self._config()
+                session = BrowserSession(key, name, directory, config)
+                if config[0] != "managed":
+                    session.lock = self._external_lock
+                namespace = (
+                    "vbot-"
+                    + hashlib.sha256(str(context.data_root.resolve()).encode()).hexdigest()[:16]
+                )
+                session.client = BrowserClient(self.executable or "", session, namespace)
+                self._sessions[key] = session
+            return session
+
+    def _connect(self, context: ToolContext, session: BrowserSession) -> None:
+        if self._version is None:
+            if not self.executable:
+                raise BrowserError("unavailable")
+            version = session.client.version()
+            match = re.search(r"(\d+)\.(\d+)\.(\d+)", version)
+            if not match or tuple(map(int, match.groups())) < MIN_VERSION:
+                raise BrowserError("unavailable")
+            self._version = version
+        # Mark before dispatch so a lost response still retains cleanup ownership.
+        session.connected = True
+        self._tabs(context, session)
+
+    def _tabs(self, context: ToolContext, session: BrowserSession) -> dict[str, Any]:
+        payload = self._call(context, session, ["tab", "list"])
+        tabs = payload.get("tabs")
+        if not isinstance(tabs, list):
+            raise BrowserError("failed")
+        current = {}
+        visible = []
+        characters = 0
+        truncated = False
+        for tab in tabs[:200]:
+            if not isinstance(tab, dict):
+                raise BrowserError("failed")
+            tab_id = tab.get("targetId")
+            target = tab.get("targetId")
+            if not isinstance(tab_id, str) or not isinstance(target, str):
+                raise BrowserError("failed")
+            row = {
+                "id": tab_id,
+                "url": str(tab.get("url", ""))[:2048],
+                "title": str(tab.get("title", ""))[:256],
+                "active": target == session.active_target
+                if session.active_target
+                else bool(tab.get("active")),
+            }
+            characters += len(json.dumps(row))
+            if characters > MAX_TEXT:
+                truncated = True
+                break
+            current[tab_id] = target
+            visible.append(row)
+            if session.active_target is None and tab.get("active"):
+                session.active_target = target
+        session.tabs = current
+        return {"tabs": visible, "truncated": truncated or len(tabs) > 200}
+
+    def _ensure_tab(
+        self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
+    ) -> None:
+        if (
+            args["action"] in {"tabs", "new_tab", "switch_tab", "close_tab", "downloads"}
+            or session.active_target is None
+        ):
+            return
+        payload = self._call(context, session, ["tab", "list"])
+        rows = payload.get("tabs", [])
+        selected = next((row for row in rows if row.get("targetId") == session.active_target), None)
+        if selected is None:
+            session.refs.clear()
+            raise BrowserError("tab_gone")
+        if not selected.get("active"):
+            self._call(context, session, ["tab", session.active_target])
+            session.refs.clear()
+            if "target" in args or "fields" in args:
+                raise BrowserError("stale")
+
+    def _ref(self, session: BrowserSession, target: str) -> str:
+        ref = session.refs.get(target)
+        if ref is None:
+            raise BrowserError("stale")
+        return ref
+
+    def _snapshot(
+        self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        session.refs.clear()
+        command = ["snapshot", "-c"]
+        if not args.get("full", False):
+            command.append("-i")
+        if "selector" in args:
+            command += ["-s", args["selector"]]
+        payload = self._call(context, session, command)
+        tree, refs = payload.get("snapshot"), payload.get("refs")
+        if not isinstance(tree, str) or not isinstance(refs, dict):
+            raise BrowserError("failed")
+        prefix = "r" + uuid.uuid4().hex[:10] + "_"
+        # Only refs actually present in returned text are actionable.
+        tree = re.sub(r"\bref=(e[1-9][0-9]*)\b", lambda match: "ref=" + prefix + match[1], tree)
+        truncated = len(tree) > MAX_TEXT
+        if truncated:
+            tree = tree[:MAX_TEXT].rsplit("\n", 1)[0]
+        for key in refs:
+            if re.fullmatch(r"e[1-9][0-9]*", key) and f"ref={prefix}{key}]" in tree:
+                session.refs[prefix + key] = "@" + key
+        result: dict[str, Any] = {
+            "snapshot": tree,
+            "url": payload.get("origin", ""),
+            "truncated": truncated,
+        }
+        if truncated:
+            result["hint"] = MESSAGES["shortened"]
+        return result
+
+    def _close(self, session: BrowserSession) -> None:
+        session.refs.clear()
+        if session.connected:
+            session.client.call(["close"])
+        session.connected = False
+        session.active_target = None
+        with self._guard:
+            if self._sessions.get(session.key) is session:
+                del self._sessions[session.key]
+
+    def _prune(self, current: BrowserSession) -> None:
+        with self._guard:
+            expired = [
+                session
+                for session in self._sessions.values()
+                if session is not current and time.monotonic() - session.last_used > 900
+            ]
+        for session in expired:
+            if session.lock.acquire(blocking=False):
+                try:
+                    if time.monotonic() - session.last_used > 900:
+                        self._close(session)
+                except BrowserError:
+                    self.api.logger.warning("Browser Use idle cleanup failed")
+                finally:
+                    session.lock.release()
+
+    def handle(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        try:
+            args = validate_arguments(arguments)
+            self._check_access(context)
+            session = self._get_session(context)
+            self._prune(session)
+            with session.lock:
+                self._check_access(context)
+                with self._guard:
+                    if self._sessions.get(session.key) is not session:
+                        raise BrowserError("changed")
+                session.last_used = time.monotonic()
+                # Refs never cross Runs, even though the browser stays connected.
+                if session.last_run != context.run_id:
+                    session.refs.clear()
+                    session.last_run = context.run_id
+                if session.config != self._config():
+                    self._close(session)
+                    raise BrowserError("changed")
+                action = args["action"]
+                if action == "close":
+                    self._close(session)
+                    return tool_success({"action": action, "closed": True})
+                if action == "status":
+                    version = session.client.version()
+                    return tool_success(
+                        {
+                            "action": action,
+                            "version": version,
+                            "mode": session.config[0],
+                            "connected": session.connected,
+                        }
+                    )
+                if not session.connected:
+                    if action not in {"open", "tabs", "new_tab"}:
+                        raise BrowserError("not_open")
+                    self._connect(context, session)
+                else:
+                    self._ensure_tab(context, session, args)
+                result = self._execute(context, session, args)
+                return tool_success({"action": action, **result})
+        except BrowserError as error:
+            code = "invalid_arguments" if error.code == "invalid" else "browser_" + error.code
+            return tool_failure(code, str(error), retryable=False)
+        except Exception:
+            self.api.logger.exception("Browser Use request failed")
+            return tool_failure("browser_failed", MESSAGES["failed"], retryable=False)
+
+    def _execute(
+        self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        action = args["action"]
+        if action == "snapshot":
+            return self._snapshot(context, session, args)
+        if action == "tabs":
+            return self._tabs(context, session)
+        if action == "downloads":
+            if session.config[0] != "managed":
+                raise BrowserError("local_download")
+            files = []
+            for item in (session.directory / "downloads").iterdir():
+                if item.is_file() and not item.is_symlink() and item.suffix != ".crdownload":
+                    files.append(
+                        {
+                            "path": item.as_posix(),
+                            "filename": item.name,
+                            "bytes": item.stat().st_size,
+                        }
+                    )
+                    if len(files) == 200:
+                        break
+            return {"files": files}
+        if action == "screenshot":
+            path = session.directory / (uuid.uuid4().hex + ".png")
+            self._call(
+                context,
+                session,
+                ["screenshot", str(path), *(["--full"] if args.get("full") else [])],
+            )
+            if not path.is_file() or path.stat().st_size > MAX_MEDIA or path.is_symlink():
+                raise BrowserError("media")
+            raw = path.read_bytes()
+            if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise BrowserError("media")
+            context.presentation_images.append({"path": path.as_posix(), "filename": path.name})
+            context.result_media.append(
+                {
+                    "path": path.as_posix(),
+                    "filename": path.name,
+                    "media_type": "image/png",
+                    "base64": base64.b64encode(raw).decode("ascii"),
+                }
+            )
+            return {"screenshot": path.as_posix()}
+        if action == "read":
+            target = self._ref(session, args["target"]) if "target" in args else "body"
+            payload = self._call(context, session, ["get", "text", target])
+            text = payload.get("text")
+            if not isinstance(text, str):
+                raise BrowserError("failed")
+            offset, limit = args.get("offset", 0), args.get("limit", 12000)
+            end = min(len(text), offset + limit)
+            return {
+                "text": text[offset:end],
+                "offset": offset,
+                "total": len(text),
+                "next_offset": end if end < len(text) else None,
+            }
+        # Resolve every field before the first side effect.
+        commands: list[list[str]] = []
+        if action == "fill":
+            commands = [
+                ["fill", self._ref(session, item["target"]), item["text"]]
+                for item in args["fields"]
+            ]
+        elif action in {"switch_tab", "close_tab"}:
+            tab = args["tab"]
+            if tab not in session.tabs:
+                raise BrowserError("tab")
+            target = session.tabs[tab]
+            with self._guard:
+                if any(
+                    other is not session
+                    and other.config == session.config
+                    and other.active_target == target
+                    for other in self._sessions.values()
+                ):
+                    raise BrowserError("busy")
+            commands = [["tab", *(["close", tab] if action == "close_tab" else [tab])]]
+        elif action in {"open", "new_tab"}:
+            commands = (
+                [["open", args["url"]]]
+                if action == "open"
+                else [["tab", "new", args.get("url", "about:blank")]]
+            )
+        elif action in {"back", "forward", "reload"}:
+            commands = [[action]]
+        elif action in {"click", "hover", "select"}:
+            commands = [
+                [
+                    action,
+                    self._ref(session, args["target"]),
+                    *([args["text"]] if action == "select" else []),
+                ]
+            ]
+        elif action == "press":
+            commands = [["press", args["text"]]]
+        elif action == "scroll":
+            commands = [
+                [
+                    "scroll",
+                    args.get("direction", "down"),
+                    str(args.get("amount", 600)),
+                    *(
+                        ["--selector", self._ref(session, args["target"])]
+                        if "target" in args
+                        else []
+                    ),
+                ]
+            ]
+        elif action == "wait":
+            commands = [["wait", "--text", args["text"]]]
+        elif action == "dialog":
+            commands = [
+                [
+                    "dialog",
+                    "accept" if args.get("accept", False) else "dismiss",
+                    *([args["text"]] if "text" in args else []),
+                ]
+            ]
+        elif action == "upload":
+            if not all(
+                PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
+                for path in args["files"]
+            ):
+                raise BrowserError("invalid")
+            if session.config[0] != "remote" and not all(
+                Path(path).is_file() for path in args["files"]
+            ):
+                raise BrowserError("invalid")
+            commands = [["upload", self._ref(session, args["target"]), *args["files"]]]
+        if action not in READ_ACTIONS:
+            session.refs.clear()
+        completed = 0
+        try:
+            for command in commands:
+                response = self._call(context, session, command)
+                target_id = response.get("targetId")
+                if action in NAVIGATION and isinstance(target_id, str):
+                    session.active_target = target_id
+                    session.tabs[target_id] = target_id
+                completed += 1
+        except BrowserError as error:
+            if action == "close_tab" and error.code in {"failed", "tab_gone"}:
+                # A lost/failed reply can follow a committed close. Verify the
+                # requested postcondition without ever replaying the input.
+                self._tabs(context, session)
+                if args["tab"] not in session.tabs:
+                    return {"closed": True, "verified": True}
+            if action == "fill" and completed:
+                return {
+                    "status": "partial",
+                    "completed": completed,
+                    "total": len(commands),
+                    "error": {"code": "browser_" + error.code, "message": str(error)},
+                    "hint": MESSAGES["partial"],
+                }
+            raise
+        result: dict[str, Any] = {"completed": completed}
+        if action == "close_tab":
+            try:
+                self._tabs(context, session)
+            except BrowserError as error:
+                result["observation_error"] = {
+                    "code": "browser_" + error.code,
+                    "message": str(error),
+                }
+        if args.get("observe", action in NAVIGATION):
+            try:
+                result.update(self._snapshot(context, session, {}))
+            except BrowserError as error:
+                # The action succeeded; a failed observation must not invite a duplicate action.
+                result["observation_error"] = {
+                    "code": "browser_" + error.code,
+                    "message": str(error),
+                }
+        return result
+
+    def run_end(self, context: Any, **kwargs: Any) -> None:
+        with self._guard:
+            sessions = [
+                session for session in self._sessions.values() if session.last_run == context.run_id
+            ]
+        for session in sessions:
+            with session.lock:
+                session.refs.clear()
+                session.last_used = time.monotonic()
+
+    def close(self) -> None:
+        self._closed = True
+        with self._guard:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            with session.lock:
+                try:
+                    self._close(session)
+                except BrowserError:
+                    self.api.logger.warning("Browser Use shutdown cleanup failed")
+
+
+def register(api: ExtensionAPI) -> None:
+    api.register_settings(
+        [
+            {
+                "key": "mode",
+                "type": "text",
+                "label": "Connection mode",
+                "default": "managed",
+                "description": (
+                    "managed: start a browser; existing: connect to local Chrome; "
+                    "remote: use the CDP URL."
+                ),
+            },
+            {
+                "key": "headed",
+                "type": "toggle",
+                "label": "Show managed browser",
+                "default": False,
+                "description": (
+                    "Show a browser window on the server computer. Applies only to managed mode."
+                ),
+            },
+            {
+                "key": "cdp_url",
+                "type": "secret",
+                "label": "Remote CDP URL",
+                "env_key": "BROWSER_USE_CDP_URL",
+                "description": (
+                    "HTTP(S) or WebSocket endpoint, including its token if needed. "
+                    "Used only in remote mode."
+                ),
+            },
+        ]
+    )
+    service = BrowserService(api)
+    api.operations.startup.append(service.start)
+    api.on_shutdown(service.close)
+    api.on("run_end", service.run_end)
+    api.register_tool(
+        "browser",
+        BROWSER_DESCRIPTION,
+        BROWSER_PARAMETERS,
+        service.handle,
+        requires_opt_in=True,
+        parallel_safe=False,
+        open_input_schema=True,
+        ready=service.ready,
+        readiness_hint=MESSAGES["unavailable"],
+        result_schema={"type": "object", "required": ["action"]},
+        display=ToolDisplay(summary_fields=("action",), hidden_argument_keys=("fields", "text")),
+    )

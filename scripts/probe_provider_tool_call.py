@@ -225,6 +225,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "kind_connection": {"action": "search", "kind": "connection"},
 }
 PROBE_SCENARIOS = (
+    "browser",
     "computer",
     "mcp_workflow",
     "mcp",
@@ -268,6 +269,136 @@ PROBE_SCENARIOS = (
     "write",
     "word_count",
 )
+BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
+    "status": {"action": "status"},
+    "back": {"action": "back"},
+    "forward": {"action": "forward"},
+    "reload": {"action": "reload"},
+    "snapshot": {"action": "snapshot"},
+    "read": {"action": "read"},
+    "scroll": {"action": "scroll"},
+    "screenshot": {"action": "screenshot"},
+    "tabs": {"action": "tabs"},
+    "new_tab": {"action": "new_tab"},
+    "downloads": {"action": "downloads"},
+    "dialog": {"action": "dialog"},
+    "close": {"action": "close"},
+    "open": {"action": "open", "url": "https://example.com"},
+    "click": {"action": "click", "target": "r0000000000_e1"},
+    "fill": {
+        "action": "fill",
+        "fields": [
+            {"target": "r0000000000_e1", "text": "Alice"},
+            {"target": "r0000000000_e2", "text": ""},
+        ],
+    },
+    "press": {"action": "press", "text": "Control+A"},
+    "select": {"action": "select", "target": "r0000000000_e1", "text": "Pro"},
+    "hover": {"action": "hover", "target": "r0000000000_e1"},
+    "wait": {"action": "wait", "text": "Saved"},
+    "switch_tab": {"action": "switch_tab", "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    "close_tab": {"action": "close_tab", "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    "upload": {
+        "action": "upload",
+        "target": "r0000000000_e1",
+        "files": ["/tmp/browser-fixture.txt"],
+    },
+    "open_observe_true": {"action": "open", "url": "https://example.com", "observe": True},
+    "open_observe_false": {"action": "open", "url": "https://example.com", "observe": False},
+    "back_observe_true": {"action": "back", "observe": True},
+    "back_observe_false": {"action": "back", "observe": False},
+    "forward_observe_true": {"action": "forward", "observe": True},
+    "forward_observe_false": {"action": "forward", "observe": False},
+    "reload_observe_true": {"action": "reload", "observe": True},
+    "reload_observe_false": {"action": "reload", "observe": False},
+    "click_observe_true": {"action": "click", "target": "r0000000000_e1", "observe": True},
+    "click_observe_false": {"action": "click", "target": "r0000000000_e1", "observe": False},
+    "fill_observe_true": {
+        "action": "fill",
+        "fields": [
+            {"target": "r0000000000_e1", "text": "Alice"},
+            {"target": "r0000000000_e2", "text": ""},
+        ],
+        "observe": True,
+    },
+    "fill_observe_false": {
+        "action": "fill",
+        "fields": [
+            {"target": "r0000000000_e1", "text": "Alice"},
+            {"target": "r0000000000_e2", "text": ""},
+        ],
+        "observe": False,
+    },
+    "press_observe_true": {"action": "press", "text": "Control+A", "observe": True},
+    "press_observe_false": {"action": "press", "text": "Control+A", "observe": False},
+    "select_observe_true": {
+        "action": "select",
+        "target": "r0000000000_e1",
+        "text": "Pro",
+        "observe": True,
+    },
+    "select_observe_false": {
+        "action": "select",
+        "target": "r0000000000_e1",
+        "text": "Pro",
+        "observe": False,
+    },
+    "hover_observe_true": {"action": "hover", "target": "r0000000000_e1", "observe": True},
+    "hover_observe_false": {"action": "hover", "target": "r0000000000_e1", "observe": False},
+    "scroll_observe_true": {"action": "scroll", "observe": True},
+    "scroll_observe_false": {"action": "scroll", "observe": False},
+    "wait_observe_true": {"action": "wait", "text": "Saved", "observe": True},
+    "wait_observe_false": {"action": "wait", "text": "Saved", "observe": False},
+    "new_tab_observe_true": {"action": "new_tab", "observe": True},
+    "new_tab_observe_false": {"action": "new_tab", "observe": False},
+    "switch_tab_observe_true": {
+        "action": "switch_tab",
+        "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "observe": True,
+    },
+    "switch_tab_observe_false": {
+        "action": "switch_tab",
+        "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "observe": False,
+    },
+    "dialog_observe_true": {"action": "dialog", "observe": True},
+    "dialog_observe_false": {"action": "dialog", "observe": False},
+    "upload_observe_true": {
+        "action": "upload",
+        "target": "r0000000000_e1",
+        "files": ["/tmp/browser-fixture.txt"],
+        "observe": True,
+    },
+    "upload_observe_false": {
+        "action": "upload",
+        "target": "r0000000000_e1",
+        "files": ["/tmp/browser-fixture.txt"],
+        "observe": False,
+    },
+    "snapshot_full": {"action": "snapshot", "full": True},
+    "snapshot_interactive": {"action": "snapshot", "full": False},
+    "snapshot_scope": {"action": "snapshot", "selector": "main"},
+    "screenshot_full": {"action": "screenshot", "full": True},
+    "screenshot_viewport": {"action": "screenshot", "full": False},
+    "read_target": {"action": "read", "target": "r0000000000_e1", "offset": 2, "limit": 20},
+    "scroll_target": {
+        "action": "scroll",
+        "target": "r0000000000_e1",
+        "direction": "up",
+        "amount": 300,
+    },
+    "scroll_left": {"action": "scroll", "direction": "left"},
+    "scroll_right": {"action": "scroll", "direction": "right"},
+    "new_tab_url": {"action": "new_tab", "url": "https://example.com"},
+    "dialog_accept": {"action": "dialog", "accept": True},
+    "dialog_response": {"action": "dialog", "accept": True, "text": "answer"},
+    "dialog_dismiss": {"action": "dialog", "accept": False},
+    "invalid_unknown": {"action": "tabs", "unknown": True},
+    "invalid_combination": {"action": "close", "url": "https://example.com"},
+    "invalid_missing": {"action": "click"},
+    "invalid_field": {"action": "fill", "fields": [{"target": "r0000000000_e1"}]},
+}
+
 COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     **{action: {"action": action} for action in ("status", "apps", "windows", "close")},
     **{
@@ -899,6 +1030,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--computer-case", choices=tuple(COMPUTER_CASE_ARGUMENTS), default="windows"
     )
+    parser.add_argument("--browser-case", choices=tuple(BROWSER_CASE_ARGUMENTS), default="open")
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
         "--mcp-workflow-case", choices=("render", "no_match", "large_result"), default="render"
@@ -2966,6 +3098,33 @@ def _write_scenario() -> ProbeScenario:
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
+    if name == "browser":
+        from resources.extensions.browser_use.extension import (
+            BROWSER_DESCRIPTION,
+            BROWSER_PARAMETERS,
+        )
+
+        expected = BROWSER_CASE_ARGUMENTS[args.browser_case]
+        instruction = (
+            "This is an inert Tool-contract test; no browser action will execute. "
+            "The fixture has current element refs and tab ids. "
+            "Emit exactly one browser call using only these arguments, "
+            "including deliberate invalid cases: " + json.dumps(expected)
+        )
+        return ProbeScenario(
+            name,
+            [
+                {
+                    "name": "browser",
+                    "description": BROWSER_DESCRIPTION,
+                    "parameters": BROWSER_PARAMETERS,
+                }
+            ],
+            _probe_messages(instruction),
+            "browser",
+            require_closed_input=False,
+            expected_arguments=expected,
+        )
     if name == "computer":
         from resources.extensions.computer_use.extension import (
             COMPUTER_DESCRIPTION,
