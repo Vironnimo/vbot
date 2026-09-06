@@ -57,6 +57,7 @@
     onTranscriptionError,
     onListFiles = null,
     onLoadModelCatalog = null,
+    computerControl,
   } = $props();
   let content = $state('');
   // Input-history navigation. `historyCursor` is -1 while editing the live draft
@@ -1577,6 +1578,7 @@
           />
         </svg>
       </Button>
+      {@render computerControl?.()}
       {#if isRunning}
         <!-- Run-level cancel lives next to Send: while a run is active both
              actions coexist — Send queues, the stop button cancels. It is

@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from contextlib import ExitStack, asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any
 
@@ -48,7 +49,7 @@ SAFE_ENVIRONMENT_KEYS = {
 
 
 class EmergencyHotkey:
-    """Own one Windows message-loop registration; no desktop focus is required."""
+    """Observe physical double-Esc globally, dispatching stop off the hook thread."""
 
     def __init__(self, callback: Any) -> None:
         self.callback = callback
@@ -57,10 +58,66 @@ class EmergencyHotkey:
         self._thread_id = 0
         self._ready = threading.Event()
         self._closing = threading.Event()
+        self._requested = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._state_lock = threading.Lock()
+        self._armed = False
+        self._down = False
+        self._first_press: float | None = None
+
+    def set_armed(self, armed: bool) -> None:
+        with self._state_lock:
+            if armed != self._armed:
+                self._armed = armed
+                self._first_press = None
+                self._down = False
+
+    @property
+    def pending(self) -> bool:
+        return self._requested.is_set() and not self._closing.is_set()
+
+    def _key_event(self, key: int, down: bool, flags: int) -> None:
+        # LLKHF_INJECTED / LLKHF_LOWER_IL_INJECTED: Agent input never counts.
+        if flags & 0x12:
+            return
+        with self._state_lock:
+            if not self._armed:
+                return
+            if key != 0x1B:
+                if down:
+                    self._first_press = None
+                return
+            if not down:
+                self._down = False
+                return
+            if self._down:  # Holding Esc and its auto-repeat are one press.
+                return
+            self._down = True
+            now = time.monotonic()
+            if self._first_press is not None and now - self._first_press <= 0.6:
+                self._first_press = None
+                self._armed = False
+                self._requested.set()
+            else:
+                self._first_press = now
+
+    def _dispatch(self) -> None:
+        while not self._closing.is_set():
+            self._requested.wait()
+            if self._closing.is_set():
+                return
+            try:
+                self.callback()
+            finally:
+                self._requested.clear()
 
     def start(self) -> None:
         if os.name != "nt":
             return
+        if self._thread is not None:
+            return
+        self._worker = threading.Thread(target=self._dispatch, daemon=True)
+        self._worker.start()
         self._thread = threading.Thread(target=self._listen, daemon=True)
         self._thread.start()
         self._ready.wait(2)
@@ -71,40 +128,83 @@ class EmergencyHotkey:
 
         user = ctypes.WinDLL("user32", use_last_error=True)
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        user.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+
+        class KeyboardEvent(ctypes.Structure):
+            _fields_ = [
+                ("key", wintypes.DWORD),
+                ("scan", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("extra", ctypes.c_size_t),
+            ]
+
+        hook_proc = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+        )
+        user.SetWindowsHookExW.argtypes = [
+            ctypes.c_int,
+            hook_proc,
+            wintypes.HINSTANCE,
+            wintypes.DWORD,
+        ]
+        user.SetWindowsHookExW.restype = wintypes.HHOOK
+        user.CallNextHookEx.argtypes = [
+            wintypes.HHOOK,
+            ctypes.c_int,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user.CallNextHookEx.restype = ctypes.c_ssize_t
+        user.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        kernel.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel.GetModuleHandleW.restype = wintypes.HMODULE
+        kernel.GetCurrentThreadId.restype = wintypes.DWORD
         user.GetMessageW.argtypes = [
             ctypes.POINTER(wintypes.MSG),
             wintypes.HWND,
             wintypes.UINT,
             wintypes.UINT,
         ]
-        user.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
         self._thread_id = kernel.GetCurrentThreadId()
-        # MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_PAUSE.
-        self.available = bool(user.RegisterHotKey(None, 1, 0x4003, 0x13))
+
+        @hook_proc
+        def observe(code: int, message: int, pointer: int) -> int:
+            if code == 0 and message in {0x100, 0x101, 0x104, 0x105}:
+                event = ctypes.cast(pointer, ctypes.POINTER(KeyboardEvent)).contents
+                self._key_event(event.key, message in {0x100, 0x104}, event.flags)
+            # Never swallow normal Esc or interfere with the foreground app.
+            return int(user.CallNextHookEx(None, code, message, pointer))
+
+        hook = user.SetWindowsHookExW(13, observe, kernel.GetModuleHandleW(None), 0)
+        message = wintypes.MSG()
+        # Ensure PostThreadMessage can wake shutdown even before GetMessage starts.
+        user.PeekMessageW(ctypes.byref(message), None, 0, 0, 0)
+        self.available = bool(hook)
         self._ready.set()
         if not self.available:
             return
         try:
-            message = wintypes.MSG()
             while (
                 not self._closing.is_set()
                 and user.GetMessageW(ctypes.byref(message), None, 0, 0) > 0
             ):
-                if message.message == 0x0312 and message.wParam == 1:
-                    self.callback()
+                pass
         finally:
-            user.UnregisterHotKey(None, 1)
+            user.UnhookWindowsHookEx(hook)
             self.available = False
 
     def close(self) -> None:
         self._closing.set()
+        self.set_armed(False)
+        self._requested.set()
         if self._thread_id and self.available:
             import ctypes
 
             ctypes.WinDLL("user32").PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
         if self._thread is not None:
             self._thread.join(timeout=2)
+        if self._worker is not None:
+            self._worker.join(timeout=2)
 
 
 class ComputerUseError(Exception):
