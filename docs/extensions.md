@@ -567,4 +567,17 @@ Screenshots default to an overview bounded to 1600 pixels on the long edge and 1
 
 Driver sessions belong to the calling Project/Agent/Session/Run and close on explicit close, Run completion, or Extension shutdown. Calls serialize and recheck current permission and cancellation. Stale references are rejected; input never retries automatically. Changing driver configuration or version requires Extension reload.
 
-Stable 0.23.2 has a verified limitation on German Windows: its browser endpoint ownership check expects an English network-listener state, so semantic browser preparation fails. vBot preserves that refusal. Native background input and DPI-unaware window captures also depend on upstream support; successful input must be checked in the returned observation. See the [upstream installation guide](https://cua.ai/docs/how-to-guides/driver/install) and [platform support](https://cua.ai/docs/reference/cua-driver/platform-support).
+The global **Stop computer control** button, active Tool/Run cancellation, and Windows **Ctrl+Alt+Pause** interrupt the Extension's owned input process. Stop remains latched across reconnects, Extension reloads, and server restarts. **Allow computer control** explicitly clears it after active work has drained; an older pending resume cannot undo a newer stop. The Agent cannot resume through the `computer` Tool. The global shortcut requires registration on the server's interactive Windows desktop; the UI reports when it is unavailable (for example, another vBot instance owns it). Already delivered input cannot be rolled back. Other Tools, including shell access, are outside this interlock.
+
+Stable 0.23.2 has a verified limitation on German Windows: its browser endpoint ownership check expects an English network-listener state, so semantic browser preparation fails. The repository carries a narrow source repair in [`cua-driver-0.23.2-windows.patch`](../resources/extensions/computer_use/cua-driver-0.23.2-windows.patch), pinned to upstream commit `e88e9d899ac5effaeae38619527ebaa46b26ce72` (`cua-driver-rs-v0.23.2`). It queries numeric Windows IPv4/IPv6 owner tables while retaining exact loopback and process ownership checks. The Extension does not apply this patch automatically, and the installed stock binary retains the limitation until replaced with a verified repaired build. A subsequent upstream update also replaces a local repair.
+
+To reproduce the repair, use a separate checkout of that upstream commit, apply the patch from its repository root, then run these commands inside `libs/cua-driver/rust`:
+
+```powershell
+cargo test --locked -p platform-windows native_listener_tests
+cargo build --locked --release -p cua-driver
+```
+
+This build requires Rust, the Windows SDK, and MSVC including its Spectre-mitigated x64 runtime libraries. Verify the resulting `target/release/cua-driver.exe` against an isolated browser before replacing the executable resolved by `cua-driver`; retain the stock binary and patch provenance. The numeric listener function and its three tests have run successfully on German Windows. The complete repaired Driver build and live semantic-browser verification remain pending because the required MSVC component installation was cancelled.
+
+Native background input and DPI-unaware window captures also depend on upstream support; successful input must be checked in the returned observation. See the [upstream installation guide](https://cua.ai/docs/how-to-guides/driver/install) and [platform support](https://cua.ai/docs/reference/cua-driver/platform-support).

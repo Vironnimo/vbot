@@ -1,6 +1,14 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'computerControl.paused': 'Computer control is stopped.',
+  'computerControl.stopping': 'Stopping computer control…',
+  'computerControl.active': 'Agent is using the computer.',
+  'computerControl.ready': 'Computer control is allowed.',
+  'computerControl.hotkey': 'Emergency stop: Ctrl+Alt+Pause',
+  'computerControl.noHotkey': 'Global shortcut unavailable. Use Stop here.',
+  'computerControl.resume': 'Allow computer control',
+  'computerControl.stop': 'Stop computer control',
   'toolAccess.requiresOptIn':
     'Requires explicit permission, including in All mode. Turn this Tool on to grant it.',
   'skills.descriptionLabel': 'When to use this skill',

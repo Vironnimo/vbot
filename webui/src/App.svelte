@@ -79,6 +79,7 @@
   import { onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
+  import ComputerUseControl from './components/ComputerUseControl.svelte';
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
@@ -1151,6 +1152,7 @@
     </Banner>
   {/if}
   <ExtensionRequests />
+  <ComputerUseControl />
   {#if sessionStoreIncident}
     <Banner variant="error" role="alert" class="app-session-store-incident">
       <div class="app-session-store-incident__copy">
