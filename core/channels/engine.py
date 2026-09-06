@@ -19,7 +19,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
-from uuid import uuid4
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels.adapter import (
@@ -56,7 +55,6 @@ from core.runs import (
 )
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
-    SESSION_ID_PATTERN,
     SessionAddress,
 )
 from core.utils.logging import get_logger
@@ -1269,17 +1267,11 @@ class ChannelConversationEngine:
         reply_plan: ReplyPlanFacts,
         conversation_key: str,
     ) -> None:
-        preferred_session_id = (
-            self._preferred_session_id(conversation_key)
-            if prepared.accepts_preferred_session_id
-            else None
-        )
         context = CommandExecutionContext(
             agent_id=route.agent_id,
             session_id=route.session_id,
             project_id=None,
             reply_surface=self._reply_surface(conversation.kind),
-            preferred_new_session_id=preferred_session_id,
         )
         try:
             if prepared.execution_mode == "serialized":
@@ -1347,11 +1339,6 @@ class ChannelConversationEngine:
             conversation_key,
             route.session_id,
         )
-
-    @staticmethod
-    def _preferred_session_id(anchor: str) -> str:
-        candidate = f"{anchor}-{uuid4().hex}"
-        return candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
 
     def _reply_surface(self, conversation_kind: Literal["direct", "group"]) -> ReplySurface:
         return ReplySurface.channel(

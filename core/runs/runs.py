@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.event_stream import ReplayEventStream
 from core.utils.errors import VBotError
+from core.utils.ids import new_id
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
@@ -807,7 +808,7 @@ class ChatRunManager:
         """Start immediately when idle or append one item to the session queue."""
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = QueuedRunItem(
-            item_id=str(uuid.uuid4()),
+            item_id=new_id("que"),
             display_content=display_content,
             executor=executor,
             internal=internal,
@@ -1254,7 +1255,7 @@ class ChatRunManager:
         # anchor, agent, and session all come from it, so a drained queue item
         # can never start under a different anchor than it was enqueued for.
         run = Run(
-            run_id=str(uuid.uuid4()),
+            run_id=new_id("run"),
             agent_id=address.agent_id,
             session_id=address.session_id,
             project_id=address.project_id,

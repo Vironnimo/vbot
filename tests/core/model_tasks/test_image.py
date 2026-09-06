@@ -1134,3 +1134,19 @@ async def test_analyze_requires_binding_prompt_and_images(tmp_path: Path) -> Non
         await configured.analyze("  ", image_paths=[source])
     with pytest.raises(ImageInputError):
         await configured.analyze("Describe it", image_paths=[])
+
+
+def test_image_file_ids_retry_collisions_without_overwriting(tmp_path, monkeypatch):
+    from core.model_tasks.image import _write_image_artifact
+    from core.utils import ids
+
+    existing = tmp_path / "img_000000000001.png"
+    existing.write_bytes(b"keep")
+    values = iter((1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    result = _write_image_artifact(
+        b"new", output_dir=tmp_path, extension="png", media_type="image/png", index=0
+    )
+    assert result.id == "img_000000000002"
+    assert existing.read_bytes() == b"keep"
+    assert result.file_path.read_bytes() == b"new"

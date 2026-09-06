@@ -8,13 +8,14 @@ Parent Run, and submits each ready result to shared Run-boundary delivery.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.projects import format_agent_address
 from core.runs import RunStatus
 from core.sessions import SessionAddress
 from core.tools.tools import JsonObject
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("subagents")
@@ -44,6 +45,7 @@ class _SubAgentEntry:
 @dataclass
 class _SubAgentBatch:
     entries: dict[str, _SubAgentEntry]
+    allocated_ids: set[str] = field(default_factory=set)
     reserved_count: int = 0
     # The Parent Run's project, captured when the batch is first created. The
     # completion delivery continues the Parent under this project so a
@@ -59,6 +61,21 @@ class SubAgentBatchTracker:
         self._trigger_service = trigger_service
         self._sessions = sessions
         self._batches: dict[ParentKey, _SubAgentBatch] = {}
+
+    def allocate_work_id(self, parent_key: ParentKey) -> str:
+        """Reserve a public id before spawn yields, retaining it with its batch."""
+        batch = self._batches[parent_key]
+
+        def claim(candidate: str) -> bool:
+            if any(
+                candidate in item.allocated_ids or candidate in item.entries
+                for item in self._batches.values()
+            ):
+                return False
+            batch.allocated_ids.add(candidate)
+            return True
+
+        return new_id("sub", claim=claim)
 
     def register(
         self,

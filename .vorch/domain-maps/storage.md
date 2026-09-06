@@ -16,7 +16,7 @@ Browser Use creates its own durable native-client cache under `artifacts/browser
 
 ## Temporary files
 
-`TemporaryFileManager` owns only retained categories under `artifacts/temp/`: `bash`, `subagents`, `terminals`. Leases protect active files; idempotent completion starts retention (72 h bash/terminals, 24 h subagents); cleanup runs at start and periodically, removing only expired inactive regular files. The `atomic` child is short-lived staging removed by producers, not a retention category. This lifecycle is internal - Extensions get no temporary-file API.
+`TemporaryFileManager` owns only retained categories under `artifacts/temp/`: `bash`, `subagents`, `terminals`. New retained filenames use `tmp_` plus 12 lowercase base32 characters and the owner-selected suffix; exclusive file creation retries collisions without truncating existing logs (`temp_files.py`, `test_temp_files.py`). Leases protect active files; idempotent completion starts retention (72 h bash/terminals, 24 h subagents); cleanup runs at start and periodically, removing only expired inactive regular files. The `atomic` child is short-lived staging removed by producers, not a retention category. This lifecycle is internal - Extensions get no temporary-file API.
 
 ## Settings & credentials
 

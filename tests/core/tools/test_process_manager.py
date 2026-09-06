@@ -1228,3 +1228,20 @@ async def test_terminal_callback_unsubscribe_stops_delivery(
     await asyncio.sleep(0.05)
 
     assert recorder.notifications == []
+
+
+@pytest.mark.asyncio
+async def test_parallel_process_ids_skip_collisions(manager, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first, second = await asyncio.gather(
+        *(
+            manager.spawn(SCOPE_A, AGENT_A, [sys.executable, "-c", "pass"], env=None, cwd=None)
+            for _ in range(2)
+        )
+    )
+    assert {first, second} == {"proc_000000000001", "proc_000000000002"}
+    assert manager.get_process(first, AGENT_A).process_id == first
+    assert manager.get_process(second, AGENT_A).process_id == second

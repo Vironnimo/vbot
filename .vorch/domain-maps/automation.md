@@ -18,6 +18,8 @@ Programmatic Run triggering, time- and startup-based scheduling, and background 
 - Cron lifecycle: idempotent start/stop; start reconciles all jobs before any task; an escaping scheduler-task exception flows through the failure-health path; completion from a stale replaced task never restarts its replacement.
 - Every Runtime start has a UUID `startup_id`; creating/updating/enabling arms a job with it so it cannot fire in the arming process. `once` completes/fails only after an admitted Run terminates (an `interrupted` Run counts as unsuccessful -> retry policy); `always` stays active at most once per startup. Activation groups fixed-Session jobs per owner for sequential execution within four global slots; session-less jobs create fresh Sessions; crash reconciliation asks Sessions for the claimed Run's exact persisted terminal summary instead of loading its complete transcript before deciding whether to retry.
 
+New Cron and Bootstrap job ids use `cron_` and `boot_` plus 12 lowercase base32 characters. Synchronous creation checks the loaded job catalog and retries collisions before publication; persisted ids remain stable on load/update (`cron.py`, `bootstrap.py`, owning tests).
+
 ## Conventions
 
 - Validation: both stores export strict validators consumed by diagnostics; whole-file failures raise `CronStorageError` on mutation, bad data raises `CronJobValidationError`. Bootstrap modes `once|always`, statuses `active|paused|completed|failed`; completed one-shots are immutable history, failed ones rearm.

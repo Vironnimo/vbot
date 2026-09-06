@@ -9,6 +9,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1178,3 +1179,24 @@ def test_explicit_close_retires_emergency_detection_for_the_run(computer):
     capture(computer)
     assert service.handle(computer[1], {"action": "close"})["ok"]
     assert not asyncio.run(service.control({}))["controlling"]
+
+
+def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, monkeypatch):
+    from core.utils import ids
+
+    first = capture(computer)["data"]
+    assert first["view_id"].startswith("view_")
+    assert len(first["view_id"]) == 17
+    alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
+    value = 0
+    for char in first["view_id"].removeprefix("view_"):
+        value = value * 32 + alphabet.index(char)
+    original = Path(first["original"]).read_bytes()
+    # Force the displayed-image allocation to collide with the previous view.
+    sequence = iter((value, value, (value + 1) % (1 << 60)))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(sequence))
+    second = capture(computer)["data"]
+    assert second["view_id"] != first["view_id"]
+    assert Path(first["original"]).read_bytes() == original
+    result = call(computer, "click", view_id=first["view_id"], coordinate=[1, 1], apply=True)
+    assert result["error"]["code"] == "stale_view"

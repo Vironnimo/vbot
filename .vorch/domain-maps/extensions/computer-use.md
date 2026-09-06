@@ -30,7 +30,7 @@ Stop latches in `<data_dir>/computer-use-stopped` across reload/restart. The use
 
 ## Observations and verification
 
-Captures live under the caller's `tmp/computer-use`. Original PNG limits are 32 MiB / 40 million pixels; overviews use at most 1600 pixels on the long edge and 1.5 million pixels. `original` preserves full resolution and `zoom` crops original pixels. `view_id` binds images to transforms. Mutations invalidate prior observations across Runs; transport loss clears them without input replay. Arbitrary Driver-supplied file paths are never read.
+Captures live under the caller's `tmp/computer-use`. Original PNG limits are 32 MiB / 40 million pixels; overviews use at most 1600 pixels on the long edge and 1.5 million pixels. `original` preserves full resolution and `zoom` crops original pixels. `view_id` binds images to transforms. New views use `view_` plus 12 lowercase base32 characters; view images, originals (`orig_`), and overflow state (`state_`) use exclusive collision-retrying file creation through `core/utils/ids.py`. Mutations invalidate prior observations across Runs; transport loss clears them without input replay. Arbitrary Driver-supplied file paths are never read.
 
 `ToolContext.result_media` carries the displayed image; `presentation_images` exposes the original. Structured elements replace duplicate tree text; text overflow retains a complete state file.
 

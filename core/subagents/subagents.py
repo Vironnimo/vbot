@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
 
 from core.chat import (
     ChatMessage,
@@ -75,7 +74,6 @@ SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
 SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
-SUBAGENT_WORK_ID_PREFIX = "sub_"
 SUBAGENT_SESSION_TITLE_MAX_CHARACTERS = 48
 SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "Current Sub-Agent activity is available at {path}. Read this file if the Sub-Agent's "
@@ -401,7 +399,7 @@ async def _handle_subagent(
         )
 
     slot_registered = False
-    work_id = _new_subagent_work_id()
+    work_id = batch_tracker.allocate_work_id(parent_key)
     activity: SubAgentActivity | None = None
     activity_handed_off = False
     try:
@@ -1657,10 +1655,6 @@ def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObje
     if activity_file is not None:
         data["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
     return data
-
-
-def _new_subagent_work_id() -> str:
-    return f"{SUBAGENT_WORK_ID_PREFIX}{uuid4().hex}"
 
 
 def _without_internal_handles(data: JsonObject) -> JsonObject:

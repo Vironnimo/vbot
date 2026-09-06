@@ -167,3 +167,17 @@ def test_one_unlink_failure_does_not_block_other_cleanup(
 
     assert blocked.path.exists()
     assert not removable.path.exists()
+
+
+def test_short_temp_paths_retry_collisions_without_truncating_logs(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    manager = TemporaryFileManager(tmp_path)
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first = manager.create("bash", ".log")
+    first.path.write_text("keep", encoding="utf-8")
+    second = manager.create("bash", ".log")
+    assert first.path.name == "tmp_000000000001.log"
+    assert second.path.name == "tmp_000000000002.log"
+    assert first.path.read_text(encoding="utf-8") == "keep"

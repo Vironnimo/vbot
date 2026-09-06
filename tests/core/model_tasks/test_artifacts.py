@@ -93,3 +93,40 @@ def test_read_rejects_missing_blob_and_recovers_size_from_stat(tmp_path: Path) -
     written.file_path.unlink()
     with pytest.raises(_StubConfigurationError):
         store.read(written.id)
+
+
+def test_short_artifact_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    store = _store(tmp_path)
+    first = store.write(b"first", extension="mp3", media_type="audio/mpeg")
+    second = store.write(b"second", extension="wav", media_type="audio/wav")
+    assert first.id == "aud_000000000001"
+    assert second.id == "aud_000000000002"
+    assert store.read(first.id).file_path.read_bytes() == b"first"
+    assert store.read(second.id).file_path.read_bytes() == b"second"
+
+
+@pytest.mark.parametrize(("media_type", "prefix"), [("video/mp4", "vid"), ("audio/mpeg", "mus")])
+def test_generated_media_ids_never_overwrite_colliding_files(
+    tmp_path, monkeypatch, media_type, prefix
+):
+    from core.model_tasks.artifacts import write_generated_media_artifact
+    from core.utils import ids
+
+    original = tmp_path / f"{prefix}_000000000001.mp4"
+    original.write_bytes(b"keep")
+    values = iter((1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    result = write_generated_media_artifact(
+        b"new",
+        output_dir=tmp_path,
+        extension="mp4",
+        media_type=media_type,
+        error=_StubConfigurationError,
+    )
+    assert result.id == f"{prefix}_000000000002"
+    assert original.read_bytes() == b"keep"
+    assert result.file_path.read_bytes() == b"new"

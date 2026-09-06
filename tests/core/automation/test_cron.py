@@ -1429,3 +1429,21 @@ async def test_sleep_until_utc_realigns_after_wall_clock_jump(
 
     # Assert
     assert naps == [cron_module._WALL_CLOCK_RECHECK_SECONDS]
+
+
+def test_short_ids_skip_collisions_after_reload(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    service, _ = make_service(tmp_path)
+    first = service.create_job(
+        agent_id="agent", prompt="first", schedule_type="interval", interval_seconds=60
+    )
+    reloaded, _ = make_service(tmp_path)
+    second = reloaded.create_job(
+        agent_id="agent", prompt="second", schedule_type="interval", interval_seconds=60
+    )
+    assert first.id == "cron_000000000001"
+    assert second.id == "cron_000000000002"
+    assert reloaded.get_job(first.id).prompt == "first"

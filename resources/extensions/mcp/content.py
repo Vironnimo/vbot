@@ -7,13 +7,13 @@ import copy
 import json
 import mimetypes
 import re
-import uuid
 from pathlib import Path
 from typing import Any
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext, read_media_artifact, run_tool_worker
+from core.utils.ids import is_safe_id, new_id
 
 from .config import atomic_json
 
@@ -21,7 +21,6 @@ RESULT_VIEW_CHARACTERS = 6000
 RESULT_PREVIEW_CHARACTERS = 400
 RESULT_READ_ENTRIES = 20
 RESULT_READ_CHARACTERS = 2000
-RESULT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 RESULT_MISSING = (
     "Saved MCP result is unavailable. Use an existing result_id returned by this connection."
@@ -57,7 +56,7 @@ class ContentStore:
             raw = base64.b64decode(encoded, validate=True)
             media_type = value.get("mimeType", "application/octet-stream")
             suffix = mimetypes.guess_extension(media_type) or ".bin"
-            filename = f"mcp-{uuid.uuid4()}{suffix}"
+            filename = f"{new_id('mcp')}{suffix}"
             try:
                 record = await run_tool_worker(self.host.store_attachment, filename, raw)
             except (AttachmentTooLargeError, AttachmentTypeNotAllowedError) as error:
@@ -91,7 +90,8 @@ class ContentStore:
     @staticmethod
     def _save(path: Path, raw: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(raw)
+        with path.open("xb") as stream:
+            stream.write(raw)
 
     async def present(
         self,
@@ -103,15 +103,26 @@ class ContentStore:
         preview: Any = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         preserved, artifacts = await self.preserve(payload)
-        identifier = uuid.uuid4().hex
-        path = self.directory / "results" / f"{identifier}.json"
         document = {
             "owner": {"agent_id": context.agent_id, "project_id": context.project_id},
             "connection": connection,
             "source": source,
             "payload": preserved,
         }
-        await run_tool_worker(atomic_json, path, document)
+
+        def save(candidate: str) -> bool:
+            path = self.directory / "results" / f"{candidate}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with path.open("x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                return False
+            atomic_json(path, document)
+            return True
+
+        identifier = await run_tool_worker(new_id, "res", claim=save)
+        path = self.directory / "results" / f"{identifier}.json"
         encoded = json.dumps(preserved, ensure_ascii=False, separators=(",", ":"))
         complete = preview is None and len(encoded) <= RESULT_VIEW_CHARACTERS
         view = (
@@ -131,7 +142,7 @@ class ContentStore:
         context: ToolContext,
         connection: str,
     ) -> dict[str, Any]:
-        if not RESULT_ID_PATTERN.fullmatch(identifier):
+        if not is_safe_id(identifier):
             raise ValueError(RESULT_MISSING)
         path = self.directory / "results" / f"{identifier}.json"
         try:

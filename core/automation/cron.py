@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
@@ -38,6 +37,7 @@ from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -495,7 +495,7 @@ class CronService:
         if schedule_type == "interval" and interval_anchor_at is None:
             interval_anchor_at = _utc_now_iso()
         job = CronJob(
-            id=str(uuid4()),
+            id=new_id("cron", claim=lambda candidate: candidate not in self._jobs),
             agent_id=agent_id,
             name=name if name is not None else _derive_legacy_cron_job_name(prompt),
             prompt=prompt,
