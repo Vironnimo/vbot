@@ -1369,7 +1369,7 @@ function skillFixtures() {
 }
 
 function composerInput() {
-  return document.body.querySelector('#chat-composer-input');
+  return document.body.querySelector('.msg-input');
 }
 
 function cancelRunButton() {

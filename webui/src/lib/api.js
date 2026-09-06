@@ -9,6 +9,11 @@ import {
 import { isPlainObject } from './values.js';
 
 const RPC_ENDPOINT = '/api/rpc';
+
+export const openFilePreview = (source, options = {}) =>
+  rpc('file.preview_open', { source }, options);
+export const getFilePreviewRevision = (token, options = {}) =>
+  rpc('file.preview_revision', { token }, options);
 const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
 const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';

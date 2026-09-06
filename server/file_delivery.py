@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
+import os
 import secrets
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 from core.attachments import sniff_media_type
 
@@ -17,6 +20,35 @@ JsonObject = dict[str, Any]
 FILE_URL_PREFIX = "/api/files/"
 FILE_SNIFF_BYTES = 65_536
 MAX_FILE_TOKEN_LENGTH = 16_384
+PREVIEW_URL_PREFIX = "/api/preview-assets/"
+PREVIEW_MAX_ENTRIES = 5000
+PREVIEW_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".avif": "image/avif",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".ogg": "audio/ogg",
+    ".txt": "text/plain",
+}
+PREVIEW_EXCLUDED = frozenset({"node_modules", "__pycache__", "venv"})
 CHAT_IMAGE_MEDIA_TYPES = frozenset(
     {
         "image/avif",
@@ -34,16 +66,29 @@ BROWSER_MEDIA_TYPES = CHAT_IMAGE_MEDIA_TYPES | {
     "image/svg+xml",
 }
 ACTIVE_DOCUMENT_TYPES = {"text/html", "image/svg+xml"}
-# Scripts can power self-contained reports without inheriting the app's origin.
-# HTTPS assets support styles/fonts/chart libraries; application requests, nested
-# documents and form submissions are blocked. No filesystem-relative assets.
-DOCUMENT_CSP = (
-    "sandbox allow-scripts allow-downloads; default-src 'none'; "
-    "script-src https: 'unsafe-inline'; style-src https: 'unsafe-inline'; "
-    "img-src https: data: blob:; font-src https: data:; media-src https: data: blob:; "
-    "connect-src 'none'; frame-src 'none'; object-src 'none'; "
-    "base-uri 'none'; form-action 'none'"
-)
+
+
+def document_csp(assets: str = "") -> str:
+    """One active-document policy for browser and embedded website views."""
+    resources = f"https: {assets}".strip()
+    local_sources = assets or "'none'"
+    return "; ".join(
+        [
+            "sandbox allow-scripts allow-downloads",
+            "default-src 'none'",
+            f"script-src {resources} 'unsafe-inline'",
+            f"style-src {resources} 'unsafe-inline'",
+            f"img-src {resources} data: blob:",
+            f"font-src {resources} data:",
+            f"media-src {resources} data: blob:",
+            f"connect-src {local_sources}",
+            "worker-src 'none'",
+            "frame-src 'none'",
+            "object-src 'none'",
+            f"base-uri {local_sources}",
+            "form-action 'none'",
+        ]
+    )
 
 
 @dataclass(frozen=True)
@@ -62,7 +107,7 @@ class DeliveredFile:
             "Referrer-Policy": "no-referrer",
         }
         if self.media_type in ACTIVE_DOCUMENT_TYPES:
-            headers["Content-Security-Policy"] = DOCUMENT_CSP
+            headers["Content-Security-Policy"] = document_csp()
         return headers
 
 
@@ -73,6 +118,171 @@ class FileDelivery:
         self._secret = secret if secret is not None else secrets.token_bytes(32)
         if not self._secret:
             raise ValueError("file delivery secret must not be empty")
+
+    def open_preview(self, source: str) -> JsonObject:
+        """Grant read-only access to a website rooted beside its entry HTML file."""
+        if source.startswith(FILE_URL_PREFIX):
+            delivered = self.resolve_token(source[len(FILE_URL_PREFIX) :])
+            if delivered is None or delivered.media_type != "text/html":
+                raise ValueError("File is no longer available")
+            entry = delivered.path
+        else:
+            entry = Path(source)
+            if not entry.is_absolute():
+                raise ValueError("Use an absolute HTML file path on the server")
+            try:
+                entry = entry.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError("HTML file is not available") from exc
+        if not entry.is_file() or entry.suffix.lower() not in {".html", ".htm"}:
+            raise ValueError("Select an HTML file")
+        root = entry.parent
+        token = self._preview_token(root)
+        # Validate the bounded tree before exposing an unusable preview.
+        revision = self.preview_revision(token)
+        return {
+            "token": token,
+            "url": f"{PREVIEW_URL_PREFIX}{token}/{quote(entry.name, safe='')}",
+            "filename": entry.name,
+            "source": str(entry),
+            "root": str(root),
+            "revision": revision,
+        }
+
+    def _preview_token(self, root: Path) -> str:
+        # Domain-separated from single-file capabilities: neither token can be
+        # replayed against the other's endpoint to widen its authority.
+        payload = _urlsafe_encode(str(root).encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(self._secret, b"preview:" + payload.encode("ascii"), hashlib.sha256)
+        )
+        return f"{payload}.{signature}"
+
+    def _preview_root(self, token: str) -> Path:
+        try:
+            if len(token) > MAX_FILE_TOKEN_LENGTH:
+                raise ValueError("Invalid preview")
+            payload, _signature = token.split(".")
+            root = Path(_urlsafe_decode(payload).decode("utf-8"))
+            if not hmac.compare_digest(self._preview_token(root), token):
+                raise ValueError("Invalid preview")
+            if not root.is_absolute() or root.resolve(strict=True) != root or not root.is_dir():
+                raise ValueError("Preview folder is no longer available")
+            return root
+        except (OSError, RuntimeError, UnicodeError, ValueError, TypeError) as exc:
+            raise ValueError("Preview folder is no longer available") from exc
+
+    def preview_file(self, token: str, relative_path: str) -> DeliveredFile:
+        root = self._preview_root(token)
+        if "\\" in relative_path or "\0" in relative_path:
+            raise ValueError("Invalid preview path")
+        relative = PurePosixPath(relative_path)
+        if relative.is_absolute() or any(
+            part.startswith(".") or ":" in part or part.casefold() in PREVIEW_EXCLUDED
+            for part in relative.parts
+        ):
+            raise ValueError("Invalid preview path")
+        try:
+            path = root.joinpath(*relative.parts)
+            # Reject symlinks/junctions even when their current target is in-tree.
+            cursor = root
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.resolve(strict=True) != cursor:
+                    raise ValueError("Invalid preview path")
+            if path.is_dir():
+                path = path / "index.html"
+            resolved = path.resolve(strict=True)
+            if resolved != path or not resolved.is_relative_to(root) or not resolved.is_file():
+                raise ValueError("Invalid preview path")
+            media_type = PREVIEW_TYPES.get(resolved.suffix.lower())
+            if media_type is None:
+                raise ValueError("Unsupported preview file")
+            return DeliveredFile(resolved, media_type, True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Preview file is no longer available") from exc
+
+    def preview_revision(self, token: str) -> str:
+        root = self._preview_root(token)
+        entries: list[tuple[str, int, int]] = []
+        count = 0
+        try:
+            for directory, dirs, files in os.walk(root, followlinks=False):
+                count += len(dirs) + len(files)
+                if count > PREVIEW_MAX_ENTRIES:
+                    raise ValueError("Preview folder is too large; use a dedicated website folder")
+                base = Path(directory)
+                dirs[:] = sorted(
+                    name
+                    for name in dirs
+                    if not name.startswith(".")
+                    and name.casefold() not in PREVIEW_EXCLUDED
+                    and (base / name).resolve() == base / name
+                )
+                for name in sorted(files):
+                    if name.startswith(".") or Path(name).suffix.lower() not in PREVIEW_TYPES:
+                        continue
+                    path = base / name
+                    if path.resolve() != path:
+                        continue
+                    stat = path.stat()
+                    entries.append(
+                        (path.relative_to(root).as_posix(), stat.st_mtime_ns, stat.st_size)
+                    )
+        except OSError as exc:
+            raise ValueError("Preview folder could not be read") from exc
+        return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest()
+
+    @staticmethod
+    def preview_headers(base_url: str, token: str) -> dict[str, str]:
+        assets = f"{base_url.rstrip('/')}{PREVIEW_URL_PREFIX}{token}/"
+        return {
+            "Content-Security-Policy": document_csp(assets) + "; frame-ancestors 'self'",
+            "Access-Control-Allow-Origin": "null",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        }
+
+    @staticmethod
+    def preview_html(path: Path, revision_url: str) -> bytes:
+        with path.open("rb") as handle:
+            content = handle.read(4 * 1024 * 1024 + 1)
+        if len(content) > 4 * 1024 * 1024:
+            raise ValueError("HTML preview exceeds 4 MiB")
+        # Tell the parent which subpage to refresh. The parent validates this
+        # against the capability prefix, never accepting an arbitrary URL.
+        return (
+            content
+            + b"\n<script>\n(() => {\nconst revisionUrl = "
+            + json.dumps(revision_url).encode()
+            + b""";
+  const notify = () => parent.postMessage({type: 'vbot-preview-ready', url: location.href}, '*');
+  notify();
+  addEventListener('hashchange', notify);
+  addEventListener('popstate', notify);
+  // Embedded views use the host's Live toggle. Standalone browser views
+  // watch the same bounded revision without gaining access to application RPC.
+  if (parent === window) {
+    let revision;
+    const check = async () => {
+      try {
+        if (document.visibilityState !== 'hidden') {
+          const response = await fetch(revisionUrl, {cache: 'no-store', credentials: 'omit'});
+          if (response.ok) {
+            const next = (await response.json()).revision;
+            if (revision !== undefined && revision !== next) { location.reload(); return; }
+            revision = next;
+          }
+        }
+      } catch { /* Retry after transient connectivity failures. */ }
+      setTimeout(check, 1500);
+    };
+    void check();
+  }
+})();
+</script>"""
+        )
 
     def project_message(self, message: JsonObject) -> JsonObject:
         """Replace recognized Assistant file markers with fresh public Markdown URLs."""

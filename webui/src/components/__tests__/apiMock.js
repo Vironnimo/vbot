@@ -8,6 +8,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
   });
 
   return {
+    openFilePreview: (source) => call('file.preview_open', { source }),
+    getFilePreviewRevision: (token) => call('file.preview_revision', { token }),
     rpc: (...args) => rpcMock(...args),
     extensionOperation: (name, operation, args = {}) =>
       call('extensions.operation', { name, operation, arguments: args }),

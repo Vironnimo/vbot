@@ -96,7 +96,7 @@ describe('ChatView', () => {
     );
 
     const newSessionButton = findNewSessionButton();
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     expect(newSessionButton).toBeTruthy();
     expect(composerInput).toBeTruthy();
 
@@ -146,7 +146,7 @@ describe('ChatView', () => {
       100,
     );
 
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     setInputValue(composerInput, 'unfinished draft');
     flushSync();
     findNewSessionButton().click();
@@ -201,7 +201,7 @@ describe('ChatView', () => {
         ),
       100,
     );
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     await waitForCondition(() => document.activeElement === composerInput, 100);
 
     expect(
@@ -317,7 +317,7 @@ describe('ChatView', () => {
       () => document.body.textContent.includes('Second session reply'),
       100,
     );
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     await waitForCondition(() => document.activeElement === composerInput, 100);
   });
 
@@ -420,7 +420,7 @@ describe('ChatView', () => {
       () => document.body.textContent.includes('Beta session reply'),
       100,
     );
-    const composerInput = document.querySelector('#chat-composer-input');
+    const composerInput = document.querySelector('.msg-input');
     await waitForCondition(() => document.activeElement === composerInput, 100);
 
     const passiveFocusTarget = document.createElement('button');
@@ -486,7 +486,7 @@ describe('ChatView', () => {
         () => document.body.textContent.includes('Mobile session reply'),
         100,
       );
-      const composerInput = document.querySelector('#chat-composer-input');
+      const composerInput = document.querySelector('.msg-input');
       expect(document.activeElement).not.toBe(composerInput);
 
       findNewSessionButton().click();
