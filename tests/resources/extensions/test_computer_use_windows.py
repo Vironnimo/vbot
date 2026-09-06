@@ -138,7 +138,7 @@ def test_stop_interrupts_hold_and_drag_and_releases_every_owned_input(
         desktop.interrupt()
         with pytest.raises(ComputerUseError) as caught:
             future.result(timeout=0.5)
-        assert caught.value.code == "computer_use_stopped"
+        assert caught.value.code == "computer_use_interrupted"
     assert desktop._held == []
     assert sent[-1][3] == release_flag
     previous = list(sent)
@@ -303,12 +303,12 @@ def test_session_end_retires_geometry(native):
 def test_emergency_stop_ignores_injected_escape(flags):
     from resources.extensions.computer_use.driver import EmergencyHotkey
 
-    hotkey = EmergencyHotkey(lambda: None)
-    hotkey.set_armed(True)
+    hotkey = EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(object())
     for _ in range(2):
         hotkey._key_event(0x1B, True, flags)
         hotkey._key_event(0x1B, False, flags)
-    assert not hotkey.pending
+    assert not hotkey.pending_owner
 
 
 def test_emergency_stop_needs_two_separate_physical_presses(monkeypatch):
@@ -316,15 +316,15 @@ def test_emergency_stop_needs_two_separate_physical_presses(monkeypatch):
 
     now = [10.0]
     monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
-    hotkey = driver.EmergencyHotkey(lambda: None)
-    hotkey.set_armed(True)
+    hotkey = driver.EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(object())
     hotkey._key_event(0x1B, True, 0)
     now[0] += 0.2
     hotkey._key_event(0x1B, True, 0)  # OS auto-repeat.
-    assert not hotkey.pending
+    assert not hotkey.pending_owner
     hotkey._key_event(0x1B, False, 0)
     hotkey._key_event(0x1B, True, 0)
-    assert hotkey.pending
+    assert hotkey.pending_owner
 
 
 @pytest.mark.parametrize("between", ["timeout", "other_key", "disarm", "inactive"])
@@ -333,8 +333,8 @@ def test_emergency_stop_does_not_join_unrelated_presses(monkeypatch, between):
 
     now = [10.0]
     monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
-    hotkey = driver.EmergencyHotkey(lambda: None)
-    hotkey.set_armed(between != "inactive")
+    hotkey = driver.EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(None if between == "inactive" else object())
     hotkey._key_event(0x1B, True, 0)
     hotkey._key_event(0x1B, False, 0)
     if between == "timeout":
@@ -342,12 +342,12 @@ def test_emergency_stop_does_not_join_unrelated_presses(monkeypatch, between):
     elif between == "other_key":
         hotkey._key_event(0x41, True, 0)
     elif between == "disarm":
-        hotkey.set_armed(False)
-        hotkey.set_armed(True)
+        hotkey.set_armed(None)
+        hotkey.set_armed(object())
     else:
-        hotkey.set_armed(True)
+        hotkey.set_armed(object())
     hotkey._key_event(0x1B, True, 0)
-    assert not hotkey.pending
+    assert not hotkey.pending_owner
 
 
 def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
@@ -356,7 +356,7 @@ def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
     entered = threading.Event()
     release = threading.Event()
 
-    def stop():
+    def stop(owner):
         entered.set()
         assert release.wait(1)
 
@@ -364,12 +364,12 @@ def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
     hotkey._worker = threading.Thread(target=hotkey._dispatch)
     hotkey._worker.start()
     try:
-        hotkey.set_armed(True)
+        hotkey.set_armed(object())
         hotkey._key_event(0x1B, True, 0)
         hotkey._key_event(0x1B, False, 0)
         hotkey._key_event(0x1B, True, 0)
         assert entered.wait(0.5)
-        assert hotkey.pending
+        assert hotkey.pending_owner
         # The listener can still process input while interruption is draining.
         hotkey._key_event(0x41, True, 0)
     finally:

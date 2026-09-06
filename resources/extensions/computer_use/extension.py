@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -17,9 +16,10 @@ from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
+from core.utils.ids import new_id
 
 from . import observations
-from .driver import ComputerUseError, CuaDriver, EmergencyHotkey
+from .driver import ComputerUseError, ComputerUseInterruptedError, CuaDriver, EmergencyHotkey
 from .observations import Observation
 
 
@@ -613,70 +613,59 @@ class ComputerUseService:
         self._closed = False
         self._control_lock = threading.RLock()
         self._wake = threading.Event()
-        self._paused = False
-        self._stop_token = uuid.uuid4().hex
-        self._active: object | None = None
+        self._active: str | None = None
+        self._interrupted: object | None = None
         self._active_driver: CuaDriver | None = None
-        self._controlling_runs: set[str] = set()
-        self._stop_file: Path | None = None
-        self._hotkey = EmergencyHotkey(self.stop)
+        self._active_context: ToolContext | None = None
+        self._hotkey = EmergencyHotkey(lambda owner: self.stop(owner, source="double_escape"))
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
-        self._stop_file = host.data_dir / "computer-use-stopped"
-        self._paused = self._stop_file.exists()
         if self.executable:
             self._hotkey.start()
 
-    def stop(self, owner: object | None = None) -> None:
+    def stop(self, owner: object | None = None, *, source: str = "control") -> None:
         # This lock is never held while waiting for a Driver call or the service lock.
         with self._control_lock:
-            if owner is not None and self._active is not owner:
+            if self._active is None or self._interrupted is self._active:
                 return
-            changed = not self._paused
-            self._paused = True
-            self._hotkey.set_armed(False)
+            if owner is not None and self._active != owner:
+                return
+            self._interrupted = self._active
+            self._hotkey.set_armed(None)
             self._wake.set()
-            self._stop_token = uuid.uuid4().hex
-            driver = self._active_driver or self._driver
+            driver = self._active_driver
             if driver is not None:
                 try:
                     driver.interrupt()
                 except OSError:
-                    # Keep the interlock and hotkey alive even if the OS refuses termination.
+                    # Further steps still stop even if the OS refuses termination.
+                    driver.broken = True
                     self.api.logger.exception("Could not interrupt the Computer Use worker")
-            if self._stop_file is not None:
-                try:
-                    self._stop_file.touch()
-                except OSError:
-                    self.api.logger.exception("Could not persist Computer Use stop")
-            if changed:
-                self.api.logger.info("Computer Use stopped by operator")
+            context = self._active_context
+            self.api.logger.info(
+                "Computer Use call interrupted (source=%s run=%s tool_call=%s)",
+                source,
+                context.run_id if context is not None else None,
+                context.tool_call_id if context is not None else None,
+            )
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
-        if action == "stop":
-            self.stop()
         with self._control_lock:
+            context = self._active_context
             if (
-                action == "resume"
-                and self._paused
-                and self._active is None
-                and arguments.get("stop_token") == self._stop_token
+                action == "stop"
+                and context is not None
+                and arguments.get("call_id") == self._active
             ):
-                if self._stop_file is not None:
-                    self._stop_file.unlink(missing_ok=True)
-                self._paused = False
-                self._wake.clear()
-                self._hotkey.set_armed(bool(self._controlling_runs))
-                self.api.logger.info("Computer Use allowed by operator")
+                self.stop()
             return {
                 "available": self.ready(),
-                "paused": self._paused,
                 "active": self._active is not None,
-                "controlling": bool(self._controlling_runs) and not self._paused,
+                "stopping": self._active is not None and self._interrupted is self._active,
                 "hotkey_available": self._hotkey.available,
-                "stop_token": self._stop_token,
+                **({"call_id": self._active} if context is not None else {}),
             }
 
     def ready(self) -> bool:
@@ -697,12 +686,10 @@ class ComputerUseService:
         return self._driver
 
     def _check_access(self, context: ToolContext) -> None:
-        if self._paused or self._hotkey.pending:
-            raise ComputerUseError(
-                "Computer Use was stopped by the user. "
-                "Wait for the user to allow computer control again.",
-                "computer_use_stopped",
-            )
+        if self._active is not None and (
+            self._interrupted is self._active or self._hotkey.pending_owner is self._active
+        ):
+            raise ComputerUseInterruptedError()
         if self._closed or self.host is None or self.api.operations.tool_registry is None:
             raise ComputerUseError(
                 "Computer Use has stopped. Retry after Extensions have reloaded."
@@ -724,7 +711,7 @@ class ComputerUseService:
                 "the computer Tool."
             )
         if context.is_cancelled() or context.was_cancelled_by_user():
-            raise ComputerUseError("Computer Use was cancelled before the next desktop action.")
+            raise ComputerUseInterruptedError()
 
     def _call(
         self, context: ToolContext, session: DesktopSession, name: str, args: dict[str, Any]
@@ -736,7 +723,12 @@ class ComputerUseService:
         payload = dict(args)
         if "session" in client.schemas.get(name, {}).get("properties", {}):
             payload["session"] = session.name
-        return client.call(name, payload)
+        try:
+            result = client.call(name, payload)
+        except ComputerUseError:
+            self._check_access(context)
+            raise
+        return result
 
     def _invalidate(self, target: tuple[Any, ...] | None = None) -> None:
         for session in self._sessions.values():
@@ -914,6 +906,15 @@ class ComputerUseService:
         result: dict[str, Any],
     ) -> dict[str, Any]:
         if not args["capture_after"] and not result.get("partial"):
+            try:
+                self._check_access(context)
+            except ComputerUseInterruptedError as error:
+                return {
+                    **result,
+                    "partial": True,
+                    "error": {"code": error.code, "message": str(error)},
+                    "next_action": str(error),
+                }
             return {
                 **result,
                 "next_action": result.get(
@@ -945,7 +946,9 @@ class ComputerUseService:
             )
             if result.get("applied"):
                 result["next_action"] = (
-                    "Input was dispatched but its result could not be observed. Capture "
+                    str(error)
+                    if isinstance(error, ComputerUseInterruptedError)
+                    else "Input was dispatched but its result could not be observed. Capture "
                     "the target before deciding whether to repeat it."
                 )
         return result
@@ -1200,17 +1203,19 @@ class ComputerUseService:
                 args = _validate_arguments(arguments, reference)
             except InvalidComputerArgumentsError as error:
                 return tool_failure("invalid_arguments", str(error))
-            owner = object()
+            owner = new_id("ctl")
             try:
                 self._check_access(context)
                 client = self._client()
                 with self._control_lock:
                     self._active = owner
+                    self._interrupted = None
                     self._active_driver = client
+                    self._active_context = context
+                    self._wake.clear()
                     if args["action"] not in {"status", "close"}:
-                        self._controlling_runs.add(context.run_id)
-                        self._hotkey.set_armed(not self._paused)
-                context.on_cancel(lambda: self.stop(owner))
+                        self._hotkey.set_armed(owner)
+                context.on_cancel(lambda: self.stop(owner, source="tool_cancel"))
                 self._check_access(context)
                 client.connect()
                 self._check_access(context)
@@ -1227,9 +1232,6 @@ class ComputerUseService:
                     if session is not None:
                         self._call(context, session, "end_session", {})
                         del self._sessions[key]
-                    with self._control_lock:
-                        self._controlling_runs.discard(context.run_id)
-                        self._hotkey.set_armed(bool(self._controlling_runs) and not self._paused)
                     return tool_success({"action": "close", "closed": True})
                 if session is None:
                     session = DesktopSession("vbot-" + uuid.uuid4().hex)
@@ -1237,6 +1239,8 @@ class ComputerUseService:
                     self._call(context, session, "start_session", {})
                 self._check_access(context)
                 result = self._execute(context, session, args)
+                if args["action"] not in _MUTATIONS:
+                    self._check_access(context)
                 if result.get("error") and not result["applied"]:
                     failure = tool_failure(
                         result["error"]["code"],
@@ -1278,8 +1282,11 @@ class ComputerUseService:
                 finally:
                     with self._control_lock:
                         if self._active is owner:
+                            self._hotkey.set_armed(None)
                             self._active = None
+                            self._interrupted = None
                             self._active_driver = None
+                            self._active_context = None
 
     def _close_sessions(self, run_id: str | None = None) -> None:
         if self._driver is not None and self._driver.broken:
@@ -1297,19 +1304,13 @@ class ComputerUseService:
                 self._sessions.pop(key, None)
 
     def run_end(self, context: Any, **kwargs: Any) -> None:
-        with self._control_lock:
-            self._controlling_runs.discard(context.run_id)
-            self._hotkey.set_armed(bool(self._controlling_runs) and not self._paused)
         with self._lock:
             self._close_sessions(context.run_id)
 
     def close(self) -> None:
         self._closed = True
         self._hotkey.close()
-        with self._control_lock:
-            self._controlling_runs.clear()
-            if self._active_driver is not None:
-                self._active_driver.interrupt()
+        self.stop(source="shutdown")
         with self._lock:
             self._close_sessions()
             if self._driver is not None:
@@ -1321,13 +1322,19 @@ def register(api: ExtensionAPI) -> None:
     api.operations.startup.append(service.start)
     api.operations.register(
         "control",
-        "Inspect, stop, or allow Computer Use on the server host.",
+        "Inspect or interrupt the active Computer Use call on the server host.",
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "stop", "resume"]},
-                "stop_token": {"type": "string"},
+                "action": {"type": "string", "enum": ["status", "stop"]},
+                "call_id": {"type": "string", "minLength": 1},
             },
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "stop"}}, "required": ["action"]},
+                    "then": {"required": ["call_id"]},
+                }
+            ],
             "additionalProperties": False,
         },
         service.control,
