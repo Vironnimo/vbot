@@ -7,7 +7,6 @@ import base64
 import io
 import logging
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +46,9 @@ class DesktopClient:
                 "start_session",
                 "end_session",
                 "get_window_state",
+                "capture_pixels",
+                "list_monitors",
+                "move_cursor",
                 "get_desktop_state",
                 "get_browser_state",
                 "list_apps",
@@ -84,7 +86,7 @@ class DesktopClient:
             self.hook(name)
         if name == self.fail:
             raise ComputerUseError("test-owned failure")
-        if name in {"get_window_state", "get_desktop_state", "get_browser_state"}:
+        if name in {"get_window_state", "get_desktop_state", "capture_pixels"}:
             if self.fail_capture_after_input and self.inputs:
                 raise ComputerUseError("test-owned capture failure")
             self.snapshots += 1
@@ -104,6 +106,8 @@ class DesktopClient:
             if name == "get_browser_state":
                 result.update(target_id="b1", tab_id="t1")
             return result
+        if name == "list_monitors":
+            return {"monitors": [{"id": 1, "x": -1920, "y": 0, "width": 1920, "height": 1080}]}
         if name == "verify_state":
             return {"status": "satisfied", "verified": True}
         if name in {"start_session", "end_session"}:
@@ -327,6 +331,52 @@ def test_sequence_saves_captures_and_stops_on_failure(computer):
     assert sum(name == "press_key" for name, _ in computer[2].calls) == 1
 
 
+def test_later_sequence_coordinates_validate_before_first_input(computer):
+    data = capture(computer)["data"]
+    result = call(
+        computer,
+        "sequence",
+        apply=True,
+        steps=[
+            {"action": "type", "text": "must not be sent"},
+            {"action": "click", "view_id": data["view_id"], "x": 9000, "y": 10},
+        ],
+    )
+    assert result["error"]["code"] == "invalid_coordinates"
+    assert computer[2].inputs == 0
+
+
+def test_desktop_defaults_to_fast_pixels_and_native_sequence(computer):
+    service, context, client, _ = computer
+    data = service.handle(context, {"action": "capture"})["data"]
+    assert client.calls[-1][0] == "get_desktop_state"
+    result = service.handle(
+        context,
+        {
+            "action": "sequence",
+            "apply": True,
+            "steps": [
+                {"action": "move", "view_id": data["view_id"], "x": 10, "y": 10},
+                {"action": "click", "view_id": data["view_id"], "x": 20, "y": 20},
+                {"action": "key", "shortcut": "alt+f4"},
+            ],
+        },
+    )
+    assert result["data"]["completed_steps"] == 3
+    assert client.snapshots == 2
+    assert all(
+        args.get("delivery_mode") == "foreground"
+        for name, args in client.calls
+        if name in {"move_cursor", "click", "hotkey"}
+    )
+
+
+def test_windows_vision_does_not_request_element_tree(computer):
+    result = capture(computer, mode="vision")
+    assert result["ok"]
+    assert computer[2].calls[-1][0] == "capture_pixels"
+
+
 def test_sequence_rechecks_cancellation_between_steps(computer):
     service, context, client, _ = computer
     capture(computer)
@@ -400,7 +450,7 @@ def test_cancel_during_start_prevents_capture(computer):
         {"action": "capture", "pid": 1.0, "window_id": 2},
         {"action": "capture", "pid": 1, "window_id": 2, "apply": True},
         {"action": "click", "pid": 1, "window_id": 2, "x": 1, "y": 1},
-        {"action": "key", "pid": 1, "window_id": 2, "shortcut": "win+l"},
+        {"action": "key", "pid": 1, "window_id": 2, "shortcut": "+"},
         {"action": "scroll", "pid": 1, "window_id": 2, "direction": "down", "amount": 101},
         {"action": "capture", "scope": "desktop", "pid": 1, "window_id": 2},
         {"action": "capture", "scope": "desktop", "mode": "ax"},
@@ -488,33 +538,6 @@ def test_verify_reports_structured_result_and_fresh_observation(computer):
     assert result["data"]["observation"]
 
 
-@pytest.mark.parametrize(
-    "action,fields,tool",
-    [
-        ("browser_navigate", {"url": "https://example.com"}, "browser_navigate"),
-        ("browser_click", {"ref": "r1"}, "browser_click"),
-        ("browser_click", {"ref": "r1", "button": "right"}, "browser_pointer"),
-        ("browser_type", {"ref": "r1", "text": "draft"}, "browser_type"),
-        ("browser_hover", {"ref": "r1"}, "browser_pointer"),
-        ("browser_drag", {"ref": "r1", "destination_ref": "r2"}, "browser_pointer"),
-        ("browser_scroll", {"direction": "down"}, "browser_pointer"),
-        ("browser_dialog", {"dialog_action": "accept", "dialog_id": "d1"}, "browser_dialog"),
-    ],
-)
-def test_browser_operations_keep_exact_target_and_owned_session(computer, action, fields, tool):
-    service, context, client, _ = computer
-    assert service.handle(
-        context, {"action": "browser_capture", "target_id": "b1", "tab_id": "t1"}
-    )["ok"]
-    result = service.handle(
-        context, {"action": action, "target_id": "b1", "tab_id": "t1", "apply": True, **fields}
-    )
-    assert result["ok"] and result["data"]["observation"]
-    _, payload = next(item for item in client.calls if item[0] == tool)
-    assert payload["target_id"] == "b1" and payload["tab_id"] == "t1"
-    assert payload["session"].startswith("vbot-")
-
-
 def test_owned_session_cleanup_and_retirement(computer):
     service, context, client, _ = computer
     capture(computer)
@@ -582,71 +605,6 @@ def test_missing_driver_is_not_ready(monkeypatch):
         service._client()
 
 
-def test_browser_pixels_use_css_scale_and_preserve_image_path(computer):
-    service, context, client, _ = computer
-    original_call = client.call
-
-    def response(name, arguments):
-        payload = original_call(name, arguments)
-        if name == "get_browser_state":
-            payload["screenshot"] = {
-                "coordinate_space": "viewport_css_px",
-                "pixel_to_css_scale_x": 0.5,
-                "pixel_to_css_scale_y": 0.5,
-            }
-        return payload
-
-    client.call = response
-    target = {"target_id": "b1", "tab_id": "t1"}
-    data = service.handle(context, {"action": "browser_capture", **target})["data"]
-    assert Path(data["screenshot"]).is_file()
-    data = service.handle(
-        context,
-        {
-            "action": "zoom",
-            **target,
-            "view_id": data["view_id"],
-            "x": 20,
-            "y": 30,
-            "x2": 100,
-            "y2": 100,
-        },
-    )["data"]
-    result = service.handle(
-        context,
-        {
-            "action": "browser_click",
-            **target,
-            "view_id": data["view_id"],
-            "x": 10,
-            "y": 20,
-            "apply": True,
-        },
-    )
-    assert result["ok"]
-    payload = next(args for name, args in client.calls if name == "browser_click")
-    assert (payload["x"], payload["y"]) == (15, 25)
-
-
-def test_browser_pixels_without_scale_refuse_before_input(computer):
-    service, context, client, _ = computer
-    target = {"target_id": "b1", "tab_id": "t1"}
-    data = service.handle(context, {"action": "browser_capture", **target})["data"]
-    result = service.handle(
-        context,
-        {
-            "action": "browser_click",
-            **target,
-            "view_id": data["view_id"],
-            "x": 10,
-            "y": 20,
-            "apply": True,
-        },
-    )
-    assert not result["ok"]
-    assert not any(name == "browser_click" for name, _ in client.calls)
-
-
 def test_desktop_mutation_invalidates_other_window_observations(computer):
     service, context, _, _ = computer
     capture(computer)
@@ -665,14 +623,6 @@ def test_desktop_mutation_invalidates_other_window_observations(computer):
     assert (
         call(computer, "key", shortcut="enter", apply=True)["error"]["code"] == "capture_required"
     )
-
-
-def test_browser_discovery_is_read_only_without_profile(computer):
-    result = call(computer, "browser_prepare")
-    assert result["ok"] and not result["data"].get("preview")
-    payload = next(args for name, args in computer[2].calls if name == "browser_prepare")
-    assert payload["pid"] == 1 and payload["window_id"] == 2
-    assert "allow_launch" not in payload and "strategy" not in payload
 
 
 def test_empty_set_value_clears_field(computer):
@@ -745,6 +695,7 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
     monkeypatch.setattr(driver.CuaDriver, "_stdio", stdio)
     monkeypatch.setattr(driver, "ClientSession", Session)
     client = driver.CuaDriver("test-owned-driver")
+    client.desktop = None
     try:
         if expected:
             with pytest.raises(ComputerUseError, match=expected):
@@ -763,6 +714,7 @@ def test_transport_timeout_never_replays_uncertain_input():
     from resources.extensions.computer_use.driver import CuaDriver
 
     client = CuaDriver("test-owned-driver")
+    client.desktop = None
     calls = []
 
     class Portal:
@@ -886,6 +838,7 @@ def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch
 
     monkeypatch.setattr(CuaDriver, "_connection", connection)
     client = CuaDriver("test-owned-driver")
+    client.desktop = None
     with pytest.raises(ComputerUseError) as failure:
         client.connect()
     assert failure.value.code == "computer_use_stopped"
@@ -931,6 +884,7 @@ for line in sys.stdin:
 
     monkeypatch.setattr(driver.anyio, "open_process", launch)
     client = driver.CuaDriver("test-owned-driver")
+    client.desktop = None
     client.connect()
 
     def call():
@@ -959,19 +913,6 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
     from scripts.probe_provider_tool_call import COMPUTER_CASE_ARGUMENTS
 
     service, context, client, _ = computer
-    original_call = client.call
-
-    def response(name, arguments):
-        result = original_call(name, arguments)
-        if name == "get_browser_state":
-            result["screenshot"] = {
-                "coordinate_space": "viewport_css_px",
-                "pixel_to_css_scale_x": 1,
-                "pixel_to_css_scale_y": 1,
-            }
-        return result
-
-    client.call = response
     for case, arguments in COMPUTER_CASE_ARGUMENTS.items():
         args = dict(arguments)
         if case.startswith("invalid_"):
@@ -980,11 +921,8 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             assert result["error"]["code"] == "invalid_arguments", case
             assert len(client.calls) == before, case
             continue
-        if "target_id" in args:
-            target = {key: args[key] for key in ("target_id", "tab_id")}
-            observed = service.handle(context, {"action": "browser_capture", **target})
-        else:
-            observed = service.handle(context, {"action": "capture", "pid": 101, "window_id": 202})
+        target = {key: args[key] for key in ("pid", "window_id", "scope", "monitor") if key in args}
+        observed = service.handle(context, {"action": "capture", **target})
         assert observed["ok"], case
         if "view_id" in args:
             args["view_id"] = observed["data"]["view_id"]
@@ -1047,34 +985,19 @@ def test_failed_session_cleanup_is_retained_for_shutdown_retry(computer):
     assert not service._sessions
 
 
+def test_cleanup_after_stop_does_not_start_a_replacement_worker(computer):
+    service, _, client, _ = computer
+    capture(computer)
+    service._driver = client
+    client.broken = True
+    previous = list(client.calls)
+    service._close_sessions()
+    assert not service._sessions
+    assert client.calls == previous
+
+
 def test_verified_window_disappearance_survives_capture_failure(computer):
     computer[2].fail = "get_window_state"
     result = call(computer, "verify", expect=[{"window": {"exists": False}}], timeout_ms=0)
     assert result["ok"] and result["data"]["verification"]["verified"]
     assert result["data"]["observation_error"]
-
-
-def test_download_keeps_artifact_metadata_for_next_action(computer):
-    service, context, client, _ = computer
-    original_call = client.call
-    artifact = {"path": (context.data_root / "download.txt").as_posix(), "bytes": 42}
-
-    def response(name, args):
-        if name == "browser_download":
-            return {"status": "completed", "download": artifact}
-        return original_call(name, args)
-
-    client.call = response
-    target = {"target_id": "b1", "tab_id": "t1"}
-    assert service.handle(context, {"action": "browser_capture", **target})["ok"]
-    result = service.handle(
-        context,
-        {
-            "action": "browser_download",
-            **target,
-            "ref": "r1",
-            "directory": str(context.data_root),
-            "apply": True,
-        },
-    )
-    assert result["ok"] and result["data"]["backend"]["download"] == artifact

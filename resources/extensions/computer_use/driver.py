@@ -8,7 +8,10 @@ import re
 import subprocess
 import threading
 from contextlib import ExitStack, asynccontextmanager, suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .windows import WindowsDesktop
 
 import anyio
 from anyio.from_thread import start_blocking_portal
@@ -177,9 +180,20 @@ class CuaDriver:
         self._process: Any = None
         self._process_lock = threading.Lock()
         self._interrupted = False
+        self.desktop: WindowsDesktop | None = None
+        if os.name == "nt":
+            from .windows import WindowsDesktop
+
+            self.desktop = WindowsDesktop()
 
     def interrupt(self) -> None:
         """Stop only this connection's owned input worker, without waiting for RPC."""
+        if self.desktop is not None:
+            try:
+                self.desktop.interrupt()
+            except ComputerUseError:
+                # The MCP process must still be interrupted if Windows refused key cleanup.
+                self.broken = True
         with self._process_lock:
             self._interrupted = True
             self.broken = True
@@ -269,9 +283,11 @@ class CuaDriver:
                 )
             catalog = await session.list_tools()
             self.schemas = {tool.name: tool.input_schema for tool in catalog.tools}
+            for name in ("capture_pixels", "list_monitors"):
+                self.schemas[name] = {"properties": {"session": {}}}
             config = await session.call_tool("get_config", {})
             values = unpack(config.model_dump(by_alias=True, exclude_none=True))
-            if values.get("max_image_dimension") != 0:
+            if self.desktop is None and values.get("max_image_dimension") != 0:
                 raise ComputerUseError(
                     "Set cua-driver max_image_dimension to 0 and reload Extensions so "
                     "original screenshots remain available."
@@ -323,6 +339,43 @@ class CuaDriver:
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.connect()
+        arguments = dict(arguments)
+        if self.desktop is not None:
+            if name == "list_monitors":
+                return {"monitors": self.desktop.monitors()}
+            if name in {"capture_pixels", "get_desktop_state"}:
+                return self.desktop.capture(arguments)
+            if name == "get_window_state" and arguments.get("include_screenshot", True):
+                # One native screenshot; request UIA separately only when needed.
+                pixels = self.desktop.capture(arguments)
+                state = self.call(name, {**arguments, "include_screenshot": False})
+                return {**state, **pixels}
+            if (
+                name
+                in {"move_cursor", "click", "type_text", "press_key", "hotkey", "scroll", "drag"}
+                and "element_token" not in arguments
+            ):
+                if arguments.get("delivery_mode") != "foreground":
+                    raise ComputerUseError(
+                        (
+                            "Pixel input needs foreground delivery. Use foreground=true or a window"
+                            " element reference."
+                        ),
+                        "foreground_required",
+                    )
+                return self.desktop.input(name, arguments)
+            if name == "end_session":
+                self.desktop.end_session(arguments.get("session", ""))
+        elif name == "list_monitors" or "monitor" in arguments or "duration_ms" in arguments:
+            raise ComputerUseError(
+                "Monitor selection and timed input are currently available on Windows only.",
+                "unsupported_capability",
+            )
+        elif name == "capture_pixels":
+            name = "get_window_state"
+        # Desktop scope is implicit in this read-only upstream method.
+        if name == "get_desktop_state":
+            arguments.pop("scope", None)
         if name not in self.schemas:
             raise ComputerUseError(
                 "This driver lacks a required capability. Update cua-driver and reload Extensions."
@@ -346,6 +399,8 @@ class CuaDriver:
         return unpack(response.model_dump(by_alias=True, exclude_none=True))
 
     def close(self) -> None:
+        if self.desktop is not None:
+            self.desktop.release()
         stack, self._stack = self._stack, None
         self._session = None
         self._portal = None
