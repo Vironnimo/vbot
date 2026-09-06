@@ -7,11 +7,13 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -91,7 +93,16 @@ BROWSER_PARAMETERS = {
                     "text": {
                         "type": "string",
                         "description": (
-                            "Text to fill, including an empty string to clear the field."
+                            "Text to fill or option value to select. "
+                            "An empty string clears a text field."
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["fill", "select"],
+                        "description": (
+                            "Form control operation. Omit for text input; "
+                            "use select for an option value."
                         ),
                     },
                 },
@@ -153,7 +164,6 @@ BROWSER_PARAMETERS = {
     "required": ["action"],
 }
 MESSAGES = {
-    "invalid": "Invalid browser arguments. Check the selected action's fields and required values.",
     "unavailable": (
         "Browser components could not be prepared automatically. "
         "Retry the browser operation once. If preparation fails again, "
@@ -265,64 +275,108 @@ READ_ACTIONS = {"status", "snapshot", "read", "screenshot", "tabs", "wait", "dow
 class BrowserError(Exception):
     """Expected failure without raw credentials, page text, or CLI arguments."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, message: str | None = None):
         self.code = code
-        super().__init__(MESSAGES[code])
+        super().__init__(message if message is not None else MESSAGES[code])
+
+
+class BrowserArgumentError(BrowserError):
+    """Identify an argument by its schema path without echoing input values."""
+
+    def __init__(self, field: str, correction: str):
+        self.field = field
+        super().__init__("invalid", f"Invalid {field}. {correction}")
+
+
+def _validate_text(value: Any, path: str, *, empty: bool = False) -> None:
+    if not (
+        isinstance(value, str)
+        and (empty or bool(value))
+        and len(value) <= 100000
+        and "\x00" not in value
+    ):
+        qualifier = "" if empty else "non-empty "
+        raise BrowserArgumentError(
+            path,
+            f"Provide a {qualifier}string with at most 100000 characters and no null characters.",
+        )
 
 
 def validate_arguments(arguments: Any) -> dict[str, Any]:
     """Validate all input before starting a browser or applying a form field."""
     if not isinstance(arguments, dict):
-        raise BrowserError("invalid")
+        raise BrowserArgumentError("arguments", "Provide an object.")
     action = arguments.get("action")
     if not isinstance(action, str) or action not in FIELDS:
-        raise BrowserError("invalid")
+        raise BrowserArgumentError("action", "Choose one of: " + ", ".join(FIELDS) + ".")
     if set(arguments) - {"action", *FIELDS[action]}:
-        raise BrowserError("invalid")
-    if any(key not in arguments for key in REQUIRED.get(action, ())):
-        raise BrowserError("invalid")
+        unexpected = next(key for key in arguments if key not in {"action", *FIELDS[action]})
+        path = (
+            unexpected
+            if isinstance(unexpected, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", unexpected)
+            else "arguments"
+        )
+        raise BrowserArgumentError(
+            path,
+            "Use only these fields: " + ", ".join(("action", *FIELDS[action])) + ".",
+        )
+    missing = [key for key in REQUIRED.get(action, ()) if key not in arguments]
+    if missing:
+        raise BrowserArgumentError(
+            f"arguments for {action}", "Provide the required fields: " + ", ".join(missing) + "."
+        )
     for key, value in arguments.items():
         if key in {"full", "observe", "accept"}:
-            valid = type(value) is bool
+            if type(value) is not bool:
+                raise BrowserArgumentError(key, "Provide true or false.")
         elif key in {"amount", "offset", "limit"}:
             lower, upper = {"amount": (1, 5000), "offset": (0, 10000000), "limit": (1, MAX_TEXT)}[
                 key
             ]
-            valid = type(value) is int and lower <= value <= upper
+            if type(value) is not int or not lower <= value <= upper:
+                raise BrowserArgumentError(key, f"Provide an integer from {lower} to {upper}.")
         elif key == "fields":
-            valid = isinstance(value, list) and 1 <= len(value) <= 30
-            if valid:
-                valid = all(
-                    isinstance(item, dict)
-                    and set(item) == {"target", "text"}
-                    and isinstance(item["target"], str)
-                    and bool(item["target"])
-                    and isinstance(item["text"], str)
-                    and len(item["text"]) <= 100000
-                    and "\x00" not in item["text"]
-                    for item in value
-                )
+            if not isinstance(value, list) or not 1 <= len(value) <= 30:
+                raise BrowserArgumentError(key, "Provide between 1 and 30 items.")
+            for index, item in enumerate(value):
+                path = f"fields[{index}]"
+                if not isinstance(item, dict):
+                    raise BrowserArgumentError(path, "Provide an object.")
+                if set(item) - {"target", "text", "kind"}:
+                    unexpected = next(key for key in item if key not in {"target", "text", "kind"})
+                    if isinstance(unexpected, str) and re.fullmatch(
+                        r"[A-Za-z_][A-Za-z0-9_]{0,63}", unexpected
+                    ):
+                        path += "." + unexpected
+                    raise BrowserArgumentError(path, "Use only these fields: target, text, kind.")
+                missing = [name for name in ("target", "text") if name not in item]
+                if missing:
+                    raise BrowserArgumentError(
+                        path, "Provide the required fields: " + ", ".join(missing) + "."
+                    )
+                if item.get("kind", "fill") not in ("fill", "select"):
+                    raise BrowserArgumentError(path + ".kind", "Choose one of: fill, select.")
+                _validate_text(item["target"], path + ".target")
+                _validate_text(item["text"], path + ".text", empty=True)
         elif key == "files":
-            valid = (
-                isinstance(value, list)
-                and 1 <= len(value) <= 20
-                and all(
-                    isinstance(item, str) and bool(item) and "\x00" not in item for item in value
-                )
-            )
+            if not isinstance(value, list) or not 1 <= len(value) <= 20:
+                raise BrowserArgumentError(key, "Provide between 1 and 20 items.")
+            for index, path in enumerate(value):
+                _validate_text(path, f"files[{index}]")
+                if not (PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()):
+                    raise BrowserArgumentError(
+                        f"files[{index}]",
+                        "Provide an absolute file path on the browser's computer.",
+                    )
         else:
-            valid = (
-                isinstance(value, str)
-                and bool(value)
-                and len(value) <= 100000
-                and "\x00" not in value
-            )
-        if not valid:
-            raise BrowserError("invalid")
+            _validate_text(value, key)
     if "direction" in arguments and arguments["direction"] not in {"up", "down", "left", "right"}:
-        raise BrowserError("invalid")
+        raise BrowserArgumentError("direction", "Choose one of: up, down, left, right.")
     if "text" in arguments and action == "dialog" and not arguments.get("accept", False):
-        raise BrowserError("invalid")
+        raise BrowserArgumentError(
+            "text", "Set accept to true when supplying a prompt response, or omit text."
+        )
     if "url" in arguments:
         validate_url(arguments["url"])
     return dict(arguments)
@@ -343,7 +397,9 @@ def validate_url(url: str) -> None:
     except ValueError:
         valid = False
     if not valid or any(character.isspace() for character in url):
-        raise BrowserError("invalid")
+        raise BrowserArgumentError(
+            "url", "Use an HTTP(S) URL without credentials or whitespace, or about:blank."
+        )
 
 
 @dataclass
@@ -463,6 +519,8 @@ class BrowserService:
         self._external_lock = threading.RLock()
         self._sessions: dict[tuple[str | None, str, str], BrowserSession] = {}
         self._closed = False
+        self._ref_next = 0
+        self._ref_end = 0
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
@@ -643,6 +701,39 @@ class BrowserService:
             raise BrowserError("stale")
         return ref
 
+    def _new_refs(self, count: int) -> list[str]:
+        """Lease durable numeric ranges, so refs never repeat after a reload.
+
+        SQLite's transaction serializes processes sharing this data directory.
+        A small range amortizes disk writes; unused numbers are never reclaimed.
+        """
+        if not count:
+            return []
+        with self._guard:
+            if self.host is None:
+                raise BrowserError("stopped")
+            if self._ref_next + count > self._ref_end:
+                directory = self.host.data_dir.resolve() / "artifacts" / "browser-use"
+                if not directory.resolve().is_relative_to(self.host.data_dir.resolve()):
+                    raise BrowserError("config")
+                directory.mkdir(parents=True, exist_ok=True)
+                with closing(sqlite3.connect(directory / "refs.db", timeout=5)) as connection:
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        connection.execute(
+                            "CREATE TABLE IF NOT EXISTS sequence "
+                            "(id INTEGER PRIMARY KEY CHECK(id=1), "
+                            "next INTEGER NOT NULL CHECK(next>0)) STRICT"
+                        )
+                        row = connection.execute("SELECT next FROM sequence WHERE id=1").fetchone()
+                        start = row[0] if row else 1
+                        end = start + max(count, 4096)
+                        connection.execute("INSERT OR REPLACE INTO sequence VALUES (1, ?)", (end,))
+                    self._ref_next, self._ref_end = start, end
+            start = self._ref_next
+            self._ref_next += count
+            return [f"r{number}" for number in range(start, self._ref_next)]
+
     def _snapshot(
         self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
     ) -> dict[str, Any]:
@@ -656,15 +747,37 @@ class BrowserService:
         tree, refs = payload.get("snapshot"), payload.get("refs")
         if not isinstance(tree, str) or not isinstance(refs, dict):
             raise BrowserError("failed")
-        prefix = "r" + uuid.uuid4().hex[:10] + "_"
-        # Only refs actually present in returned text are actionable.
-        tree = re.sub(r"\bref=(e[1-9][0-9]*)\b", lambda match: "ref=" + prefix + match[1], tree)
+        source: str = tree
+        keys: list[str] = list(
+            dict.fromkeys(key for key in re.findall(r"\bref=(e[1-9][0-9]*)\b", tree) if key in refs)
+        )
+        try:
+            labels: dict[str, str] = dict(zip(keys, self._new_refs(len(keys)), strict=True))
+        except (OSError, sqlite3.Error):
+            raise BrowserError("failed") from None
+        # Track generated labels so page text cannot publish a truncated ref.
+        positions: list[tuple[int, str, str]] = []
+        shift = 0
+
+        def replace_ref(match: re.Match[str]) -> str:
+            nonlocal shift
+            key = match.group(1)
+            label = labels.get(key)
+            if label is None:
+                return match[0]
+            replacement = "ref=" + label
+            shift += len(replacement) - len(match[0])
+            if source[match.end() : match.end() + 1] == "]":
+                positions.append((match.end() + shift + 1, label, key))
+            return replacement
+
+        tree = re.sub(r"\bref=(e[1-9][0-9]*)\b", replace_ref, source)
         truncated = len(tree) > MAX_TEXT
         if truncated:
             tree = tree[:MAX_TEXT].rsplit("\n", 1)[0]
-        for key in refs:
-            if re.fullmatch(r"e[1-9][0-9]*", key) and f"ref={prefix}{key}]" in tree:
-                session.refs[prefix + key] = "@" + key
+        for end, label, key in positions:
+            if end <= len(tree):
+                session.refs[label] = "@" + key
         result: dict[str, Any] = {
             "snapshot": tree,
             "url": payload.get("origin", ""),
@@ -825,7 +938,7 @@ class BrowserService:
         commands: list[list[str]] = []
         if action == "fill":
             commands = [
-                ["fill", self._ref(session, item["target"]), item["text"]]
+                [item.get("kind", "fill"), self._ref(session, item["target"]), item["text"]]
                 for item in args["fields"]
             ]
         elif action in {"switch_tab", "close_tab"}:
@@ -884,15 +997,13 @@ class BrowserService:
                 ]
             ]
         elif action == "upload":
-            if not all(
-                PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
-                for path in args["files"]
-            ):
-                raise BrowserError("invalid")
-            if session.config[0] != "remote" and not all(
-                Path(path).is_file() for path in args["files"]
-            ):
-                raise BrowserError("invalid")
+            if session.config[0] != "remote":
+                for index, path in enumerate(args["files"]):
+                    if not Path(path).is_file():
+                        raise BrowserArgumentError(
+                            f"files[{index}]",
+                            "Provide a path to an existing file on the browser's computer.",
+                        )
             commands = [["upload", self._ref(session, args["target"]), *args["files"]]]
         if action not in READ_ACTIONS:
             session.refs.clear()

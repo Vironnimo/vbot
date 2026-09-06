@@ -11,7 +11,7 @@ Use the browser Tool to carry out the user's website task and verify the result.
 
 1. Start with `open` and the task's URL. To work in an already connected, logged-in page, use `tabs` and select the matching id with `switch_tab`.
 2. Read the returned snapshot. Use its exact element refs for interaction. After page changes, obtain fresh refs with `snapshot` or request `observe: true` on the action. Refs from an earlier Run are no longer valid.
-3. Fill related text fields together in one `fill` call using `fields: [{target, text}, ...]`. An empty text clears a field. Use `select` for an option and `press` for a key combination. Request one observation after the group, then use the new ref to submit.
+3. Fill related text and selection fields together in one `fill` call. Use `{target, text}` for text inputs and `{target, text, kind: "select"}` for option values in the `fields` array. An empty text clears a text input. Use `press` for a key combination. Request one observation after the group, then use the new ref to submit.
 4. Verify the requested outcome using visible confirmation or page content. Continue until the task is complete or a concrete blocker remains; opening a page alone does not complete a task that asks for an action.
 
 ## Reading and visual work

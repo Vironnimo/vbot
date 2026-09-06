@@ -285,23 +285,51 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "dialog": {"action": "dialog"},
     "close": {"action": "close"},
     "open": {"action": "open", "url": "https://example.com"},
-    "click": {"action": "click", "target": "r0000000000_e1"},
+    "click": {"action": "click", "target": "r1"},
     "fill": {
         "action": "fill",
         "fields": [
-            {"target": "r0000000000_e1", "text": "Alice"},
-            {"target": "r0000000000_e2", "text": ""},
+            {"target": "r1", "text": "Alice"},
+            {"target": "r2", "text": ""},
         ],
     },
+    "fill_explicit_kind": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "Alice", "kind": "fill"}],
+    },
+    "fill_select": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "Pro", "kind": "select"}],
+    },
+    "fill_select_empty": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "", "kind": "select"}],
+    },
+    "fill_mixed": {
+        "action": "fill",
+        "fields": [
+            {"target": "r1", "text": "Alice"},
+            {"target": "r2", "text": "Pro", "kind": "select"},
+        ],
+        "observe": True,
+    },
+    "invalid_fill_kind": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "Pro", "kind": "click"}],
+    },
+    "invalid_fill_extra": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "Alice", "submit": True}],
+    },
     "press": {"action": "press", "text": "Control+A"},
-    "select": {"action": "select", "target": "r0000000000_e1", "text": "Pro"},
-    "hover": {"action": "hover", "target": "r0000000000_e1"},
+    "select": {"action": "select", "target": "r1", "text": "Pro"},
+    "hover": {"action": "hover", "target": "r1"},
     "wait": {"action": "wait", "text": "Saved"},
     "switch_tab": {"action": "switch_tab", "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "close_tab": {"action": "close_tab", "tab": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "upload": {
         "action": "upload",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "files": ["/tmp/browser-fixture.txt"],
     },
     "open_observe_true": {"action": "open", "url": "https://example.com", "observe": True},
@@ -312,21 +340,21 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "forward_observe_false": {"action": "forward", "observe": False},
     "reload_observe_true": {"action": "reload", "observe": True},
     "reload_observe_false": {"action": "reload", "observe": False},
-    "click_observe_true": {"action": "click", "target": "r0000000000_e1", "observe": True},
-    "click_observe_false": {"action": "click", "target": "r0000000000_e1", "observe": False},
+    "click_observe_true": {"action": "click", "target": "r1", "observe": True},
+    "click_observe_false": {"action": "click", "target": "r1", "observe": False},
     "fill_observe_true": {
         "action": "fill",
         "fields": [
-            {"target": "r0000000000_e1", "text": "Alice"},
-            {"target": "r0000000000_e2", "text": ""},
+            {"target": "r1", "text": "Alice"},
+            {"target": "r2", "text": ""},
         ],
         "observe": True,
     },
     "fill_observe_false": {
         "action": "fill",
         "fields": [
-            {"target": "r0000000000_e1", "text": "Alice"},
-            {"target": "r0000000000_e2", "text": ""},
+            {"target": "r1", "text": "Alice"},
+            {"target": "r2", "text": ""},
         ],
         "observe": False,
     },
@@ -334,18 +362,18 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "press_observe_false": {"action": "press", "text": "Control+A", "observe": False},
     "select_observe_true": {
         "action": "select",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "text": "Pro",
         "observe": True,
     },
     "select_observe_false": {
         "action": "select",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "text": "Pro",
         "observe": False,
     },
-    "hover_observe_true": {"action": "hover", "target": "r0000000000_e1", "observe": True},
-    "hover_observe_false": {"action": "hover", "target": "r0000000000_e1", "observe": False},
+    "hover_observe_true": {"action": "hover", "target": "r1", "observe": True},
+    "hover_observe_false": {"action": "hover", "target": "r1", "observe": False},
     "scroll_observe_true": {"action": "scroll", "observe": True},
     "scroll_observe_false": {"action": "scroll", "observe": False},
     "wait_observe_true": {"action": "wait", "text": "Saved", "observe": True},
@@ -366,13 +394,13 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "dialog_observe_false": {"action": "dialog", "observe": False},
     "upload_observe_true": {
         "action": "upload",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "files": ["/tmp/browser-fixture.txt"],
         "observe": True,
     },
     "upload_observe_false": {
         "action": "upload",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "files": ["/tmp/browser-fixture.txt"],
         "observe": False,
     },
@@ -381,10 +409,10 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "snapshot_scope": {"action": "snapshot", "selector": "main"},
     "screenshot_full": {"action": "screenshot", "full": True},
     "screenshot_viewport": {"action": "screenshot", "full": False},
-    "read_target": {"action": "read", "target": "r0000000000_e1", "offset": 2, "limit": 20},
+    "read_target": {"action": "read", "target": "r1", "offset": 2, "limit": 20},
     "scroll_target": {
         "action": "scroll",
-        "target": "r0000000000_e1",
+        "target": "r1",
         "direction": "up",
         "amount": 300,
     },
@@ -397,7 +425,7 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "invalid_unknown": {"action": "tabs", "unknown": True},
     "invalid_combination": {"action": "close", "url": "https://example.com"},
     "invalid_missing": {"action": "click"},
-    "invalid_field": {"action": "fill", "fields": [{"target": "r0000000000_e1"}]},
+    "invalid_field": {"action": "fill", "fields": [{"target": "r1"}]},
 }
 
 COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
@@ -4207,6 +4235,7 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
             ]
             actions: list[dict[str, Any]] = []
             final = ""
+            mixed_form_call = False
             try:
                 async with asyncio.timeout(args.total_timeout):
                     for _ in range(24):
@@ -4237,6 +4266,15 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
                                 call["arguments"],
                                 allowed_tools=allowed,
                             )
+                            if (
+                                call["name"] == "browser"
+                                and call["arguments"].get("action") == "fill"
+                                and result["ok"]
+                            ):
+                                kinds = {
+                                    item.get("kind", "fill") for item in call["arguments"]["fields"]
+                                }
+                                mixed_form_call |= {"fill", "select"} <= kinds
                             actions.append(
                                 {
                                     "tool": call["name"],
@@ -4274,6 +4312,7 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
                     "download_verified": downloaded,
                     "reference_verified": "B-739251" in final,
                     "skill_activated": guidance,
+                    "mixed_form_call": mixed_form_call,
                     "failed_calls": sum(not row["ok"] for row in actions),
                 }
             finally:
