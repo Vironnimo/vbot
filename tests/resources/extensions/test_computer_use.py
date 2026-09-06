@@ -6,6 +6,8 @@ import asyncio
 import base64
 import io
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -224,14 +226,18 @@ def test_scaled_image_coordinates_and_native_crop_round_trip(computer):
     result = capture(computer)["data"]
     assert (result["image_width"], result["image_height"]) == (1600, 900)
     assert Image.open(result["original"]).size == (3840, 2160)
-    zoom = call(computer, "zoom", view_id=result["view_id"], x=100, y=100, x2=200, y2=200)["data"]
+    zoom = call(
+        computer, "zoom", view_id=result["view_id"], coordinate=[100, 100], to_coordinate=[200, 200]
+    )["data"]
     assert (zoom["image_width"], zoom["image_height"]) == (240, 240)
-    clicked = call(computer, "click", view_id=zoom["view_id"], x=50, y=60, apply=True)
+    clicked = call(computer, "click", view_id=zoom["view_id"], coordinate=[50, 60], apply=True)
     assert clicked["ok"]
     _, args = next(item for item in computer[2].calls if item[0] == "click")
     assert (args["x"], args["y"]) == (290, 300)
     assert (
-        call(computer, "click", view_id=result["view_id"], x=1, y=1, apply=True)["error"]["code"]
+        call(computer, "click", view_id=result["view_id"], coordinate=[1, 1], apply=True)["error"][
+            "code"
+        ]
         == "stale_view"
     )
 
@@ -240,7 +246,7 @@ def test_original_resolution_and_image_edges(computer):
     computer[2].size = (1800, 1000)
     data = capture(computer, resolution="original")["data"]
     assert data["image_width"] == 1800
-    result = call(computer, "click", view_id=data["view_id"], x=1800, y=2, apply=True)
+    result = call(computer, "click", view_id=data["view_id"], coordinate=[1800, 2], apply=True)
     assert result["error"]["code"] == "invalid_coordinates"
     assert not any(name == "click" for name, _ in computer[2].calls)
 
@@ -259,8 +265,7 @@ def test_capture_authority_never_crosses_context(computer, change):
             "pid": 1,
             "window_id": 2,
             "view_id": data["view_id"],
-            "x": 1,
-            "y": 1,
+            "coordinate": [1, 1],
             "apply": True,
         },
     )
@@ -339,7 +344,7 @@ def test_later_sequence_coordinates_validate_before_first_input(computer):
         apply=True,
         steps=[
             {"action": "type", "text": "must not be sent"},
-            {"action": "click", "view_id": data["view_id"], "x": 9000, "y": 10},
+            {"action": "click", "view_id": data["view_id"], "coordinate": [9000, 10]},
         ],
     )
     assert result["error"]["code"] == "invalid_coordinates"
@@ -356,8 +361,8 @@ def test_desktop_defaults_to_fast_pixels_and_native_sequence(computer):
             "action": "sequence",
             "apply": True,
             "steps": [
-                {"action": "move", "view_id": data["view_id"], "x": 10, "y": 10},
-                {"action": "click", "view_id": data["view_id"], "x": 20, "y": 20},
+                {"action": "move", "view_id": data["view_id"], "coordinate": [10, 10]},
+                {"action": "click", "view_id": data["view_id"], "coordinate": [20, 20]},
                 {"action": "key", "shortcut": "alt+f4"},
             ],
         },
@@ -449,11 +454,11 @@ def test_cancel_during_start_prevents_capture(computer):
         {"action": "capture", "pid": True, "window_id": 2},
         {"action": "capture", "pid": 1.0, "window_id": 2},
         {"action": "capture", "pid": 1, "window_id": 2, "apply": True},
-        {"action": "click", "pid": 1, "window_id": 2, "x": 1, "y": 1},
+        {"action": "click", "pid": 1, "window_id": 2, "coordinate": [1, 1]},
         {"action": "key", "pid": 1, "window_id": 2, "shortcut": "+"},
         {"action": "scroll", "pid": 1, "window_id": 2, "direction": "down", "amount": 101},
         {"action": "capture", "scope": "desktop", "pid": 1, "window_id": 2},
-        {"action": "capture", "scope": "desktop", "mode": "ax"},
+        {"action": "capture", "mode": "ax"},
         {
             "action": "sequence",
             "pid": 1,
@@ -500,8 +505,8 @@ def test_invalid_arguments_fail_before_any_driver_work(computer, args):
     [
         ("set_value", {"element": "1", "text": "new"}, "set_value"),
         ("menu", {"menu_path": ["File", "Save"]}, "invoke_menu"),
-        ("resize", {"x": -100, "y": 0, "width": 900, "height": 700}, "set_window_frame"),
-        ("drag", {"x": 1, "y": 2, "x2": 20, "y2": 30}, "drag"),
+        ("resize", {"coordinate": [-100, 0], "size": [900, 700]}, "set_window_frame"),
+        ("drag", {"coordinate": [1, 2], "to_coordinate": [20, 30]}, "drag"),
     ],
 )
 def test_desktop_operations_return_observations(computer, action, fields, tool):
@@ -515,21 +520,19 @@ def test_desktop_operations_return_observations(computer, action, fields, tool):
 
 def test_desktop_scope_uses_own_coordinate_space(computer):
     service, context, client, _ = computer
-    data = service.handle(context, {"action": "capture", "scope": "desktop"})["data"]
+    data = service.handle(context, {"action": "capture"})["data"]
     result = service.handle(
         context,
         {
             "action": "click",
-            "scope": "desktop",
             "view_id": data["view_id"],
-            "x": 10,
-            "y": 10,
+            "coordinate": [10, 10],
             "apply": True,
         },
     )
     assert result["ok"]
     _, payload = next(item for item in client.calls if item[0] == "click")
-    assert payload["scope"] == "desktop" and "pid" not in payload
+    assert "pid" not in payload
 
 
 def test_verify_reports_structured_result_and_fresh_observation(computer):
@@ -608,15 +611,13 @@ def test_missing_driver_is_not_ready(monkeypatch):
 def test_desktop_mutation_invalidates_other_window_observations(computer):
     service, context, _, _ = computer
     capture(computer)
-    data = service.handle(context, {"action": "capture", "scope": "desktop"})["data"]
+    data = service.handle(context, {"action": "capture"})["data"]
     assert service.handle(
         context,
         {
             "action": "click",
-            "scope": "desktop",
             "view_id": data["view_id"],
-            "x": 10,
-            "y": 20,
+            "coordinate": [10, 20],
             "apply": True,
         },
     )["ok"]
@@ -921,7 +922,7 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             assert result["error"]["code"] == "invalid_arguments", case
             assert len(client.calls) == before, case
             continue
-        target = {key: args[key] for key in ("pid", "window_id", "scope", "monitor") if key in args}
+        target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
         observed = service.handle(context, {"action": "capture", **target})
         assert observed["ok"], case
         if "view_id" in args:
@@ -930,6 +931,131 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             args["element"] = observed["data"]["elements"][0]["element_token"]
         result = service.handle(context, args)
         assert result["ok"], (case, result)
+
+
+def test_skip_capture_preserves_outcome_and_retires_view(computer):
+    capture(computer)
+    result = call(computer, "type", text="draft", apply=True, capture_after=False)
+    assert result["ok"] and result["data"]["applied"]
+    assert "observation" not in result["data"]
+    assert "Capture" in result["data"]["next_action"]
+    assert computer[2].snapshots == 1
+    assert (
+        call(computer, "key", shortcut="enter", apply=True)["error"]["code"] == "capture_required"
+    )
+    capture(computer)
+    assert call(computer, "key", shortcut="enter", apply=True)["ok"]
+
+
+def test_sequence_without_capture_and_wait_only_captures_at_end(computer):
+    capture(computer)
+    result = call(
+        computer,
+        "sequence",
+        apply=True,
+        capture_after=False,
+        steps=[
+            {"action": "type", "text": "draft"},
+            {"action": "wait", "duration_ms": 0},
+            {"action": "key", "shortcut": "enter"},
+        ],
+    )
+    assert result["ok"] and result["data"]["completed_steps"] == 3
+    assert computer[2].snapshots == 1
+    assert call(computer, "wait", duration_ms=0)["ok"]
+    assert computer[2].snapshots == 2
+
+
+def test_failed_sequence_captures_even_if_capture_after_false(computer):
+    capture(computer)
+    computer[2].fail = "press_key"
+    result = call(
+        computer,
+        "sequence",
+        apply=True,
+        capture_after=False,
+        steps=[
+            {"action": "type", "text": "draft"},
+            {"action": "key", "shortcut": "enter"},
+        ],
+    )
+    assert result["data"]["partial"] and result["data"]["completed_steps"] == 1
+    assert "observation" in result["data"]
+
+
+def test_wait_interrupts_immediately_without_recapture(computer, monkeypatch):
+    service, _, client, _ = computer
+    waiting = threading.Event()
+    original = service._wake.wait
+
+    def wait(seconds):
+        waiting.set()
+        return original(seconds)
+
+    monkeypatch.setattr(service._wake, "wait", wait)
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(call, computer, "wait", duration_ms=10_000)
+        assert waiting.wait(1)
+        service.stop()
+        assert future.result(timeout=0.5)["error"]["code"] == "computer_use_stopped"
+    assert client.snapshots == 0
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "move", "view_id": "v", "coordinate": [1]},
+        {"action": "move", "view_id": "v", "coordinate": [1, 2, 3]},
+        {"action": "move", "view_id": "v", "coordinate": [1.0, 2]},
+        {"action": "move", "view_id": "v", "coordinate": [True, 2]},
+        {"action": "move", "view_id": "v", "coordinate": [-1, 2]},
+        {"action": "click", "view_id": "v", "coordinate": [1, 2], "modifiers": ["ctrl", "ctrl"]},
+        {
+            "action": "click",
+            "view_id": "v",
+            "coordinate": [1, 2],
+            "modifiers": ["ctrl"],
+            "foreground": False,
+        },
+        {"action": "click", "pid": 1, "window_id": 2, "element": "1", "modifiers": ["ctrl"]},
+        {"action": "resize", "pid": 1, "window_id": 2, "coordinate": [0, 0], "size": [0, 5]},
+        {"action": "wait", "duration_ms": 10_001},
+        {"action": "capture", "capture_after": False},
+    ],
+)
+def test_compact_contract_rejects_bad_values_before_connect(computer, arguments):
+    service, context, client, _ = computer
+    assert service.handle(context, arguments)["error"]["code"] == "invalid_arguments"
+    assert client.calls == []
+
+
+def test_pointer_modifiers_are_forwarded_and_prevalidated_for_every_step(computer):
+    data = capture(computer)["data"]
+    result = call(
+        computer,
+        "click",
+        view_id=data["view_id"],
+        coordinate=[10, 20],
+        modifiers=["ctrl", "shift"],
+        apply=True,
+    )
+    assert result["ok"]
+    assert next(args for name, args in computer[2].calls if name == "click")["modifiers"] == [
+        "ctrl",
+        "shift",
+    ]
+    before = len(computer[2].calls)
+    result = call(
+        computer,
+        "sequence",
+        apply=True,
+        steps=[
+            {"action": "type", "text": "never"},
+            {"action": "click", "view_id": "v", "coordinate": [10, 20], "modifiers": ["invalid"]},
+        ],
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert len(computer[2].calls) == before
 
 
 def test_sequence_zero_completed_steps_uses_failure_envelope(computer):
