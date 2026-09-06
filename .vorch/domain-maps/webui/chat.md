@@ -66,6 +66,8 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 
 ## Composer and inputs
 
+`ComputerUseControl.svelte` owns contextual Computer Use stop/resume buttons inserted through ChatComposer's existing action slot by ChatView. It discovers the loaded Extension and polls its management operation; availability alone renders nothing. Ongoing control remains visible between Tool calls, and a latched stop exposes explicit recovery. Mutation generations reject stale status/resume responses, resume forwards the current stop token, and Stop remains reachable during resume. Mutation errors use Chat's existing toast. Native double-Esc and the persisted interlock belong to the Extension (see `extensions/computer-use.md`), not browser key listeners.
+
 - `ChatComposer.svelte` owns draft entry and delegates parsing/media to established helpers; every submission variant uses the same resolved address.
 - Submission serializes from an initial snapshot (text, origin, attachments, callbacks) through file-mention resolution and admission; only a confirmed successful outcome clears draft and attachments - failures and mid-flight additions stay editable. No-argument immediate Commands enter the same guarded path.
 - Setup guidance is prerequisite-ordered: missing Provider routes to Settings -> Providers before model-less-Agent guidance routes to Agents; readiness is never inferred from the Model catalog, and neither prompt shows while Settings are unresolved.

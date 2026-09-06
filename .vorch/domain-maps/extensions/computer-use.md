@@ -26,7 +26,7 @@ Internally named Driver sessions belong to Project/Agent/Session/Run. Explicit c
 
 Operator stop runs outside the service lock. Windows checks a stop event before short input batches; timed key holds and drag waits are interruptible and release owned keys/buttons on completion, error, and stop. A stopped native adapter is not reused. Already delivered OS events cannot be rolled back.
 
-Stop latches in `<data_dir>/computer-use-stopped` across reload/restart. The user-only `control` operation supplies status/stop/resume; resume needs the current stop token and no active call. `ComputerUseControl.svelte` owns the global UI through Extension RPC. `EmergencyHotkey` owns Windows Ctrl+Alt+Pause and reports registration failure. Agents cannot resume through `computer`.
+Stop latches in `<data_dir>/computer-use-stopped` across reload/restart. The user-only `control` operation supplies status/stop/resume; resume needs the current stop token and no active call. `ComputerUseControl.svelte` renders contextual stop/resume icons inside the existing Chat composer through Extension RPC; no app-wide bar is mounted. `EmergencyHotkey` owns a Windows keyboard hook for two physical Esc presses within 600 ms, with key-up between them; repeats and injected input are ignored, and events pass through. A separate worker interrupts input so the hook never waits for driver cleanup. Detection stays armed between calls until the last participating Run ends or explicitly closes, independently of transport session cleanup; a pending stop blocks new Tool input before worker dispatch. Management status distinguishes an active call from ongoing computer control and reports hook availability. Agents cannot resume through `computer`.
 
 ## Observations and verification
 

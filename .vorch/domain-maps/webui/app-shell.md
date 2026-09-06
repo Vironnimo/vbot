@@ -8,7 +8,6 @@ Read this reference only for WebUI application-shell, navigation, connectivity, 
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
-`ComputerUseControl.svelte` owns the persistent operator stop/resume surface, separate from pending Extension questions. It discovers the loaded Extension and polls its `control` management operation; mutation generations reject stale status responses, and resume forwards the server's current stop token. Stop remains available during an outstanding resume. The backend interlock is owned by the Computer Use Extension, not the shell.
 
 ## Desktop context menu
 
