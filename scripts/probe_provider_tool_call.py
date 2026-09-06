@@ -692,6 +692,39 @@ COMPUTER_CASE_ARGUMENTS.update(
     }
 )
 
+COMPUTER_CASE_ARGUMENTS.update(
+    {
+        **{
+            f"background_{case}": {**COMPUTER_CASE_ARGUMENTS[case], "foreground": False}
+            for case in (
+                "capture_default",
+                "capture_vision",
+                "capture_ax",
+                "click_coordinates",
+                "move",
+                "wait_window",
+                "click_element",
+            )
+        },
+        "background_set_value": {
+            "action": "set_value",
+            **_COMPUTER_WINDOW,
+            "element": "1",
+            "text": "draft",
+            "foreground": False,
+            "apply": True,
+        },
+        "invalid_background_desktop": {"action": "capture", "foreground": False},
+        "invalid_background_hold": {
+            "action": "key",
+            **_COMPUTER_WINDOW,
+            "shortcut": "shift",
+            "duration_ms": 100,
+            "foreground": False,
+        },
+    }
+)
+
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
 BASH_CASES = (
