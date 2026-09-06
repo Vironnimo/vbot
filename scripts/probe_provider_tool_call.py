@@ -423,8 +423,7 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "pid": 101,
         "window_id": 202,
         "view_id": "vtest",
-        "x": 20,
-        "y": 30,
+        "coordinate": [20, 30],
         "apply": True,
     },
     "click_right_double": {
@@ -432,8 +431,7 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "pid": 101,
         "window_id": 202,
         "view_id": "vtest",
-        "x": 20,
-        "y": 30,
+        "coordinate": [20, 30],
         "button": "right",
         "count": 2,
         "apply": True,
@@ -444,8 +442,7 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         "pid": 101,
         "window_id": 202,
         "view_id": "vtest",
-        "x": 20,
-        "y": 30,
+        "coordinate": [20, 30],
         "button": "middle",
         "count": 1,
         "apply": False,
@@ -508,24 +505,20 @@ COMPUTER_CASE_ARGUMENTS.update(
     {
         "capture_original": {"action": "capture", **_COMPUTER_WINDOW, "resolution": "original"},
         "capture_query": {"action": "capture", **_COMPUTER_WINDOW, "query": "Draft", "limit": 25},
-        "capture_desktop": {"action": "capture", "scope": "desktop"},
+        "capture_desktop": {"action": "capture"},
         "zoom": {
             "action": "zoom",
             **_COMPUTER_WINDOW,
             "view_id": "vtest",
-            "x": 10,
-            "y": 10,
-            "x2": 100,
-            "y2": 100,
+            "coordinate": [10, 10],
+            "to_coordinate": [100, 100],
         },
         "drag": {
             "action": "drag",
             **_COMPUTER_WINDOW,
             "view_id": "vtest",
-            "x": 10,
-            "y": 10,
-            "x2": 100,
-            "y2": 100,
+            "coordinate": [10, 10],
+            "to_coordinate": [100, 100],
             "apply": True,
         },
         "set_value": {
@@ -551,10 +544,8 @@ COMPUTER_CASE_ARGUMENTS.update(
         "resize": {
             "action": "resize",
             **_COMPUTER_WINDOW,
-            "x": -100,
-            "y": 0,
-            "width": 900,
-            "height": 700,
+            "coordinate": [-100, 0],
+            "size": [900, 700],
             "apply": True,
         },
         "launch_preview": {"action": "launch", "app": "Notepad"},
@@ -596,7 +587,7 @@ COMPUTER_CASE_ARGUMENTS.update(
             **_COMPUTER_WINDOW,
             "steps": [{"action": "key", "shortcut": "enter"}, {"action": "click", "element": "1"}],
         },
-        "invalid_view": {"action": "click", **_COMPUTER_WINDOW, "x": 1, "y": 1},
+        "invalid_view": {"action": "click", **_COMPUTER_WINDOW, "coordinate": [1, 1]},
     }
 )
 
@@ -609,8 +600,7 @@ COMPUTER_CASE_ARGUMENTS.update(
             "action": "move",
             **_COMPUTER_WINDOW,
             "view_id": "vtest",
-            "x": 20,
-            "y": 30,
+            "coordinate": [20, 30],
             "apply": True,
         },
         "hold_key": {
@@ -621,6 +611,55 @@ COMPUTER_CASE_ARGUMENTS.update(
             "apply": True,
         },
         "invalid_duration": {"action": "key", "shortcut": "shift", "duration_ms": 3000},
+        "wait_default": {"action": "wait"},
+        "wait_explicit": {"action": "wait", "duration_ms": 0},
+        "wait_window": {"action": "wait", **_COMPUTER_WINDOW, "duration_ms": 10},
+        "type_no_capture": {
+            "action": "type",
+            "text": "draft",
+            "apply": True,
+            "capture_after": False,
+        },
+        "type_capture": {"action": "type", "text": "draft", "apply": True, "capture_after": True},
+        **{
+            f"modifier_{modifier}": {
+                "action": "click",
+                "coordinate": [20, 30],
+                "view_id": "vtest",
+                "modifiers": [modifier],
+                "apply": True,
+            }
+            for modifier in ("ctrl", "shift", "alt", "win")
+        },
+        "drag_modifiers": {
+            "action": "drag",
+            "coordinate": [20, 30],
+            "to_coordinate": [40, 50],
+            "view_id": "vtest",
+            "modifiers": ["ctrl", "shift"],
+            "apply": True,
+        },
+        "scroll_modifiers": {
+            "action": "scroll",
+            "coordinate": [20, 30],
+            "view_id": "vtest",
+            "direction": "down",
+            "modifiers": ["ctrl"],
+            "apply": True,
+        },
+        "sequence_wait_no_capture": {
+            "action": "sequence",
+            "apply": True,
+            "capture_after": False,
+            "steps": [{"action": "wait", "duration_ms": 0}, {"action": "type", "text": "draft"}],
+        },
+        "invalid_wait": {"action": "wait", "duration_ms": 10001},
+        "invalid_modifiers": {
+            "action": "click",
+            **_COMPUTER_WINDOW,
+            "element": "1",
+            "modifiers": ["ctrl"],
+        },
     }
 )
 

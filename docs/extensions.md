@@ -566,6 +566,10 @@ Start with `capture` to see the desktop. On Windows, `monitors` discovers displa
 
 `move`, `click`, `type`, `key`, `scroll`, and `drag` cover visible input. Set `apply: true` to execute; omission previews the action. Foreground input is the default and may move the real pointer or change focus. Windows timed key holds and drags accept `duration_ms` up to 2000. Window element actions, menus, launch, resize, and verification remain available. Background window element actions can use `foreground: false`.
 
+Coordinates use `coordinate: [x, y]`; drag and zoom also take `to_coordinate: [x, y]`. Resize takes a screen position and `size: [width, height]`. Omit window IDs to select the desktop. Windows coordinate click, drag, and scroll accept `modifiers`, for example `["ctrl", "shift"]`; held keys release after the action or Stop.
+
+Input and `sequence` capture automatically. Set `capture_after: false` to skip the final image when it is unnecessary; capture again before further input. Partial sequences still attempt an observation. `wait` pauses for `duration_ms` (default 1000, maximum 10000) and then captures; within a sequence it adds no intermediate screenshot. Stop interrupts waits immediately.
+
 Desktop screenshots default to vision and skip accessibility traversal. Window observations default to screenshots plus elements; `mode: vision` uses the fast Windows screenshot path and `mode: ax` requests elements only. Overviews are bounded to 1600 pixels on the long edge and 1.5 million pixels. Originals remain available through `resolution: original` or native-resolution `zoom` crops. Use the returned `view_id` and image coordinates. Negative monitor origins and physical DPI coordinates are handled internally; changed geometry requires a fresh capture.
 
 `sequence` executes up to eight known mouse/key/text actions with one final observation. Coordinates refer to the initial image and only the first step may use an element reference. Keep sequences short when the layout may change. Failure reports partial completion; uncertain input never retries automatically.
