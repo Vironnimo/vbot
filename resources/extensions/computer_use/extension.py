@@ -1219,6 +1219,8 @@ class ComputerUseService:
                 self._check_access(context)
                 client.connect()
                 self._check_access(context)
+                # Selecting the client may retire a broken worker and its cached sessions.
+                session = self._sessions.get(key)
                 if args["action"] == "status":
                     return tool_success(
                         {
@@ -1235,8 +1237,8 @@ class ComputerUseService:
                     return tool_success({"action": "close", "closed": True})
                 if session is None:
                     session = DesktopSession("vbot-" + uuid.uuid4().hex)
-                    self._sessions[key] = session
                     self._call(context, session, "start_session", {})
+                    self._sessions[key] = session
                 self._check_access(context)
                 result = self._execute(context, session, args)
                 if args["action"] not in _MUTATIONS:
@@ -1275,8 +1277,9 @@ class ComputerUseService:
                 )
             finally:
                 try:
-                    if self._driver is not None and self._driver.broken:
-                        self._sessions.clear()
+                    if self._driver is not None and (self._driver.broken or not self._sessions):
+                        if self._driver.broken:
+                            self._sessions.clear()
                         driver, self._driver = self._driver, None
                         driver.close()
                 finally:
@@ -1292,16 +1295,24 @@ class ComputerUseService:
         if self._driver is not None and self._driver.broken:
             # Its owned worker has already stopped. Never reconnect during cleanup.
             self._sessions.clear()
-            return
-        for key, session in list(self._sessions.items()):
-            if run_id is not None and key[3] != run_id:
-                continue
-            try:
-                self._client().call("end_session", {"session": session.name})
-            except ComputerUseError:
-                self.api.logger.warning("Computer Use session cleanup failed", exc_info=True)
-            else:
-                self._sessions.pop(key, None)
+        else:
+            for key, session in list(self._sessions.items()):
+                if run_id is not None and key[3] != run_id:
+                    continue
+                try:
+                    self._client().call("end_session", {"session": session.name})
+                except ComputerUseError:
+                    self.api.logger.warning("Computer Use session cleanup failed", exc_info=True)
+                    if self._driver is not None and self._driver.broken:
+                        self._sessions.clear()
+                        break
+                else:
+                    self._sessions.pop(key, None)
+        # Cua also owns an implicit transport session used by discovery tools.
+        # Retire it with the last Run instead of retaining idle/ended state.
+        if not self._sessions and self._driver is not None:
+            driver, self._driver = self._driver, None
+            driver.close()
 
     def run_end(self, context: Any, **kwargs: Any) -> None:
         with self._lock:
