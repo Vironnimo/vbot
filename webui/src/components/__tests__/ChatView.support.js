@@ -148,8 +148,8 @@ export function setupChatViewTestSuite() {
     get mountedComponent() {
       return mountedComponent;
     },
-    mount(options) {
-      mountedComponent = mount(ChatView, options);
+    mount(options, Component = ChatView) {
+      mountedComponent = mount(Component, options);
       return mountedComponent;
     },
   };
@@ -364,7 +364,7 @@ export function setInputValue(input, value) {
 }
 
 export function sendComposerMessage(content) {
-  const composerInput = document.querySelector('#chat-composer-input');
+  const composerInput = document.querySelector('.msg-input');
   expect(composerInput).toBeTruthy();
   setInputValue(composerInput, content);
   flushSync();

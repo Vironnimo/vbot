@@ -5,6 +5,7 @@
   import Dropdown from '../Dropdown.svelte';
 
   let {
+    titleId = 'chat-title',
     agents = [],
     agentStatuses = {},
     selectedAgentId = '',
@@ -53,7 +54,7 @@
 </script>
 
 <header class="chat-header">
-  <h2 id="chat-title" class="chat-title">{t('chat.title', 'Chat')}</h2>
+  <h2 id={titleId} class="chat-title">{t('chat.title', 'Chat')}</h2>
   <div class="agent-tabs" aria-label={t('chat.selectAgent', 'Select agent')}>
     {#if showPersonalLabel}
       <span
