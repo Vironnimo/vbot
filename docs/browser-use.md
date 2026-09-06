@@ -1,15 +1,26 @@
 # Browser Use
 
-Browser Use is a bundled vBot Extension that gives selected Agents the `browser` Tool. It replaces the old `browser-use` Skill. No Chrome, Edge, or other browser add-on is required.
+Browser Use is a bundled vBot Extension that gives selected Agents the `browser` Tool and includes a `browser-use` Skill explaining its workflow. The Extension replaces the former standalone Skill and owns browser execution and dependency preparation. No Chrome, Edge, or other browser add-on is required.
 
 ## Enable it
 
-1. Install [agent-browser](https://agent-browser.dev/installation) version **0.36.0 or newer** on the computer running the vBot server, with its executable on the server's PATH. For the version verified here: `npm install -g agent-browser@0.36.0`.
-2. For a managed browser, install Chrome/Chromium on that computer or run `agent-browser install`. On Linux ARM64, use the distribution's Chromium package; the backend discovers `chromium` or `chromium-browser` on PATH. See the official [Chrome discovery rules](https://agent-browser.dev/engines/chrome).
-3. Reload Extensions in vBot after installing the executable. Enable **Browser Use** and choose a connection mode in its settings.
-4. Explicitly grant the **browser** Tool to each Agent that should use it. An Agent with all ordinary Tools does not automatically receive Browser Use; a Project whitelist also does not grant it. Existing Skill grants are not converted into browser Tool grants.
+1. Enable **Browser Use** in Extensions. The default connection mode starts a managed browser.
+2. Explicitly grant the **browser** Tool to each Agent that should use it. An Agent with all ordinary Tools does not automatically receive Browser Use; a Project whitelist also does not grant it. Existing Skill grants are not converted into browser Tool grants.
+3. Give the Agent a website task. Its Extension-provided Skill explains navigation, observations, forms, files, and recovery. Normal Skill visibility settings still apply when an Agent uses a restricted Skill list.
+
+The first opening operation automatically prepares the native client and, in managed mode, a browser. Subsequent operations and Extension reloads reuse the installation. The user does not need to install `agent-browser`, Node, npm, or a separate Skill, or run a setup command. Loading the Extension itself does not perform network access; an authorized Tool call triggers preparation.
 
 The Tool's permission controls access through vBot. An Agent with unrestricted host Bash access can independently launch host programs; Extension grants do not sandbox Bash.
+
+## Automatic preparation
+
+The Extension downloads the pinned native **agent-browser 0.36.0** release, checks its SHA-256 against the bundled release digest, and validates its version before execution. The client lives under `<data-dir>/artifacts/browser-use/0.36.0/`; global executables and npm shims are not used. First use requires access to GitHub Releases and, if a browser is needed, the browser download or distribution package servers. See the upstream [native installation](https://agent-browser.dev/installation) and [Chrome engine](https://agent-browser.dev/engines/chrome) documentation.
+
+On Windows and macOS, the client prepares Chrome for Testing in its standard `~/.agent-browser/browsers` cache. On Linux, an existing distribution Chromium/Chrome is reused. The Debian/Raspberry Pi OS server Installer includes Chromium and its shared libraries; an existing apt-based installation can also prepare missing Chromium automatically when the server has noninteractive package-install rights. Other Linux ARM64 hosts require a working system Chromium because this backend's Chrome for Testing download does not support that platform. A desktop-only client installation does not install a server browser.
+
+Setup is serialized across concurrent calls and processes, including the shared browser cache. Permission revocation, Extension shutdown, and cancellation stop preparation before browser input can begin. Failed preparation reports a bounded setup stage and permits one retry, then avoids repeatedly downloading until the Extension is reloaded. Attached-browser modes prepare only the client.
+
+The implementation was compared with the local Hermes Agent snapshot `165c889e5`, particularly `tools/browser_tool.py` and its Chromium setup tests. It adopts lazy preparation, cached reuse, bounded failure retries, and cancellation-aware setup. vBot uses a pinned, verified native client instead of Hermes's npx fallback and keeps the Tool grant as the execution boundary.
 
 ## Choose a connection
 
@@ -51,8 +62,11 @@ Verified on Windows with `agent-browser 0.36.0` on 2026-09-06:
 
 - 70 of 70 structural Model calls using `gpt-5.6-luna` produced the expected Tool arguments, covering every action, optional fields, and deliberately malformed inputs. These probes did not execute browser actions; runtime tests separately validate their results.
 - A deterministic local website exercised 38 successful real-browser Tool calls, including forms, dialogs, uploads, downloads, screenshots, navigation, tab selection, and remote CDP attachment. Disconnecting the attached connection preserved the original browser and its page.
+- A free-form website task through `gpt-5.6-luna` activated the bundled Skill, filled and submitted a registration, downloaded its confirmation, read that file, and returned the correct reference. The final run used eight successful Tool calls with no failed calls, including Skill activation and file reading. The fixture independently checked exactly one correct submission and the downloaded bytes. The native client was prepared automatically in a fresh data directory; the host Chrome cache was reused. An earlier cold-host check also downloaded Chrome automatically. This is one successful workflow observation, not a guarantee that every Model run avoids recovery.
 - In five warm-browser trials on the same three-field form and backend, the old wrapper required three Agent calls and six backend commands; the Extension required one Agent call and five backend commands, including tab verification and a final snapshot. Median returned JSON size was **765 vs 278 tokens** with `o200k_base` (64% fewer). Median local execution time was **169 vs 132 ms**. Initial navigation, Tool definitions, and Model/network latency were excluded; this is not an end-to-end task-speed claim.
 
-The automatic suite covers permissions, stale refs, selection drift, cancellation, partial failures, bounded media, and cleanup. The private-browser Chrome consent dialog, Linux ARM64 runtime, and a real cross-machine connection were not exercised locally; setup guidance for those follows the upstream documentation.
+The automatic suite additionally covers cold dependency preparation, cached reloads, corrupt-client replacement, simultaneous setup, platform selection, noninteractive Linux package preparation, and cancellation/revocation during setup. Runtime tests verify that the Skill follows the loaded Extension and disappears when it is disabled. The private-browser Chrome consent dialog, Linux ARM64 runtime, and a real cross-machine connection were not exercised locally; those remain platform verification limits.
+
+The workflow fixture is reproducible through `python -m scripts.probe_provider_tool_call --scenario browser_workflow` with the usual Provider, connection, Model, and data-directory options. It executes a real browser against a local test website, prepares dependencies automatically, and reports observed outcomes rather than trusting the Model's completion claim. It is an opt-in live probe, separate from the network-free automatic tests.
 
 The existing generic Extension settings and Agent Tool-grant UI provide configuration; no frontend changes or browser add-on are involved. See [Extension development](extensions.md) for the shared lifecycle and permission mechanisms.

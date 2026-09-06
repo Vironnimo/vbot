@@ -33,7 +33,7 @@ from core.tools import ToolAccess
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
-from core.tools.tools import ToolRegistry
+from core.tools.tools import ToolNotFoundError, ToolRegistry, tool_is_ready
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
 
@@ -1267,7 +1267,9 @@ def test_skills_for_project_skill_wins_name_collision(config: Config, tmp_path: 
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
-    bundled_name = runtime.skills.list_all()[0].name
+    bundled_name = next(
+        skill.name for skill in runtime.skills.list_all() if skill.origin == "bundled"
+    )
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_project_skill(repo, bundled_name, "Project override of a bundled skill.")
@@ -1607,7 +1609,9 @@ def test_skills_for_tags_origin_per_scope(config: Config, tmp_path: Path) -> Non
     _write_project_skill(repo, "proj-skill", "Project.")
     project = runtime.projects.create("p", "P", repo)
     _write_agent_skill(runtime.storage.data_dir, "main", "mine", "Mine.")
-    bundled_name = runtime.skills.list_all()[0].name
+    bundled_name = next(
+        skill.name for skill in runtime.skills.list_all() if skill.origin == "bundled"
+    )
 
     registry = runtime.skills_for(project.project_id, "main")
 
@@ -1669,6 +1673,22 @@ def test_disabling_extension_live_drops_its_skill(config: Config) -> None:
 
     with pytest.raises(KeyError):
         runtime.skills.get("ext-skill")
+
+
+def test_browser_skill_follows_loaded_extension_without_external_binary(config: Config) -> None:
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        skill = runtime.skills.get("browser-use")
+        assert "browser_use" in skill.path.parts
+        assert tool_is_ready(runtime.tools.get("browser"))
+        asyncio.run(runtime.apply_extension_disabled_change({"browser_use"}))
+        with pytest.raises(KeyError):
+            runtime.skills.get("browser-use")
+        with pytest.raises(ToolNotFoundError):
+            runtime.tools.get("browser")
+    finally:
+        asyncio.run(runtime.aclose())
 
 
 class _BlockingChannelAdapter:

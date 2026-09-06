@@ -115,7 +115,7 @@ metadata:
 
 ## External Dependencies
 
-- `pyyaml` (core dependency) parses SKILL.md frontmatter. Browser Use and Computer Use are opt-in bundled Extensions (see `extensions/browser-use.md` and `extensions/computer-use.md`), not Skills.
+- `pyyaml` (core dependency) parses SKILL.md frontmatter. Browser Use and Computer Use execute through opt-in bundled Extensions (see `extensions/browser-use.md` and `extensions/computer-use.md`). Browser Use also bundles a workflow Skill; the Skill supplies instructions, while the Extension's Tool grant controls execution.
 
 ## Constraints & Gotchas
 
