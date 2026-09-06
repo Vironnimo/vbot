@@ -8,7 +8,6 @@
   let { onError = () => {} } = $props();
   let status = $state(null);
   let error = $state('');
-  let resuming = $state(false);
   let stopping = $state(false);
   let disposed = false;
   let revision = 0;
@@ -17,7 +16,7 @@
   const control = (action) =>
     extensionOperation('computer_use', 'control', {
       action,
-      ...(action === 'resume' ? { stop_token: status?.stop_token } : {}),
+      ...(action === 'stop' ? { call_id: status.call_id } : {}),
     });
 
   onMount(() => {
@@ -34,8 +33,7 @@
         }
         if (discovered) {
           const result = await control('status');
-          if (disposed || requestRevision !== revision || resuming || stopping)
-            return;
+          if (disposed || requestRevision !== revision || stopping) return;
           status = result;
           error = '';
         }
@@ -55,13 +53,12 @@
     };
   });
 
-  async function change(action) {
+  async function stop() {
     const requestRevision = ++revision;
-    if (action === 'stop') stopping = true;
-    else resuming = true;
+    stopping = true;
     error = '';
     try {
-      const result = await control(action);
+      const result = await control('stop');
       if (!disposed && requestRevision === revision) status = result;
     } catch (failure) {
       if (!disposed && requestRevision === revision) {
@@ -69,50 +66,30 @@
         onError(error);
       }
     } finally {
-      if (action === 'stop') stopping = false;
-      else resuming = false;
+      stopping = false;
     }
   }
 </script>
 
-{#if status?.paused}
-  <Button
-    variant="secondary"
-    icon
-    disabled={status.active || resuming || stopping}
-    ariaLabel={t('computerControl.resume', 'Allow computer control')}
-    tooltip={error ||
-      (status.active
-        ? t('computerControl.stopping', 'Stopping computer control…')
-        : t(
-            'computerControl.resumeHint',
-            'Computer control is stopped. Click to allow it again.',
-          ))}
-    onClick={() => change('resume')}
-  >
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <rect x="1.5" y="2" width="13" height="9" rx="1" />
-      <path d="M5 14h6M8 11v3M6.5 4.5l4 2-4 2z" />
-    </svg>
-  </Button>
-{/if}
-{#if status?.controlling || stopping || resuming}
+{#if status?.active || stopping}
   <Button
     variant="danger"
     icon
-    disabled={stopping}
+    disabled={stopping || status?.stopping}
     ariaLabel={t('computerControl.stop', 'Stop computer control')}
     tooltip={error ||
-      (status.hotkey_available
-        ? t(
-            'computerControl.hotkey',
-            'Stop computer control — press Esc twice in any app',
-          )
-        : t(
-            'computerControl.noHotkey',
-            'Global shortcut unavailable. Click to stop computer control.',
-          ))}
-    onClick={() => change('stop')}
+      (stopping || status?.stopping
+        ? t('computerControl.stopping', 'Stopping computer control…')
+        : status.hotkey_available
+          ? t(
+              'computerControl.hotkey',
+              'Stop computer control — press Esc twice in any app',
+            )
+          : t(
+              'computerControl.noHotkey',
+              'Global shortcut unavailable. Click to stop computer control.',
+            ))}
+    onClick={stop}
   >
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <rect x="1.5" y="2" width="13" height="9" rx="1" />

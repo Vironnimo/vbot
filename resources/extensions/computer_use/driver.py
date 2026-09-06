@@ -61,27 +61,29 @@ class EmergencyHotkey:
         self._requested = threading.Event()
         self._worker: threading.Thread | None = None
         self._state_lock = threading.Lock()
-        self._armed = False
+        self._owner: object | None = None
+        self._requested_owner: object | None = None
         self._down = False
         self._first_press: float | None = None
 
-    def set_armed(self, armed: bool) -> None:
+    def set_armed(self, owner: object | None) -> None:
         with self._state_lock:
-            if armed != self._armed:
-                self._armed = armed
+            if owner is not self._owner:
+                self._owner = owner
                 self._first_press = None
                 self._down = False
 
     @property
-    def pending(self) -> bool:
-        return self._requested.is_set() and not self._closing.is_set()
+    def pending_owner(self) -> object | None:
+        with self._state_lock:
+            return self._requested_owner if not self._closing.is_set() else None
 
     def _key_event(self, key: int, down: bool, flags: int) -> None:
         # LLKHF_INJECTED / LLKHF_LOWER_IL_INJECTED: Agent input never counts.
         if flags & 0x12:
             return
         with self._state_lock:
-            if not self._armed:
+            if self._owner is None:
                 return
             if key != 0x1B:
                 if down:
@@ -96,7 +98,8 @@ class EmergencyHotkey:
             now = time.monotonic()
             if self._first_press is not None and now - self._first_press <= 0.6:
                 self._first_press = None
-                self._armed = False
+                self._requested_owner = self._owner
+                self._owner = None
                 self._requested.set()
             else:
                 self._first_press = now
@@ -104,12 +107,20 @@ class EmergencyHotkey:
     def _dispatch(self) -> None:
         while not self._closing.is_set():
             self._requested.wait()
-            if self._closing.is_set():
-                return
+            with self._state_lock:
+                if self._closing.is_set():
+                    return
+                owner = self._requested_owner
             try:
-                self.callback()
+                if owner is not None:
+                    self.callback(owner)
             finally:
-                self._requested.clear()
+                with self._state_lock:
+                    # A later call may have received its own double-Esc while
+                    # the previous callback was draining. Do not lose it.
+                    if self._requested_owner is owner:
+                        self._requested_owner = None
+                        self._requested.clear()
 
     def start(self) -> None:
         if os.name != "nt":
@@ -195,7 +206,7 @@ class EmergencyHotkey:
 
     def close(self) -> None:
         self._closing.set()
-        self.set_armed(False)
+        self.set_armed(None)
         self._requested.set()
         if self._thread_id and self.available:
             import ctypes
@@ -213,6 +224,19 @@ class ComputerUseError(Exception):
     def __init__(self, message: str, code: str = "computer_use_failed") -> None:
         super().__init__(message)
         self.code = code
+
+
+class ComputerUseInterruptedError(ComputerUseError):
+    """An interrupted call, without implying a change to Tool availability."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Computer Use was interrupted. Input may already have taken effect. "
+            "Do not automatically repeat the interrupted action. The computer Tool remains "
+            "available; follow the user's latest instructions and capture the target "
+            "before further input.",
+            "computer_use_interrupted",
+        )
 
 
 def unpack(result: dict[str, Any]) -> dict[str, Any]:
@@ -399,11 +423,7 @@ class CuaDriver:
 
     def connect(self) -> None:
         if self._interrupted:
-            raise ComputerUseError(
-                "Computer Use was stopped by the user. "
-                "Wait for the user to allow computer control again.",
-                "computer_use_stopped",
-            )
+            raise ComputerUseInterruptedError()
         if self._session is not None:
             return
         stack = ExitStack()
@@ -414,11 +434,7 @@ class CuaDriver:
             stack.close()
             self.broken = True
             if self._interrupted:
-                raise ComputerUseError(
-                    "Computer Use was stopped by the user. "
-                    "Wait for the user to allow computer control again.",
-                    "computer_use_stopped",
-                ) from exc
+                raise ComputerUseInterruptedError() from exc
             pending: list[BaseException] = [exc]
             while pending:
                 error = pending.pop()
@@ -434,11 +450,7 @@ class CuaDriver:
             self.broken = self._interrupted
         if self._interrupted:
             self.close()
-            raise ComputerUseError(
-                "Computer Use was stopped by the user. "
-                "Wait for the user to allow computer control again.",
-                "computer_use_stopped",
-            )
+            raise ComputerUseInterruptedError()
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.connect()
@@ -590,11 +602,7 @@ class CuaDriver:
             with suppress(Exception):  # Preserve the dispatch failure; never replay input.
                 self.close()
             if self._interrupted:
-                raise ComputerUseError(
-                    "Computer Use was stopped by the user. "
-                    "Wait for the user to allow computer control again.",
-                    "computer_use_stopped",
-                ) from exc
+                raise ComputerUseInterruptedError() from exc
             raise ComputerUseError(
                 "The driver connection was lost. Capture the target again before sending input."
             ) from exc
