@@ -352,36 +352,90 @@
     icon
     class={inChat ? 'chat-view__workspace-action' : ''}
     data-workspace-action
-    ariaLabel={t('split.actions', 'Area actions')}
-    tooltip={t('split.actions', 'Area actions')}
-    aria-haspopup="menu"
-    aria-expanded={menuPane === index && !menuFile}
-    aria-controls={menuPane === index && !menuFile
-      ? `${id}-actions`
-      : undefined}
-    onClick={(event) => toggleMenu(index, event.currentTarget)}
-    onkeydown={(event) => {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        void toggleMenu(index, event.currentTarget);
-      }
-    }}
+    ariaLabel={split
+      ? t('split.close', 'Close area')
+      : t('split.open', 'Split view')}
+    tooltip={split
+      ? t('split.close', 'Close area')
+      : t('split.open', 'Split view')}
+    onClick={() => (split ? closePane(index) : openSplit())}
   >
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" />
-    </svg>
+    {#if split}
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        aria-hidden="true"
+      >
+        <path d="M6 6l12 12M18 6 6 18" />
+      </svg>
+    {:else}
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        aria-hidden="true"
+      >
+        <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" />
+      </svg>
+    {/if}
   </Button>
+  {#if kinds[index] === 'preview' || previews[index]}
+    <Button
+      variant={inChat ? 'secondary' : 'tertiary'}
+      icon
+      class={inChat ? 'chat-view__workspace-action' : ''}
+      ariaLabel={kinds[index] === 'chat'
+        ? t('split.showPreview', 'Show preview')
+        : t('split.backToChat', 'Back to chat')}
+      tooltip={kinds[index] === 'chat'
+        ? t('split.showPreview', 'Show preview')
+        : t('split.backToChat', 'Back to chat')}
+      onClick={() =>
+        changeContent(index, kinds[index] === 'chat' ? 'preview' : 'chat')}
+    >
+      {#if kinds[index] === 'chat'}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          aria-hidden="true"
+        >
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle
+            cx="12"
+            cy="12"
+            r="3"
+          />
+        </svg>
+      {:else}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          aria-hidden="true"
+        >
+          <path
+            d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"
+          />
+        </svg>
+      {/if}
+    </Button>
+  {/if}
 {/snippet}
 
-{#if menuPane !== null}
+{#if menuFile}
   <div
     bind:this={menu}
     use:portal
@@ -389,72 +443,39 @@
     id={`${id}-actions`}
     role="menu"
     tabindex="-1"
-    aria-label={menuFile
-      ? t('preview.fileActions', 'Actions for {filename}', {
-          filename: menuFile.filename,
-        })
-      : t('split.actions', 'Area actions')}
+    aria-label={t('preview.fileActions', 'Actions for {filename}', {
+      filename: menuFile.filename,
+    })}
     style={menuStyle}
     onkeydown={menuKeydown}
   >
-    {#if menuFile}
-      <Button
-        variant="tertiary"
-        role="menuitem"
-        onClick={() => openPreview(menuPane, menuFile.source)}
-        >{t('split.showPreview', 'Show preview')}</Button
-      >
-      <a
-        role="menuitem"
-        href={menuFile.source}
-        target="_blank"
-        rel="noopener noreferrer"
-        onclick={(event) => {
-          openExternal(event, menuFile.source);
-          closeMenu(true);
-        }}>{t('preview.openBrowser', 'Open in browser')}</a
-      >
-      <a
-        role="menuitem"
-        href={`${menuFile.source}?download=true`}
-        target="_blank"
-        rel="noopener noreferrer"
-        download={menuFile.filename}
-        onclick={(event) => {
-          openExternal(event, `${menuFile.source}?download=true`);
-          closeMenu(true);
-        }}>{t('preview.download', 'Download')}</a
-      >
-    {:else}
-      {#if !split}
-        <Button variant="tertiary" role="menuitem" onClick={openSplit}
-          >{t('split.open', 'Split view')}</Button
-        >
-      {/if}
-      {#if kinds[menuPane] === 'preview' || previews[menuPane]}
-        <Button
-          variant="tertiary"
-          role="menuitem"
-          onClick={() =>
-            changeContent(
-              menuPane,
-              kinds[menuPane] === 'chat' ? 'preview' : 'chat',
-            )}
-        >
-          {kinds[menuPane] === 'chat'
-            ? t('split.showPreview', 'Show preview')
-            : t('split.backToChat', 'Back to chat')}
-        </Button>
-      {/if}
-      {#if split}
-        <Button
-          variant="tertiary"
-          role="menuitem"
-          onClick={() => closePane(menuPane)}
-          >{t('split.close', 'Close area')}</Button
-        >
-      {/if}
-    {/if}
+    <Button
+      variant="tertiary"
+      role="menuitem"
+      onClick={() => openPreview(menuPane, menuFile.source)}
+      >{t('split.showPreview', 'Show preview')}</Button
+    >
+    <a
+      role="menuitem"
+      href={menuFile.source}
+      target="_blank"
+      rel="noopener noreferrer"
+      onclick={(event) => {
+        openExternal(event, menuFile.source);
+        closeMenu(true);
+      }}>{t('preview.openBrowser', 'Open in browser')}</a
+    >
+    <a
+      role="menuitem"
+      href={`${menuFile.source}?download=true`}
+      target="_blank"
+      rel="noopener noreferrer"
+      download={menuFile.filename}
+      onclick={(event) => {
+        openExternal(event, `${menuFile.source}?download=true`);
+        closeMenu(true);
+      }}>{t('preview.download', 'Download')}</a
+    >
   </div>
 {/if}
 

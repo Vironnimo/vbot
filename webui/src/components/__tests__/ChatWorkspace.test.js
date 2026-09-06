@@ -36,13 +36,7 @@ describe('ChatWorkspace', () => {
     );
 
   function action(index, label) {
-    button(pane(index), 'Area actions').click();
-    flushSync();
-    const item = [...document.querySelectorAll('[role="menuitem"]')].find(
-      (element) => element.textContent.trim() === label,
-    );
-    expect(item).toBeTruthy();
-    item.click();
+    button(pane(index), label).click();
     flushSync();
   }
 
@@ -268,7 +262,7 @@ describe('ChatWorkspace', () => {
       expect(pane(index).querySelector('.chat-workspace__toolbar')).toBeNull();
       expect(pane(index).querySelector('[role="tablist"]')).toBeNull();
       expect(
-        button(pane(index), 'Area actions').closest('.chat-view__session-bar'),
+        button(pane(index), 'Close area').closest('.chat-view__session-bar'),
       ).not.toBeNull();
     }
     mockPreviewOpening();
@@ -276,7 +270,7 @@ describe('ChatWorkspace', () => {
     await waitForCondition(() => pane(1).querySelector('iframe'), 100);
     expect(chat.hidden).toBe(true);
     expect(
-      button(pane(1), 'Area actions').closest('.html-preview__toolbar'),
+      button(pane(1), 'Back to chat').closest('.html-preview__toolbar'),
     ).not.toBeNull();
     action(1, 'Back to chat');
     expect(chat.hidden).toBe(false);
@@ -289,38 +283,13 @@ describe('ChatWorkspace', () => {
     ).toBeNull();
   });
 
-  it('supports menu keyboard navigation, dismissal and focus restoration', async () => {
+  it('restores focus on the remaining area after closing one', async () => {
     await start();
-    const trigger = button(pane(0), 'Area actions');
-    trigger.focus();
-    trigger.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
+    button(pane(0), 'Close area').click();
+    flushSync();
+    expect(pane(0).hidden).toBe(true);
     await waitForCondition(
-      () => document.activeElement?.getAttribute('role') === 'menuitem',
-      100,
-    );
-    const menu = document.querySelector('[role="menu"]');
-    const items = menu.querySelectorAll('button');
-    expect(document.activeElement).toBe(items[0]);
-    items[0].dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'End', bubbles: true }),
-    );
-    expect(document.activeElement).toBe(items[items.length - 1]);
-    menu.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-    );
-    flushSync();
-    expect(document.querySelector('[role="menu"]')).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-    trigger.click();
-    flushSync();
-    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-    flushSync();
-    expect(document.querySelector('[role="menu"]')).toBeNull();
-    action(0, 'Close area');
-    await waitForCondition(
-      () => document.activeElement === button(pane(1), 'Area actions'),
+      () => document.activeElement === button(pane(1), 'Split view'),
       100,
     );
   });
@@ -347,19 +316,8 @@ describe('ChatWorkspace', () => {
 
   it('opens a rendered Agent file output directly from one Chat without a manual Preview entry', async () => {
     await start(false);
-    button(pane(0), 'Area actions').click();
-    flushSync();
-    expect(
-      [...document.querySelectorAll('[role="menuitem"]')].map((item) =>
-        item.textContent.trim(),
-      ),
-    ).toEqual(['Split view']);
-    document
-      .querySelector('[role="menu"]')
-      .dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-      );
-    flushSync();
+    expect(button(pane(0), 'Split view')).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
     mockPreviewOpening();
     pane(0).querySelector('.msg-markdown a').click();
     await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
@@ -400,9 +358,6 @@ describe('ChatWorkspace', () => {
     await waitForCondition(() => document.querySelector('[role="menu"]'), 100);
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     expect(items).toHaveLength(3);
-    expect(button(pane(0), 'Area actions').getAttribute('aria-expanded')).toBe(
-      'false',
-    );
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     const download = items.find((item) => item.hasAttribute('download'));
     expect(download.getAttribute('href')).toBe(
@@ -450,6 +405,18 @@ describe('ChatWorkspace', () => {
     );
     flushSync();
     expect(document.activeElement).toBe(trigger);
+    trigger.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 90,
+        clientY: 120,
+      }),
+    );
+    await waitForCondition(() => document.querySelector('[role="menu"]'), 100);
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
     trigger.dispatchEvent(
       new MouseEvent('contextmenu', {
         bubbles: true,
