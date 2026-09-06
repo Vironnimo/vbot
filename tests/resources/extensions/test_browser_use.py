@@ -76,7 +76,9 @@ def setup(tmp_path, monkeypatch):
         logger=logging.getLogger("test.browser"),
         credential_resolver=lambda key: "ws://localhost:9222/devtools/browser/test?token=secret",
     )
-    monkeypatch.setattr(browser, "executable_path", lambda: "browser.exe")
+    monkeypatch.setattr(
+        browser.BrowserRuntime, "ensure", lambda self, mode, check: ("browser.exe", "")
+    )
     monkeypatch.setattr(browser, "BrowserClient", FakeClient)
     browser.register(api)
     declaration = declarations.tools[0]
@@ -97,7 +99,9 @@ def setup(tmp_path, monkeypatch):
         memory_prompt_mode="off",
         workspace=str(tmp_path),
     )
-    asyncio.run(service.start(SimpleNamespace(resolve_agent=lambda project, name: agent)))
+    asyncio.run(
+        service.start(SimpleNamespace(data_dir=tmp_path, resolve_agent=lambda project, name: agent))
+    )
     context = ToolContext(
         agent_id="a",
         session_id="s",
@@ -119,6 +123,51 @@ def opened(setup):
     assert result["ok"], result
     session = next(iter(service._sessions.values()))
     return service, context, session, session.client
+
+
+@pytest.mark.parametrize("action", ["close", "fill", "snapshot", "read", "downloads"])
+def test_fresh_nonopening_actions_do_not_install_components(setup, monkeypatch, action):
+    service, context, *_ = setup
+    monkeypatch.setattr(service.runtime, "ensure", lambda *args: pytest.fail("unexpected setup"))
+    arguments = {"action": action}
+    if action == "fill":
+        arguments["fields"] = [{"target": "stale", "text": "value"}]
+    result = service.handle(context, arguments)
+    assert result["ok"] is (action == "close")
+    assert not service._sessions
+
+
+def test_denied_agent_never_prepares_components(setup, monkeypatch):
+    service, context, agent, *_ = setup
+    agent.tool_access = ToolAccess(mode="all")
+    monkeypatch.setattr(service.runtime, "ensure", lambda *args: pytest.fail("unexpected setup"))
+    assert service.handle(context, {"action": "tabs"})["error"]["code"] == "browser_denied"
+
+
+def test_revocation_during_setup_prevents_browser_connection(setup, monkeypatch):
+    service, context, agent, *_ = setup
+
+    def prepare(mode, check):
+        agent.tool_access = ToolAccess(mode="all")
+        return "browser.exe", "chrome.exe"
+
+    monkeypatch.setattr(service.runtime, "ensure", prepare)
+    result = service.handle(context, {"action": "open", "url": "https://example.com"})
+    assert result["error"]["code"] == "browser_denied"
+    assert not service._sessions
+
+
+def test_preparation_error_reports_stage_without_raw_diagnostics(setup, monkeypatch):
+    service, context, *_ = setup
+
+    def prepare(*args):
+        raise browser.SetupError("client_integrity") from RuntimeError("private diagnostic")
+
+    monkeypatch.setattr(service.runtime, "ensure", prepare)
+    result = service.handle(context, {"action": "tabs"})
+    assert result["error"]["code"] == "browser_setup_client_integrity"
+    assert "private diagnostic" not in json.dumps(result)
+    assert not service._sessions
 
 
 def test_explicit_grant_is_required_in_all_mode_and_dispatch(setup):
@@ -437,13 +486,12 @@ def test_backend_failure_is_not_success_or_a_secret_echo(tmp_path, monkeypatch, 
     assert "secret" not in str(error.value)
 
 
-def test_missing_backend_stays_registered_without_readiness(monkeypatch):
-    monkeypatch.setattr(browser, "executable_path", lambda: None)
+def test_missing_backend_stays_callable_for_automatic_setup():
     declarations = ExtensionDeclarations()
     api = ExtensionAPI("browser_use", declarations, config={}, logger=logging.getLogger("test"))
     browser.register(api)
     assert declarations.tools[0].requires_opt_in
-    assert not declarations.tools[0].ready()
+    assert declarations.tools[0].ready()
 
 
 def test_focus_drift_never_retargets_existing_refs(setup):

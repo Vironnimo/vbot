@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 from core.channels.channels import ChannelConfig
@@ -226,6 +226,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
 }
 PROBE_SCENARIOS = (
     "browser",
+    "browser_workflow",
     "computer",
     "mcp_workflow",
     "mcp",
@@ -4065,14 +4066,247 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         }
 
 
+async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
+    """Drive a local website with production Tools and the Extension's discovered Skill.
+
+    This opt-in probe downloads the native client into a temporary data directory
+    and prepares/reuses the host browser cache. No browser actions are prescribed.
+    """
+    import http.server
+    import threading
+
+    from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+    from core.extensions.operations import ExtensionHost
+    from core.skills import SkillRegistry
+    from core.tools.availability import ToolAccess
+    from core.tools.file_state import FileReadState
+    from core.tools.read import register_read_tool
+    from core.tools.skill import register_skill_tool
+    from core.tools.tools import ToolContext, ToolRegistry
+    from resources.extensions.browser_use import extension as browser
+
+    submissions: list[dict[str, Any]] = []
+    receipt = b"Reference: B-739251\nAda Lovelace\nada@example.com\nPro\n"
+
+    class Website(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *arguments: Any) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            self.send_response(200)
+            if self.path == "/receipt.txt":
+                content = receipt
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Disposition", "attachment; filename=receipt.txt")
+            else:
+                content = (
+                    b"<!doctype html><title>Registration</title><main><h1>Registration</h1>"
+                    b"<form onsubmit=\"event.preventDefault();fetch('/submit',"
+                    b"{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(this)))})"
+                    b".then(r=>r.text()).then(t=>document.querySelector('main').innerHTML=t)\">"
+                    b'<label>Name<input name="name" required></label>'
+                    b'<label>Email<input name="email" type="email" required></label>'
+                    b'<label>Plan<select name="plan"><option>Basic</option><option>Pro</option>'
+                    b"</select></label><button>Save registration</button></form></main>"
+                )
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_POST(self) -> None:
+            submissions.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(
+                b"<h1>Registration saved</h1><p>Reference: B-739251</p>"
+                b'<a href="/receipt.txt" download>Download confirmation</a>'
+            )
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Website)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        temporary = TemporaryDirectory(prefix="vbot-browser-probe-")
+        with temporary as directory:
+            root = Path(directory)
+            declarations = ExtensionDeclarations()
+            api = ExtensionAPI(
+                "browser_use", declarations, config={}, logger=logging.getLogger("probe")
+            )
+            browser.register(api)
+            declaration = declarations.tools[0]
+            assert isinstance(declaration.handler, MethodType)
+            service = declaration.handler.__self__
+            assert isinstance(service, browser.BrowserService)
+            registry = ToolRegistry()
+            registry.register(
+                declaration.name,
+                declaration.description,
+                declaration.parameters,
+                declaration.handler,
+                requires_opt_in=True,
+                open_input_schema=True,
+                ready=service.ready,
+                extension="browser_use",
+            )
+            skills = SkillRegistry.load(Path(browser.__file__).parent / "skills")
+            register_skill_tool(registry, lambda *args: skills, lambda: None)
+            register_read_tool(
+                registry,
+                attachment_store=None,
+                speech_service=None,
+                file_state=FileReadState(),
+                speech_max_size_bytes=1000000,
+            )
+            api.operations.bind(registry)
+            allowed = ["browser", "skill", "read"]
+            agent = SimpleNamespace(
+                tool_access=ToolAccess(granted=tuple(allowed)),
+                memory_prompt_mode="off",
+                workspace=directory,
+            )
+
+            async def sample(*_: Any) -> dict[str, Any]:
+                raise ValueError("Sampling is not part of this fixture")
+
+            host = ExtensionHost(
+                data_dir=root,
+                sample=sample,
+                resolve_agent=lambda *_: agent,
+                store_attachment=lambda *_: None,
+                resolve_credential=lambda _: "",
+                set_credential=lambda *_: None,
+            )
+            await service.start(host)
+            context = ToolContext(
+                agent_id="probe",
+                session_id="probe",
+                run_id="probe",
+                tool_call_id="probe",
+                tool_name="browser",
+                tool_call_index=0,
+                workspace=root,
+                vbot_root=root,
+                data_root=root,
+            )
+            definitions = registry.provider_definitions(allowed_tools=allowed)
+            messages: list[dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": "Complete the user's task using the available Tools. "
+                    "Activate a relevant Skill before doing its workflow. "
+                    "Available Skill: browser-use - " + skills.get("browser-use").description,
+                },
+                {
+                    "role": "user",
+                    "content": f"Use Browser Use for http://127.0.0.1:{server.server_port}/. "
+                    "Register Ada Lovelace with ada@example.com for the Pro plan. "
+                    "Download the confirmation and tell me the reference number.",
+                },
+            ]
+            actions: list[dict[str, Any]] = []
+            final = ""
+            try:
+                async with asyncio.timeout(args.total_timeout):
+                    for _ in range(24):
+                        raw = await adapter.send(
+                            messages,
+                            model_id=args.model,
+                            tools=definitions,
+                            thinking_effort=args.thinking_effort,
+                            max_tokens=args.max_tokens or 2500,
+                        )
+                        response = adapter.normalize_response(raw, model_id=args.model)
+                        calls = response.get("tool_calls") or []
+                        messages.append(
+                            {
+                                key: response[key]
+                                for key in ("content", "tool_calls", "reasoning", "reasoning_meta")
+                                if key in response
+                            }
+                            | {"role": "assistant"}
+                        )
+                        if not calls:
+                            final = response.get("content") or ""
+                            break
+                        for call in calls:
+                            started = time.monotonic()
+                            result = await registry.dispatch(
+                                replace(context, tool_name=call["name"], tool_call_id=call["id"]),
+                                call["arguments"],
+                                allowed_tools=allowed,
+                            )
+                            actions.append(
+                                {
+                                    "tool": call["name"],
+                                    "action": call["arguments"].get(
+                                        "action", call["arguments"].get("name")
+                                    ),
+                                    "ok": result["ok"],
+                                    "seconds": round(time.monotonic() - started, 3),
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": json.dumps(result),
+                                }
+                            )
+                downloaded = any(
+                    path.read_bytes() == receipt
+                    for path in root.glob("tmp/browser-use/*/downloads/receipt.txt")
+                )
+                submitted = submissions == [
+                    {"name": "Ada Lovelace", "email": "ada@example.com", "plan": "Pro"}
+                ]
+                guidance = any(
+                    row["tool"] == "skill" and row["action"] == "browser-use" and row["ok"]
+                    for row in actions
+                )
+                return {
+                    "scenario": "browser_workflow",
+                    "model": args.model,
+                    "actions": actions,
+                    "passed": submitted and downloaded and guidance and "B-739251" in final,
+                    "submission_verified": submitted,
+                    "download_verified": downloaded,
+                    "reference_verified": "B-739251" in final,
+                    "skill_activated": guidance,
+                    "failed_calls": sum(not row["ok"] for row in actions),
+                }
+            finally:
+                service.close()
+                # The native daemon acknowledges close before releasing its executable
+                # on Windows. Wait for that release before removing the owned fixture.
+                for attempt in range(50):
+                    try:
+                        temporary.cleanup()
+                        break
+                    except PermissionError:
+                        if attempt == 49:
+                            raise
+                        await asyncio.sleep(0.1)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 async def _run(args: argparse.Namespace) -> int:
-    if args.scenario == "mcp_workflow":
+    if args.scenario in {"mcp_workflow", "browser_workflow"}:
         runtime = Runtime(Config(data_dir=args.data_dir))
         _start_probe_runtime(runtime)
         try:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
-                result = await _probe_mcp_workflow(adapter, args)
+                probe = (
+                    _probe_browser_workflow
+                    if args.scenario == "browser_workflow"
+                    else _probe_mcp_workflow
+                )
+                result = await probe(adapter, args)
             finally:
                 await adapter.aclose()
         finally:

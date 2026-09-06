@@ -223,6 +223,12 @@ ensure_node() {
     { have node && have npm; } || fail "Node.js installation did not put node/npm on PATH."
 }
 
+ensure_browser() {
+    { have chromium || have chromium-browser; } && return
+    apt_install chromium
+    { have chromium || have chromium-browser; } || fail "Chromium installation did not put a browser on PATH."
+}
+
 # --- code --------------------------------------------------------------------
 
 latest_release_tag() {
@@ -500,6 +506,9 @@ finish_with_summary() {
 [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && ensure_git
 ensure_python
 ensure_venv_support
+if [ "$DESKTOP_CLIENT" -eq 0 ]; then
+    ensure_browser
+fi
 if [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && [ "$DEV" -eq 0 ]; then
     ensure_curl
 fi

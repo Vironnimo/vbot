@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -22,6 +21,8 @@ from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
+
+from .runtime import BrowserRuntime, SetupError
 
 BROWSER_DESCRIPTION = (
     "Use the configured browser to navigate websites, read pages, fill forms, "
@@ -154,8 +155,9 @@ BROWSER_PARAMETERS = {
 MESSAGES = {
     "invalid": "Invalid browser arguments. Check the selected action's fields and required values.",
     "unavailable": (
-        "Browser Use requires agent-browser 0.36.0 or newer on the server. "
-        "Install it and reload Extensions."
+        "Browser components could not be prepared automatically. "
+        "Retry the browser operation once. If preparation fails again, "
+        "report the setup stage and error."
     ),
     "config": (
         "Browser settings are invalid. Ask the user to check the Browser Use Extension settings."
@@ -344,25 +346,6 @@ def validate_url(url: str) -> None:
         raise BrowserError("invalid")
 
 
-def executable_path() -> str | None:
-    executable = shutil.which("agent-browser")
-    if executable and os.name == "nt":
-        # Invoke the native binary, never a .cmd/.ps1 wrapper or a shell.
-        arch = "arm64" if os.environ.get("PROCESSOR_ARCHITECTURE", "").lower() == "arm64" else "x64"
-        native = (
-            Path(executable).parent
-            / "node_modules"
-            / "agent-browser"
-            / "bin"
-            / f"agent-browser-win32-{arch}.exe"
-        )
-        if native.is_file():
-            return str(native)
-        if Path(executable).suffix.lower() != ".exe":
-            return None
-    return executable
-
-
 @dataclass
 class BrowserSession:
     key: tuple[str | None, str, str]
@@ -377,6 +360,7 @@ class BrowserSession:
     last_used: float = field(default_factory=time.monotonic)
     last_run: str = ""
     client: Any = None
+    browser_executable: str = ""
 
 
 class BrowserClient:
@@ -399,6 +383,8 @@ class BrowserClient:
             options += ["--cdp", endpoint]
         else:
             options += ["--download-path", str(self.session.directory / "downloads")]
+            if self.session.browser_executable:
+                options += ["--executable-path", self.session.browser_executable]
             if headed:
                 options += ["--headed"]
         raw = self._invoke(
@@ -470,7 +456,8 @@ class BrowserService:
     def __init__(self, api: ExtensionAPI):
         self.api = api
         self.host: ExtensionHost | None = None
-        self.executable = executable_path()
+        self.executable: str | None = None
+        self.runtime: BrowserRuntime | None = None
         self._version: str | None = None
         self._guard = threading.RLock()
         self._external_lock = threading.RLock()
@@ -479,9 +466,10 @@ class BrowserService:
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
+        self.runtime = BrowserRuntime(host.data_dir)
 
     def ready(self) -> bool:
-        return bool(self.executable) and not self._closed
+        return not self._closed
 
     def _config(self) -> tuple[str, str, bool]:
         config = self.api.get_config()
@@ -546,6 +534,17 @@ class BrowserService:
     def _get_session(self, context: ToolContext) -> BrowserSession:
         key = (context.project_id, context.agent_id, context.session_id)
         with self._guard:
+            existing = self._sessions.get(key)
+            if existing is not None:
+                return existing
+        if self.runtime is None:
+            raise BrowserError("stopped")
+        config = self._config()
+        executable, chrome = self.runtime.ensure(config[0], lambda: self._check_access(context))
+        self._check_access(context)
+        if self._config() != config:
+            raise BrowserError("changed")
+        with self._guard:
             session = self._sessions.get(key)
             if session is None:
                 name = "vbot-" + uuid.uuid4().hex
@@ -557,15 +556,16 @@ class BrowserService:
                     raise BrowserError("config")
                 (directory / "config.json").write_text("{}\n", encoding="utf-8")
                 (directory / "downloads").mkdir(exist_ok=True)
-                config = self._config()
                 session = BrowserSession(key, name, directory, config)
+                session.browser_executable = chrome
                 if config[0] != "managed":
                     session.lock = self._external_lock
                 namespace = (
                     "vbot-"
                     + hashlib.sha256(str(context.data_root.resolve()).encode()).hexdigest()[:16]
                 )
-                session.client = BrowserClient(self.executable or "", session, namespace)
+                self.executable = executable
+                session.client = BrowserClient(executable, session, namespace)
                 self._sessions[key] = session
             return session
 
@@ -705,6 +705,13 @@ class BrowserService:
         try:
             args = validate_arguments(arguments)
             self._check_access(context)
+            key = (context.project_id, context.agent_id, context.session_id)
+            with self._guard:
+                connected = key in self._sessions
+            if not connected and args["action"] == "close":
+                return tool_success({"action": "close", "closed": True})
+            if not connected and args["action"] not in {"open", "tabs", "new_tab", "status"}:
+                raise BrowserError("not_open")
             session = self._get_session(context)
             self._prune(session)
             with session.lock:
@@ -742,6 +749,11 @@ class BrowserService:
                     self._ensure_tab(context, session, args)
                 result = self._execute(context, session, args)
                 return tool_success({"action": action, **result})
+        except SetupError as error:
+            self.api.logger.warning("Browser setup failed at stage %s", error.stage)
+            return tool_failure(
+                "browser_setup_" + error.stage, MESSAGES["unavailable"], retryable=False
+            )
         except BrowserError as error:
             code = "invalid_arguments" if error.code == "invalid" else "browser_" + error.code
             return tool_failure(code, str(error), retryable=False)
