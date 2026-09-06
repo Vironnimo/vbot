@@ -385,7 +385,7 @@ class CuaDriver:
                 )
             catalog = await session.list_tools()
             self.schemas = {tool.name: tool.input_schema for tool in catalog.tools}
-            for name in ("capture_pixels", "list_monitors"):
+            for name in ("capture_pixels", "list_monitors", "resolve_window"):
                 self.schemas[name] = {"properties": {"session": {}}}
             config = await session.call_tool("get_config", {})
             values = unpack(config.model_dump(by_alias=True, exclude_none=True))
@@ -443,6 +443,12 @@ class CuaDriver:
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.connect()
         arguments = dict(arguments)
+        if name == "resolve_window":
+            return (
+                self.desktop.resolve_window(arguments)
+                if self.desktop is not None
+                else {key: arguments[key] for key in ("pid", "window_id")}
+            )
         background_capture = arguments.pop("_background_capture", False)
         background_input = arguments.pop("_background_input", False)
         background = (
@@ -451,6 +457,31 @@ class CuaDriver:
         frame_key = (arguments.get("session"), arguments.get("pid"), arguments.get("window_id"))
         geometry = None
         foreground_before = None
+        if (
+            self.desktop is not None
+            and "window_id" in arguments
+            and name
+            in {
+                "move_cursor",
+                "click",
+                "double_click",
+                "right_click",
+                "drag",
+                "scroll",
+                "type_text",
+                "press_key",
+                "hotkey",
+                "set_value",
+                "invoke_menu",
+            }
+        ):
+            resolved = self.desktop.resolve_window(arguments)
+            if resolved["window_id"] != arguments["window_id"]:
+                raise ComputerUseError(
+                    "The window has an open dialog. Continue with the dialog target "
+                    "returned in the observation.",
+                    "target_blocked",
+                )
         if self.desktop is not None and background and "window_id" in arguments:
             geometry = self.desktop.window_geometry(arguments)
             if not background_capture:
@@ -472,7 +503,9 @@ class CuaDriver:
             if name == "capture_pixels":
                 name = "get_window_state"
                 arguments.update(max_elements=1, max_depth=1)
-        if background and ({"duration_ms", "modifiers"} & arguments.keys()):
+        if background and (
+            "modifiers" in arguments or ("duration_ms" in arguments and name != "drag")
+        ):
             raise ComputerUseError(
                 "Invalid value for duration_ms or modifiers.", "invalid_arguments"
             )
@@ -504,7 +537,11 @@ class CuaDriver:
                 return self.desktop.input(name, arguments)
             if name == "end_session":
                 self.desktop.end_session(arguments.get("session", ""))
-        elif name == "list_monitors" or "monitor" in arguments or "duration_ms" in arguments:
+        elif (
+            name == "list_monitors"
+            or "monitor" in arguments
+            or ("duration_ms" in arguments and not (background and name == "drag"))
+        ):
             raise ComputerUseError(
                 "Monitor selection and timed input are currently available on Windows only.",
                 "unsupported_capability",
@@ -518,9 +555,36 @@ class CuaDriver:
             raise ComputerUseError(
                 "This driver lacks a required capability. Update cua-driver and reload Extensions."
             )
+        request = dict(arguments)
+        if name in {
+            "move_cursor",
+            "click",
+            "double_click",
+            "right_click",
+            "drag",
+            "scroll",
+            "type_text",
+            "press_key",
+            "hotkey",
+        }:
+            if "target" not in self.schemas[name].get("properties", {}):
+                raise ComputerUseError(
+                    "This driver lacks a required capability. Update cua-driver and "
+                    "reload Extensions."
+                )
+            if "window_id" in request:
+                request["target"] = {
+                    "kind": "window",
+                    "pid": request.pop("pid"),
+                    "window_id": request.pop("window_id"),
+                }
+            else:
+                request["target"] = {"kind": "desktop", "display_id": "primary"}
+            if name == "move_cursor":
+                request.pop("delivery_mode", None)
         try:
             assert self._session is not None
-            response = self._portal.call(self._session.call_tool, name, arguments)
+            response = self._portal.call(self._session.call_tool, name, request)
         except Exception as exc:
             self.broken = True
             with suppress(Exception):  # Preserve the dispatch failure; never replay input.

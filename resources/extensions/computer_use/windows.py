@@ -111,6 +111,9 @@ class WindowsDesktop:
             "GetWindowRect": ([ct.c_void_p, ct.POINTER(Rect)], ct.c_int),
             "GetWindowThreadProcessId": ([ct.c_void_p, ct.POINTER(ct.c_uint32)], ct.c_uint32),
             "GetForegroundWindow": ([], ct.c_void_p),
+            "GetLastActivePopup": ([ct.c_void_p], ct.c_void_p),
+            "IsWindowEnabled": ([ct.c_void_p], ct.c_int),
+            "IsWindowVisible": ([ct.c_void_p], ct.c_int),
             "SetForegroundWindow": ([ct.c_void_p], ct.c_int),
             "IsIconic": ([ct.c_void_p], ct.c_int),
             "ShowWindow": ([ct.c_void_p, ct.c_int], ct.c_int),
@@ -269,6 +272,25 @@ class WindowsDesktop:
     def foreground_window(self) -> int:
         return int(self.user.GetForegroundWindow() or 0)
 
+    def resolve_window(self, args: dict[str, Any]) -> dict[str, int]:
+        """Follow a disabled owner's modal popup, never another application's focus."""
+        target = {key: args[key] for key in ("pid", "window_id")}
+        self._check()
+        self.window_geometry(target)
+        for _ in range(8):
+            hwnd = target["window_id"]
+            if self.user.IsWindowEnabled(hwnd):
+                break
+            popup = int(self.user.GetLastActivePopup(hwnd) or 0)
+            if not popup or popup == hwnd or not self.user.IsWindowVisible(popup):
+                break
+            pid = ct.c_uint32()
+            self.user.GetWindowThreadProcessId(popup, ct.byref(pid))
+            if pid.value != target["pid"]:
+                break
+            target["window_id"] = popup
+        return target
+
     def window_geometry(self, args: dict[str, Any]) -> tuple[int, ...]:
         """Bind another window capture backend to the same physical geometry checks."""
         self._check()
@@ -279,12 +301,14 @@ class WindowsDesktop:
         self._check()
         with self._physical():
             bounds, geometry = self._geometry(args)
+            self._check_capture_focus(args)
             if (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) > 40_000_000:
                 raise ComputerUseError(
                     "The desktop image is too large. Select one monitor.", "image_too_large"
                 )
             image = ImageGrab.grab(bbox=bounds, all_screens=True, include_layered_windows=True)
             _, after = self._geometry(args)
+            self._check_capture_focus(args)
         self._check()
         if geometry != after:
             raise ComputerUseError(
@@ -299,6 +323,14 @@ class WindowsDesktop:
             "capture_backend": "windows",
             "coordinate_space": "image_pixels",
         }
+
+    def _check_capture_focus(self, args: dict[str, Any]) -> None:
+        if "window_id" in args and self.foreground_window() != args["window_id"]:
+            raise ComputerUseError(
+                "The target is not foreground. Capture it with foreground=false for "
+                "background control, or select it on the desktop before foreground control.",
+                "target_not_foreground",
+            )
 
     def _wait(self, seconds: float) -> None:
         self._stopped.wait(seconds)
