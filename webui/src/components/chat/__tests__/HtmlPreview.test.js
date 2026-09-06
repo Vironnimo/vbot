@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, unmount, flushSync } from 'svelte';
+import { fromStore, writable } from 'svelte/store';
 import HtmlPreview from '../HtmlPreview.svelte';
 import { init } from '../../../lib/i18n.js';
 
@@ -11,6 +12,11 @@ const { open, revision } = vi.hoisted(() => ({
 vi.mock(
   'svelte',
   async () => import('../../../../node_modules/svelte/src/index-client.js'),
+);
+vi.mock(
+  'svelte/store',
+  async () =>
+    import('../../../../node_modules/svelte/src/store/index-client.js'),
 );
 vi.mock('$lib/api.js', () => ({
   openFilePreview: open,
@@ -48,12 +54,13 @@ describe('HtmlPreview', () => {
   it('refreshes only on changes, pauses polling and cleans up on unmount', async () => {
     component = mount(HtmlPreview, {
       target: document.body,
-      props: { request: { source: '/site/index.html' } },
+      props: { request: { source: '/api/files/output-token' } },
     });
     await settle();
     const frame = document.querySelector('iframe');
     const reload = vi.spyOn(frame, 'src', 'set');
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(document.querySelector('input, form')).toBeNull();
     await vi.advanceTimersByTimeAsync(1500);
     expect(reload).not.toHaveBeenCalled();
     revision.mockResolvedValue({ revision: 'two' });
@@ -69,25 +76,32 @@ describe('HtmlPreview', () => {
     expect(revision).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps failed input editable and exposes a retry without an empty iframe', async () => {
+  it('retries a failed Agent file output without asking for a path', async () => {
     open.mockRejectedValue(new Error('Test-owned unavailable sentinel'));
     component = mount(HtmlPreview, {
       target: document.body,
-      props: { request: { source: '/missing.html' } },
+      props: { request: { source: '/api/files/missing-token' } },
     });
     await settle();
     expect(document.querySelector('[role="alert"]').textContent).toContain(
       'Test-owned unavailable sentinel',
     );
     expect(document.querySelector('iframe')).toBeNull();
-    expect(document.querySelector('input').disabled).toBe(false);
-    expect(document.querySelector('input').value).toBe('/missing.html');
+    expect(document.querySelector('input, form')).toBeNull();
+    open.mockResolvedValue(result);
+    document.querySelector('[role=alert] button').click();
+    await settle();
+    expect(open).toHaveBeenLastCalledWith(
+      '/api/files/missing-token',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(document.querySelector('iframe')).not.toBeNull();
   });
 
   it('retains a validated subpage on reload and ignores foreign frame messages', async () => {
     component = mount(HtmlPreview, {
       target: document.body,
-      props: { request: { source: '/site/index.html' } },
+      props: { request: { source: '/api/files/output-token' } },
     });
     await settle();
     const frame = document.querySelector('iframe');
@@ -116,20 +130,20 @@ describe('HtmlPreview', () => {
   });
 
   it('does not erase a failed open when the previous preview polls successfully', async () => {
+    const request = fromStore(writable({ source: '/api/files/output-token' }));
     component = mount(HtmlPreview, {
       target: document.body,
-      props: { request: { source: '/site/index.html' } },
+      props: {
+        get request() {
+          return request.current;
+        },
+      },
     });
     await settle();
     const frame = document.querySelector('iframe');
     open.mockRejectedValue(new Error('Test-owned failed replacement'));
-    const input = document.querySelector('input');
-    input.value = '/missing.html';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    request.current = { source: '/api/files/missing-token' };
     flushSync();
-    const form = document.querySelector('form');
-    const submit = new Event('submit', { bubbles: true, cancelable: true });
-    form.dispatchEvent(submit);
     await settle();
     await vi.advanceTimersByTimeAsync(1500);
     expect(document.querySelector('iframe')).toBe(frame);
@@ -141,7 +155,7 @@ describe('HtmlPreview', () => {
   it('shows localized feedback for a missing page and recovers on readiness', async () => {
     component = mount(HtmlPreview, {
       target: document.body,
-      props: { request: { source: '/site/index.html' } },
+      props: { request: { source: '/api/files/output-token' } },
     });
     await settle();
     const frame = document.querySelector('iframe');

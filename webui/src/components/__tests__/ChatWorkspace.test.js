@@ -42,10 +42,34 @@ describe('ChatWorkspace', () => {
     flushSync();
   }
 
-  async function start() {
+  function mockPreviewOpening() {
+    const baseRpc = rpcMock.getMockImplementation();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'file.preview_open'
+        ? Promise.resolve({
+            token: 'site-token',
+            url: '/api/preview-assets/site-token/index.html',
+            source: '/site/index.html',
+            root: '/site',
+            filename: 'index.html',
+            revision: 'one',
+          })
+        : baseRpc(method, params),
+    );
+  }
+
+  async function start(split = true) {
     rpcMock.mockImplementation(
       createChatRpcMock({
         sessionMessages: {
+          'session-1': [
+            {
+              id: 'website-answer',
+              role: 'assistant',
+              content:
+                'Hello! Your website: [index.html](/api/files/file-token)',
+            },
+          ],
           'session-2': [
             {
               id: 'second-answer',
@@ -77,6 +101,7 @@ describe('ChatWorkspace', () => {
       ChatWorkspace,
     );
     await waitForCondition(() => pane(0)?.textContent.includes('Hello'), 100);
+    if (!split) return;
     action(0, 'Split view');
     await waitForCondition(
       () => pane(1)?.textContent.includes('Second topic'),
@@ -242,15 +267,22 @@ describe('ChatWorkspace', () => {
         button(pane(index), 'Area actions').closest('.chat-view__session-bar'),
       ).not.toBeNull();
     }
-    action(1, 'Show preview');
+    mockPreviewOpening();
+    pane(0).querySelector('.msg-markdown a').click();
+    await waitForCondition(() => pane(1).querySelector('iframe'), 100);
     expect(chat.hidden).toBe(true);
     expect(
-      button(pane(1), 'Area actions').closest('.html-preview__address'),
+      button(pane(1), 'Area actions').closest('.html-preview__toolbar'),
     ).not.toBeNull();
     action(1, 'Back to chat');
     expect(chat.hidden).toBe(false);
     expect(chat.querySelector('.msg-input')).toBe(input);
     expect(input.value).toBe('Draft survives the content menu');
+    action(1, 'Show preview');
+    expect(chat.hidden).toBe(true);
+    expect(
+      pane(1).querySelector('.html-preview input, .html-preview form'),
+    ).toBeNull();
   });
 
   it('supports menu keyboard navigation, dismissal and focus restoration', async () => {
@@ -291,24 +323,8 @@ describe('ChatWorkspace', () => {
 
   it('opens an HTML output in the other area without replacing its Chat', async () => {
     await start();
-    const baseRpc = rpcMock.getMockImplementation();
-    rpcMock.mockImplementation((method, params) =>
-      method === 'file.preview_open'
-        ? Promise.resolve({
-            token: 'site-token',
-            url: '/api/preview-assets/site-token/index.html',
-            source: '/site/index.html',
-            root: '/site',
-            filename: 'index.html',
-            revision: 'one',
-          })
-        : baseRpc(method, params),
-    );
-    const markdown = pane(0).querySelector('.msg-markdown');
-    const anchor = document.createElement('a');
-    anchor.href = '/api/files/file-token';
-    anchor.textContent = 'index.html';
-    markdown.append(anchor);
+    mockPreviewOpening();
+    const anchor = pane(0).querySelector('.msg-markdown a');
     anchor.click();
     await waitForCondition(() => pane(1).querySelector('iframe'), 100);
     expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
@@ -323,5 +339,37 @@ describe('ChatWorkspace', () => {
     expect(pane(1).querySelector('.chat-view')).toBe(rightChat);
     expect(rightChat.textContent).toContain('Second conversation sentinel');
     expect(testChatStateRefs).toHaveLength(2);
+  });
+
+  it('opens a rendered Agent file output directly from one Chat without a manual Preview entry', async () => {
+    await start(false);
+    button(pane(0), 'Area actions').click();
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[role="menuitem"]')].map((item) =>
+        item.textContent.trim(),
+      ),
+    ).toEqual(['Split view']);
+    document
+      .querySelector('[role="menu"]')
+      .dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    flushSync();
+    mockPreviewOpening();
+    pane(0).querySelector('.msg-markdown a').click();
+    await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+    expect(pane(0).querySelector('.chat-view').hidden).toBe(false);
+    expect(
+      pane(1).querySelector('.html-preview input, .html-preview form'),
+    ).toBeNull();
+    expect(testChatStateRefs).toHaveLength(1);
+    expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
+      source: '/api/files/file-token',
+    });
+    action(1, 'Close area');
+    pane(0).querySelector('.msg-markdown a').click();
+    await waitForCondition(() => !pane(1).hidden, 100);
+    expect(testChatStateRefs).toHaveLength(1);
   });
 });
