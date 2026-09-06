@@ -967,6 +967,7 @@ def test_set_tool_access_override_rejects_overlap_and_out_of_ceiling_names(
     for value in (
         {"mode": "selected", "allowed": ["read"], "denied": ["read"]},
         {"mode": "selected", "allowed": ["missing_tool"]},
+        {"mode": "all", "granted": ["computer"]},
     ):
         with pytest.raises(RpcError) as exc_info:
             _set_override(

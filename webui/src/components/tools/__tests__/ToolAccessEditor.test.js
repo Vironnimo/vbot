@@ -92,6 +92,33 @@ describe('ToolAccessEditor', () => {
     document.body.innerHTML = '';
   });
 
+  it('offers explicit opt-in while All mode stays selected', () => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: {
+        value: { mode: 'all' },
+        tools: [
+          ...tools,
+          {
+            name: 'computer',
+            activation: 'configurable',
+            requires_opt_in: true,
+            ready: true,
+          },
+        ],
+        onChange,
+      },
+    });
+    flushSync();
+    expect(toolChip('computer').getAttribute('aria-checked')).toBe('false');
+    toolChip('computer').click();
+    expect(onChange).toHaveBeenCalledWith({
+      mode: 'all',
+      granted: ['computer'],
+    });
+  });
+
   it('renders name-only chips and restores each Tool description on hover', () => {
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,

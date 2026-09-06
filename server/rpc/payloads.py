@@ -285,6 +285,7 @@ def _tool_response(tool: Any) -> JsonObject:
         "family_label": getattr(tool, "family_label", None),
         "activation": getattr(tool, "activation", "configurable"),
         "activation_source": getattr(tool, "activation_source", None),
+        "requires_opt_in": bool(getattr(tool, "requires_opt_in", False)),
         "constraints": list(getattr(tool, "constraints", ())),
         "session_scoped": bool(getattr(tool, "session_scoped", False)),
         # The owning extension name, or null for a built-in tool.

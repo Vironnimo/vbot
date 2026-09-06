@@ -1565,6 +1565,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "analyze_image",
         "bash",
         "calendar",
+        "computer",
         "cron",
         "edit",
         "generate_music",
@@ -1596,7 +1597,6 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     assert [skill.name for skill in runtime.skills.list_all()] == [
         "browser-use",
         "coding-agents",
-        "computer-use",
         "free-models",
         "home-assistant",
         "pdf",

@@ -26,9 +26,14 @@ export function normalizeToolAccess(value) {
     const allowed = normalizeNames(value.allowed).filter(
       (name) => !deniedSet.has(name),
     );
-    return compactPolicy({ mode: value.mode, allowed, denied });
+    return compactPolicy({
+      mode: value.mode,
+      allowed,
+      denied,
+      granted: value.granted,
+    });
   }
-  return compactPolicy({ mode: value.mode, denied });
+  return compactPolicy({ mode: value.mode, denied, granted: value.granted });
 }
 
 export function changeToolAccessMode(
@@ -47,12 +52,18 @@ export function changeToolAccessMode(
     const allowed =
       current.mode === TOOL_ACCESS_MODE_ALL
         ? configurableNames(catalog, ceiling).filter(
-            (name) => !deniedSet.has(name),
+            (name) =>
+              !deniedSet.has(name) &&
+              toolAccessPreferenceEnabled(current, toolByName(catalog, name)),
           )
         : [];
-    return compactPolicy({ mode, allowed, denied });
+    return compactPolicy({ mode, allowed, denied, granted: current.granted });
   }
-  return compactPolicy({ mode, denied: [...(current.denied ?? [])] });
+  return compactPolicy({
+    mode,
+    denied: [...(current.denied ?? [])],
+    granted: current.granted,
+  });
 }
 
 export function setToolAccessState(
@@ -71,6 +82,10 @@ export function setToolAccessState(
 
   const denied = new Set(current.denied ?? []);
   const allowed = new Set(current.allowed ?? []);
+  const granted = new Set(current.granted ?? []);
+  if (state === 'denied' || state === 'default') granted.delete(name);
+  if (state === 'enabled' && tool.requires_opt_in) granted.add(name);
+  current.granted = [...granted];
   if (state === 'denied') {
     denied.add(name);
     allowed.delete(name);
@@ -104,6 +119,7 @@ export function setToolAccessState(
   allowed.add(name);
   return compactPolicy({
     mode: TOOL_ACCESS_MODE_SELECTED,
+    granted: [...granted],
     allowed: [...allowed],
     denied: [...denied],
   });
@@ -131,6 +147,7 @@ export function toolAccessPreferenceEnabled(value, tool) {
   const policy = normalizeToolAccess(value);
   if (
     policy.mode === TOOL_ACCESS_MODE_NONE ||
+    (tool?.requires_opt_in && !(policy.granted ?? []).includes(tool?.name)) ||
     (policy.denied ?? []).includes(tool?.name)
   ) {
     return false;
@@ -193,6 +210,8 @@ export function toolAccessState(value, tool, catalog = [], context = {}) {
     return 'denied';
   }
   if (toolIsConfigurable(tool)) {
+    if (tool.requires_opt_in && !(policy.granted ?? []).includes(tool.name))
+      return 'off';
     if (policy.mode === TOOL_ACCESS_MODE_ALL) {
       return 'included';
     }
@@ -209,10 +228,12 @@ export function toolAccessState(value, tool, catalog = [], context = {}) {
     : 'inactive';
 }
 
-export function toolAccessIncludes(value, name) {
+export function toolAccessIncludes(value, name, catalog = []) {
   const policy = normalizeToolAccess(value);
   if (
     (policy.denied ?? []).includes(name) ||
+    (toolByName(catalog, name).requires_opt_in &&
+      !(policy.granted ?? []).includes(name)) ||
     policy.mode === TOOL_ACCESS_MODE_NONE
   ) {
     return false;
@@ -292,7 +313,11 @@ export function policyNamesNotInCatalog(value, catalog = []) {
   const known = new Set(
     (Array.isArray(catalog) ? catalog : []).map((tool) => tool?.name),
   );
-  return [...(policy.allowed ?? []), ...(policy.denied ?? [])].filter(
+  return [
+    ...(policy.allowed ?? []),
+    ...(policy.denied ?? []),
+    ...(policy.granted ?? []),
+  ].filter(
     (name, index, all) => !known.has(name) && all.indexOf(name) === index,
   );
 }
@@ -350,12 +375,7 @@ function automaticToolIsActive(
   const nextSeen = new Set(seen);
   nextSeen.add(tool.name);
   if (toolIsConfigurable(source)) {
-    return (
-      !(policy.denied ?? []).includes(sourceName) &&
-      (policy.mode === TOOL_ACCESS_MODE_ALL ||
-        (policy.mode === TOOL_ACCESS_MODE_SELECTED &&
-          (policy.allowed ?? []).includes(sourceName)))
-    );
+    return toolAccessPreferenceEnabled(policy, source);
   }
   return automaticToolIsActive(policy, source, catalog, context, nextSeen);
 }
@@ -376,6 +396,8 @@ function compactPolicy(value) {
   if (denied.length > 0) {
     policy.denied = denied;
   }
+  const granted = normalizeNames(value.granted);
+  if (granted.length > 0) policy.granted = granted;
   return policy;
 }
 

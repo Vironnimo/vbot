@@ -225,6 +225,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "kind_connection": {"action": "search", "kind": "connection"},
 }
 PROBE_SCENARIOS = (
+    "computer",
     "mcp_workflow",
     "mcp",
     "direct_required",
@@ -267,6 +268,108 @@ PROBE_SCENARIOS = (
     "write",
     "word_count",
 )
+COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
+    **{action: {"action": action} for action in ("status", "apps", "windows", "close")},
+    **{
+        f"capture_{mode}": {
+            "action": "capture",
+            "pid": 101,
+            "window_id": 202,
+            **({"mode": mode} if mode != "default" else {}),
+        }
+        for mode in ("default", "som", "vision", "ax")
+    },
+    "click_preview": {"action": "click", "pid": 101, "window_id": 202, "element": "1"},
+    "click_element": {
+        "action": "click",
+        "pid": 101,
+        "window_id": 202,
+        "element": "s00000001:1",
+        "apply": True,
+    },
+    "click_coordinates": {
+        "action": "click",
+        "pid": 101,
+        "window_id": 202,
+        "x": 20,
+        "y": 30,
+        "apply": True,
+    },
+    "click_right_double": {
+        "action": "click",
+        "pid": 101,
+        "window_id": 202,
+        "x": 20,
+        "y": 30,
+        "button": "right",
+        "count": 2,
+        "apply": True,
+        "foreground": False,
+    },
+    "click_middle": {
+        "action": "click",
+        "pid": 101,
+        "window_id": 202,
+        "x": 20,
+        "y": 30,
+        "button": "middle",
+        "count": 1,
+        "apply": False,
+    },
+    "type": {
+        "action": "type",
+        "pid": 101,
+        "window_id": 202,
+        "text": "test-owned draft",
+        "apply": True,
+    },
+    "type_element": {
+        "action": "type",
+        "pid": 101,
+        "window_id": 202,
+        "element": "1",
+        "text": "test-owned draft",
+        "apply": True,
+    },
+    "key_single": {
+        "action": "key",
+        "pid": 101,
+        "window_id": 202,
+        "shortcut": "enter",
+        "apply": True,
+    },
+    "key_foreground": {
+        "action": "key",
+        "pid": 101,
+        "window_id": 202,
+        "shortcut": "ctrl+a",
+        "apply": True,
+        "foreground": True,
+    },
+    **{
+        f"scroll_{direction}": {
+            "action": "scroll",
+            "pid": 101,
+            "window_id": 202,
+            "direction": direction,
+            "apply": True,
+        }
+        for direction in ("up", "down", "left", "right")
+    },
+    "scroll_element": {
+        "action": "scroll",
+        "pid": 101,
+        "window_id": 202,
+        "direction": "down",
+        "element": "1",
+        "amount": 5,
+        "apply": True,
+    },
+    "invalid_target": {"action": "capture", "pid": 101},
+    "invalid_field": {"action": "windows", "pid": 101},
+}
+
+
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
 BASH_CASES = (
@@ -585,6 +688,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
     parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
+    parser.add_argument(
+        "--computer-case", choices=tuple(COMPUTER_CASE_ARGUMENTS), default="windows"
+    )
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
         "--mcp-workflow-case", choices=("render", "no_match", "large_result"), default="render"
@@ -2652,6 +2758,34 @@ def _write_scenario() -> ProbeScenario:
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
+    if name == "computer":
+        from resources.extensions.computer_use.extension import (
+            COMPUTER_DESCRIPTION,
+            COMPUTER_PARAMETERS,
+        )
+
+        expected = COMPUTER_CASE_ARGUMENTS[args.computer_case]
+        instruction = (
+            "This is an inert Tool-contract test; no desktop action will execute. "
+            "The target is a test-owned window with a fresh capture and element 1 / s00000001:1. "
+            "The user explicitly requested foreground input where specified. "
+            "Emit exactly one computer call using only these arguments, "
+            "including deliberate invalid cases: " + json.dumps(expected)
+        )
+        return ProbeScenario(
+            name,
+            [
+                {
+                    "name": "computer",
+                    "description": COMPUTER_DESCRIPTION,
+                    "parameters": COMPUTER_PARAMETERS,
+                }
+            ],
+            _probe_messages(instruction),
+            "computer",
+            require_closed_input=False,
+            expected_arguments=expected,
+        )
     if name == "direct_required":
         return ProbeScenario(name, [direct], _probe_messages("Inspect key alpha."), PROBE_TOOL_NAME)
     if name == "nested_operation":
