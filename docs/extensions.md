@@ -11,7 +11,7 @@ for runnable samples see [`examples/extensions/`](../examples/extensions/).
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **4**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4.
+`API_VERSION` is currently **5**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5.
 
 ## Install and discovery
 
@@ -545,3 +545,22 @@ Each MCP connection presents one stable Tool with search, describe, call, and re
 The MCP row in Settings -> Connections -> Extensions also provides manual connection management: add/edit local programs or HTTP/SSE servers, select Agent grants, enter referenced credentials in a write-only dialog, enable/disable, test, and remove connections. Capabilities & access shows the discovered Tools, server guidance, Prompts, and effective access for granted Agents; inspection does not execute application Tools. Connection edits are explicitly saved and may interrupt the current connection. A connection test verifies the server; verify application-level access separately through the intended Agent. CLI operations remain available for automated setup, including `inspect <id>` for the same read-only inspection.
 
 Begin Agent discovery with an unfiltered search: application Tools appear first, alongside server guidance and available Prompts. Searches rank matching words; an empty result supplies a browse action because an application may expose an indirect capability through a general-purpose Tool. Search continuation arguments and saved-result reads preserve access to larger catalogs and guidance without inflating every Model request. Live behavior probes use `python scripts/probe_provider_tool_call.py --scenario mcp_workflow --mcp-workflow-case render|no_match|large_result` with the usual Provider options. They exercise the real MCP host against an inert application and verify discovery behavior, not real Blender rendering.
+
+
+## Explicit Tool permission
+
+Pass `requires_opt_in=True` to `api.register_tool(...)` (or the same field in a live Tool catalog) when a configurable Tool must require an explicit per-Agent grant. Declare `api_version: 5` in the Extension manifest. This metadata is accepted only for configurable, non-internal, non-Session-scoped Tools.
+
+The owning Agent policy stores these grants in `tool_access.granted`. All mode does not grant them, and selected mode requires both inclusion in `allowed` and an explicit grant. None and `denied` still take precedence. Missing Extensions do not erase stored grants. For Project Agents, the Project Tool Whitelist remains the outer ceiling and never implies a grant; configure grants through the Agent's vBot Tool override. The shared Tool editor performs these updates through its ordinary toggle and autosave flow.
+
+This is vBot Tool authorization. It does not sandbox an Agent's unrestricted Bash access or make Extension Python code untrusted. MCP connection grants remain an additional connection-specific restriction.
+
+## Computer Use
+
+The bundled `computer_use` Extension supplies the opt-in `computer` Tool, replacing the former bundled Computer Use Skill. Install `cua-driver` separately on the server host and start its daemon (`cua-driver serve`), reload Extensions, then explicitly enable `computer` for the intended Agent under Tools & Skills. A Project Agent additionally needs `computer` in the Project Tool Whitelist and in its Tool override with an explicit grant. The Extension remains listed when the driver is missing and explains the prerequisite; it never installs, upgrades, or reconfigures the driver.
+
+The Tool controls windows on the machine running the vBot server. It does not control a remote Desktop accessor. Actions are `status`, `apps`, `windows`, `capture`, `click`, `type`, `key`, `scroll`, and `close`. Input defaults to a preview; set `apply: true` to execute. Delivery defaults to background. Captures return screenshot pixels through normal Tool media handling, with `mode: ax` selecting accessibility text only. List windows before selecting an exact `pid` and `window_id`, capture it before input, and capture again after input to verify the result.
+
+Driver sessions are owned by the calling Agent/Project/Session/Run, created on first use and closed on explicit close, Run completion, or Extension shutdown. Desktop operations serialize across calls. Input requires the latest matching window capture; applying input invalidates it even when the driver fails, and input is never automatically retried. Explicit element tokens are checked against that capture. Each call rechecks the Agent's current effective permission, including after waiting for an earlier desktop operation.
+
+Cua Driver platform requirements and OS permissions still apply; see the [upstream installation guide](https://cua.ai/docs/how-to-guides/driver/install) and [platform support](https://cua.ai/docs/reference/cua-driver/platform-support).

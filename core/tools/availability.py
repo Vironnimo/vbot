@@ -54,6 +54,7 @@ class ToolAccess:
     mode: str = TOOL_ACCESS_MODE_ALL
     allowed: tuple[str, ...] = ()
     denied: tuple[str, ...] = ()
+    granted: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical persisted/public JSON representation."""
@@ -63,6 +64,8 @@ class ToolAccess:
             result["allowed"] = list(self.allowed)
         if self.denied:
             result["denied"] = list(self.denied)
+        if self.granted:
+            result["granted"] = list(self.granted)
         return result
 
 
@@ -96,11 +99,12 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
             "mode": value.mode,
             **({"allowed": list(value.allowed)} if value.mode == TOOL_ACCESS_MODE_SELECTED else {}),
             **({"denied": list(value.denied)} if value.denied else {}),
+            **({"granted": list(value.granted)} if value.granted else {}),
         }
     if not isinstance(value, Mapping):
         raise ValueError("tool_access must be an object")
 
-    unsupported = sorted(set(value) - {"mode", "allowed", "denied"})
+    unsupported = sorted(set(value) - {"mode", "allowed", "denied", "granted"})
     if unsupported:
         raise ValueError(f"unsupported tool_access fields: {', '.join(unsupported)}")
     mode = value.get("mode")
@@ -115,11 +119,12 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
 
     allowed = _normalize_tool_name_list(value.get("allowed", ()), "tool_access.allowed")
     denied = _normalize_tool_name_list(value.get("denied", ()), "tool_access.denied")
+    granted = _normalize_tool_name_list(value.get("granted", ()), "tool_access.granted")
     overlap = sorted(set(allowed) & set(denied))
     if overlap:
         names = ", ".join(overlap)
         raise ValueError(f"tool_access.allowed and tool_access.denied overlap: {names}")
-    return ToolAccess(mode=mode, allowed=allowed, denied=denied)
+    return ToolAccess(mode=mode, allowed=allowed, denied=denied, granted=granted)
 
 
 def resolve_tool_access(
@@ -152,6 +157,12 @@ def resolve_tool_access(
             and _constraints_allow(catalog[name], workspace=workspace)
         }
 
+    # A whitelist (including a materialized Project ceiling) is never an opt-in.
+    active = {
+        name
+        for name in active
+        if not getattr(catalog[name], "requires_opt_in", False) or name in tool_access.granted
+    }
     requested_grants = set(session_tool_grants)
     for name, tool in catalog.items():
         activation = _activation_kind(tool)

@@ -237,3 +237,90 @@ describe('Tool Access Policy UI helpers', () => {
     expect(toolAccessIncludes({ mode: 'none' }, 'subagent')).toBe(false);
   });
 });
+
+describe('explicit Tool opt-in', () => {
+  const computer = {
+    name: 'computer',
+    activation: 'configurable',
+    requires_opt_in: true,
+  };
+  const allTools = [...catalog, computer];
+  it('never grants by choosing All or materializing Choose', () => {
+    const all = changeToolAccessMode(
+      { mode: 'selected', allowed: [] },
+      'all',
+      allTools,
+    );
+    expect(toolAccessPreferenceEnabled(all, computer)).toBe(false);
+    expect(
+      changeToolAccessMode(all, 'selected', allTools).allowed,
+    ).not.toContain('computer');
+    expect(toolAccessState(all, computer)).toBe('off');
+  });
+  it('grants and revokes explicitly without leaving All mode', () => {
+    const granted = setToolAccessPreference(
+      { mode: 'all' },
+      computer,
+      true,
+      allTools,
+    );
+    expect(granted).toEqual({ mode: 'all', granted: ['computer'] });
+    expect(toolAccessPreferenceEnabled(granted, computer)).toBe(true);
+    const revoked = setToolAccessPreference(granted, computer, false, allTools);
+    expect(revoked).toEqual({ mode: 'all', denied: ['computer'] });
+    expect(toolAccessPreferenceEnabled(revoked, computer)).toBe(false);
+  });
+  it('preserves explicit grants across modes but None still disables them', () => {
+    const granted = { mode: 'all', granted: ['computer'] };
+    const none = changeToolAccessMode(granted, 'none', allTools);
+    expect(none.granted).toEqual(['computer']);
+    expect(toolAccessPreferenceEnabled(none, computer)).toBe(false);
+    expect(
+      toolAccessPreferenceEnabled(
+        changeToolAccessMode(none, 'all', allTools),
+        computer,
+      ),
+    ).toBe(true);
+  });
+  it('requires selection and grant within the Project ceiling', () => {
+    expect(
+      toolAccessPreferenceEnabled(
+        { mode: 'selected', allowed: ['computer'] },
+        computer,
+      ),
+    ).toBe(false);
+    const policy = setToolAccessPreference(
+      { mode: 'selected', allowed: [] },
+      computer,
+      true,
+      allTools,
+      ['computer'],
+    );
+    expect(policy).toEqual({
+      mode: 'selected',
+      allowed: ['computer'],
+      granted: ['computer'],
+    });
+    expect(
+      setToolAccessPreference({ mode: 'all' }, computer, true, allTools, [
+        'read',
+      ]),
+    ).toEqual({ mode: 'all' });
+  });
+  it('keeps companions inactive until their parent is granted', () => {
+    const follower = {
+      name: 'computer_read',
+      activation: 'follows',
+      activation_source: 'computer',
+    };
+    expect(
+      toolAccessState({ mode: 'all' }, follower, [computer, follower]),
+    ).toBe('inactive');
+    expect(
+      toolAccessState({ mode: 'all', granted: ['computer'] }, follower, [
+        computer,
+        follower,
+      ]),
+    ).toBe('automatic');
+  });
+});

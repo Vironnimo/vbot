@@ -74,6 +74,7 @@
         activation: 'configurable',
         ready: false,
         registered: false,
+        requires_opt_in: (policy.granted ?? []).includes(name),
       });
     }
     return catalog;
@@ -175,6 +176,14 @@
 
   function toolNotes(tool) {
     const notes = [];
+    if (tool.requires_opt_in) {
+      notes.push(
+        t(
+          'toolAccess.requiresOptIn',
+          'Requires explicit permission, including in All mode. Turn this Tool on to grant it.',
+        ),
+      );
+    }
     if (tool.activation === 'follows') {
       notes.push(
         t('toolAccess.activation.follows', 'Automatic with {source}', {
