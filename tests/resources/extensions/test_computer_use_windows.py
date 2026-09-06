@@ -209,6 +209,66 @@ def test_native_input_abi_matches_windows_x64():
         assert ct.sizeof(Input) == 40
 
 
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("click", {"x": 10, "y": 10, "count": 2}),
+        ("scroll", {"x": 10, "y": 10, "direction": "down"}),
+        ("drag", {"from_x": 10, "from_y": 10, "to_x": 30, "to_y": 30, "duration_ms": 0}),
+    ],
+)
+def test_modifiers_span_entire_pointer_action_and_release(native, name, args):
+    desktop, sent, _, _ = native
+    desktop.capture({})
+    desktop.input(name, {**args, "modifiers": ["ctrl", "shift"]})
+    assert sent[:2] == [(1, 0x11, 0, 0), (1, 0x10, 0, 0)]
+    assert sent[-2:] == [(1, 0x10, 0, 2), (1, 0x11, 0, 2)]
+    assert all(event[0] == 0 for event in sent[2:-2])
+    assert not desktop._held
+
+
+def test_modified_drag_stop_releases_mouse_and_modifiers(native):
+    desktop, sent, _, _ = native
+    desktop.capture({})
+    waiting = threading.Event()
+    original_wait = desktop._wait
+
+    def wait(seconds):
+        waiting.set()
+        original_wait(seconds)
+
+    desktop._wait = wait
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(
+            desktop.input,
+            "drag",
+            {
+                "from_x": 10,
+                "from_y": 10,
+                "to_x": 500,
+                "to_y": 500,
+                "duration_ms": 2000,
+                "modifiers": ["ctrl", "shift"],
+            },
+        )
+        assert waiting.wait(1)
+        desktop.interrupt()
+        with pytest.raises(ComputerUseError):
+            future.result(timeout=0.5)
+    assert sent[-3][3] == 4
+    assert sent[-2:] == [(1, 0x10, 0, 2), (1, 0x11, 0, 2)]
+    assert not desktop._held
+
+
+def test_user_held_pointer_modifier_refuses_before_moving(native):
+    desktop, sent, _, _ = native
+    desktop.capture({})
+    desktop.user.GetAsyncKeyState = lambda _: 0x8000
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.input("click", {"x": 10, "y": 10, "modifiers": ["ctrl"]})
+    assert caught.value.code == "input_busy" and not sent
+
+
 def test_session_end_retires_geometry(native):
     desktop, _, _, _ = native
     desktop.capture({"session": "s"})
