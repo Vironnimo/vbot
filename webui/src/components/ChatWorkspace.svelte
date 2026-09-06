@@ -4,8 +4,8 @@
   import ChatView from './ChatView.svelte';
   import HtmlPreview from './chat/HtmlPreview.svelte';
   import Button from './ui/Button.svelte';
-  import TabList from './ui/TabList.svelte';
   import { tooltip } from '$lib/tooltip.js';
+  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
 
   let { active = true, ...chatProps } = $props();
   const id = $props.id();
@@ -44,6 +44,67 @@
     Math.max(minimum, Math.min(100 - minimum, ratio)),
   );
   let lastNavigation = null;
+  let menuPane = $state(null);
+  let menuTrigger = null;
+  let menu = $state(null);
+  let menuStyle = $state('visibility: hidden');
+
+  function closeMenu(restoreFocus = false) {
+    menuPane = null;
+    if (restoreFocus) menuTrigger?.focus();
+  }
+
+  async function toggleMenu(index, trigger) {
+    if (menuPane === index) {
+      closeMenu(true);
+      return;
+    }
+    menuTrigger = trigger;
+    menuPane = index;
+    menuStyle = 'visibility: hidden';
+    await tick();
+    if (menuPane !== index || !menu) return;
+    const position = computePanelPosition(trigger, {
+      panelWidth: 200,
+      contentHeight: menu.scrollHeight,
+    });
+    menuStyle = `left: ${position.left}px; ${position.verticalRule}; width: ${position.width}px; max-height: ${position.optionsMaxHeight}px`;
+    menu.querySelector('button')?.focus();
+  }
+
+  function menuKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu(true);
+      return;
+    }
+    if (event.key === 'Tab') {
+      closeMenu(true);
+      return;
+    }
+    const items = [...menu.querySelectorAll('button')];
+    const current = items.indexOf(document.activeElement);
+    let next;
+    if (event.key === 'ArrowDown') next = (current + 1) % items.length;
+    else if (event.key === 'ArrowUp')
+      next = (current - 1 + items.length) % items.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = items.length - 1;
+    else return;
+    event.preventDefault();
+    items[next]?.focus();
+  }
+
+  function changeContent(index, kind) {
+    closeMenu();
+    kinds[index] = kind;
+    if (index === 1 && kind === 'chat') secondChatCreated = true;
+    focusArea(index);
+  }
+
+  $effect(() => {
+    if (!active) closeMenu();
+  });
 
   onMount(() => {
     try {
@@ -78,6 +139,7 @@
   }
 
   function openSplit() {
+    closeMenu();
     createSecond();
     if (kinds[1] === 'chat') secondChatCreated = true;
     split = true;
@@ -86,6 +148,7 @@
   }
 
   function closePane(index) {
+    closeMenu();
     split = false;
     dragging = false;
     singlePane = 1 - index;
@@ -97,7 +160,10 @@
   function focusArea(index) {
     void tick().then(() => {
       const area = root?.querySelectorAll('.chat-workspace__pane')[index];
-      area?.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+      const surface = area?.querySelector(
+        '.chat-workspace__body:not([hidden])',
+      );
+      surface?.querySelector('[data-workspace-action]')?.focus();
     });
   }
 
@@ -194,12 +260,93 @@
       requestId: ++navigationSequence,
     };
   }
-
-  const tabs = $derived([
-    { id: 'chat', label: t('split.chat', 'Chat') },
-    { id: 'preview', label: t('split.preview', 'Preview') },
-  ]);
 </script>
+
+<svelte:window onresize={() => closeMenu()} />
+<svelte:document
+  onpointerdown={(event) => {
+    if (
+      menuPane !== null &&
+      !menu?.contains(event.target) &&
+      !menuTrigger?.contains(event.target)
+    )
+      closeMenu();
+  }}
+/>
+
+{#snippet areaActions(index, inChat = true)}
+  <Button
+    variant={inChat ? 'secondary' : 'tertiary'}
+    icon
+    class={inChat ? 'chat-view__workspace-action' : ''}
+    data-workspace-action
+    ariaLabel={t('split.actions', 'Area actions')}
+    tooltip={t('split.actions', 'Area actions')}
+    aria-haspopup="menu"
+    aria-expanded={menuPane === index}
+    aria-controls={menuPane === index ? `${id}-actions` : undefined}
+    onClick={(event) => toggleMenu(index, event.currentTarget)}
+    onkeydown={(event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        void toggleMenu(index, event.currentTarget);
+      }
+    }}
+  >
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" />
+    </svg>
+  </Button>
+{/snippet}
+
+{#if menuPane !== null}
+  <div
+    bind:this={menu}
+    use:portal
+    class="chat-workspace__menu"
+    id={`${id}-actions`}
+    role="menu"
+    tabindex="-1"
+    aria-label={t('split.actions', 'Area actions')}
+    style={menuStyle}
+    onkeydown={menuKeydown}
+  >
+    {#if !split}
+      <Button variant="tertiary" role="menuitem" onClick={openSplit}
+        >{t('split.open', 'Split view')}</Button
+      >
+    {/if}
+    <Button
+      variant="tertiary"
+      role="menuitem"
+      onClick={() =>
+        changeContent(
+          menuPane,
+          kinds[menuPane] === 'chat' ? 'preview' : 'chat',
+        )}
+    >
+      {kinds[menuPane] === 'chat'
+        ? t('split.showPreview', 'Show preview')
+        : t('split.backToChat', 'Back to chat')}
+    </Button>
+    {#if split}
+      <Button
+        variant="tertiary"
+        role="menuitem"
+        onClick={() => closePane(menuPane)}
+        >{t('split.close', 'Close area')}</Button
+      >
+    {/if}
+  </div>
+{/if}
 
 <div
   bind:this={root}
@@ -211,6 +358,8 @@
   style:--pane-ratio={`${effectiveRatio}%`}
 >
   {#each paneIds as index (index)}
+    {#snippet chatActions()}{@render areaActions(index)}{/snippet}
+    {#snippet previewActions()}{@render areaActions(index, false)}{/snippet}
     {#if index === 0 || secondCreated}
       {#if index === 1 && split}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -245,7 +394,6 @@
       {/if}
       <section
         class="chat-workspace__pane"
-        class:focused={focusedPane === index}
         id={`${id}-pane-${index}`}
         hidden={!split && singlePane !== index}
         aria-label={index === 0
@@ -255,81 +403,11 @@
         onpointerdowncapture={() => (focusedPane = index)}
         use:interceptFiles={index}
       >
-        <div class="chat-workspace__toolbar">
-          <TabList
-            items={tabs}
-            value={kinds[index]}
-            onChange={(kind) => {
-              kinds[index] = kind;
-              if (index === 1 && kind === 'chat') secondChatCreated = true;
-            }}
-            idPrefix={`${id}-type-${index}`}
-            appearance="segmented"
-            density="compact"
-            ariaLabel={t('split.content', 'Area content')}
-          />
-          <span
-            class="chat-workspace__context"
-            use:tooltip={sessions[index]?.sessionId || ''}
-          >
-            {kinds[index] === 'chat'
-              ? sessions[index]?.title || sessions[index]?.name || ''
-              : t('split.website', 'Website')}
-          </span>
-          {#if split}
-            <Button
-              variant="tertiary"
-              icon
-              ariaLabel={t('split.close', 'Close area')}
-              tooltip={t('split.close', 'Close area')}
-              onClick={() => closePane(index)}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg
-              >
-            </Button>
-          {:else}
-            <Button
-              variant="tertiary"
-              ariaLabel={t('split.open', 'Split view')}
-              tooltip={t(
-                'split.openHint',
-                'Open another Chat or preview alongside this one',
-              )}
-              onClick={openSplit}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                aria-hidden="true"
-                ><rect x="3" y="4" width="18" height="16" rx="2" /><path
-                  d="M12 4v16"
-                /></svg
-              >
-              {t('split.open', 'Split view')}
-            </Button>
-          {/if}
-        </div>
-        <div
-          class="chat-workspace__body"
-          role="tabpanel"
-          id={`${id}-type-${index}-panel-chat`}
-          aria-labelledby={`${id}-type-${index}-tab-chat`}
-          hidden={kinds[index] !== 'chat'}
-        >
+        <div class="chat-workspace__body" hidden={kinds[index] !== 'chat'}>
           {#if index === 0}
             <ChatView
               {...chatProps}
+              workspaceActions={chatActions}
               active={active &&
                 kinds[index] === 'chat' &&
                 (split || singlePane === index)}
@@ -341,6 +419,7 @@
           {:else if secondChatCreated}
             <ChatView
               {...chatProps}
+              workspaceActions={chatActions}
               active={active &&
                 kinds[index] === 'chat' &&
                 (split || singlePane === index)}
@@ -361,17 +440,12 @@
             />
           {/if}
         </div>
-        <div
-          class="chat-workspace__body"
-          role="tabpanel"
-          id={`${id}-type-${index}-panel-preview`}
-          aria-labelledby={`${id}-type-${index}-tab-preview`}
-          hidden={kinds[index] !== 'preview'}
-        >
+        <div class="chat-workspace__body" hidden={kinds[index] !== 'preview'}>
           <HtmlPreview
             active={active &&
               kinds[index] === 'preview' &&
               (split || singlePane === index)}
+            workspaceActions={previewActions}
             request={previews[index]}
           />
         </div>
@@ -406,28 +480,24 @@
   .split .chat-workspace__pane:first-child {
     flex: 0 0 calc(var(--pane-ratio) - 4.5px);
   }
-  .chat-workspace__toolbar {
+  .chat-workspace__menu {
+    position: fixed;
+    z-index: var(--z-floating);
     display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 43px;
-    flex-shrink: 0;
-    padding: 4px 10px;
-    background: var(--secondary-surface);
-    border-bottom: 1px solid var(--border);
-    box-shadow: inset 0 2px transparent;
+    flex-direction: column;
+    padding: 4px;
+    overflow-y: auto;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    box-shadow: var(--dropdown-elevation);
   }
-  .split .focused .chat-workspace__toolbar {
-    box-shadow: inset 0 2px var(--accent);
-  }
-  .chat-workspace__context {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    color: var(--text-med);
-    font-size: 12px;
+  .chat-workspace__menu :global(button) {
+    justify-content: flex-start;
+    min-height: 36px;
+    padding: 8px 12px;
+    font-family: var(--font-ui);
+    text-transform: none;
   }
   .chat-workspace__body {
     display: flex;

@@ -27,7 +27,20 @@ describe('ChatWorkspace', () => {
   const pane = (index) =>
     document.querySelectorAll('.chat-workspace__pane')[index];
   const button = (root, label) =>
-    root.querySelector(`button[aria-label="${label}"]`);
+    root.querySelector(
+      `.chat-workspace__body:not([hidden]) button[aria-label="${label}"]`,
+    );
+
+  function action(index, label) {
+    button(pane(index), 'Area actions').click();
+    flushSync();
+    const item = [...document.querySelectorAll('[role="menuitem"]')].find(
+      (element) => element.textContent.trim() === label,
+    );
+    expect(item).toBeTruthy();
+    item.click();
+    flushSync();
+  }
 
   async function start() {
     rpcMock.mockImplementation(
@@ -64,7 +77,7 @@ describe('ChatWorkspace', () => {
       ChatWorkspace,
     );
     await waitForCondition(() => pane(0)?.textContent.includes('Hello'), 100);
-    button(pane(0), 'Split view').click();
+    action(0, 'Split view');
     await waitForCondition(
       () => pane(1)?.textContent.includes('Second topic'),
       100,
@@ -82,19 +95,18 @@ describe('ChatWorkspace', () => {
     await start();
     expect(pane(0).textContent).toContain('Hello');
     expect(pane(0).textContent).not.toContain('Second conversation sentinel');
-    expect(pane(1).querySelector('.chat-workspace__context').textContent).toBe(
-      'Second topic',
-    );
+    expect(pane(1).querySelector('.chat-workspace__toolbar')).toBeNull();
+    expect(pane(1).querySelector('[role=tablist]')).toBeNull();
     const leftInput = pane(0).querySelector('.msg-input');
     const rightInput = pane(1).querySelector('.msg-input');
     setInputValue(leftInput, 'Left draft sentinel');
     setInputValue(rightInput, 'Right draft sentinel');
     flushSync();
-    button(pane(1), 'Close area').click();
+    action(1, 'Close area');
     flushSync();
     expect(pane(1).hidden).toBe(true);
     expect(pane(0).querySelector('.msg-input')).toBe(leftInput);
-    button(pane(0), 'Split view').click();
+    action(0, 'Split view');
     flushSync();
     expect(pane(1).querySelector('.msg-input')).toBe(rightInput);
     expect(leftInput.value).toBe('Left draft sentinel');
@@ -152,16 +164,16 @@ describe('ChatWorkspace', () => {
     const firstInput = pane(0).querySelector('.msg-input');
     setInputValue(firstInput, 'Shared Session draft');
     flushSync();
-    button(pane(0), 'Split view').click();
+    action(0, 'Split view');
     await waitForCondition(() => testChatStateRefs.length === 2, 100);
     expect(pane(1).querySelector('.msg-input')).toBeNull();
-    button(pane(0), 'Close area').click();
+    action(0, 'Close area');
     await waitForCondition(() => pane(1).querySelector('.msg-input'), 100);
     const secondInput = pane(1).querySelector('.msg-input');
     expect(secondInput.value).toBe('Shared Session draft');
     setInputValue(secondInput, 'Continued in the right');
     flushSync();
-    button(pane(1), 'Split view').click();
+    action(1, 'Split view');
     await waitForCondition(() => pane(0).querySelector('.msg-input'), 100);
     expect(pane(0).querySelector('.msg-input').value).toBe(
       'Continued in the right',
@@ -177,7 +189,7 @@ describe('ChatWorkspace', () => {
     );
     harness.mount({ target: document.body }, ChatWorkspace);
     await waitForCondition(() => pane(0)?.querySelector('.msg-input'), 100);
-    button(pane(0), 'Split view').click();
+    action(0, 'Split view');
     await waitForCondition(() => pane(1)?.querySelector('.chat-view'), 100);
     await waitForCondition(() => button(pane(1), 'New session'), 100);
     button(pane(1), 'New session').click();
@@ -212,6 +224,71 @@ describe('ChatWorkspace', () => {
     expect(localStorage.getItem('vbot.chat.splitRatio')).toBe('50');
   });
 
+  it('keeps area actions inside existing controls and preserves Chat through manual Preview switching', async () => {
+    await start();
+    const chat = pane(1).querySelector('.chat-view');
+    const input = chat.querySelector('.msg-input');
+    setInputValue(input, 'Draft survives the content menu');
+    flushSync();
+    for (const index of [0, 1]) {
+      expect(
+        pane(index).firstElementChild.classList.contains(
+          'chat-workspace__body',
+        ),
+      ).toBe(true);
+      expect(pane(index).querySelector('.chat-workspace__toolbar')).toBeNull();
+      expect(pane(index).querySelector('[role="tablist"]')).toBeNull();
+      expect(
+        button(pane(index), 'Area actions').closest('.chat-view__session-bar'),
+      ).not.toBeNull();
+    }
+    action(1, 'Show preview');
+    expect(chat.hidden).toBe(true);
+    expect(
+      button(pane(1), 'Area actions').closest('.html-preview__address'),
+    ).not.toBeNull();
+    action(1, 'Back to chat');
+    expect(chat.hidden).toBe(false);
+    expect(chat.querySelector('.msg-input')).toBe(input);
+    expect(input.value).toBe('Draft survives the content menu');
+  });
+
+  it('supports menu keyboard navigation, dismissal and focus restoration', async () => {
+    await start();
+    const trigger = button(pane(0), 'Area actions');
+    trigger.focus();
+    trigger.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    await waitForCondition(
+      () => document.activeElement?.getAttribute('role') === 'menuitem',
+      100,
+    );
+    const menu = document.querySelector('[role="menu"]');
+    const items = menu.querySelectorAll('button');
+    expect(document.activeElement).toBe(items[0]);
+    items[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'End', bubbles: true }),
+    );
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    menu.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    trigger.click();
+    flushSync();
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    flushSync();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    action(0, 'Close area');
+    await waitForCondition(
+      () => document.activeElement === button(pane(1), 'Area actions'),
+      100,
+    );
+  });
+
   it('opens an HTML output in the other area without replacing its Chat', async () => {
     await start();
     const baseRpc = rpcMock.getMockImplementation();
@@ -241,7 +318,7 @@ describe('ChatWorkspace', () => {
       'allow-scripts',
     );
     const rightChat = pane(1).querySelector('.chat-view');
-    pane(1).querySelector('[role="tab"]').click();
+    action(1, 'Back to chat');
     flushSync();
     expect(pane(1).querySelector('.chat-view')).toBe(rightChat);
     expect(rightChat.textContent).toContain('Second conversation sentinel');

@@ -54,6 +54,7 @@
 
   let {
     active = true,
+    workspaceActions,
     interactive = true,
     composerAvailable = true,
     preserveSessionSelection = false,
@@ -329,7 +330,6 @@
   // parent row so it can show the real Session name instead of a raw id.
   let subAgentParentTarget = $state(null);
   let sessionParentLink = $state(null);
-  let sessionHeading = $state({ key: '', title: '' });
   let sessionParentFetchKey = '';
 
   $effect(() => {
@@ -384,10 +384,6 @@
       const childSession = (listed?.sessions ?? []).find(
         (session) => String(session?.id ?? '').trim() === childSessionId,
       );
-      sessionHeading = {
-        key: displayKey,
-        title: childSession ? sessionDisplayName(childSession) : '',
-      };
       const parent = sessionParentReference(childSession);
       if (!parent) {
         return;
@@ -1982,8 +1978,6 @@
     const selection = {
       agentId: session?.agentId || activeAgentAddress,
       sessionId: session?.sessionId || agent?.current_session_id || '',
-      name: agent?.name || '',
-      title: sessionHeading.key === session?.key ? sessionHeading.title : '',
     };
     untrack(() => onDisplayedSession(selection));
   });
@@ -2127,6 +2121,11 @@
               <path d="M12 5v14M5 12h14" />
             </svg>
           </Button>
+          {#if workspaceActions}
+            <span class="chat-view__session-bar-divider" aria-hidden="true"
+            ></span>
+            {@render workspaceActions()}
+          {/if}
         </div>
         {#if showSessionDrawer}
           <SessionListDrawer
@@ -2441,7 +2440,8 @@
     color: var(--accent);
   }
 
-  :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+  :global(.btn-secondary.btn-icon.chat-view__new-session-fab),
+  :global(.btn-secondary.btn-icon.chat-view__workspace-action) {
     border: 0;
     border-radius: 0;
     width: 36px;
@@ -2452,6 +2452,9 @@
 
   :global(
     .btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled)
+  ),
+  :global(
+    .btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled)
   ) {
     background: var(--accent-08);
     color: var(--accent);
