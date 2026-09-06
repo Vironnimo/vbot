@@ -65,7 +65,7 @@ On Debian-like systems, including Raspberry Pi OS, run:
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-The Installer can add missing prerequisites through `apt`, configures a systemd user unit, and starts the server.
+The Installer can add missing prerequisites through `apt`, including Chromium and its shared libraries for Browser Use on server installations, configures a systemd user unit, and starts the server. Browser Use prepares its native client automatically when an authorized Agent first uses it; no separate browser Tool installation is needed.
 
 After either standard installation, wait for the final summary to confirm that the server is running, then open `http://127.0.0.1:8420/`. The first-run setup is described in [First-run setup](#first-run-setup).
 
