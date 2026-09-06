@@ -151,10 +151,6 @@ def _present(
         "view_id": observation.view_id,
         "image_width": image.width,
         "image_height": image.height,
-        "source_width": source_width,
-        "source_height": source_height,
-        "original": original.as_posix(),
-        "screenshot": path.as_posix(),
     }
     if factor < 1:
         result["image_note"] = (
@@ -189,7 +185,7 @@ def capture(
         observation.original = path
         result.update(_present(context, observation, image, resolution))
     elements = payload.get("elements")
-    if isinstance(elements, list):
+    if mode != "vision" and isinstance(elements, list):
         observation.elements = {
             str(item["element_index"]): item["element_token"]
             for item in elements
@@ -198,19 +194,55 @@ def capture(
             and isinstance(item.get("element_token"), str)
         }
         payload["elements"] = [
-            {key: value for key, value in item.items() if key not in {"frame", "bounds"}}
+            {
+                "element": item["element_token"],
+                **{
+                    key: item[key]
+                    for key in (
+                        "role",
+                        "label",
+                        "value",
+                        "enabled",
+                        "selected",
+                        "checked",
+                        "expanded",
+                        "focused",
+                    )
+                    if key in item
+                },
+            }
             for item in elements
-            if isinstance(item, dict)
+            if isinstance(item, dict) and isinstance(item.get("element_token"), str)
         ]
-        payload.pop("tree_markdown", None)
     if mode == "vision":
         payload.pop("elements", None)
         payload.pop("tree_markdown", None)
+        # A deliberately shallow UIA lookup says nothing about screenshot quality.
+        payload.pop("elements_complete", None)
+        payload.pop("degraded", None)
     elif mode == "ax" and not payload:
         raise ComputerUseError(
             "No window elements were returned. Capture with mode vision to inspect the pixels."
         )
-    result.update(bounded(context, payload))
+    # Driver bookkeeping, duplicate ids and tree text do not help the next action.
+    state = bounded(
+        context,
+        {
+            key: payload[key]
+            for key in (
+                "elements",
+                "elements_complete",
+                "title",
+                "window_title",
+                "degraded",
+                "warnings",
+            )
+            if key in payload
+        },
+    )
+    if "elements" in state:
+        state["element_count"] = len(state["elements"])
+    result.update(state)
     return observation, result
 
 

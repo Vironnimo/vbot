@@ -439,7 +439,13 @@ COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
         }
         for mode in ("default", "som", "vision", "ax")
     },
-    "click_preview": {"action": "click", "pid": 101, "window_id": 202, "element": "1"},
+    "click_preview": {
+        "action": "click",
+        "pid": 101,
+        "window_id": 202,
+        "element": "1",
+        "apply": False,
+    },
     "click_element": {
         "action": "click",
         "pid": 101,
@@ -577,7 +583,7 @@ COMPUTER_CASE_ARGUMENTS.update(
             "size": [900, 700],
             "apply": True,
         },
-        "launch_preview": {"action": "launch", "app": "Notepad"},
+        "launch_preview": {"action": "launch", "app": "Notepad", "apply": False},
         "launch": {"action": "launch", "app": "Notepad", "apply": True},
         "verify_window": {
             "action": "verify",
@@ -638,6 +644,7 @@ COMPUTER_CASE_ARGUMENTS.update(
             "shortcut": "shift",
             "duration_ms": 100,
             "apply": True,
+            "foreground": True,
         },
         "invalid_duration": {"action": "key", "shortcut": "shift", "duration_ms": 3000},
         "wait_default": {"action": "wait"},
@@ -714,6 +721,14 @@ COMPUTER_CASE_ARGUMENTS.update(
             "foreground": False,
             "apply": True,
         },
+        "background_drag_duration": {
+            "action": "drag",
+            **_COMPUTER_WINDOW,
+            "view_id": "vtest",
+            "coordinate": [20, 30],
+            "to_coordinate": [40, 50],
+            "duration_ms": 1800,
+        },
         "invalid_background_desktop": {"action": "capture", "foreground": False},
         "invalid_background_hold": {
             "action": "key",
@@ -721,6 +736,45 @@ COMPUTER_CASE_ARGUMENTS.update(
             "shortcut": "shift",
             "duration_ms": 100,
             "foreground": False,
+        },
+        "click_default": {
+            "action": "click",
+            **_COMPUTER_WINDOW,
+            "element": "1",
+        },
+        "launch_default": {"action": "launch", "app": "Notepad"},
+        "zoom_view_target": {
+            "action": "zoom",
+            "view_id": "vtest",
+            "coordinate": [10, 10],
+            "to_coordinate": [100, 100],
+        },
+        "click_view_target": {
+            "action": "click",
+            "view_id": "vtest",
+            "coordinate": [20, 30],
+        },
+        "sequence_shared_view": {
+            "action": "sequence",
+            "view_id": "vtest",
+            "steps": [
+                {"action": "click", "coordinate": [10, 10]},
+                {"action": "drag", "coordinate": [20, 30], "to_coordinate": [100, 100]},
+            ],
+        },
+        "type_then_elements": {
+            "action": "type",
+            **_COMPUTER_WINDOW,
+            "text": "draft",
+            "mode": "som",
+            "query": "Draft",
+            "limit": 10,
+        },
+        "invalid_vision_query": {
+            "action": "capture",
+            **_COMPUTER_WINDOW,
+            "mode": "vision",
+            "query": "Draft",
         },
     }
 )
