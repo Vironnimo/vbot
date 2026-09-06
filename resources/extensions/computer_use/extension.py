@@ -354,6 +354,8 @@ _DEFAULTS = {
 _VALIDATOR = Draft202012Validator(COMPUTER_PARAMETERS)
 _ELEMENT = re.compile(r"^(?:[0-9]+|[A-Za-z0-9_-]+:[0-9]+)$")
 _READINESS_HINT = "Install cua-driver on the server host and reload Extensions."
+# A bounded observation delay, never a claim that the application has completed work.
+_POST_INPUT_OBSERVATION_MS = 1000
 
 
 def _invalid(field_name: str) -> None:
@@ -809,7 +811,16 @@ class ComputerUseService:
                 ),
             }
         try:
+            # SendInput and UIA acknowledgements do not await application rendering.
+            # Do not infer completion from changing or quiet pixels (animations/carets).
+            self._wait(context, {"duration_ms": _POST_INPUT_OBSERVATION_MS})
             result["observation"] = self._observe(context, session, target, args)
+            result["observation_delay_ms"] = _POST_INPUT_OBSERVATION_MS
+            result["observation_note"] = (
+                "Input was dispatched. This observation does not confirm that application "
+                "work has finished. If the expected result is missing, use wait or verify "
+                "before repeating input."
+            )
         except (ComputerUseError, OSError) as error:
             result.update(
                 observation_error={

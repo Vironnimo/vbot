@@ -209,6 +209,29 @@ def test_native_input_abi_matches_windows_x64():
         assert ct.sizeof(Input) == 40
 
 
+def test_window_pixels_are_captured_after_accessibility_query(monkeypatch):
+    client = CuaDriver.__new__(CuaDriver)
+    order = []
+
+    def capture(args):
+        order.append("pixels")
+        return {"screen_origin": [0, 0]}
+
+    def query(function, name, args):
+        assert name == "get_window_state" and args["include_screenshot"] is False
+        order.append("elements")
+        return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": {"elements": []}})
+
+    client.desktop = SimpleNamespace(capture=capture)
+    client._portal = SimpleNamespace(call=query)
+    client._session = SimpleNamespace(call_tool=object())
+    client.schemas = {"get_window_state": {}}
+    monkeypatch.setattr(client, "connect", lambda: None)
+    result = client.call("get_window_state", {"pid": 1, "window_id": 2})
+    assert order == ["elements", "pixels"]
+    assert result["screen_origin"] == [0, 0] and result["elements"] == []
+
+
 @pytest.mark.parametrize(
     "name,args",
     [
