@@ -1190,6 +1190,7 @@
       />
     {:else}
       <ChatWorkspace
+        onToast={showToast}
         active={activeViewId === 'chat'}
         sharedAgents={agents}
         sharedSelectedAgentId={selectedAgentId}

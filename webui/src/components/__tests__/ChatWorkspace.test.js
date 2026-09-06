@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import {
   describe,
   expect,
@@ -22,6 +22,10 @@ describe('ChatWorkspace', () => {
   beforeEach(() => {
     localStorage.clear();
     resetComposerMemory();
+  });
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+    delete window.pywebview;
   });
 
   const pane = (index) =>
@@ -331,7 +335,7 @@ describe('ChatWorkspace', () => {
       source: '/api/files/file-token',
     });
     expect(pane(1).querySelector('iframe').getAttribute('sandbox')).toBe(
-      'allow-scripts',
+      'allow-scripts allow-downloads',
     );
     const rightChat = pane(1).querySelector('.chat-view');
     action(1, 'Back to chat');
@@ -371,5 +375,95 @@ describe('ChatWorkspace', () => {
     pane(0).querySelector('.msg-markdown a').click();
     await waitForCondition(() => !pane(1).hidden, 100);
     expect(testChatStateRefs).toHaveLength(1);
+  });
+
+  it('opens external and download actions through the Desktop browser bridge without splitting Chat', async () => {
+    await start(false);
+    window.history.replaceState({}, '', '/?accessor=desktop');
+    const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+    window.pywebview = { api: { openExternalUrl } };
+    pane(0).querySelector('[data-file-external]').click();
+    expect(openExternalUrl).toHaveBeenLastCalledWith(
+      new URL('/api/files/file-token', window.location.href).href,
+    );
+    const trigger = pane(0).querySelector(
+      'a[data-preview-file]:not([data-file-external])',
+    );
+    trigger.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 90,
+        clientY: 120,
+      }),
+    );
+    await waitForCondition(() => document.querySelector('[role="menu"]'), 100);
+    const items = [...document.querySelectorAll('[role="menuitem"]')];
+    expect(items).toHaveLength(3);
+    expect(button(pane(0), 'Area actions').getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const download = items.find((item) => item.hasAttribute('download'));
+    expect(download.getAttribute('href')).toBe(
+      '/api/files/file-token?download=true',
+    );
+    expect(download.getAttribute('download')).toBe('index.html');
+    download.click();
+    flushSync();
+    expect(openExternalUrl).toHaveBeenLastCalledWith(
+      new URL('/api/files/file-token?download=true', window.location.href).href,
+    );
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(document.querySelector('[role="separator"]')).toBeNull();
+    expect(
+      rpcMock.mock.calls.some(([method]) => method === 'file.preview_open'),
+    ).toBe(false);
+  });
+
+  it('supports file menu keyboard navigation across buttons and links, and its preview action', async () => {
+    await start(false);
+    mockPreviewOpening();
+    const trigger = pane(0).querySelector(
+      'a[data-preview-file]:not([data-file-external])',
+    );
+    trigger.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'F10',
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await waitForCondition(
+      () => document.activeElement?.getAttribute('role') === 'menuitem',
+      100,
+    );
+    const items = [...document.querySelectorAll('[role="menuitem"]')];
+    expect(document.activeElement).toBe(items[0]);
+    items[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'End', bubbles: true }),
+    );
+    expect(document.activeElement).toBe(items[2]);
+    items[2].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+    expect(document.activeElement).toBe(trigger);
+    trigger.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 90,
+        clientY: 120,
+      }),
+    );
+    flushSync();
+    document.querySelector('[role="menuitem"]').click();
+    await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(rpcMock).toHaveBeenCalledWith('file.preview_open', {
+      source: '/api/files/file-token',
+    });
   });
 });

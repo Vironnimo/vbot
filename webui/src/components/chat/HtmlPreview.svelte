@@ -223,7 +223,7 @@
       bind:this={frame}
       src={preview.url}
       title={t('preview.frame', 'Website preview')}
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-downloads"
       referrerpolicy="no-referrer"
       allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
     >
