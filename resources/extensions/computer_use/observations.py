@@ -7,7 +7,6 @@ import binascii
 import io
 import json
 import math
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from core.tools import ToolContext
+from core.utils.ids import write_id_file
 
 from .driver import ComputerUseError
 
@@ -132,11 +132,10 @@ def _present(
         raise ComputerUseError(
             "The image is invalid or exceeds the supported size. Capture a smaller target."
         )
-    observation.view_id = "v" + uuid.uuid4().hex
+    path = write_id_file(_directory(context), "view", ".png", raw)
+    observation.view_id = path.stem
     observation.source_size = (source_width, source_height)
     observation.display_size = display_size
-    path = _directory(context) / f"{observation.view_id}.png"
-    path.write_bytes(raw)
     context.result_media.append(
         {
             "path": path.as_posix(),
@@ -185,8 +184,7 @@ def capture(
                 "The image is invalid or exceeds the supported size. Capture a smaller target."
             )
         image = _image(raw)
-        path = _directory(context) / f"original-{uuid.uuid4().hex}.png"
-        path.write_bytes(raw)
+        path = write_id_file(_directory(context), "orig", ".png", raw)
         observation.original = path
         result.update(_present(context, observation, image, resolution))
     elements = payload.get("elements")
@@ -219,8 +217,7 @@ def bounded(context: ToolContext, payload: dict[str, Any]) -> dict[str, Any]:
     serialized = json.dumps(payload, ensure_ascii=False)
     if len(serialized) <= MAX_TEXT:
         return payload
-    path = _directory(context) / f"state-{uuid.uuid4().hex}.json"
-    path.write_text(serialized, encoding="utf-8")
+    path = write_id_file(_directory(context), "state", ".json", serialized.encode("utf-8"))
     # Preserve exact target ids and the complete structured file; never truncate JSON text.
     result: dict[str, Any] = {
         key: payload[key] for key in ("target_id", "tab_id", "pid", "window_id") if key in payload

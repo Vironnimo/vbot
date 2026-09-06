@@ -10,7 +10,6 @@ import re
 import shlex
 import subprocess
 import time
-import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -43,6 +42,7 @@ from core.tools.terminal_store import (
     validate_group_name,
 )
 from core.utils.errors import VBotError
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -555,7 +555,6 @@ class TerminalManager:
         if group_id is not None:
             self._require_group(group_id)
 
-        terminal_id = uuid.uuid4().hex
         log_path: Path | None = None
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
@@ -584,6 +583,7 @@ class TerminalManager:
                 log_lease.finish()
             raise TerminalLaunchError(f"Terminal process could not be started: {error}") from error
 
+        terminal_id = new_id("term", claim=lambda candidate: candidate not in self._sessions)
         session = TerminalSession(
             terminal_id=terminal_id,
             owner=owner,
@@ -759,7 +759,9 @@ class TerminalManager:
         if self._operator_store.group_name_taken(name):
             raise TerminalManagerError(f"A Terminal group named '{name}' already exists")
         group = TerminalGroup(
-            group_id=uuid.uuid4().hex,
+            group_id=new_id(
+                "grp", claim=lambda candidate: candidate not in self._operator_store.groups
+            ),
             name=name,
             kind="user",
             order=[],
@@ -853,7 +855,9 @@ class TerminalManager:
         if existing is not None:
             return existing
         group = TerminalGroup(
-            group_id=uuid.uuid4().hex,
+            group_id=new_id(
+                "grp", claim=lambda candidate: candidate not in self._operator_store.groups
+            ),
             name=name,
             kind="agent",
             order=[],

@@ -397,3 +397,17 @@ def test_stored_at_uses_utc_iso_format_with_explicit_offset(tmp_path: Path) -> N
     assert record.stored_at.endswith("+00:00")
     assert parsed.tzinfo is not None
     assert parsed.utcoffset() == timedelta(0)
+
+
+def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
+    from core.utils import ids
+
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    store = AttachmentStore(tmp_path)
+    first = store.store("first.txt", b"first")
+    second = store.store("second.pdf", b"%PDF-1.7 second")
+    assert first.id == "att_000000000001"
+    assert second.id == "att_000000000002"
+    assert Path(store.get(first.id).file_path).read_bytes() == b"first"
+    assert Path(store.get(second.id).file_path).read_bytes() == b"%PDF-1.7 second"

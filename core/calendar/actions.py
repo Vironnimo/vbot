@@ -11,7 +11,6 @@ from datetime import UTC, datetime, time, timedelta
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
@@ -23,6 +22,7 @@ from core.projects.address import parse_agent_address
 from core.runs import RunKind
 from core.sessions import SessionAddress
 from core.utils.atomic import atomic_write_text
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -205,7 +205,7 @@ class CalendarActions:
             )
         stamp = (now or datetime.now(UTC)).isoformat()
         action: dict[str, Any] = {
-            "id": str(uuid4()),
+            "id": new_id("act", claim=lambda candidate: candidate not in self._actions),
             "event_id": event_id,
             "when": parse_action_when(when)[2],
             "prompt": prompt,

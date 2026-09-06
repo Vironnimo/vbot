@@ -2,23 +2,21 @@
 
 Speech and image execution use the sidecar-backed :class:`TaskArtifactStore`.
 Video and Music use :func:`write_generated_media_artifact` for caller-owned
-exclusive files without a central sidecar. Both paths use ``uuid4().hex`` ids
+exclusive files without a central sidecar. Both paths use compact typed ids
 and preserve each task's own error type.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from core.utils.errors import TaskError
+from core.utils.ids import is_safe_id, new_id, write_id_file
 
 JsonObject = dict[str, Any]
-_ARTIFACT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
 @dataclass(frozen=True)
@@ -56,12 +54,26 @@ class TaskArtifactStore:
     ) -> StoredArtifact:
         """Persist one blob and its sidecar; returns the stored artifact.
 
-        Writes the blob before the sidecar and has no rollback wrapper —
-        interrupted writes can leave an orphaned blob (fail-closed on read).
+        Reserves the sidecar name, then writes the blob and complete metadata.
+        Interrupted writes can leave invalid metadata or an orphaned blob;
+        those names stay occupied and reads fail closed.
         """
-        artifact_id = uuid4().hex
-        filename = f"{artifact_id}.{extension}"
         self._artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        def claim(candidate: str) -> bool:
+            metadata_path = self._artifact_dir / f"{candidate}.json"
+            try:
+                with metadata_path.open("x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                return False
+            if any(path != metadata_path for path in self._artifact_dir.glob(f"{candidate}.*")):
+                metadata_path.unlink()
+                return False
+            return True
+
+        artifact_id = new_id("aud" if self._kind == "speech" else "img", claim=claim)
+        filename = f"{artifact_id}.{extension}"
         file_path = self._artifact_dir / filename
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
         file_path.write_bytes(payload)
@@ -86,7 +98,7 @@ class TaskArtifactStore:
     def read(self, artifact_id: str) -> StoredArtifact:
         """Load one artifact by id; raises the task's error for every failure."""
         label = self._kind.capitalize()
-        if not isinstance(artifact_id, str) or _ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None:
+        if not is_safe_id(artifact_id):
             raise self._error(f"Invalid {self._kind} artifact id")
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
         if not metadata_path.is_file():
@@ -137,22 +149,16 @@ def write_generated_media_artifact(
 
     destination = Path(output_dir)
     try:
-        destination.mkdir(parents=True, exist_ok=True)
-        while True:
-            artifact_id = uuid4().hex
-            filename = f"{artifact_id}.{extension}"
-            file_path = destination / filename
-            try:
-                with file_path.open("xb") as media_file:
-                    media_file.write(payload)
-            except FileExistsError:
-                continue
-            return GeneratedMediaArtifact(
-                id=artifact_id,
-                filename=filename,
-                media_type=media_type,
-                size_bytes=len(payload),
-                file_path=file_path,
-            )
+        prefix = "vid" if media_type.startswith("video/") else "mus"
+        file_path = write_id_file(destination, prefix, f".{extension}", payload)
+        artifact_id = file_path.stem
+        filename = file_path.name
+        return GeneratedMediaArtifact(
+            id=artifact_id,
+            filename=filename,
+            media_type=media_type,
+            size_bytes=len(payload),
+            file_path=destination / filename,
+        )
     except OSError as exc:
         raise error(str(exc)) from exc

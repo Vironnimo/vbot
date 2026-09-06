@@ -1,5 +1,7 @@
 # Interactive Terminal Sessions (`terminal`)
 
+New Terminal Session ids use `term_` plus 12 lowercase base32 characters, allocated against the retained catalog after async launch and before synchronous publication. Created groups use `grp_` with the same suffix; automatic group identities stay deterministic (`terminal_manager.py`, `test_terminal_manager.py`).
+
 ## Boundary and invariants
 
 `terminal` gives an Agent a real interactive terminal rather than Bash's pipe-based background processes. Every requested executable uses the same PTY/ConPTY transport and receives the exact declared argument vector. The terminal capability contains no executable detection, program-specific flags, hooks, configuration injection, lifecycle protocol, or screen-text heuristics. Codex, Claude Code, other coding CLIs, shells, editors, games, and arbitrary interactive programs therefore share one contract.

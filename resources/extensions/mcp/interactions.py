@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
+
+from core.utils.ids import new_id
 
 
 @dataclass
@@ -32,7 +33,7 @@ class InputRequests:
         payload: dict[str, Any],
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        identifier = str(uuid.uuid4())
+        identifier = new_id("req", claim=lambda candidate: candidate not in self._pending)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         pending = PendingInput(
             identifier, connection, kind, copy.deepcopy(payload), future, session_id

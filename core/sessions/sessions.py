@@ -1097,10 +1097,11 @@ class ChatSessionManager:
         _validate_agent_id(agent_id)
         if project_id is not None and not is_valid_project_id(project_id):
             raise ChatSessionError("invalid project id")
-        session_id = str(uuid.uuid4()) if session_id is None else session_id
-        _validate_session_id(session_id)
-        address = SessionAddress(project_id, agent_id, session_id)
-        self._store.create(address)
+        if session_id is not None:
+            _validate_session_id(session_id)
+        address = self._store.create(
+            SessionAddress(project_id, agent_id, session_id or ""), generate_id=session_id is None
+        )
         return ChatSession(self._store, address)
 
     async def create_async(
@@ -1565,7 +1566,7 @@ class ChatSessionManager:
     ) -> ChatSession:
         _validate_agent_id(target_agent_id)
         same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
-        target = SessionAddress(target_project_id, target_agent_id, str(uuid.uuid4()))
+        target = SessionAddress(target_project_id, target_agent_id, "")
         cross_scope_affinity_id = None if same_scope else _new_prompt_cache_affinity_id()
         forked_at = _format_timestamp(datetime.now(UTC))
 
@@ -1591,7 +1592,7 @@ class ChatSessionManager:
                 "message_count": message_count,
             }
 
-        self._store.fork(source, target, prepare_metadata)
+        target = self._store.fork(source, target, prepare_metadata, generate_id=True)
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:

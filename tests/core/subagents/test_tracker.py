@@ -401,3 +401,17 @@ async def test_remove_queued_only_entry_prunes_batch_without_note() -> None:
     # Assert
     assert trigger_service.calls == []
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_work_ids_are_reserved_before_registration_across_parent_batches(monkeypatch):
+    from core.utils import ids
+
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    first = ("agent", "session", "run-one")
+    second = ("agent", "session", "run-two")
+    assert tracker.reserve_slot(first, 2)
+    assert tracker.reserve_slot(second, 2)
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    assert tracker.allocate_work_id(first) == "sub_000000000001"
+    assert tracker.allocate_work_id(second) == "sub_000000000002"

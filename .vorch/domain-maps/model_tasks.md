@@ -27,6 +27,8 @@ Provider target IDs use `<provider>/<model>::<connection-local-id>[:<account-id>
 - Option schemas resolve model-aware (`option_schema_for(..., *, model)`) falling back to conservative provider defaults without a registry hit; local targets surface descriptor-declared fields. `options_with_defaults` merges backend schema defaults under stored options before provider routing.
 - Server RPCs expose settings/update/patch_options/list_targets/status/options as thin delegates; validation errors map to stable `invalid_request`. `task_model.status` is the Desktop Voice preflight.
 
+Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_`, `vid_`, and `mus_` plus 12 lowercase base32 characters. Workspace files are claimed exclusively through `core/utils/ids.py`; sidecar-backed artifacts reserve the shared metadata basename before writing so collisions across extensions cannot replace metadata. Readers accept bounded safe opaque ids, preserving stored references. Collision and round-trip coverage: `tests/core/model_tasks/test_artifacts.py`, `test_image.py`.
+
 ## Conventions
 
 - Option schemas are backend-owned render hints over Model-DB facts, never a hardcoded capability matrix. Accessors render field types generically (`text`, `textarea`, `select`, `number`, `boolean`, `json`) without provider-specific rules.
