@@ -12,7 +12,7 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Models the Model DB, Providers `statistics/provider-usage/`, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
 
-Browser Use creates its own durable native-client cache under `artifacts/browser-use/`; it is not a `TemporaryFileManager` retention category or a Storage bootstrap directory. Its shared Chrome for Testing cache is outside the data directory at `~/.agent-browser/browsers`. Preparation and locking belong to `resources/extensions/browser_use/runtime.py`; see `extensions/browser-use.md`.
+Browser Use creates its own durable native-client cache under `artifacts/browser-use/`; it is not a `TemporaryFileManager` retention category or a Storage bootstrap directory. That directory also contains the Extension-owned `refs.db` counter, which prevents short element ids from being reused across reloads and must not be reset as routine cache cleanup. Its shared Chrome for Testing cache is outside the data directory at `~/.agent-browser/browsers`. Preparation and locking belong to `resources/extensions/browser_use/runtime.py`, ref allocation to `extension.py`; see `extensions/browser-use.md`.
 
 ## Temporary files
 

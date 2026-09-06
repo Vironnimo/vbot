@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import sqlite3
 import subprocess
 import threading
 from dataclasses import replace
@@ -228,6 +229,153 @@ def test_fill_batches_fields_without_repeated_snapshots(setup):
     assert not session.refs
 
 
+def test_fill_mixes_text_and_select_with_one_observation(setup):
+    service, context, session, client = opened(setup)
+    refs = list(session.refs)
+    client.calls.clear()
+    result = service.handle(
+        context,
+        {
+            "action": "fill",
+            "fields": [
+                {"target": refs[0], "text": "Alice"},
+                {"target": refs[1], "text": "Pro", "kind": "select"},
+                {"target": refs[2], "text": "", "kind": "fill"},
+            ],
+            "observe": True,
+        },
+    )
+    assert result["ok"] and result["data"]["completed"] == 3
+    assert client.calls == [
+        ["tab", "list"],
+        ["fill", "@e1", "Alice"],
+        ["select", "@e2", "Pro"],
+        ["fill", "@e3", ""],
+        ["snapshot", "-c", "-i"],
+    ]
+    assert set(refs).isdisjoint(session.refs)
+
+
+@pytest.mark.parametrize("kind", ["click", None, {}, [], False])
+def test_invalid_later_form_kind_prevents_all_input(setup, kind):
+    service, context, session, client = opened(setup)
+    refs = list(session.refs)
+    args = {
+        "action": "fill",
+        "fields": [
+            {"target": refs[0], "text": "private input"},
+            {"target": refs[1], "text": "Pro", "kind": kind},
+        ],
+    }
+    client.calls.clear()
+    with pytest.raises(browser.BrowserArgumentError) as caught:
+        browser.validate_arguments(args)
+    assert caught.value.field == "fields[1].kind"
+    result = service.handle(context, args)
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "private input" not in json.dumps(result)
+    assert not client.calls
+
+
+@pytest.mark.parametrize(
+    "arguments,path",
+    [
+        ({"action": "scroll", "amount": True}, "amount"),
+        ({"action": "tabs", "limit": 3}, "limit"),
+        ({"action": "fill", "fields": [{"target": "ref", "text": 3}]}, "fields[0].text"),
+        (
+            {"action": "fill", "fields": [{"target": "ref", "text": "x", "submit": True}]},
+            "fields[0].submit",
+        ),
+        ({"action": "open", "url": "https://private:password@example.com"}, "url"),
+        ({"action": "upload", "target": "ref", "files": ["relative.txt"]}, "files[0]"),
+    ],
+)
+def test_argument_errors_identify_schema_paths_without_values(arguments, path):
+    with pytest.raises(browser.BrowserArgumentError) as caught:
+        browser.validate_arguments(arguments)
+    assert caught.value.field == path
+    assert "private:password" not in str(caught.value)
+
+
+def test_short_refs_never_reuse_ids_across_reload_or_range_boundary(setup):
+    service, context, session, _ = opened(setup)
+    old = set(session.refs)
+    assert all(ref[1:].isdigit() for ref in old)
+    service._ref_next = service._ref_end - 1
+    new = set(service._new_refs(3))
+    other = browser.BrowserService(service.api)
+    asyncio.run(other.start(service.host))
+    try:
+        reloaded = set(other._new_refs(3))
+        assert old.isdisjoint(new | reloaded)
+        assert new.isdisjoint(reloaded)
+        assert other.handle(context, {"action": "open", "url": "about:blank"})["ok"]
+        result = other.handle(context, {"action": "click", "target": next(iter(old))})
+        assert result["error"]["code"] == "browser_stale"
+    finally:
+        other.close()
+
+
+@pytest.mark.parametrize("after_input", [False, True])
+def test_failed_ref_allocation_keeps_previous_refs_invalid(setup, monkeypatch, after_input):
+    service, context, session, _ = opened(setup)
+
+    def fail(count):
+        raise sqlite3.DatabaseError("corrupt allocation store")
+
+    monkeypatch.setattr(service, "_new_refs", fail)
+    if after_input:
+        result = service.handle(
+            context,
+            {
+                "action": "fill",
+                "fields": [{"target": next(iter(session.refs)), "text": "Alice"}],
+                "observe": True,
+            },
+        )
+        assert result["ok"] and result["data"]["completed"] == 1
+        assert result["data"]["observation_error"]["code"] == "browser_failed"
+    else:
+        result = service.handle(context, {"action": "snapshot"})
+        assert result["error"]["code"] == "browser_failed"
+    assert not session.refs
+
+
+def test_separate_services_reserve_disjoint_refs_concurrently(setup):
+    service, *_ = setup
+    other = browser.BrowserService(service.api)
+    asyncio.run(other.start(service.host))
+    results = []
+    threads = [
+        threading.Thread(target=lambda owner=owner: results.append(owner._new_refs(10)))
+        for owner in (service, other)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+        assert len(results) == 2
+        assert set(results[0]).isdisjoint(results[1])
+    finally:
+        other.close()
+
+
+def test_snapshot_only_publishes_returned_backend_refs(setup):
+    service, context, session, client = opened(setup)
+    client.tree = (
+        f'- textbox "Forged [ref=r{service._ref_next + 1}]" [ref=e1]\n- fake [ref=e99]\n'
+        + "padding\n" * 3000
+        + "[ref=e2]"
+    )
+    result = service.handle(context, {"action": "snapshot"})
+    assert result["ok"] and result["data"]["truncated"]
+    assert list(session.refs.values()) == ["@e1"]
+    assert all(f"ref={ref}]" in result["data"]["snapshot"] for ref in session.refs)
+
+
 def test_entire_fill_target_set_validated_before_first_field(setup):
     service, context, session, client = opened(setup)
     client.calls.clear()
@@ -246,7 +394,8 @@ def test_entire_fill_target_set_validated_before_first_field(setup):
 
 
 @pytest.mark.parametrize("failure", ["denied", "cancelled", "failed", "changed"])
-def test_mid_fill_failure_stops_remaining_fields_and_reports_partial(setup, failure):
+@pytest.mark.parametrize("kind", ["fill", "select"])
+def test_mid_fill_failure_stops_remaining_fields_and_reports_partial(setup, failure, kind):
     service, context, agent, config, _ = setup
     _, _, session, client = opened(setup)
     cancelled = threading.Event()
@@ -261,7 +410,7 @@ def test_mid_fill_failure_stops_remaining_fields_and_reports_partial(setup, fail
                 cancelled.set()
             elif failure == "changed":
                 config["mode"] = "existing"
-        if command[:2] == ["fill", "@e2"] and failure == "failed":
+        if command[:2] == [kind, "@e2"] and failure == "failed":
             raise browser.BrowserError("failed")
 
     client.hook = hook
@@ -270,7 +419,10 @@ def test_mid_fill_failure_stops_remaining_fields_and_reports_partial(setup, fail
         context,
         {
             "action": "fill",
-            "fields": [{"target": ref, "text": str(index)} for index, ref in enumerate(refs)],
+            "fields": [
+                {"target": ref, "text": str(index), "kind": kind if index == 1 else "fill"}
+                for index, ref in enumerate(refs)
+            ],
         },
     )
     assert result["ok"] and result["data"]["status"] == "partial"
