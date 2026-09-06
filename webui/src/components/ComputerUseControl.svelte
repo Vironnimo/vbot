@@ -1,11 +1,11 @@
 <script>
-  // Ongoing operator control has its own lifecycle, separate from pending Extension questions.
+  // Contextual controls inside the existing composer, with no app-wide banner.
   import { onMount } from 'svelte';
   import { extensionOperation, listExtensions } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
-  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
 
+  let { onError = () => {} } = $props();
   let status = $state(null);
   let error = $state('');
   let resuming = $state(false);
@@ -64,7 +64,10 @@
       const result = await control(action);
       if (!disposed && requestRevision === revision) status = result;
     } catch (failure) {
-      if (!disposed && requestRevision === revision) error = failure.message;
+      if (!disposed && requestRevision === revision) {
+        error = failure.message;
+        onError(error);
+      }
     } finally {
       if (action === 'stop') stopping = false;
       else resuming = false;
@@ -72,62 +75,48 @@
   }
 </script>
 
-{#if status?.available || status?.paused}
-  <Banner variant={status.paused ? 'warn' : 'neutral'}>
-    <div class="computer-status">
-      <span role="status"
-        >{status.paused
-          ? status.active
-            ? t('computerControl.stopping', 'Stopping computer control…')
-            : t('computerControl.paused', 'Computer control is stopped.')
-          : status.active
-            ? t('computerControl.active', 'Agent is using the computer.')
-            : t('computerControl.ready', 'Computer control is allowed.')}</span
-      >
-      <small
-        >{status.hotkey_available
-          ? t('computerControl.hotkey', 'Emergency stop: Ctrl+Alt+Pause')
-          : t(
-              'computerControl.noHotkey',
-              'Global shortcut unavailable. Use Stop here.',
-            )}</small
-      >
-      {#if error}<span role="alert">{error}</span>{/if}
-    </div>
-    <div class="computer-actions">
-      {#if status.paused}
-        <Button
-          variant="secondary"
-          disabled={status.active || resuming || stopping}
-          onClick={() => change('resume')}
-        >
-          {t('computerControl.resume', 'Allow computer control')}
-        </Button>
-      {/if}
-      <Button
-        variant="danger"
-        disabled={stopping}
-        onClick={() => change('stop')}
-      >
-        {t('computerControl.stop', 'Stop computer control')}
-      </Button>
-    </div>
-  </Banner>
+{#if status?.paused}
+  <Button
+    variant="secondary"
+    icon
+    disabled={status.active || resuming || stopping}
+    ariaLabel={t('computerControl.resume', 'Allow computer control')}
+    tooltip={error ||
+      (status.active
+        ? t('computerControl.stopping', 'Stopping computer control…')
+        : t(
+            'computerControl.resumeHint',
+            'Computer control is stopped. Click to allow it again.',
+          ))}
+    onClick={() => change('resume')}
+  >
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <rect x="1.5" y="2" width="13" height="9" rx="1" />
+      <path d="M5 14h6M8 11v3M6.5 4.5l4 2-4 2z" />
+    </svg>
+  </Button>
 {/if}
-
-<style>
-  .computer-status {
-    display: grid;
-    gap: 4px;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .computer-status small {
-    color: var(--text-secondary);
-  }
-  .computer-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-</style>
+{#if status?.controlling || stopping || resuming}
+  <Button
+    variant="danger"
+    icon
+    disabled={stopping}
+    ariaLabel={t('computerControl.stop', 'Stop computer control')}
+    tooltip={error ||
+      (status.hotkey_available
+        ? t(
+            'computerControl.hotkey',
+            'Stop computer control — press Esc twice in any app',
+          )
+        : t(
+            'computerControl.noHotkey',
+            'Global shortcut unavailable. Click to stop computer control.',
+          ))}
+    onClick={() => change('stop')}
+  >
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <rect x="1.5" y="2" width="13" height="9" rx="1" />
+      <path d="M5 14h6M8 11v3M6 4.5l4 4M10 4.5l-4 4" />
+    </svg>
+  </Button>
+{/if}

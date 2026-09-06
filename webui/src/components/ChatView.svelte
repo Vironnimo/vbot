@@ -45,6 +45,7 @@
   import ChatHeader from './chat/ChatHeader.svelte';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
   import ChatComposer from './ChatComposer.svelte';
+  import ComputerUseControl from './ComputerUseControl.svelte';
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
@@ -2334,7 +2335,11 @@
                 onTranscriptionError={handleTranscriptionError}
                 onListFiles={composerListFiles}
                 onLoadModelCatalog={composerLoadModelCatalog}
-              />
+              >
+                {#snippet computerControl()}
+                  <ComputerUseControl onError={showChatToast} />
+                {/snippet}
+              </ChatComposer>
             {:else}
               <Banner class="chat-view__footer-banner">
                 {t(

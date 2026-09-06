@@ -555,6 +555,7 @@ class ComputerUseService:
         self._stop_token = uuid.uuid4().hex
         self._active: object | None = None
         self._active_driver: CuaDriver | None = None
+        self._controlling_runs: set[str] = set()
         self._stop_file: Path | None = None
         self._hotkey = EmergencyHotkey(self.stop)
 
@@ -572,6 +573,7 @@ class ComputerUseService:
                 return
             changed = not self._paused
             self._paused = True
+            self._hotkey.set_armed(False)
             self._wake.set()
             self._stop_token = uuid.uuid4().hex
             driver = self._active_driver or self._driver
@@ -604,11 +606,13 @@ class ComputerUseService:
                     self._stop_file.unlink(missing_ok=True)
                 self._paused = False
                 self._wake.clear()
+                self._hotkey.set_armed(bool(self._controlling_runs))
                 self.api.logger.info("Computer Use allowed by operator")
             return {
                 "available": self.ready(),
                 "paused": self._paused,
                 "active": self._active is not None,
+                "controlling": bool(self._controlling_runs) and not self._paused,
                 "hotkey_available": self._hotkey.available,
                 "stop_token": self._stop_token,
             }
@@ -631,7 +635,7 @@ class ComputerUseService:
         return self._driver
 
     def _check_access(self, context: ToolContext) -> None:
-        if self._paused:
+        if self._paused or self._hotkey.pending:
             raise ComputerUseError(
                 "Computer Use was stopped by the user. "
                 "Wait for the user to allow computer control again.",
@@ -972,6 +976,9 @@ class ComputerUseService:
                 with self._control_lock:
                     self._active = owner
                     self._active_driver = client
+                    if args["action"] not in {"status", "close"}:
+                        self._controlling_runs.add(context.run_id)
+                        self._hotkey.set_armed(not self._paused)
                 context.on_cancel(lambda: self.stop(owner))
                 self._check_access(context)
                 client.connect()
@@ -991,6 +998,9 @@ class ComputerUseService:
                     if session is not None:
                         self._call(context, session, "end_session", {})
                         del self._sessions[key]
+                    with self._control_lock:
+                        self._controlling_runs.discard(context.run_id)
+                        self._hotkey.set_armed(bool(self._controlling_runs) and not self._paused)
                     return tool_success({"action": "close", "closed": True})
                 if session is None:
                     session = DesktopSession("vbot-" + uuid.uuid4().hex)
@@ -1050,6 +1060,9 @@ class ComputerUseService:
                 self._sessions.pop(key, None)
 
     def run_end(self, context: Any, **kwargs: Any) -> None:
+        with self._control_lock:
+            self._controlling_runs.discard(context.run_id)
+            self._hotkey.set_armed(bool(self._controlling_runs) and not self._paused)
         with self._lock:
             self._close_sessions(context.run_id)
 
@@ -1057,6 +1070,7 @@ class ComputerUseService:
         self._closed = True
         self._hotkey.close()
         with self._control_lock:
+            self._controlling_runs.clear()
             if self._active_driver is not None:
                 self._active_driver.interrupt()
         with self._lock:
