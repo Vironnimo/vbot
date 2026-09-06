@@ -420,13 +420,14 @@ def _validate_override_value(
             policy = normalize_tool_access(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-        outside = sorted(set(policy.allowed) - set(project.allowed_tools))
-        if outside:
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                "params.value.allowed contains Tools outside the Project Tool Whitelist: "
-                + ", ".join(outside),
-            )
+        for name_field in ("allowed", "granted"):
+            outside = sorted(set(getattr(policy, name_field)) - set(project.allowed_tools))
+            if outside:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"params.value.{name_field} contains Tools outside the Project Tool Whitelist: "
+                    + ", ".join(outside),
+                )
         return policy.to_dict()
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)

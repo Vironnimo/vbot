@@ -115,12 +115,12 @@ metadata:
 
 ## External Dependencies
 
-- `pyyaml` (core dependency) parses SKILL.md frontmatter. Script-backed bundled Skills declare their own binaries: `browser-use` wraps `agent-browser`, `computer-use` wraps `cua-driver` - neither wrapper installs backends; absence keeps only that Skill unavailable.
+- `pyyaml` (core dependency) parses SKILL.md frontmatter. The script-backed `browser-use` Skill requires `agent-browser` and never installs it. Computer Use is an opt-in bundled Extension (see `extensions/computer-use.md`), not a Skill.
 
 ## Constraints & Gotchas
 
 - Requirement checks run against the environment snapshot captured at registry load/reload, not live `os.environ` at activation - a newly exported key or installed binary flips availability only after reload.
-- Bundled scripts execute on the machine running the server through that Run's `bash`: in a Pi-server + Desktop Client deployment, `browser-use`/`computer-use` control the Pi host, not the user's Windows browser. Screenshots are file artifacts becoming Model-visible only after the Agent `read`s the returned path.
+- Bundled scripts execute on the machine running the server through that Run's `bash`: in a Pi-server + Desktop Client deployment, `browser-use` controls the Pi host, not the user's Windows browser. Screenshots are file artifacts becoming Model-visible only after the Agent `read`s the returned path.
 - Path economy (catalog and `skill({})` results path-free; provenance internal) is presentation preference, not routing: activations expose absolute script paths and relative readable paths under `resource_files`, and `project` Tool Results may carry structured path context - but `skill(name, file_path)` accepts only relative package paths and returns only those.
 - Retain non-loadable directories as diagnostics (I/O failures, malformed requirements, duplicate names) so UI can explain them; plain YAML errors and missing ordinary metadata use loadable fallbacks instead.
 - Metadata diagnostics log at `DEBUG` (`vbot.skills`) **once per process**, keyed by (path, warning), because registries reload on every project run/reload - only the log deduplicates; caller-facing diagnostics always carry every warning.

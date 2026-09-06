@@ -973,6 +973,7 @@ def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolA
                 mode="selected",
                 allowed=tuple(project.allowed_tools),
                 denied=override.denied,
+                granted=override.granted,
             )
         return override
 

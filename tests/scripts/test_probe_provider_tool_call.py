@@ -1362,3 +1362,23 @@ def test_mcp_probe_uses_the_production_definition_for_every_case():
         ]
         assert scenario.expected_arguments == arguments
         assert scenario.require_closed_input is False
+
+
+def test_computer_probe_uses_production_definition_and_validates_matrix():
+    from resources.extensions.computer_use.extension import (
+        COMPUTER_PARAMETERS,
+        InvalidComputerArgumentsError,
+        _validate_arguments,
+    )
+
+    for case, expected in PROBE.COMPUTER_CASE_ARGUMENTS.items():
+        args = PROBE._parser().parse_args(["--scenario", "computer", "--computer-case", case])
+        scenario = PROBE._scenario(args)
+        assert scenario.tools[0]["parameters"] is COMPUTER_PARAMETERS
+        assert scenario.expected_arguments == expected
+        try:
+            _validate_arguments(expected)
+        except InvalidComputerArgumentsError:
+            assert case.startswith("invalid_")
+        else:
+            assert not case.startswith("invalid_")

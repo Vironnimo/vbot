@@ -751,6 +751,7 @@ class Tool:
     # followed, memory-mode, and Session-grant Tools are automatic.
     activation: str = TOOL_ACTIVATION_CONFIGURABLE
     activation_source: str | None = None
+    requires_opt_in: bool = False
     # Stable machine-readable preconditions. Runtime readiness and Chat route
     # availability remain separate live projections.
     constraints: tuple[str, ...] = ()
@@ -788,6 +789,12 @@ class Tool:
     def __post_init__(self) -> None:
         if self.activation not in TOOL_ACTIVATION_KINDS:
             raise ValueError(f"Unsupported Tool activation: {self.activation}")
+        if not isinstance(self.requires_opt_in, bool):
+            raise ValueError("requires_opt_in must be a boolean")
+        if self.requires_opt_in and (
+            self.internal or self.session_scoped or self.activation != TOOL_ACTIVATION_CONFIGURABLE
+        ):
+            raise ValueError("Only configurable, non-internal Tools can require opt-in")
         if self.activation == TOOL_ACTIVATION_FOLLOWS:
             if not self.activation_source:
                 raise ValueError("A followed Tool requires activation_source")
@@ -942,6 +949,7 @@ class ToolRegistry:
         family: str | None = None,
         activation: str = TOOL_ACTIVATION_CONFIGURABLE,
         activation_source: str | None = None,
+        requires_opt_in: bool = False,
         constraints: Sequence[str] = (),
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
@@ -991,6 +999,7 @@ class ToolRegistry:
             family_label=family_definition.label if family_definition is not None else None,
             activation=activation,
             activation_source=activation_source,
+            requires_opt_in=requires_opt_in,
             constraints=tuple(dict.fromkeys(constraints)),
             display=display or ToolDisplay(),
             ready=ready,
@@ -1260,7 +1269,9 @@ class ToolRegistry:
         tool = self.get(context.tool_name)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
             raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
-        if not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
+        if (
+            tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
+        ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {context.tool_name}")
         # Readiness safety net: dispatch is not list-filtered, so a prompt built
         # moments before the credential vanished could still request a now
@@ -1308,6 +1319,8 @@ class ToolRegistry:
         tools: list[Tool] = []
         for tool in self._tools.values():
             if tool.internal and not include_internal:
+                continue
+            if tool.requires_opt_in and tool.name not in (allowed_tools or ()):
                 continue
             if tool.session_scoped:
                 if tool.name not in grants:

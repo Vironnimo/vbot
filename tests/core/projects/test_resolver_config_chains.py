@@ -255,3 +255,38 @@ def test_thinking_chain_all_empty_yields_none(
     runtime_agent = resolver.resolve_agent(project.project_id, "builder")
 
     assert runtime_agent.thinking_effort is None
+
+
+@pytest.mark.parametrize("mode", ["all", "selected", "none"])
+def test_project_opt_in_requires_grant_beyond_whitelist(agents, projects, repo, mode):
+    from types import SimpleNamespace
+
+    from core.tools.availability import resolve_tool_access
+
+    _write_agent(repo, "writer.md", model="openai/gpt-mini")
+    project = _project(projects, repo)
+    project = projects.update(project.project_id, allowed_tools=["computer"])
+    resolver = _resolver(agents, projects, _openai_configured())
+    tools = [SimpleNamespace(name="computer", requires_opt_in=True)]
+    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
+    assert resolve_tool_access(runtime_agent.tool_access, tools, "off").allowed_tools == ()
+    policy = {"mode": mode, "granted": ["computer"]}
+    if mode == "selected":
+        policy["allowed"] = ["computer"]
+    projects.set_override(project.project_id, "writer", "tool_access", policy)
+    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
+    assert runtime_agent.tool_access.granted == ("computer",)
+    assert resolve_tool_access(runtime_agent.tool_access, tools, "off").allowed_tools == (
+        () if mode == "none" else ("computer",)
+    )
+
+
+def test_project_cannot_grant_opt_in_outside_whitelist(agents, projects, repo):
+    from core.projects.projects import ProjectError
+
+    project = _project(projects, repo)
+    project = projects.update(project.project_id, allowed_tools=["read"])
+    with pytest.raises(ProjectError):
+        projects.set_override(
+            project.project_id, "writer", "tool_access", {"mode": "all", "granted": ["computer"]}
+        )

@@ -54,7 +54,7 @@ _EXTENSION_WORKERS = BoundedWorkerPool(
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 4
+API_VERSION = 5
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -201,6 +201,7 @@ class ToolDeclaration:
     parameters: dict[str, Any]
     handler: Callable[..., Any]
     internal: bool = False
+    requires_opt_in: bool = False
     display: Any = None
     ready: Callable[[], bool] | None = None
     # Optional English hint explaining the tool's readiness precondition, forwarded
@@ -412,6 +413,7 @@ class ExtensionAPI:
         handler: Callable[..., Any],
         *,
         internal: bool = False,
+        requires_opt_in: bool = False,
         display: Any = None,
         ready: Callable[[], bool] | None = None,
         readiness_hint: str | None = None,
@@ -444,6 +446,7 @@ class ExtensionAPI:
                 parameters=parameters,
                 handler=handler,
                 internal=internal,
+                requires_opt_in=requires_opt_in,
                 display=display,
                 ready=ready,
                 readiness_hint=readiness_hint,
@@ -951,6 +954,7 @@ class ExtensionRegistry:
                 declaration.parameters,
                 declaration.handler,
                 internal=declaration.internal,
+                requires_opt_in=declaration.requires_opt_in,
                 display=declaration.display,
                 ready=declaration.ready,
                 readiness_hint=declaration.readiness_hint,
