@@ -6,6 +6,9 @@ This is the author guide. For the precise internal contract (composition rules,
 dispatch internals) see [`.vorch/domain-maps/extensions.md`](../.vorch/domain-maps/extensions.md);
 for runnable samples see [`examples/extensions/`](../examples/extensions/).
 
+For the bundled Browser Use Extension's installation, logged-in browser connections,
+and Agent grants, see [Browser Use](browser-use.md).
+
 > **Trust boundary.** Extensions run in-process with the **same trust as the
 > kernel** — arbitrary Python, no sandbox, no permission system. Only install
 > extensions you would run by hand. This is intentional: vBot is a single-user,
