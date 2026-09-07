@@ -195,8 +195,18 @@ MESSAGES = {
     "stale": "The element ref is no longer current. Take a new snapshot before using the element.",
     "failed": (
         "The browser command failed and its effect may be uncertain. "
-        "Inspect the page before repeating input. If the browser is disconnected, "
-        "ask the user to check its connection and any Chrome permission dialog."
+        "Use wait to inspect the current page, or tabs to check the browser if the page "
+        "cannot be read. Do not repeat input before checking its effect."
+    ),
+    "response_lost": (
+        "The browser did not return a command result. Its effect is unconfirmed. "
+        "Use wait to inspect the current page, or tabs if the page cannot be read. "
+        "Do not repeat input before checking its effect."
+    ),
+    "unconfirmed": (
+        "The navigation command was not confirmed. Check the current page's URL and content "
+        "to determine whether the requested destination was reached. Use wait if the page "
+        "is still changing; do not repeat open while verifying."
     ),
     "tab_gone": "The selected tab is closed. Use tabs and switch_tab, or create a new_tab.",
     "changed": "Browser configuration changed. Use open or tabs to connect with the new settings.",
@@ -553,7 +563,7 @@ class BrowserClient:
                 raise BrowserError("failed")
             payload = results[0]
         except (ValueError, TypeError) as error:
-            raise BrowserError("failed") from error
+            raise BrowserError("response_lost") from error
         if not isinstance(payload, dict) or payload.get("success") is not True:
             code = payload.get("code") if isinstance(payload, dict) else None
             diagnostic = payload.get("error", "") if isinstance(payload, dict) else ""
@@ -562,6 +572,8 @@ class BrowserClient:
             # Classify only known native diagnostics. Never echo page values,
             # endpoint credentials, selectors, or arbitrary backend prose.
             message = diagnostic.lower() if isinstance(diagnostic, str) else ""
+            if message.startswith(("invalid response:", "failed to read:", "failed to send:")):
+                raise BrowserError("response_lost")
             if message.startswith(
                 (
                     "element not found",
@@ -725,7 +737,13 @@ class BrowserService:
         try:
             result: dict[str, Any] = session.client.call(command)
         except BrowserError as error:
-            if error.code in {"page_changed", "connection", "element_unavailable", "tab_gone"}:
+            if error.code in {
+                "page_changed",
+                "connection",
+                "element_unavailable",
+                "tab_gone",
+                "response_lost",
+            }:
                 session.refs.clear()
             raise
         return result
@@ -1263,8 +1281,39 @@ class BrowserService:
                 if action in NAVIGATION | {"click", "press", "select", "dialog"}:
                     session.observe_after = time.monotonic() + 0.75
         except BrowserError as error:
+            if action == "open" and error.code in {"response_lost", "timeout", "page_changed"}:
+                self.api.logger.warning(
+                    "Browser navigation result unconfirmed (code=%s)", error.code
+                )
+                try:
+                    # Inspect only the owned target. A changed URL, redirect, or
+                    # readable document does not prove this command completed.
+                    self._ensure_tab(context, session, args)
+                    session.observe_after = time.monotonic() + 0.75
+                    observed = (
+                        self._snapshot(context, session, args)
+                        if args.get("observe", True)
+                        else self._observe_page(context, session)
+                    )
+                except BrowserError as observation_error:
+                    if observation_error.code in {
+                        "denied",
+                        "cancelled",
+                        "stopped",
+                        "changed",
+                        "tab_gone",
+                    }:
+                        raise
+                    raise error from observation_error
+                return {
+                    "navigation_confirmed": False,
+                    "navigation_error": {"code": "browser_" + error.code, "message": str(error)},
+                    **observed,
+                    "hint": MESSAGES["unconfirmed"],
+                }
             if action == "close_tab" and error.code in {
                 "failed",
+                "response_lost",
                 "tab_gone",
                 "timeout",
                 "connection",
