@@ -1480,7 +1480,9 @@ async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_l
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
     manager.start()
     try:
-        result = await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
+        result = await manager.spawn_for_operator(
+            command=None, arguments=[], cwd=tmp_path, columns=137, rows=41
+        )
         terminal_id = result["terminal_id"]
         session = manager._sessions[terminal_id]
 
@@ -1491,10 +1493,14 @@ async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_l
         assert session.lifecycle_owner is None
         assert session.attachment == owner()
         assert manager.get_session(terminal_id, owner()) is session
+        assert (session.renderer.columns, session.renderer.rows) == (137, 41)
+        assert factory.adapters[0].resizes == []
 
         same, changed = manager.attach(terminal_id, owner(), origin_run_id="attach-run-2")
         assert same is session
         assert changed is False
+        assert (session.renderer.columns, session.renderer.rows) == (137, 41)
+        assert factory.adapters[0].resizes == []
 
         await manager.send_operator_input(terminal_id, "echo ready\r")
         factory.adapters[0].emit("ready\r\n")
