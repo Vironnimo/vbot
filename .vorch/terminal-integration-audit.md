@@ -2,6 +2,8 @@
 
 Date: 2026-09-07. Inspected revision: `a18e403b220d20d93a04447b9cffed057cdae0bd`.
 
+Follow-up: the default launch grid is now 80x24. The 120x32 launch default described below belongs to the inspected revision; existing terminals, attachment, UI resizing, and automatic delivery retain their behavior. Evidence: `TERMINAL_DEFAULT_COLUMNS` / `TERMINAL_DEFAULT_ROWS` and `test_start_uses_compact_default_until_explicit_resize`.
+
 Scope: reconstruct the current Terminal Tool, operator UI, shared geometry, attachment, and automatic Agent delivery; identify improvements. This audit changes documentation only. Recommendations below are not an approved implementation specification.
 
 ## User requirement

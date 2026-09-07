@@ -136,24 +136,42 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_without_command_spawns_host_default_shell(
-    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("command", [None, "fake-tui"])
+async def test_start_uses_compact_default_until_explicit_resize(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str | None,
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
     terminal_manager, factory = manager
-    result = await call(terminal_manager, make_context(tmp_path), {"action": "start"})
+    context = make_context(tmp_path)
+    arguments: JsonObject = {"action": "start"}
+    if command is not None:
+        arguments["command"] = command
+    result = await call(terminal_manager, context, arguments)
 
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
     assert data["state"] == "ready"
-    assert data["command"] == "host-shell"
-    assert data["columns"] == 120
-    assert data["rows"] == 32
+    assert data["command"] == (command or "host-shell")
+    assert data["columns"] == 80
+    assert data["rows"] == 24
     assert data["delivery"] == "automatic_terminal_activity"
     assert isinstance(data["handoff_note"], str)
     assert data["handoff_note"]
-    assert factory.calls[0][0] == ["host-shell"]
+    assert factory.calls[0][0] == [command or "host-shell"]
+    assert factory.calls[0][3:] == (24, 80)
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
+
+    await terminal_manager.resize_for_operator(data["terminal_id"], columns=153, rows=43)
+    status = await call(
+        terminal_manager, context, {"action": "status", "terminal_id": data["terminal_id"]}
+    )
+    assert status["ok"] is True
+    resized = cast(dict[str, Any], status["data"])
+    assert (resized["columns"], resized["rows"]) == (153, 43)
+    assert factory.adapters[0].resizes == [(43, 153)]
 
 
 @pytest.mark.asyncio
