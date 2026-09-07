@@ -31,6 +31,13 @@ class FakeClient:
             '- textbox "Name" [ref=e1]\n- textbox "Email" [ref=e2]\n- button "Submit" [ref=e3]'
         )
         self.active = "A" * 32
+        self.page = {
+            "url": "https://example.com",
+            "title": "Fixture",
+            "page_text": "Fixture text",
+            "http_status": 200,
+            "observation_state": "stable",
+        }
         self.tab_rows = [
             {
                 "tabId": "t1",
@@ -47,6 +54,8 @@ class FakeClient:
     def call(self, command):
         self.calls.append(command)
         self.hook(command)
+        if command[0] == "eval":
+            return {"result": self.page.copy(), "origin": self.page["url"]}
         if command[:2] == ["tab", "list"]:
             return {"tabs": self.tab_rows}
         if command[0] == "tab" and len(command) == 2 and len(command[1]) == 32:
@@ -56,11 +65,11 @@ class FakeClient:
         if command[0] == "snapshot":
             return {
                 "snapshot": self.tree,
-                "origin": "https://example.com",
+                "origin": self.page["url"],
                 "refs": {"e1": {}, "e2": {}, "e3": {}},
             }
         if command[:2] == ["get", "text"]:
-            return {"text": "0123456789" * 3000}
+            return {"text": "0123456789" * 3000, "origin": self.page["url"]}
         if command[0] == "screenshot":
             Path(command[1]).write_bytes(b"\x89PNG\r\n\x1a\nfixture")
         return {}
@@ -126,7 +135,7 @@ def opened(setup):
     return service, context, session, session.client
 
 
-@pytest.mark.parametrize("action", ["close", "fill", "snapshot", "read", "downloads"])
+@pytest.mark.parametrize("action", ["status", "close", "fill", "snapshot", "read", "downloads"])
 def test_fresh_nonopening_actions_do_not_install_components(setup, monkeypatch, action):
     service, context, *_ = setup
     monkeypatch.setattr(service.runtime, "ensure", lambda *args: pytest.fail("unexpected setup"))
@@ -134,7 +143,7 @@ def test_fresh_nonopening_actions_do_not_install_components(setup, monkeypatch, 
     if action == "fill":
         arguments["fields"] = [{"target": "stale", "text": "value"}]
     result = service.handle(context, arguments)
-    assert result["ok"] is (action == "close")
+    assert result["ok"] is (action in {"close", "status"})
     assert not service._sessions
 
 
@@ -143,6 +152,46 @@ def test_denied_agent_never_prepares_components(setup, monkeypatch):
     agent.tool_access = ToolAccess(mode="all")
     monkeypatch.setattr(service.runtime, "ensure", lambda *args: pytest.fail("unexpected setup"))
     assert service.handle(context, {"action": "tabs"})["error"]["code"] == "browser_denied"
+
+
+@pytest.mark.parametrize("mode", ["managed", "existing", "remote"])
+@pytest.mark.parametrize("headed", [False, True])
+def test_status_is_side_effect_free_and_explains_window_mode(setup, monkeypatch, mode, headed):
+    service, context, _, config, _ = setup
+    config.update(mode=mode, headed=headed)
+    monkeypatch.setattr(service.runtime, "ensure", lambda *args: pytest.fail("unexpected setup"))
+    result = service.handle(context, {"action": "status"})["data"]
+    assert not result["connected"] and not service._sessions
+    assert result["mode"] == mode
+    assert result["headed"] is (headed if mode == "managed" else None)
+    assert result["browser_host"] == ("remote" if mode == "remote" else "server")
+    assert "secret" not in json.dumps(result)
+
+
+def test_status_keeps_live_connection_and_reports_pending_config_change(setup):
+    service, context, session, client = opened(setup)
+    original = session.config[2]
+    setup[3]["headed"] = not original
+    client.calls.clear()
+    result = service.handle(context, {"action": "status"})["data"]
+    assert result["connected"] and result["headed"] is original
+    assert result["next_connection"]["headed"] is not original
+    assert not client.calls and session.refs
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_desktop_default_and_saved_override_match_settings_schema(monkeypatch, available):
+    monkeypatch.setattr(browser, "desktop_available", lambda: available)
+    declarations = ExtensionDeclarations()
+    config = {}
+    api = ExtensionAPI("browser_use", declarations, config=config, logger=logging.getLogger("test"))
+    browser.register(api)
+    service = declarations.tools[0].handler.__self__
+    assert service._config()[2] is available
+    headed_field = next(field for field in declarations.settings_schema if field.key == "headed")
+    assert headed_field.default is available
+    config["headed"] = not available
+    assert service._config()[2] is not available
 
 
 def test_revocation_during_setup_prevents_browser_connection(setup, monkeypatch):
@@ -246,7 +295,7 @@ def test_fill_mixes_text_and_select_with_one_observation(setup):
         },
     )
     assert result["ok"] and result["data"]["completed"] == 3
-    assert client.calls == [
+    assert [command for command in client.calls if command[0] != "eval"] == [
         ["tab", "list"],
         ["fill", "@e1", "Alice"],
         ["select", "@e2", "Pro"],
@@ -508,6 +557,232 @@ def test_failed_observation_preserves_completed_action(setup):
     assert len([command for command in client.calls if command[0] == "click"]) == 1
 
 
+def test_observation_retries_navigation_race_without_repeating_input(setup):
+    service, context, session, client = opened(setup)
+    ref = next(iter(session.refs))
+    attempts = 0
+
+    def hook(command):
+        nonlocal attempts
+        if command[0] == "eval":
+            attempts += 1
+            if attempts == 1:
+                raise browser.BrowserError("page_changed")
+            client.page.update(url="https://example.com/done", page_text="Saved", http_status=201)
+
+    client.hook = hook
+    result = service.handle(context, {"action": "click", "target": ref, "observe": True})["data"]
+    assert attempts == 2
+    assert result["url"] == "https://example.com/done" and result["page_text"] == "Saved"
+    assert result["http_status"] == 201 and result["completed"] == 1
+    assert len([command for command in client.calls if command[0] == "click"]) == 1
+    assert ref not in session.refs and session.refs
+
+
+def test_changing_page_withholds_input_refs_and_preserves_action_result(setup):
+    service, context, session, client = opened(setup)
+    ref = next(iter(session.refs))
+    client.page["observation_state"] = "changing"
+    client.calls.clear()
+    result = service.handle(context, {"action": "click", "target": ref, "observe": True})["data"]
+    assert result["completed"] == 1 and result["observation_state"] == "changing"
+    assert result["snapshot"] == "" and not session.refs
+    assert not any(command[0] == "snapshot" for command in client.calls)
+    assert (
+        service.handle(context, {"action": "click", "target": ref})["error"]["code"]
+        == "browser_stale"
+    )
+    client.page["observation_state"] = "stable"
+    assert service.handle(context, {"action": "wait"})["data"]["snapshot"]
+    assert session.refs
+
+
+def test_repeated_page_change_is_bounded_and_does_not_replay_input(setup):
+    service, context, session, client = opened(setup)
+    ref = next(iter(session.refs))
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "eval":
+            raise browser.BrowserError("page_changed")
+
+    client.hook = hook
+    result = service.handle(context, {"action": "click", "target": ref, "observe": True})["data"]
+    assert result["completed"] == 1
+    assert result["observation_error"]["code"] == "browser_page_changed"
+    assert sum(command[0] == "eval" for command in client.calls) == 3
+    assert sum(command[0] == "click" for command in client.calls) == 1
+    assert not session.refs
+
+
+def test_observation_rechecks_revocation_between_retries(setup):
+    service, context, _, client = opened(setup)
+    agent = setup[2]
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "eval":
+            agent.tool_access = ToolAccess(mode="none")
+            raise browser.BrowserError("page_changed")
+
+    client.hook = hook
+    result = service.handle(context, {"action": "snapshot"})
+    assert result["error"]["code"] == "browser_denied"
+    assert sum(command[0] == "eval" for command in client.calls) == 1
+
+
+def test_observation_rechecks_cancellation_between_retries(setup):
+    service, context, _, client = opened(setup)
+    cancelled = threading.Event()
+    context = replace(context, cancellation_hook=cancelled.is_set)
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "eval":
+            cancelled.set()
+            raise browser.BrowserError("page_changed")
+
+    client.hook = hook
+    result = service.handle(context, {"action": "snapshot"})
+    assert result["error"]["code"] == "browser_cancelled"
+    assert sum(command[0] == "eval" for command in client.calls) == 1
+
+
+def test_navigation_between_page_metadata_and_snapshot_is_reobserved(setup, monkeypatch):
+    service, context, session, client = opened(setup)
+    original = client.call
+    attempts = 0
+
+    def call(command):
+        nonlocal attempts
+        if command[0] == "snapshot":
+            attempts += 1
+            if attempts == 1:
+                client.page.update(url="https://example.com/done", page_text="Saved")
+        return original(command)
+
+    monkeypatch.setattr(client, "call", call)
+    result = service.handle(context, {"action": "snapshot"})["data"]
+    assert attempts == 2 and result["url"] == "https://example.com/done"
+    assert result["page_text"] == "Saved" and session.refs
+
+
+def test_targeted_read_never_reuses_ref_invalidated_during_observation(setup):
+    service, context, session, client = opened(setup)
+    ref = next(iter(session.refs))
+    client.calls.clear()
+    attempts = 0
+
+    def hook(command):
+        nonlocal attempts
+        if command[0] == "eval":
+            attempts += 1
+            if attempts == 1:
+                raise browser.BrowserError("page_changed")
+
+    client.hook = hook
+    result = service.handle(context, {"action": "read", "target": ref})
+    assert result["error"]["code"] == "browser_stale"
+    assert not any(command[:2] == ["get", "text"] for command in client.calls)
+    assert not session.refs
+
+
+@pytest.mark.parametrize("code", ["page_changed", "timeout", "connection"])
+def test_input_with_uncertain_effect_is_never_retried(setup, code):
+    service, context, session, client = opened(setup)
+    ref = next(iter(session.refs))
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "click":
+            raise browser.BrowserError(code)
+
+    client.hook = hook
+    result = service.handle(context, {"action": "click", "target": ref, "observe": True})
+    assert result["error"]["code"] == "browser_" + code
+    assert sum(command[0] == "click" for command in client.calls) == 1
+    assert not session.refs
+
+
+def test_snapshot_compact_default_expand_and_scoped_action_observation(setup):
+    service, context, session, client = opened(setup)
+    client.tree = '- button "Submit" [ref=e3]\n' * 400
+    compact = service.handle(context, {"action": "snapshot"})["data"]
+    assert len(compact["snapshot"]) <= 4000 and compact["truncated"]
+    expanded = service.handle(context, {"action": "snapshot", "limit": 16000})["data"]
+    assert len(expanded["snapshot"]) > 4000 and not expanded["truncated"]
+    ref = next(iter(session.refs))
+    client.calls.clear()
+    scoped = service.handle(
+        context,
+        {
+            "action": "click",
+            "target": ref,
+            "observe": True,
+            "selector": "main",
+            "limit": 120,
+        },
+    )["data"]
+    assert len(scoped["snapshot"]) <= 120 and scoped["truncated"]
+    assert ["snapshot", "-c", "-i", "-s", "main"] in client.calls
+    assert all(f"ref={key}]" in scoped["snapshot"] for key in session.refs)
+    tiny = service.handle(context, {"action": "snapshot", "limit": 1})["data"]
+    assert tiny["snapshot"] == "" and not session.refs
+
+
+@pytest.mark.parametrize("status", [0, None, "418", True, 700])
+def test_unavailable_http_status_is_not_guessed_from_error_page_url(setup, status):
+    service, context, _, client = opened(setup)
+    client.page.update(http_status=status, url="https://example.com/418.html", page_text="Error")
+    result = service.handle(context, {"action": "snapshot"})["data"]
+    assert "http_status" not in result and result["page_text"] == "Error"
+
+
+@pytest.mark.parametrize("condition", [{}, {"text": "Saved"}, {"url": "https://example.com/done"}])
+def test_wait_returns_fresh_observation_with_optional_condition(setup, condition):
+    service, context, session, client = opened(setup)
+    previous = set(session.refs)
+    client.calls.clear()
+    result = service.handle(context, {"action": "wait", **condition})["data"]
+    assert result["snapshot"] and previous.isdisjoint(session.refs)
+    commands = [command for command in client.calls if command[0] == "wait"]
+    assert len(commands) == bool(condition)
+    if condition:
+        assert result["condition_met"] is True
+        assert commands[0][-2:] == ["--timeout", "5000"]
+    else:
+        assert "condition_met" not in result
+
+
+def test_wait_timeout_returns_current_page_without_claiming_condition_met(setup):
+    service, context, _, client = opened(setup)
+    client.hook = lambda command: (
+        (_ for _ in ()).throw(browser.BrowserError("timeout")) if command[0] == "wait" else None
+    )
+    result = service.handle(context, {"action": "wait", "text": "Saved"})["data"]
+    assert result["condition_met"] is False and result["snapshot"]
+    assert result["condition_error"]["code"] == "browser_condition_not_met"
+    assert sum(command[0] == "wait" for command in client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "click", "target": "r1", "selector": "main"},
+        {"action": "fill", "fields": [{"target": "r1", "text": "private"}], "limit": 50},
+        {"action": "open", "url": "https://example.com", "observe": False, "limit": 50},
+        {"action": "wait", "text": "Saved", "url": "https://example.com"},
+        {"action": "wait", "url": "https://private:password@example.com"},
+    ],
+)
+def test_invalid_observation_options_fail_before_any_backend_command(setup, arguments):
+    service, context, _, client = opened(setup)
+    client.calls.clear()
+    result = service.handle(context, arguments)
+    assert result["error"]["code"] == "invalid_arguments" and not client.calls
+    assert "private" not in json.dumps(result)
+
+
 def test_external_browser_uses_stable_targets_and_rejects_busy_tab(setup):
     service, context, _, config, _ = setup
     config["mode"] = "existing"
@@ -636,6 +911,35 @@ def test_backend_failure_is_not_success_or_a_secret_echo(tmp_path, monkeypatch, 
     with pytest.raises(browser.BrowserError) as error:
         client.call(["snapshot"])
     assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "diagnostic,code",
+    [
+        ("No element found: secret timeout", "element_unavailable"),
+        ("Element exists but is not visible. secret", "element_unavailable"),
+        ("Another element is covering the target element. secret", "element_unavailable"),
+        ("Operation timed out. secret", "timeout"),
+        ("Wait timed out after 5000ms secret", "timeout"),
+        ("CDP error: Execution context was destroyed. secret", "page_changed"),
+        ("CDP error: Cannot find context with specified id secret", "page_changed"),
+        ("Navigation failed: net::ERR_NAME_NOT_RESOLVED secret", "navigation"),
+        ("Connection closed secret", "connection"),
+        ("Browser not launched secret", "connection"),
+        ("Unexpected error from website secret", "failed"),
+    ],
+)
+def test_native_error_classification_preserves_only_safe_recovery_code(
+    tmp_path, monkeypatch, diagnostic, code
+):
+    session = browser.BrowserSession((None, "a", "s"), "owned", tmp_path, ("managed", "", False))
+    client = browser.BrowserClient("native", session, "test")
+    raw = json.dumps([{"success": False, "error": diagnostic}])
+    monkeypatch.setattr(client, "_invoke", lambda *args: raw)
+    with pytest.raises(browser.BrowserError) as caught:
+        client.call(["snapshot"])
+    assert caught.value.code == code
+    assert "secret" not in str(caught.value)
 
 
 def test_missing_backend_stays_callable_for_automatic_setup():
