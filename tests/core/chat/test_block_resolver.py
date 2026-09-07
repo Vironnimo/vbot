@@ -19,7 +19,8 @@ from core.attachments.images import ImageConverter
 from core.chat import ChatMessage, wire_shaping
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
-from core.chat.wire_shaping import limit_request_images
+from core.chat.errors import ImageBudgetExceededError
+from core.chat.wire_shaping import RequestImageBudget, limit_request_images
 from core.model_tasks import SpeechExecutionError
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.sessions import ChatSessionManager
@@ -154,10 +155,12 @@ def test_four_user_images_are_all_sent_up_to_150_mib() -> None:
         for _ in range(4)
     ]
     message = {"role": "user", "content": content}
-    bounded = limit_request_images([message, _resolved_image_result(0)])
+    bounded = limit_request_images([message])
     assert bounded[0] == message
     assert len(bounded[0]["content"]) == 4
     assert _native_image_calls(bounded) == []
+    with pytest.raises(ImageBudgetExceededError):
+        limit_request_images([message, _resolved_image_result(0)])
 
 
 def test_image_byte_budget_reserves_user_references_before_recent_tools(
@@ -176,14 +179,16 @@ def test_image_byte_budget_reserves_user_references_before_recent_tools(
         _resolved_image_result(0, 4),
         _resolved_image_result(1, 12),
     ]
-    bounded = limit_request_images(messages)
+    budget = RequestImageBudget()
+    budget.record_delivered([messages[1]])
+    bounded = limit_request_images(messages, budget=budget)
     assert bounded[0] == reference
     assert _native_image_calls(bounded) == ["call-1"]
     assert bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD][0]["type"] == "text"
 
 
 @pytest.mark.parametrize("role", ["user", "tool"])
-def test_single_oversized_image_degrades_explicitly_without_dropping_other_media(
+def test_single_oversized_fresh_image_fails_without_dropping_other_media(
     role: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", 16)
@@ -196,11 +201,106 @@ def test_single_oversized_image_degrades_explicitly_without_dropping_other_media
     audio = {"type": "media", "media_type": "audio/wav", "base64": "audio-sentinel"}
     document = {"type": "document", "media_type": "application/pdf", "base64": "pdf-sentinel"}
     message[field].extend([audio, document])
-    bounded = limit_request_images([message])[0]
-    assert bounded[field][0]["type"] == "text"
-    assert bounded[field][0]["text"]
-    assert bounded[field][1:] == message[field][1:]
+    before = deepcopy(message)
+    with pytest.raises(ImageBudgetExceededError) as failure:
+        limit_request_images([message])
+    assert failure.value.count == 1
+    assert failure.value.size_bytes == 20
+    assert failure.value.max_bytes == 16
+    assert message == before
     assert message[field][0]["type"] == "media"
+
+
+@pytest.mark.parametrize("groups", [[4], [1, 1, 1, 1], [20, 20, 10]])
+def test_fresh_image_groups_are_all_retained(groups: list[int]) -> None:
+    messages = []
+    for index, count in enumerate(groups):
+        message = _resolved_image_result(index)
+        message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= count
+        messages.append(message)
+    assert limit_request_images(messages) == messages
+
+
+@pytest.mark.parametrize("role,groups", [("user", [51]), ("tool", [51]), ("tool", [17, 17, 17])])
+def test_fresh_image_overflow_counts_individual_images(role: str, groups: list[int]) -> None:
+    messages = []
+    for index, count in enumerate(groups):
+        message = _resolved_image_result(index)
+        message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= count
+        if role == "user":
+            message["role"] = role
+            message["content"] = message.pop(TOOL_RESULT_CONTENT_BLOCKS_FIELD)
+        messages.append(message)
+    before = deepcopy(messages)
+    with pytest.raises(ImageBudgetExceededError) as failure:
+        limit_request_images(messages)
+    assert failure.value.count == 51
+    assert failure.value.max_count == 50
+    assert messages == before
+
+
+def test_image_pressure_reclaims_a_batch_then_preserves_the_prefix() -> None:
+    budget = RequestImageBudget()
+    original = [_resolved_image_result(i) for i in range(50)]
+    budget.record_delivered(original)
+    expanded = [*original, _resolved_image_result(50)]
+    bounded = budget.project(expanded, remember=True)
+    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(26, 51)]
+    assert _native_image_calls(original) == [f"call-{i}" for i in range(50)]
+    budget.record_delivered(bounded)
+    continued = budget.project([*bounded, _resolved_image_result(51)], remember=True)
+    assert continued[: len(bounded)] == bounded
+    assert _native_image_calls(continued) == [f"call-{i}" for i in range(26, 52)]
+    # Canonical attachment resolution may restore retired pixels. A same-Run
+    # rebuild must keep their placeholders even with no current budget pressure.
+    assert budget.project(expanded) == bounded
+    assert _native_image_calls(budget.project([original[0]])) == []
+
+
+def test_image_projection_does_not_acknowledge_failed_requests() -> None:
+    budget = RequestImageBudget()
+    original = [_resolved_image_result(i) for i in range(50)]
+    assert budget.project(original, remember=True) == original
+    with pytest.raises(ImageBudgetExceededError):
+        budget.project([*original, _resolved_image_result(50)])
+
+
+def test_image_projection_for_compaction_does_not_commit_retirement() -> None:
+    budget = RequestImageBudget()
+    original = [_resolved_image_result(i) for i in range(50)]
+    budget.record_delivered(original)
+    assert len(_native_image_calls(budget.project([*original, _resolved_image_result(50)]))) == 25
+    assert budget.project(original) == original
+
+
+def test_fresh_images_take_priority_over_delivered_user_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_COUNT_LIMIT", 4)
+    user = {
+        "role": "user",
+        "id": "user-1",
+        "content": [
+            {"type": "media", "media_type": "image/png", "base64": "AAAA"} for _ in range(4)
+        ],
+    }
+    budget = RequestImageBudget()
+    budget.record_delivered([user])
+    fresh = [_resolved_image_result(i) for i in range(2)]
+    bounded = budget.project([user, *fresh])
+    assert _native_image_calls(bounded) == ["call-0", "call-1"]
+    assert sum(block["type"] == "media" for block in bounded[0]["content"]) == 2
+
+
+def test_changed_image_at_the_same_address_is_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_COUNT_LIMIT", 1)
+    original = _resolved_image_result(0)
+    budget = RequestImageBudget()
+    budget.record_delivered([original])
+    changed = deepcopy(original)
+    changed[TOOL_RESULT_CONTENT_BLOCKS_FIELD][0]["base64"] = "BBBB"
+    with pytest.raises(ImageBudgetExceededError):
+        budget.project([changed, _resolved_image_result(1)])
 
 
 class _StubPrompts:

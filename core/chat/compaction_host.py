@@ -491,12 +491,14 @@ class ChatCompactionHost:
                 continuation_reminder,
             )
         if live_request_messages is not None:
-            projected_messages = _restore_in_run_tool_result_content(
+            projected_messages = await self.run_transform(
+                _restore_in_run_tool_result_content,
                 _restore_in_run_assistant_reasoning(
                     projected_messages,
                     live_request_messages,
                 ),
                 live_request_messages,
+                image_budget=inputs.image_budget,
             )
         context_tokens_after = await self.run_transform(
             estimate_wire_request_input_tokens,
@@ -574,12 +576,14 @@ class ChatCompactionHost:
                 context.session_snapshot.active_messages
             ),
         )
-        refreshed_messages = _restore_in_run_tool_result_content(
+        refreshed_messages = await self.run_transform(
+            _restore_in_run_tool_result_content,
             _restore_in_run_assistant_reasoning(
                 refreshed_state.messages,
                 live_request_messages,
             ),
             live_request_messages,
+            image_budget=context.image_budget,
         )
         if context.continuation_reminder is not None:
             refreshed_messages = inject_continuation_reminder(
