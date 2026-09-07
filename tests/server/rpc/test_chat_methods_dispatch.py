@@ -18,6 +18,7 @@ from core.chat import (
     CommandDispatcher,
     CommandExecutionContext,
     CommandFeedback,
+    CommandNavigation,
     CommandOutcome,
     CommandResourceChange,
     ExtensionCommandContext,
@@ -43,6 +44,33 @@ from server.rpc.methods import dispatch_rpc
 class HistoryAgentStore:
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id="session-one")
+
+
+def test_command_page_navigation_projects_without_session_destination() -> None:
+    result = chat_methods._command_outcome_response(
+        CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(kind="notice", text="Workflow is ready."),
+            navigation=CommandNavigation(
+                kind="open_extension_page", extension="fixture", page="overview", route="items/one"
+            ),
+        )
+    )
+
+    assert result == {
+        "command_handled": True,
+        "reply": "Workflow is ready.",
+        "output": "action",
+        "data": {
+            "command": "workflow",
+            "navigation": {
+                "kind": "open_extension_page",
+                "extension": "fixture",
+                "page": "overview",
+                "route": "items/one",
+            },
+        },
+    }
 
 
 def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]:

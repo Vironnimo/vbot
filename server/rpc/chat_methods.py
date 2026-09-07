@@ -310,11 +310,20 @@ def _command_outcome_response(outcome: CommandOutcome) -> JsonObject:
     }
     data: JsonObject = {"command": outcome.command, **dict(outcome.facts)}
     if outcome.navigation is not None:
-        data.setdefault("session_id", outcome.navigation.session_id)
-        data.setdefault(
-            "agent_id",
-            format_agent_address(outcome.navigation.agent_id, outcome.navigation.project_id),
-        )
+        navigation = outcome.navigation
+        if navigation.kind == "open_extension_page":
+            data["navigation"] = {
+                "kind": navigation.kind,
+                "extension": navigation.extension,
+                "page": navigation.page,
+                "route": navigation.route,
+            }
+        else:
+            data.setdefault("session_id", navigation.session_id)
+            data.setdefault(
+                "agent_id",
+                format_agent_address(navigation.agent_id, navigation.project_id),
+            )
     if len(data) > 1:
         response["data"] = data
     return response
