@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -24,6 +25,7 @@ from core.providers.opencode_go import (
     OpenCodeGoAdapter,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.sessions.titles import SessionTitleService
 from core.utils.tokens import estimate_request_input_tokens
 
 API_KEY = "test-opencode-go-key"
@@ -196,6 +198,36 @@ def test_public_package_exports_opencode_go_adapter() -> None:
     from core.providers import OpenCodeGoAdapter as PublicOpenCodeGoAdapter
 
     assert PublicOpenCodeGoAdapter is OpenCodeGoAdapter
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_title_service_sends_opencode_session_header(opencode_go_adapter) -> None:
+    route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+    )
+    runtime = SimpleNamespace(
+        get_adapter=lambda connection: opencode_go_adapter,
+        models=SimpleNamespace(get=lambda *args: None),
+        chat_sessions=SimpleNamespace(set_auto_title=Mock()),
+    )
+    service = SessionTitleService(runtime)
+    await service._generate_title(
+        agent_id="builder",
+        session_id="title-session",
+        project_id="project",
+        model="opencode-go/muse-spark-1.3-contributor::api-key",
+        title_input="Review a code change",
+        run_id="title-test",
+    )
+    assert route.call_count == 1
+    expected = opencode_go_adapter.request_context_kwargs(
+        agent_id="builder", session_id="title-session", project_id="project"
+    )[OPENCODE_SESSION_ID_KWARG]
+    request = route.calls.last.request
+    assert request.headers[OPENCODE_SESSION_HEADER] == expected
+    assert request.headers["user-agent"] == "vBot"
+    assert OPENCODE_SESSION_ID_KWARG not in json.loads(request.content)
 
 
 @pytest.fixture()

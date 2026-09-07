@@ -247,6 +247,17 @@ class SessionTitleService:
         try:
             provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
             adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+            request_context = (
+                dict(
+                    adapter.request_context_kwargs(
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        project_id=project_id,
+                    )
+                )
+                if hasattr(adapter, "request_context_kwargs")
+                else {}
+            )
             if hasattr(adapter, "set_debug_context"):
                 adapter.set_debug_context(
                     DebugContext(
@@ -267,6 +278,7 @@ class SessionTitleService:
                     provider_id,
                     title_input,
                     thinking_effort="none",
+                    request_context=request_context,
                 )
             except ProviderError:
                 # Some reasoning-mandatory endpoints reject an explicit disable
@@ -278,6 +290,7 @@ class SessionTitleService:
                     provider_id,
                     title_input,
                     thinking_effort="",
+                    request_context=request_context,
                 )
             title = await _SESSION_TITLE_WORKERS.run(
                 _normalize_generated_title,
@@ -330,6 +343,7 @@ class SessionTitleService:
         title_input: str,
         *,
         thinking_effort: str,
+        request_context: dict[str, Any],
     ) -> dict[str, Any]:
         response: dict[str, Any] = await adapter.send(
             [
@@ -344,6 +358,7 @@ class SessionTitleService:
                 model_id,
             ),
             thinking_effort=thinking_effort,
+            **request_context,
         )
         return response
 
