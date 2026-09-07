@@ -382,6 +382,56 @@ def test_generated_title_accepts_unambiguous_wrappers(response: str) -> None:
 @pytest.mark.parametrize(
     "response",
     [
+        "[title=Session naming audit]",
+        '[title="Session naming audit"]',
+        "[title='Session naming audit']",
+        "[title=“Session naming audit”]",
+        "[title=„Session naming audit“]",
+        "[title=‘Session naming audit’]",
+        "[title=«Session naming audit»]",
+        "[ TITLE =  'Session naming audit'  ]",
+        '"[title=Session naming audit]"',
+        "Explanation before.\n[title=Session naming audit]\nExplanation after.",
+        "```text\n[title=Session naming audit]\n```",
+        "<think>[title=Discarded draft]</think>[title=Session naming audit]",
+        'Draft: `[title="Session naming audit"]`</think>[title=Session naming audit]',
+        "[title=Session naming audit][title=Session naming audit]",
+    ],
+)
+def test_generated_title_extracts_one_explicit_block(response: str) -> None:
+    assert _generated_title({"content": response}) == "Session naming audit"
+
+
+def test_generated_title_preserves_internal_quotes_and_counts_only_title() -> None:
+    assert _generated_title({"content": """[title="Fix O'Brien's parser"]"""}) == (
+        "Fix O'Brien's parser"
+    )
+    assert _generated_title({"content": "[title=" + "x" * 60 + "]"}) == "x" * 60
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "[title=First][title=Second]",
+        "[title=Unfinished",
+        "[title=First] [title=Unfinished",
+        "[title=Outer [title=Inner]]",
+        "[title=Nested [brackets]]",
+        "[title=]",
+        '[title=""]',
+        "[title=First\nSecond]",
+        "[title=First\n\nSecond]",
+        "[title=" + "x" * 61 + "]",
+    ],
+)
+def test_generated_title_rejects_invalid_explicit_blocks(response: str) -> None:
+    with pytest.raises(ValueError):
+        _generated_title({"content": response})
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
         "First candidate\nSecond candidate",
         "Here is your title:\nSession naming audit",
         "Session naming audit\nThis title summarizes the request.",
@@ -404,6 +454,9 @@ def test_generated_title_rejects_ambiguous_or_empty_output(response: str) -> Non
     [
         ("```text\nSession naming audit\n```", True),
         ("Title:\nSession naming audit", True),
+        ('Explanation\n[title="Session naming audit"]\nDone.', True),
+        ("[title=First][title=Second]", False),
+        ("[title=Unfinished", False),
         ("private-candidate-one\nprivate-candidate-two", False),
         ("", False),
         ("x" * (GENERATED_TITLE_MAX_CHARACTERS + 1), False),
