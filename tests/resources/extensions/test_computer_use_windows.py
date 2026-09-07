@@ -218,6 +218,10 @@ def test_window_pixels_are_captured_after_accessibility_query(monkeypatch):
         return {"screen_origin": [0, 0]}
 
     def query(function, name, args):
+        if name == "start_session":
+            assert args == {}
+            order.append("session")
+            return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": {}})
         assert name == "get_window_state" and args["include_screenshot"] is False
         order.append("elements")
         return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": {"elements": []}})
@@ -228,7 +232,7 @@ def test_window_pixels_are_captured_after_accessibility_query(monkeypatch):
     client.schemas = {"get_window_state": {}}
     monkeypatch.setattr(client, "connect", lambda: None)
     result = client.call("get_window_state", {"pid": 1, "window_id": 2})
-    assert order == ["elements", "pixels"]
+    assert order == ["session", "elements", "pixels"]
     assert result["screen_origin"] == [0, 0] and result["elements"] == []
 
 

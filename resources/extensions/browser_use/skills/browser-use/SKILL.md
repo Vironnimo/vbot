@@ -11,7 +11,7 @@ Use the browser Tool to carry out the user's website task and verify the result.
 
 1. Start with `open` and the task's URL. To work in an already connected, logged-in page, use `tabs` and select the matching id with `switch_tab`.
 2. Read the returned snapshot. Use its exact element refs for interaction. After page changes, obtain fresh refs with `snapshot` or request `observe: true` on the action. Refs from an earlier Run are no longer valid.
-3. Fill related text and selection fields together in one `fill` call. Use `{target, text}` for text inputs and `{target, text, kind: "select"}` for option values in the `fields` array. An empty text clears a text input. Use `press` for a key combination. Request one observation after the group, then use the new ref to submit.
+3. Fill related text and selection fields together in one `fill` call. Use `{target, text}` for text inputs and `{target, text, kind: "select"}` for option values in the `fields` array. An empty text clears a text input. Use `press` for a key combination. Request one observation after the group when you need a new target ref or confirmation. You can submit a focused field with `press` without an intervening snapshot. Limit requested observations with `selector` and `limit` when only one page section matters.
 4. Verify the requested outcome using visible confirmation or page content. Continue until the task is complete or a concrete blocker remains; opening a page alone does not complete a task that asks for an action.
 
 ## Reading and visual work
@@ -27,5 +27,11 @@ For downloads, activate the website's download control and use `downloads` to ob
 ## Recovery and completion
 
 If refs are stale, take a new snapshot and continue. If input failed or its effect is uncertain, inspect the page before repeating it. A partial fill reports how many fields completed; continue from the observed state. An observation error does not mean the preceding action failed.
+
+After submitting or navigating, check the returned URL and content before another input. If the page is still changing, use `wait` with expected visible `text` or an exact destination `url`; omit both when no specific condition is known. Wait returns a fresh observation. A quiet page or a completed input command does not prove that a form was submitted or the task succeeded.
+
+Use `status` to inspect connection mode and `headed` without starting a browser. A managed browser window appears on the vBot server computer, which may differ from the user's computer. If a visible managed browser is needed, enable Show managed browser in the Browser Use Extension settings and reconnect; closing a managed connection discards its temporary browser profile. Attached browsers use their existing host and profile.
+
+When a website shows an error, inspect its text and the reported HTTP status when available. Report that evidence; do not invent a cause such as automation detection. Avoid repeatedly submitting the same request to an unchanged error page. Preserve the user's requested website and method; report the concrete blocker when that required route remains unavailable.
 
 Use existing logins when available. If the site requires a user-only login or Chrome displays a connection-consent dialog, identify that specific blocker. Summarize the verified result and provide relevant downloaded files. Use `close` when the browser connection is no longer needed; it disconnects a user-owned browser and closes a browser started for this Session.

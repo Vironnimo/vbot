@@ -39,6 +39,48 @@ class SetupError(Exception):
         super().__init__(stage)
 
 
+def desktop_available() -> bool:
+    """Choose a window only when this process has a desktop to show it on."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class UserObjectFlags(ctypes.Structure):
+            _fields_ = [
+                ("inherit", wintypes.BOOL),
+                ("reserved", wintypes.BOOL),
+                ("flags", wintypes.DWORD),
+            ]
+
+        try:
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.GetProcessWindowStation.restype = wintypes.HANDLE
+            user32.GetUserObjectInformationW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            flags, size = UserObjectFlags(), wintypes.DWORD()
+            station = user32.GetProcessWindowStation()
+            return bool(
+                station
+                and user32.GetUserObjectInformationW(
+                    station, 1, ctypes.byref(flags), ctypes.sizeof(flags), ctypes.byref(size)
+                )
+                and flags.flags & 1  # UOI_FLAGS / WSF_VISIBLE; services have a hidden station.
+            )
+        except OSError:
+            return False
+    if sys.platform == "darwin":
+        try:
+            return os.stat("/dev/console").st_uid != 0
+        except OSError:
+            return False
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def asset_name() -> str:
     machine = platform.machine().lower()
     arch = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine)
