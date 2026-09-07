@@ -260,6 +260,8 @@ class TerminalSession:
     # A quiet boundary whose screen is unchanged (status refreshes, cursor
     # frames, repaint echoes) must not wake the agent again.
     settled_screen_signature: str | None = None
+    last_resize_screen_revision: int = 0
+    observed_screen: tuple[int, int, int] | None = None
     snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -658,6 +660,8 @@ class TerminalManager:
                 "Terminal Session is already attached to another vBot Session."
             )
         changed = session.attachment is None
+        if changed:
+            session.observed_screen = None
         session.attachment = attachment
         session.activity_origin_run_id = origin_run_id
         session.acknowledged_attention_revision = session.attention_revision
@@ -1214,6 +1218,7 @@ class TerminalManager:
                 }
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
+            session.last_resize_screen_revision = session.renderer.revision
             now = self._monotonic()
             session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
             # A new explicit resize restarts the hard deadline; the rolling
@@ -1321,6 +1326,24 @@ class TerminalManager:
                     self._schedule_attention_delivery(session, attention)
                 transferred += 1
         return transferred
+
+    def acknowledge_screen(
+        self,
+        terminal_id: str,
+        owner: TerminalOwner,
+        *,
+        screen_revision: int,
+        columns: int,
+        rows: int,
+    ) -> bool:
+        """Remember a durably delivered screen without consuming later resizes."""
+        session = self._sessions.get(terminal_id)
+        if session is None or session.attachment != owner:
+            return False
+        observed = session.observed_screen
+        if observed is None or screen_revision >= observed[0]:
+            session.observed_screen = (screen_revision, columns, rows)
+        return True
 
     def acknowledge_attention(
         self,
@@ -1697,12 +1720,13 @@ class TerminalManager:
         session.activity_origin_run_id = None
         session.notify_on_settle = False
         session.settled_delivery_enabled = False
+        session.observed_screen = None
 
     def _snapshot_data(
         self, session: TerminalSession, scrollback: dict[str, Any]
     ) -> dict[str, Any]:
         attention = session.attention
-        return {
+        data = {
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": session.command,
@@ -1721,6 +1745,20 @@ class TerminalManager:
             "attention": _attention_data(attention),
             "log_file": model_path(session.log_path) if session.log_path is not None else None,
         }
+        observed = session.observed_screen
+        if observed is not None and observed[0] < session.last_resize_screen_revision:
+            _, previous_columns, previous_rows = observed
+            data["size_change"] = {
+                "previous_columns": previous_columns,
+                "previous_rows": previous_rows,
+                "notice": (
+                    "The terminal was resized since your previous screen result. "
+                    f"Previous size: {previous_columns} columns x {previous_rows} rows. "
+                    f"Current size: {session.renderer.columns} columns x "
+                    f"{session.renderer.rows} rows. Use positions from the current screen."
+                ),
+            }
+        return data
 
     def _session_group(self, session: TerminalSession) -> TerminalGroup:
         """Return the operator-visible group a Terminal Session belongs to."""
