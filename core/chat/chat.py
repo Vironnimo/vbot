@@ -29,6 +29,7 @@ from core.chat.errors import (
     ChatError,
     ChatSessionError,
     CompactionUnavailableError,
+    ImageBudgetExceededError,
 )
 from core.chat.errors import (
     ToolIterationLimitError as ToolIterationLimitError,
@@ -143,6 +144,7 @@ from core.chat.usage import (
     latest_session_context_usage,
 )
 from core.chat.wire_shaping import (
+    RequestImageBudget,
     _assistant_continuation_dict,
     _complete_usage_with_estimates,
     _embed_notes_into_request,
@@ -663,6 +665,7 @@ class _RunExecutionContext:
     continuation_reminder: str | None
     session_snapshot: _SessionSnapshot
     request_state: _RequestState | None = None
+    image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
 
 
 @dataclass
@@ -748,6 +751,7 @@ class RequestBuildInputs:
     skill_catalog: PinnedSkillCatalog | None = None
     # Request-only message source; ``None`` loads the Session transcript.
     session_messages_override: list[ChatMessage] | None = None
+    image_budget: RequestImageBudget | None = None
 
     @classmethod
     def from_context(
@@ -769,6 +773,7 @@ class RequestBuildInputs:
             agent_project_id=context.project_id,
             skill_registry=context.skill_registry,
             skill_catalog=context.skill_catalog,
+            image_budget=context.image_budget,
         )
 
     def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:
@@ -958,6 +963,7 @@ def _restore_in_run_tool_result_content(
     *,
     input_modalities: frozenset[str] | None = None,
     wire_media_types: frozenset[str] | None = None,
+    image_budget: RequestImageBudget | None = None,
 ) -> list[JsonObject]:
     """Restore live Tool pixels after Compaction or a capability-aware fallback."""
 
@@ -988,7 +994,7 @@ def _restore_in_run_tool_result_content(
                     and (wire_media_types is None or block.get("media_type") in wire_media_types)
                 )
             ]
-    return limit_request_images(rebuilt_messages)
+    return limit_request_images(rebuilt_messages, budget=image_budget)
 
 
 def _serialize_continuation_request(
@@ -1834,13 +1840,19 @@ class ChatLoop:
                     finally:
                         await session.flush_deferred_notes_async()
             run.raise_if_cancelled()
-            context.request_state = await self.build_request_state(
-                agent,
-                session,
-                inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
-                    context.session_snapshot.active_messages
-                ),
-            )
+            try:
+                context.request_state = await self.build_request_state(
+                    agent,
+                    session,
+                    inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
+                        context.session_snapshot.active_messages
+                    ),
+                )
+            except ImageBudgetExceededError as exc:
+                _run_succeeded = False
+                run_error = exc
+                await _persist_run_error(run, session, exc)
+                raise
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
                 context.continuation_reminder = render_continuation_reminder(
@@ -2164,11 +2176,13 @@ class ChatLoop:
                     context, candidate_target
                 ).with_session_messages(context.session_snapshot.active_messages),
             )
-            context.request_state.messages[:] = _restore_in_run_tool_result_content(
+            context.request_state.messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
+                _restore_in_run_tool_result_content,
                 context.request_state.messages,
                 live_messages,
                 input_modalities=candidate_target.input_modalities,
                 wire_media_types=candidate_target.wire_media_types,
+                image_budget=context.image_budget,
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -2487,7 +2501,9 @@ class ChatLoop:
             inputs.wire_media_types,
         )
         return _RequestState(
-            await _CHAT_TRANSFORM_WORKERS.run(limit_request_images, request_messages),
+            await _CHAT_TRANSFORM_WORKERS.run(
+                limit_request_images, request_messages, budget=inputs.image_budget
+            ),
             tools,
             allowed_tool_names,
             session_tool_grants,
@@ -2642,7 +2658,10 @@ class ChatLoop:
                         await context.session_snapshot.refresh(session)
 
             messages_for_request = await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images, messages_for_request
+                limit_request_images,
+                messages_for_request,
+                budget=context.image_budget,
+                remember=True,
             )
 
             # The next ordinal is derived from the canonical completed count.
@@ -2707,6 +2726,16 @@ class ChatLoop:
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
             recovery_note = assistant_step.recovery_note
+            if (
+                not assistant_message.interrupted
+                and _terminal_outcome_error(
+                    terminal_outcome, has_tool_calls=bool(assistant_message.tool_calls)
+                )
+                is None
+            ):
+                await _CHAT_TRANSFORM_WORKERS.run(
+                    context.image_budget.record_delivered, messages_for_request
+                )
             # Both an interrupted partial and a finished readable stream may
             # already be visible when Cancel arrives. The latter can race only
             # while acquiring the append lock; neither may vanish from History.
@@ -3003,10 +3032,14 @@ class ChatLoop:
 
             # Bound the live request view as well, before Compaction estimates or
             # another Tool cycle. Canonical artifacts remain available to reopen.
-            messages[:] = await _CHAT_TRANSFORM_WORKERS.run(limit_request_images, messages)
+            messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
+                limit_request_images, messages, budget=context.image_budget, remember=True
+            )
             continuation_request_messages = await _CHAT_TRANSFORM_WORKERS.run(
                 limit_request_images,
                 [*messages_for_request, assistant_request_message, *tool_request_messages],
+                budget=context.image_budget,
+                remember=True,
             )
             tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                 build_model_step_context_usage,

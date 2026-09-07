@@ -14,13 +14,14 @@ response-only — canonical Session history is never written from this module.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
-from core.chat.errors import ChatMessageValidationError
+from core.chat.errors import ChatMessageValidationError, ImageBudgetExceededError
 from core.chat.messages import (
     _USAGE_ESTIMATION_FIELDS,
     COMPACTION_SKILL_NOTE_PREFIX,
@@ -82,24 +83,21 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
 # Harness policy, not a claim about any Provider's transport limit. Count encoded
 # image payloads, independently of visual token estimates and text compaction.
 REQUEST_IMAGE_BYTES_LIMIT = 150 * 1024 * 1024
+REQUEST_IMAGE_COUNT_LIMIT = 50
 _IMAGE_BUDGET_NOTE = (
-    "[Image omitted because the request's image-data budget is full. Its file path follows. "
-    "Read fewer images together; if this image alone is too large, create a smaller copy "
-    "and read that copy.]"
+    "[This image was supplied in an earlier Model request and has now been omitted "
+    "to make room for more images. Its file path remains available. "
+    "Read the file again if you need to inspect it.]"
 )
 
 
-def limit_request_images(messages: list[JsonObject]) -> list[JsonObject]:
-    """Bound resolved images without changing history, text, or Tool correlation.
+_ImageKey = tuple[str, str, int, str]
 
-    User references have byte-budget priority, followed by newest Tool images.
-    There is no image-count limit: below the byte budget, existing content stays
-    unchanged as the Run grows. Path notes emitted by the resolver stay in place.
-    Copy changed containers so captured requests and the live source remain
-    intact; rebuilding/reopening applies the same policy afresh. Audio, documents,
-    and opaque reasoning are not traversed.
-    """
-    candidates: list[tuple[int, str, int, JsonObject]] = []
+
+def _request_images(
+    messages: list[JsonObject],
+) -> list[tuple[int, str, int, _ImageKey | None, int]]:
+    candidates: list[tuple[int, str, int, _ImageKey | None, int]] = []
     for message_index, message in enumerate(messages):
         role = message.get("role")
         if role not in {"user", "tool"}:
@@ -115,25 +113,100 @@ def limit_request_images(messages: list[JsonObject]) -> list[JsonObject]:
                 and str(block.get("media_type", "")).startswith("image/")
                 and isinstance(block.get("base64"), str)
             ):
-                candidates.append((message_index, field, block_index, block))
+                identity = message.get("id") or message.get("tool_call_id")
+                key = None
+                if isinstance(identity, str) and identity:
+                    # Hashes retain no pixels. Changed hook content or format conversion
+                    # at the same address must be delivered before it becomes eligible.
+                    digest = hashlib.sha256(block["media_type"].encode())
+                    digest.update(block["base64"].encode())
+                    key = (str(role), identity, block_index, digest.hexdigest())
+                candidates.append((message_index, field, block_index, key, len(block["base64"])))
+    return candidates
 
-    # Newest first within each priority, independent of Tool names or providers.
-    candidates.reverse()
-    candidates.sort(key=lambda item: item[1] != "content")
-    remaining = REQUEST_IMAGE_BYTES_LIMIT
-    result = list(messages)
-    copied: set[int] = set()
-    for message_index, field, block_index, block in candidates:
-        image_bytes = len(block["base64"])
-        if image_bytes <= remaining:
-            remaining -= image_bytes
-            continue
-        if message_index not in copied:
-            result[message_index] = dict(messages[message_index])
-            result[message_index][field] = list(messages[message_index][field])
-            copied.add(message_index)
-        result[message_index][field][block_index] = {"type": "text", "text": _IMAGE_BUDGET_NOTE}
-    return result
+
+@dataclass
+class RequestImageBudget:
+    """Run-local image delivery and retirement, shared by rebuilds and fallback.
+
+    Projection is pure unless remember=True is used on the live request view.
+    Successful Model responses explicitly acknowledge their exact image payloads;
+    failed/partial attempts never make fresh images eligible for eviction.
+    """
+
+    _delivered: set[_ImageKey] = field(default_factory=set)
+    _omitted: set[_ImageKey] = field(default_factory=set)
+
+    def record_delivered(self, messages: list[JsonObject]) -> None:
+        self._delivered.update(key for _, _, _, key, _ in _request_images(messages) if key)
+
+    def project(self, messages: list[JsonObject], *, remember: bool = False) -> list[JsonObject]:
+        candidates = _request_images(messages)
+        active = [item for item in candidates if item[3] not in self._omitted]
+        fresh = [item for item in active if item[3] not in self._delivered]
+        fresh_bytes = sum(item[4] for item in fresh)
+        if len(fresh) > REQUEST_IMAGE_COUNT_LIMIT or fresh_bytes > REQUEST_IMAGE_BYTES_LIMIT:
+            raise ImageBudgetExceededError(
+                len(fresh), fresh_bytes, REQUEST_IMAGE_COUNT_LIMIT, REQUEST_IMAGE_BYTES_LIMIT
+            )
+        retained = {(item[0], item[1], item[2]) for item in active}
+        if (
+            len(active) > REQUEST_IMAGE_COUNT_LIMIT
+            or sum(item[4] for item in active) > REQUEST_IMAGE_BYTES_LIMIT
+        ):
+            retained = {(item[0], item[1], item[2]) for item in fresh}
+            used_bytes = fresh_bytes
+            # Fresh pixels first, then already delivered user references. References
+            # may consume the runway, but cannot starve a fresh Tool result.
+            older = [item for item in reversed(active) if item[3] in self._delivered]
+            for message_index, field_name, block_index, _, size in older:
+                if (
+                    field_name == "content"
+                    and len(retained) < REQUEST_IMAGE_COUNT_LIMIT
+                    and used_bytes + size <= REQUEST_IMAGE_BYTES_LIMIT
+                ):
+                    retained.add((message_index, field_name, block_index))
+                    used_bytes += size
+            count_target = max(len(retained), REQUEST_IMAGE_COUNT_LIMIT // 2)
+            bytes_target = max(used_bytes, REQUEST_IMAGE_BYTES_LIMIT // 2)
+            for message_index, field_name, block_index, _, size in older:
+                if (
+                    field_name != "content"
+                    and len(retained) < count_target
+                    and used_bytes + size <= bytes_target
+                ):
+                    retained.add((message_index, field_name, block_index))
+                    used_bytes += size
+        result = list(messages)
+        copied: set[int] = set()
+        for message_index, field_name, block_index, key, _ in candidates:
+            if (message_index, field_name, block_index) in retained:
+                continue
+            if message_index not in copied:
+                result[message_index] = dict(messages[message_index])
+                result[message_index][field_name] = list(messages[message_index][field_name])
+                copied.add(message_index)
+            elif result[message_index][field_name] is messages[message_index][field_name]:
+                result[message_index][field_name] = list(messages[message_index][field_name])
+            result[message_index][field_name][block_index] = {
+                "type": "text",
+                "text": _IMAGE_BUDGET_NOTE,
+            }
+            if remember and key is not None:
+                self._omitted.add(key)
+        return result
+
+
+def limit_request_images(
+    messages: list[JsonObject],
+    *,
+    budget: RequestImageBudget | None = None,
+    remember: bool = False,
+) -> list[JsonObject]:
+    """Bound individual native images while preserving fresh input and Tool correlation."""
+    return (budget if budget is not None else RequestImageBudget()).project(
+        messages, remember=remember
+    )
 
 
 def _message_to_request_dict(
