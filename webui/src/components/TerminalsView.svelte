@@ -266,6 +266,9 @@
     tile.resizeObserver?.disconnect();
     tile.inputDisposable?.dispose();
     tile.scrollDisposable?.dispose();
+    for (const disposable of tile.protocolDisposables) {
+      disposable.dispose();
+    }
     tile.xterm?.dispose();
   }
 
@@ -311,7 +314,35 @@
     } catch {
       // The host may not have settled yet; scheduleFit will retry.
     }
+    // The server answers terminal queries from its canonical screen. Viewer
+    // replies would duplicate them and be mistaken for operator keystrokes.
+    const protocolDisposables = [
+      { final: 'c' },
+      { prefix: '>', final: 'c' },
+      { final: 'n' },
+      { prefix: '?', final: 'n' },
+      { intermediates: '$', final: 'p' },
+      { prefix: '?', intermediates: '$', final: 'p' },
+    ].map((id) => xtermInstance.parser.registerCsiHandler(id, () => true));
+    protocolDisposables.push(
+      xtermInstance.parser.registerCsiHandler({ final: 't' }, (params) =>
+        [14, 16, 18, 20, 21].includes(params[0]),
+      ),
+      xtermInstance.parser.registerDcsHandler(
+        { intermediates: '$', final: 'q' },
+        () => true,
+      ),
+      ...[4, 10, 11, 12].map((id) =>
+        xtermInstance.parser.registerOscHandler(id, (data) =>
+          data.split(';').includes('?'),
+        ),
+      ),
+    );
     const inputDisposable = xtermInstance.onData((data) => {
+      // Focus reports describe this viewer, not an input to the shared TUI.
+      if (data === '\u001b[I' || data === '\u001b[O') {
+        return;
+      }
       if (!terminalIsFinished(findTerminal(terminalId))) {
         controller.queueInput(data, { terminalId });
       }
@@ -334,6 +365,7 @@
       resizeObserver: resizeObserverInstance,
       inputDisposable,
       scrollDisposable,
+      protocolDisposables,
       lastFitCols: null,
       lastFitRows: null,
       fitFollowUpScheduled: false,

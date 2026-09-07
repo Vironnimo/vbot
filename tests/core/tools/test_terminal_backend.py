@@ -12,6 +12,42 @@ import core.tools.terminal_backend as terminal_backend
 from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
 
 
+def test_screen_signature_tracks_styles_but_ignores_cursor_and_empty_extent() -> None:
+    renderer = TerminalRenderer(80, 24, scrollback_lines=100)
+    renderer.feed("First\r\nSecond")
+    original = renderer.screen_signature()
+    renderer.feed("\x1b[1;1H\x1b[?25l")
+    assert renderer.screen_signature() == original
+    renderer.resize(120, 32)
+    assert renderer.screen_signature() == original
+    renderer.feed("\x1b[7mFirst\x1b[0m")
+    assert renderer.screen_text() == "First\nSecond"
+    assert renderer.screen_signature() != original
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
+def test_terminal_queries_use_canonical_cursor_modes_and_size(chunk_size: int) -> None:
+    renderer = TerminalRenderer(80, 24, scrollback_lines=100)
+    output = (
+        "\x1b[4;9HReady\x1b[?2004h"
+        "\x1b[6n\x1b[?6n\x1b[5n\x1b[c\x1b[>c\x1b[18t"
+        "\x1b[?2004$p\x1b[?2026$p\x1b[?7$p"
+    )
+    responses = []
+    for index in range(0, len(output), chunk_size):
+        renderer.feed(output[index : index + chunk_size])
+        responses.append(renderer.take_responses())
+    assert "".join(responses) == (
+        "\x1b[4;14R\x1b[?4;14R\x1b[0n\x1b[?6c\x1b[>0;0;0c\x1b[8;24;80t"
+        "\x1b[?2004;1$y\x1b[?2026;0$y\x1b[?7;1$y"
+    )
+    assert renderer.take_responses() == ""
+    assert renderer.screen_text() == "\n\n\n        Ready"
+    renderer.resize(100, 30)
+    renderer.feed("\x1b[18t")
+    assert renderer.take_responses() == "\x1b[8;30;100t"
+
+
 def select_default_terminal(
     platform_name: str,
     environment: dict[str, str],

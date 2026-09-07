@@ -145,3 +145,28 @@ Suggested priority: fix lost resize delivery and delayed input first, and valida
 - Browser closed and test-owned server/fake Provider stopped successfully. The installed product instance was not used. No paid Provider calls, coding-agent TUI task, Raspberry Pi/Linux live validation, or E2E suite run occurred. Platform-specific rendering and semantic completion of external coding CLIs remain unverified.
 - Evidence directory: `C:/Users/Viro/.codex/visualizations/2026/09/07/01a07b83-cd36-7af3-8eab-42902a52d98c/`. The four screenshots named above are local artifacts, outside Git.
 - Documentation corrections: `DESIGN.md` now explicitly preserves the user requirement for independent UI presentation and compact Agent output, and distinguishes it from the current fit/resize implementation. Its confirmed-Stop wording was corrected to the current optimistic close behavior. The Terminal map had retained inverse-pointer-scaling wording and a misleading complete-history continuation claim. These factual descriptions were corrected. No domain-map index or glossary change was needed.
+
+
+## Reliability follow-up (2026-09-07)
+
+The audit above describes its named historical revision. This implementation follow-up fixes independent input and delivery defects; it does not implement the separate compact Agent representation, choose a new default grid, change UI fitting/font size, or repair pagination. The proposed fixed-grid fullscreen zoom was rejected by the user and was not implemented. A single ordinary PTY exposes one application layout; the open design decision is whether the compact Agent view should page over that shared content, rather than promise two independently computed application layouts.
+
+| Verifiable requirement | Result and evidence |
+| --- | --- |
+| Human input supersedes queued Agent startup input and invalidates stale guarded input even without echo. | Pass: manager regressions cover pending initial input, no-echo input, repeated guarded input, and empty-input no-ops. |
+| A final answer during resize is delivered without requiring another PTY event. | Pass: fake-clock regressions cover a single final result, repeated identical final output, deferred acknowledgement, and subsequent changes. Delivery is coalesced for 4 seconds with a 15-second cap instead of discarded. |
+| Selection attributes count as a screen change while cursor-only refreshes remain quiet. | Pass: renderer comparison and manager delivery tests include identical text with changed inverse-video attributes. Agent results still need a future representation of those attributes. |
+| Protocol replies work headlessly and extra viewers do not inject them as human input. | Pass for the supported reports: renderer tests split requests at every character and check cursor, status, attributes, size, mode, and drain-once behavior. A manager test preserves queued initial input while answering headless queries. Component tests intercept viewer replies and focus reports. Unsupported reports remain unsupported independently of browser presence. |
+| A real terminal does not inherit an unusable TERM from a service. | Pass: eight inherited/explicit-environment cases, plus the live CLI restart below. The host environment is unchanged. |
+
+Validation: the full backend gate passed 10,908 tests before the additional protocol/startup corrections; the final scoped backend gate passed 130 tests including Tool and RPC coverage after those corrections. The full frontend gate passed 2,263 tests and the production build. Its existing large-chunk build warning remains informational. No Tool description, parameter schema, Skill wording, or runtime reminder wording changed.
+
+Live acceptance used the isolated terminal-polish worktree environment at http://127.0.0.1:8422 with its own data directory and fake Provider. PowerShell accepted a typed command and printed TERMINAL_INPUT_OK. The unmodified installed Codex CLI 0.153.2 initially demonstrated the inherited TERM=dumb warning; after the correction and server restart, it opened its TUI without that warning. Its ordinary update menu was skipped using keyboard input; no installation or Model task was requested. Two browser pages showed the same process. Both recorded zero terminal.input requests during startup/observation; the controlling page then recorded exactly the three deliberate keyboard events used in the menu, while the second viewer continued to record zero. Browser console: zero errors and warnings. Both browser pages were closed and the owned server and fake Provider confirmed stopped.
+
+Screenshot evidence outside the disposable worktree:
+
+- Input: C:/Users/Viro/.codex/visualizations/2026/09/07/01a07b83-cd36-7af3-8eab-42902a52d98c/terminal-polish-input.png
+- Initial CLI and reproduced environment warning: C:/Users/Viro/.codex/visualizations/2026/09/07/01a07b83-cd36-7af3-8eab-42902a52d98c/terminal-polish-codex.png
+- Second viewer after correction: C:/Users/Viro/.codex/visualizations/2026/09/07/01a07b83-cd36-7af3-8eab-42902a52d98c/terminal-polish-second-viewer.png
+
+Remaining work: independent compact Agent observations and their default budget, correct stable pagination, useful attach observations, representation of TUI selection/cursor state, notification policy for continuously active programs, and the already documented UI font/fit behavior. Real Linux/Pi and arbitrary TUI compatibility were not established by these Windows and fixture checks. The overall terminal-polish request is not complete.

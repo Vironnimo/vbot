@@ -250,25 +250,12 @@ class TerminalSession:
     # operator, so its settle waves must not wake the session. Real work
     # after the suppression clears delivers normally.
     suppress_until_activity: bool = False
-    # After a real resize the TUI repaints the same content at the new size,
-    # usually in several waves whose intermediate frames differ from each
-    # other (re-wrapped lines, redrawn border, status refresh). Settle
-    # deliveries stay suppressed until the repainted screen is observed
-    # stable across two consecutive quiet boundaries, then that stable screen
-    # becomes the new already-seen baseline; identical refreshes afterwards
-    # stay silent via the signature rule, while a genuinely changed screen
-    # delivers normally. The suppression is additionally bounded by the
-    # post-resize grace deadline. Input clears the gate immediately
-    # (send_input/send_operator_input).
-    resize_pending_settle: bool = False
-    resize_settle_prev_signature: str | None = None
-    # Monotonic deadline until which settle notifications are suppressed because
-    # the output is expected to be a repaint after an explicit resize. Output
-    # inside the base window extends it rollingly up to the cap; agent or
-    # operator input clears it so real work wakes the agent immediately.
+    # Resize output is coalesced, never assumed to be disposable repaint.
+    # Quiet detection still exposes an acknowledgeable activity boundary;
+    # its delivery waits for this rolling window, bounded by the hard cap.
     resize_grace_until: float = 0.0
     resize_grace_deadline: float = 0.0
-    # Text signature of the rendered screen at the moment the last
+    # Visible-cell signature of the rendered screen at the moment the last
     # output_settled delivery happened (None until the first delivery).
     # A quiet boundary whose screen is unchanged (status refreshes, cursor
     # frames, repaint echoes) must not wake the agent again.
@@ -559,9 +546,12 @@ class TerminalManager:
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
         process_env = dict(os.environ)
+        # A service or pipe-based parent may advertise no terminal. The child
+        # has a real VT here; preserve only an explicit caller override.
+        if process_env.get("TERM") in {None, "", "dumb"}:
+            process_env["TERM"] = "xterm-256color"
         if env is not None:
             process_env.update(env)
-        process_env.setdefault("TERM", "xterm-256color")
 
         try:
             log_path, log_handle, log_lease = self._open_raw_log()
@@ -914,13 +904,17 @@ class TerminalManager:
         write_error: BaseException | None = None
         async with session.lock:
             self._require_live(session)
+            initial_task = session.initial_input_task
+            if initial_task is not None and not initial_task.done():
+                initial_task.cancel()
+            # Human input invalidates an Agent's observation even when the
+            # application does not echo it (for example, a password prompt).
+            session.renderer.revision += 1
             # Operator input ends the post-resize grace and the resize
             # settle gate, and counts as work against the startup
             # suppression, for the same reason as agent input.
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
-            session.resize_pending_settle = False
-            session.resize_settle_prev_signature = None
             session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
@@ -1049,14 +1043,6 @@ class TerminalManager:
                 raise TerminalStaleScreenError(
                     "Terminal screen changed; inspect status before sending this input"
                 )
-            # Real agent input ends the post-resize grace and the resize
-            # settle gate, and counts as work against the startup
-            # suppression: what the agent types is not startup noise.
-            session.resize_grace_until = 0.0
-            session.resize_grace_deadline = 0.0
-            session.resize_pending_settle = False
-            session.resize_settle_prev_signature = None
-            session.suppress_until_activity = False
             bracketed_paste = (
                 text is not None
                 and ("\n" in text or "\r" in text)
@@ -1078,6 +1064,12 @@ class TerminalManager:
                     "superseded_attention_revision": None,
                     "screen_revision": session.renderer.revision,
                 }
+            # Only real input ends suppression. An empty write must not
+            # change activity, invalidate observations, or cancel queued input.
+            session.resize_grace_until = 0.0
+            session.resize_grace_deadline = 0.0
+            session.suppress_until_activity = False
+            session.renderer.revision += 1
             if (
                 initial_task is not None
                 and initial_task is not asyncio.current_task()
@@ -1227,10 +1219,6 @@ class TerminalManager:
             # A new explicit resize restarts the hard deadline; the rolling
             # extension happens on repaint output inside the base window.
             session.resize_grace_deadline = now + TERMINAL_RESIZE_GRACE_MAX_SECONDS
-            # The next quiet boundary is the TUI's repaint of the same
-            # content at the new size: swallow it and record its screen as
-            # the new already-seen baseline (see the field docstring).
-            session.resize_pending_settle = True
             self._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,
@@ -1348,6 +1336,8 @@ class TerminalManager:
         session.acknowledged_attention_revision = max(
             session.acknowledged_attention_revision, revision
         )
+        if attention.details.get("screen_revision") == session.renderer.revision:
+            session.settled_screen_signature = session.renderer.screen_signature()
         self._cancel_delivery(session)
 
     async def sweep_finished(self) -> None:
@@ -1382,6 +1372,11 @@ class TerminalManager:
                     previous_title = session.renderer.title
                     bracketed_paste_was_enabled = session.renderer.bracketed_paste_enabled
                     alternate_screen_exited = session.renderer.feed(text)
+                    protocol_response = session.renderer.take_responses()
+                    if protocol_response:
+                        # These are terminal protocol replies, not human/Agent
+                        # input: do not cancel queued input or start activity.
+                        await asyncio.to_thread(session.adapter.write, protocol_response)
                     bracketed_paste_disabled = (
                         bracketed_paste_was_enabled and not session.renderer.bracketed_paste_enabled
                     )
@@ -1397,17 +1392,11 @@ class TerminalManager:
                         session.state = "working"
                         notify = session.attachment is not None and session.settled_delivery_enabled
                         now = self._monotonic()
-                        if notify and now < session.resize_grace_deadline:
-                            # Output inside the post-resize grace is repaint
-                            # noise, not work, so it must not wake the agent.
-                            # A repaint burst can arrive in several waves, so
-                            # output inside the rolling base window also
-                            # extends that window; everything inside the hard
-                            # deadline stays suppressed. Input clears the
-                            # grace entirely (send_input/send_operator_input).
-                            if now < session.resize_grace_until:
-                                session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
-                            notify = False
+                        if now < session.resize_grace_until:
+                            session.resize_grace_until = min(
+                                now + TERMINAL_RESIZE_GRACE_SECONDS,
+                                session.resize_grace_deadline,
+                            )
                         self._schedule_settle(session, notify=notify)
                     if state_changed or title_changed:
                         self._publish_state(session)
@@ -1433,6 +1422,9 @@ class TerminalManager:
         )
         if pending_agent_delivery:
             self._cancel_delivery(session)
+            # A cancelled delivery has not established an observed baseline.
+            # An identical repaint must still carry the outstanding update.
+            session.settled_screen_signature = None
             notify = True
         session.activity_generation += 1
         generation = session.activity_generation
@@ -1469,7 +1461,7 @@ class TerminalManager:
                 if session.snapshot_on_settle:
                     session.snapshot_on_settle = False
                     self._publish_snapshot(session)
-                signature = session.renderer.screen_text()
+                signature = session.renderer.screen_signature()
                 if deliver and session.suppress_until_activity:
                     # A text-less Agent start is silent until the first
                     # explicit input or attach: the startup screen (banner,
@@ -1488,28 +1480,8 @@ class TerminalManager:
                     # screen. That is not work, so do not wake the agent
                     # again; the screen is already known to it.
                     deliver = False
-                if session.resize_pending_settle:
-                    # After a real resize the TUI repaints the same content
-                    # at the new size, usually in several waves. Settles stay
-                    # suppressed until the repainted screen is observed
-                    # stable across two consecutive quiet boundaries, then
-                    # that stable screen becomes the new already-seen
-                    # baseline. The grace deadline bounds this gate; input
-                    # clears it (send_input/send_operator_input).
-                    if self._monotonic() >= session.resize_grace_deadline:
-                        # The gate must not outlive the repaint window: after
-                        # the deadline, settles deliver normally again.
-                        session.resize_pending_settle = False
-                        session.resize_settle_prev_signature = None
-                    else:
-                        deliver = False
-                        if signature == session.resize_settle_prev_signature:
-                            session.resize_pending_settle = False
-                            session.resize_settle_prev_signature = None
-                            session.settled_screen_signature = signature
-                        else:
-                            session.resize_settle_prev_signature = signature
-                if deliver:
+                defer = deliver and self._monotonic() < session.resize_grace_until
+                if deliver and not defer:
                     session.settled_screen_signature = signature
                 self._set_attention(
                     session,
@@ -1520,8 +1492,31 @@ class TerminalManager:
                         "requires input."
                     ),
                     details={"screen_revision": session.renderer.revision},
-                    deliver=deliver,
+                    deliver=deliver and not defer,
                 )
+                attention = session.attention
+            # Keep this task alive even when no further output arrives. New
+            # activity cancels it and starts a fresh quiet boundary; reads can
+            # acknowledge this exact boundary before its deferred delivery.
+            while defer:
+                remaining = session.resize_grace_until - self._monotonic()
+                if remaining > 0:
+                    await self._sleep(remaining)
+                async with session.lock:
+                    if (
+                        generation != session.activity_generation
+                        or attention is None
+                        or session.attention is not attention
+                        or attention.revision <= session.acknowledged_attention_revision
+                        or session.attachment is None
+                        or session.state in {"exited", "error"}
+                    ):
+                        return
+                    if self._monotonic() < session.resize_grace_until:
+                        continue
+                    session.settled_screen_signature = signature
+                    self._schedule_attention_delivery(session, attention)
+                    return
         except asyncio.CancelledError:
             return
 
