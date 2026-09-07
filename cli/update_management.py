@@ -842,52 +842,81 @@ def _download_webui(asset_url: str, repo: Path) -> _Step:
 
 
 def _unpack_webui_archive(content: bytes, webui_dir: Path) -> None:
-    """Unpack the WebUI tarball, replacing webui/dist wholesale.
+    """Stage and replace built assets together, restoring all prior trees on failure.
 
-    Extraction goes into a staging directory first and the finished dist is
-    swapped in afterwards: a corrupt archive never costs the existing dist, and
-    replacing (rather than overlaying) keeps hashed bundles from older releases
-    from accumulating across updates.
-
-    The extraction filter (PEP 706) only exists on CPython >= 3.12 and the
-    3.11.4+/3.10.12+ backports; the deployment target (Raspberry Pi OS can ship
-    3.11.2) may lack it. Feature-detect rather than passing an unknown keyword,
-    and fall back to a same-tree guard so unpacking never escapes webui/.
+    Release bundles use repository-relative paths. Older dist-only bundles remain
+    readable. Only generated web trees are installed from bundled Extensions;
+    their Python sources continue to belong to the checkout update.
     """
+    webui_dir = webui_dir.absolute()
+    root = webui_dir.parent.resolve()
 
+    def checked(path: Path) -> Path:
+        if path.resolve() != path or not path.is_relative_to(root) or path == root:
+            raise ValueError(
+                "WebUI asset destination must remain inside the installation directory."
+            )
+        return path
+
+    checked(webui_dir)
     staging = webui_dir / "dist.staging"
     backup = webui_dir / "dist.backup"
+    checked(staging)
+    checked(backup)
+    webui_dir.mkdir(parents=True, exist_ok=True)
     if staging.exists():
         shutil.rmtree(staging)
-    if backup.exists():
-        shutil.rmtree(backup)
-    staging.mkdir(parents=True)
+    # Preserve a retained recovery directory instead of overwriting it after
+    # an interrupted filesystem rollback.
+    backup.mkdir()
+    changes: list[tuple[Path, Path, bool]] = []
+    recovered = False
     try:
+        staging.mkdir(parents=True)
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
-            if hasattr(tarfile, "data_filter"):
-                archive.extractall(staging, filter="data")  # type: ignore[call-arg]
-            else:
-                _extract_within(archive, staging)
-        staged_dist = staging / "dist"
-        if not staged_dist.is_dir():
-            raise ValueError("WebUI archive does not contain dist/")
-        dist_dir = webui_dir / "dist"
-        if dist_dir.exists():
-            dist_dir.rename(backup)
+            _extract_within(archive, staging)
+        repository_layout = (staging / "webui" / "dist").is_dir()
+        staged_dist = staging / "webui" / "dist" if repository_layout else staging / "dist"
+        if not (staged_dist / "index.html").is_file():
+            raise ValueError("WebUI archive does not contain dist/index.html")
+        targets: list[tuple[Path | None, Path]] = [(staged_dist, checked(webui_dir / "dist"))]
+        if repository_layout:
+            staged_extensions = staging / "resources" / "extensions"
+            installed_extensions = checked(root / "resources" / "extensions")
+            names = {
+                directory.name
+                for parent in (staged_extensions, installed_extensions)
+                if parent.is_dir()
+                for directory in parent.iterdir()
+                if directory.is_dir() and (directory / "web").exists()
+            }
+            for name in sorted(names):
+                target = checked(installed_extensions / name / "web")
+                staged_page = staged_extensions / name / "web"
+                targets.append((staged_page if staged_page.is_dir() else None, target))
         try:
-            staged_dist.rename(dist_dir)
-        except OSError:
-            if backup.exists() and not dist_dir.exists():
-                backup.rename(dist_dir)
+            for index, (source, target) in enumerate(targets):
+                previous = backup / str(index)
+                had_previous = target.exists()
+                if had_previous:
+                    target.rename(previous)
+                changes.append((target, previous, had_previous))
+                if source is not None:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    source.rename(target)
+        except BaseException:
+            for target, previous, had_previous in reversed(changes):
+                if target.exists():
+                    shutil.rmtree(checked(target))
+                if had_previous:
+                    previous.rename(checked(target))
+            recovered = True
             raise
-        shutil.rmtree(backup, ignore_errors=True)
+        recovered = True
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
-        dist_dir = webui_dir / "dist"
-        if backup.exists() and not dist_dir.exists():
-            backup.rename(dist_dir)
-        elif backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
+        shutil.rmtree(checked(staging), ignore_errors=True)
+        if recovered or not changes:
+            shutil.rmtree(checked(backup), ignore_errors=True)
 
 
 def _extract_within(archive: tarfile.TarFile, destination: Path) -> None:
