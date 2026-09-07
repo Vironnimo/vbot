@@ -5,6 +5,7 @@ from __future__ import annotations
 import codecs
 import contextlib
 import copy
+import hashlib
 import os
 import re
 import shutil
@@ -36,7 +37,8 @@ _PRIVATE_MODE_SEQUENCE_MIN = 1000
 # pyte cannot act on any of these keyboard/DA sequences, so they are
 # dropped before they reach it.
 _XT_KEYBOARD_MODE_COMPLETE = re.compile(r"\x1b\[[<>=][0-9;:]*[A-Za-z]")
-_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b(?:\[(?:[<>=][0-9;:]*)?)?$")
+_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*)?$")
+_TERMINAL_QUERY = re.compile(r"\x1b\[([?>]?)([0-9;]*)(\$?)([cntp])")
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -243,6 +245,7 @@ class TerminalRenderer:
         self._screen = _TerminalScreen(columns, rows, self._capture_scrolled_line)
         self._stream = pyte.Stream(self._screen)
         self._held_sequence_prefix = ""
+        self._responses: list[str] = []
 
     def feed(self, text: str) -> bool:
         """Render output and report whether it exited an alternate screen."""
@@ -250,7 +253,6 @@ class TerminalRenderer:
             return False
         text = self._held_sequence_prefix + text
         self._held_sequence_prefix = ""
-        text = _XT_KEYBOARD_MODE_COMPLETE.sub("", text)
         # A keyboard-mode sequence can be split across PTY read chunks; its
         # incomplete head is held back so the remainder in the next chunk
         # completes it instead of leaking into the text stream.
@@ -261,9 +263,59 @@ class TerminalRenderer:
         if not text:
             return False
         alternate_exit_revision = self._screen.alternate_exit_revision
-        self._stream.feed(text)
+        offset = 0
+        for match in _TERMINAL_QUERY.finditer(text):
+            self._stream.feed(_XT_KEYBOARD_MODE_COMPLETE.sub("", text[offset : match.start()]))
+            self._respond_to_query(*match.groups())
+            offset = match.end()
+        self._stream.feed(_XT_KEYBOARD_MODE_COMPLETE.sub("", text[offset:]))
         self.revision += 1
         return self._screen.alternate_exit_revision != alternate_exit_revision
+
+    def take_responses(self) -> str:
+        """Drain replies computed from the canonical grid, once per PTY read."""
+        responses = "".join(self._responses)
+        self._responses.clear()
+        return responses
+
+    def _respond_to_query(
+        self, prefix: str, parameters: str, intermediate: str, final: str
+    ) -> None:
+        values = parameters.split(";")
+        # Invalid or unsupported reports are silent, as on the underlying VT.
+        if len(values) != 1 or len(values[0]) > 6:
+            return
+        mode = int(values[0] or "0")
+        response = None
+        if final == "n" and not intermediate:
+            if mode == 5 and not prefix:
+                response = "\x1b[0n"
+            elif mode == 6 and prefix in {"", "?"}:
+                cursor = self._screen.cursor
+                row = cursor.y + 1
+                if pyte.modes.DECOM in self._screen.mode and self._screen.margins is not None:
+                    row -= self._screen.margins.top
+                column = min(cursor.x + 1, self.columns)
+                response = f"\x1b[{prefix}{row};{column}R"
+        elif final == "c" and not intermediate and mode == 0:
+            if not prefix:
+                response = "\x1b[?6c"
+            elif prefix == ">":
+                response = "\x1b[>0;0;0c"
+        elif final == "t" and not prefix and not intermediate and mode == 18:
+            response = f"\x1b[8;{self.rows};{self.columns}t"
+        elif final == "p" and intermediate == "$" and prefix in {"", "?"}:
+            tracked = mode << 5 if prefix else mode
+            known = (
+                mode in {1, 6, 7, 25, 47, 1000, 1002, 1003, 1006, 1047, 1049, 2004}
+                if prefix
+                else mode in {4, 20}
+            )
+            enabled = tracked in self._screen.mode
+            status = (1 if enabled else 2) if known else 0
+            response = f"\x1b[{prefix}{mode};{status}$y"
+        if response is not None:
+            self._responses.append(response)
 
     def resize(self, columns: int, rows: int) -> None:
         self._screen.resize(lines=rows, columns=columns)
@@ -285,6 +337,20 @@ class TerminalRenderer:
         while lines and not lines[-1]:
             lines.pop()
         return "\n".join(lines[-count:])
+
+    def screen_signature(self) -> str:
+        """Compare visible cells, including selection styles, without cursor blink."""
+        digest = hashlib.sha256()
+        for row in range(self.rows):
+            line = self._screen.buffer[row]
+            cells = [
+                (column, line[column])
+                for column in range(self.columns)
+                if line[column] != self._screen.default_char
+            ]
+            if cells:
+                digest.update(repr((row, cells)).encode("utf-8"))
+        return digest.hexdigest()
 
     @property
     def title(self) -> str:

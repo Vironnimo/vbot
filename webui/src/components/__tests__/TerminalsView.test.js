@@ -60,6 +60,11 @@ vi.mock('@xterm/xterm', () => ({
         this.buffer.active.viewportY = this.buffer.active.baseY;
       });
       this.buffer = { active: { viewportY: 0, baseY: 0 } };
+      this.parser = {
+        registerCsiHandler: vi.fn(() => ({ dispose: vi.fn() })),
+        registerDcsHandler: vi.fn(() => ({ dispose: vi.fn() })),
+        registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      };
       terminalInstances.push(this);
     }
 
@@ -663,6 +668,8 @@ describe('TerminalsView', () => {
     expect(terminalInstances[0].focus).toHaveBeenCalled();
 
     terminalInstances[0].onDataCallback('\u001b[A');
+    terminalInstances[0].onDataCallback('\u001b[I');
+    terminalInstances[0].onDataCallback('\u001b[O');
     terminalInstances[0].onDataCallback('\r');
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(sendTerminalInputMock).toHaveBeenCalledWith('term-1', '\u001b[A\r');
@@ -672,6 +679,28 @@ describe('TerminalsView', () => {
     flushSync();
     findButton('Jump to latest').click();
     expect(terminalInstances[0].scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses viewer protocol replies while preserving title and color changes', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => terminalInstances.length === 1);
+    const parser = terminalInstances[0].parser;
+    for (const [id, handler] of parser.registerCsiHandler.mock.calls) {
+      if (id.final === 't') {
+        expect(handler([18])).toBe(true);
+        expect(handler([22])).toBe(false);
+      } else {
+        expect(handler([6])).toBe(true);
+      }
+    }
+    for (const [, handler] of parser.registerOscHandler.mock.calls) {
+      expect(handler('?')).toBe(true);
+      expect(handler('rgb:0000/0000/0000')).toBe(false);
+    }
+    expect(parser.registerDcsHandler.mock.calls[0][1]('m')).toBe(true);
+    expect(sendTerminalInputMock).not.toHaveBeenCalled();
   });
 
   it('renders one tile per listed terminal with title, owner, and compact actions', async () => {
