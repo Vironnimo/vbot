@@ -105,14 +105,118 @@ def _recording_restart() -> tuple[
     return events, stop, start
 
 
-def _webui_tar_bytes() -> bytes:
+def _webui_tar_bytes(files: dict[str, bytes] | None = None) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        payload = b"<!doctype html>"
-        info = tarfile.TarInfo("dist/index.html")
-        info.size = len(payload)
-        archive.addfile(info, io.BytesIO(payload))
+        for name, payload in (files or {"dist/index.html": b"<!doctype html>"}).items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
     return buffer.getvalue()
+
+
+@respx.mock
+def test_release_download_installs_bundled_pages_without_overwriting_sources(
+    tmp_path: Path,
+) -> None:
+    extension = tmp_path / "resources" / "extensions" / "alpha"
+    extension.mkdir(parents=True)
+    (extension / "extension.py").write_text("checkout source", encoding="utf-8")
+    old_web = extension / "web"
+    old_web.mkdir()
+    (old_web / "obsolete.js").write_text("old asset", encoding="utf-8")
+    removed = tmp_path / "resources" / "extensions" / "removed" / "web"
+    removed.mkdir(parents=True)
+    (removed / "page.html").write_text("removed page", encoding="utf-8")
+    asset_url = "https://example.com/webui-dist.tar.gz"
+    respx.get(asset_url).mock(
+        return_value=httpx.Response(
+            200,
+            content=_webui_tar_bytes(
+                {
+                    "webui/dist/index.html": b"new app",
+                    "resources/extensions/alpha/extension.py": b"archived source",
+                    "resources/extensions/alpha/web/page.html": b"alpha page",
+                    "resources/extensions/alpha/web/assets/new.js": b"alpha script",
+                    "resources/extensions/beta/web/page.html": b"beta page",
+                }
+            ),
+        )
+    )
+
+    result = update_management._download_webui(asset_url, tmp_path)
+
+    assert result.ok
+    assert (tmp_path / "webui" / "dist" / "index.html").read_bytes() == b"new app"
+    assert (old_web / "assets" / "new.js").read_bytes() == b"alpha script"
+    assert not (old_web / "obsolete.js").exists()
+    assert not removed.exists()
+    assert (extension / "extension.py").read_text(encoding="utf-8") == "checkout source"
+    assert (extension.parent / "beta" / "web" / "page.html").read_bytes() == b"beta page"
+
+
+def test_asset_swap_failure_restores_app_and_every_previous_extension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webui = tmp_path / "webui"
+    originals = {
+        "webui/dist/index.html": b"old app",
+        "resources/extensions/alpha/web/page.html": b"old alpha",
+        "resources/extensions/beta/web/page.html": b"old beta",
+    }
+    for name, content in originals.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    rename = Path.rename
+
+    def fail_last_asset(source: Path, target: Path) -> Path:
+        if "dist.staging" in source.parts and source.parts[-2:] == ("beta", "web"):
+            raise OSError("injected asset swap failure")
+        return rename(source, target)
+
+    monkeypatch.setattr(Path, "rename", fail_last_asset)
+    with pytest.raises(OSError, match="injected asset swap failure"):
+        update_management._unpack_webui_archive(
+            _webui_tar_bytes(dict.fromkeys(originals, b"replacement")),
+            webui,
+        )
+
+    for name, content in originals.items():
+        assert (tmp_path / name).read_bytes() == content
+    assert not (webui / "dist.staging").exists()
+    assert not (webui / "dist.backup").exists()
+
+
+def test_legacy_asset_archive_keeps_existing_extension_assets(tmp_path: Path) -> None:
+    page = tmp_path / "resources" / "extensions" / "alpha" / "web" / "page.html"
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b"retained page")
+
+    update_management._unpack_webui_archive(_webui_tar_bytes(), tmp_path / "webui")
+
+    assert page.read_bytes() == b"retained page"
+    assert (tmp_path / "webui" / "dist" / "index.html").is_file()
+
+
+def test_incomplete_new_asset_archive_keeps_all_installed_assets(tmp_path: Path) -> None:
+    index = tmp_path / "webui" / "dist" / "index.html"
+    index.parent.mkdir(parents=True)
+    index.write_bytes(b"retained app")
+    with pytest.raises(ValueError, match="dist/index.html"):
+        update_management._unpack_webui_archive(
+            _webui_tar_bytes(
+                {
+                    "webui/dist/assets/bundle.js": b"no entry",
+                    "resources/extensions/alpha/web/page.html": b"new page",
+                }
+            ),
+            tmp_path / "webui",
+        )
+
+    assert index.read_bytes() == b"retained app"
+    assert not (tmp_path / "resources").exists()
 
 
 def _write_state(
