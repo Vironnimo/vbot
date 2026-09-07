@@ -255,6 +255,95 @@ async def establish_delivered_baseline(
 
 
 @pytest.mark.asyncio
+async def test_operator_input_supersedes_pending_agent_start_and_stale_observation(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path, initial_text="agent task")
+    revision = session.renderer.revision
+    initial_task = session.initial_input_task
+    assert initial_task is not None
+
+    await manager.send_operator_input(session.terminal_id, "human input")
+    await eventually(initial_task.done)
+    assert factory.adapters[0].writes == ["human input"]
+    with pytest.raises(TerminalStaleScreenError):
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text=None,
+            key="enter",
+            expected_screen_revision=revision,
+            origin_run_id="run-a",
+        )
+    assert factory.adapters[0].writes == ["human input"]
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_input_preserves_startup_and_pending_input(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path, initial_text="agent task")
+    session.suppress_until_activity = True
+    revision = session.renderer.revision
+    result = await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data="",
+        text=None,
+        key=None,
+        expected_screen_revision=revision,
+        origin_run_id="run-a",
+    )
+    assert result["characters_sent"] == 0
+    assert session.renderer.revision == revision
+    assert session.suppress_until_activity
+    assert session.initial_input_task is not None
+    assert session.initial_input_task.cancelling() == 0
+    assert factory.adapters[0].writes == []
+
+
+@pytest.mark.asyncio
+async def test_guarded_input_cannot_be_replayed_before_echo(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    revision = session.renderer.revision
+    arguments = {
+        "text": None,
+        "key": "enter",
+        "expected_screen_revision": revision,
+        "origin_run_id": "run-a",
+    }
+    await manager.send_input(session.terminal_id, owner(), **arguments)
+    with pytest.raises(TerminalStaleScreenError):
+        await manager.send_input(session.terminal_id, owner(), **arguments)
+    assert factory.adapters[0].writes == ["\r"]
+
+
+@pytest.mark.asyncio
+async def test_headless_queries_do_not_cancel_queued_initial_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    factory = AdapterFactory()
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path, initial_text="agent task")
+        factory.adapters[0].emit("\x1b[6n")
+        await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
+        assert session.initial_input_task is not None
+        assert not session.initial_input_task.done()
+        factory.adapters[0].emit("READY> ")
+        await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_initial_task_waits_for_tui_and_sends_enter_separately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -812,6 +901,7 @@ async def test_resize_hard_deadline_caps_repaint_suppression(tmp_path: Path) -> 
         assert len(trigger.submissions) == 1
 
         await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await eventually(lambda: len(trigger.submissions) == 2)
         generation = session.activity_generation
         factory.adapters[0].emit("work after grace cap")
         await settle_next_activity(
@@ -820,7 +910,7 @@ async def test_resize_hard_deadline_caps_repaint_suppression(tmp_path: Path) -> 
             after_generation=generation,
             quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         )
-        await eventually(lambda: len(trigger.submissions) == 2)
+        await eventually(lambda: len(trigger.submissions) == 3)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
     finally:
@@ -1001,13 +1091,10 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
 
 
 @pytest.mark.asyncio
-async def test_resize_repaint_is_swallowed_until_stable_then_uses_new_baseline(
+async def test_repeated_resize_output_is_deferred_without_losing_final_content(
     tmp_path: Path,
 ) -> None:
-    """After a real resize the TUI repaints in several waves. Settles stay
-    suppressed until the repainted screen is stable across two boundaries;
-    that stable screen becomes the new baseline — identical refreshes stay
-    silent, a changed screen delivers."""
+    """Repeated final output during resize must remain eligible for delivery."""
     clock = FakeClock()
     trigger = PendingTriggerService()
     factory = AdapterFactory()
@@ -1068,6 +1155,7 @@ async def test_resize_repaint_is_swallowed_until_stable_then_uses_new_baseline(
         assert len(trigger.submissions) == 1
 
         await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await eventually(lambda: len(trigger.submissions) == 2)
         generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status\nnew work output line")
         await settle_next_activity(
@@ -1076,9 +1164,69 @@ async def test_resize_repaint_is_swallowed_until_stable_then_uses_new_baseline(
             after_generation=generation,
             quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         )
-        await eventually(lambda: len(trigger.submissions) == 2)
+        await eventually(lambda: len(trigger.submissions) == 3)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("acknowledge", [False, True])
+@pytest.mark.parametrize(
+    "output",
+    ["\r\x1b[2KTask completed. Please review result.", "\r\x1b[7mMENU> \x1b[0m"],
+)
+async def test_resize_final_output_is_delivered_without_another_pty_event(
+    tmp_path: Path, acknowledge: bool, output: str
+) -> None:
+    clock = FakeClock()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    try:
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
+        generation = session.activity_generation
+        factory.adapters[0].emit(output)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        assert len(trigger.submissions) == 1
+        if acknowledge:
+            manager.acknowledge_attention(session.terminal_id, owner(), session.attention_revision)
+        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await eventually(lambda: session.settle_task is not None and session.settle_task.done())
+        if not acknowledge:
+            await eventually(lambda: len(trigger.submissions) == 2)
+        assert len(trigger.submissions) == (1 if acknowledge else 2)
+        generation = session.activity_generation
+        factory.adapters[0].emit(output)
+        await settle_next_activity(
+            clock,
+            session,
+            after_generation=generation,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        assert len(trigger.submissions) == (1 if acknowledge else 2)
     finally:
         await manager.aclose()
 
@@ -1551,6 +1699,33 @@ async def test_status_is_bounded_and_pages_back_with_absolute_lines(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("inherited", [None, "", "dumb", "screen-256color"])
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_real_terminal_corrects_inherited_dumb_term_and_preserves_explicit_env(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inherited: str | None,
+    explicit: bool,
+) -> None:
+    if inherited is None:
+        monkeypatch.delenv("TERM", raising=False)
+    else:
+        monkeypatch.setenv("TERM", inherited)
+    manager, factory = terminal_manager
+    await manager.spawn(
+        owner(),
+        ["fake-tui"],
+        cwd=tmp_path,
+        env={"TERM": "dumb"} if explicit else None,
+        origin_run_id="run-a",
+    )
+    expected = "screen-256color" if inherited == "screen-256color" else "xterm-256color"
+    assert factory.calls[0][2]["TERM"] == ("dumb" if explicit else expected)
+    assert os.environ.get("TERM") == inherited
+
+
+@pytest.mark.asyncio
 async def test_launch_passes_every_program_exact_argv_without_private_environment(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
@@ -1741,8 +1916,10 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["late output", "\x1b[1;1H"])
 async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_boundary(
     tmp_path: Path,
+    output: str,
 ) -> None:
     trigger = PendingTriggerService()
     factory = AdapterFactory()
@@ -1766,7 +1943,7 @@ async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_bou
         )
         await eventually(lambda: len(trigger.submissions) == 1)
 
-        factory.adapters[0].emit("late output")
+        factory.adapters[0].emit(output)
         await eventually(lambda: len(trigger.cancellations) == 1)
         await eventually(lambda: len(trigger.submissions) == 2)
 
