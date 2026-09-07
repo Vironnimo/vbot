@@ -262,6 +262,14 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(tmp_path
     """A rejected explicit disable retries once at the provider-default effort."""
 
     class RejectingAdapter(StubAdapter):
+        def request_context_kwargs(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs == {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "project_id": None,
+            }
+            return {"routing_sentinel": "title-session"}
+
         async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
             self.requests.append({"messages": messages, **kwargs})
             if kwargs.get("thinking_effort") == "none":
@@ -289,6 +297,10 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(tmp_path
     await _wait_for_background(service)
 
     assert [request["thinking_effort"] for request in adapter.requests] == ["none", ""]
+    assert [request["routing_sentinel"] for request in adapter.requests] == [
+        "title-session",
+        "title-session",
+    ]
     assert adapter.requests[0]["messages"] == adapter.requests[1]["messages"]
     assert adapter.requests[1]["messages"][0] == {
         "role": "system",
