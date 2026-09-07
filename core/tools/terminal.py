@@ -397,6 +397,7 @@ async def _handle_start(
         group_id=group_id,
     )
     snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _project_snapshot(snapshot)
     data.update(
         {
@@ -609,15 +610,8 @@ async def _handle_kill(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    session = terminal_manager.get_session(terminal_id, owner)
-    prior_attention_revision = session.attention_revision if session.attention is not None else None
     snapshot = await terminal_manager.kill(terminal_id, owner)
-    if prior_attention_revision is not None:
-        context.after_result_persisted(
-            lambda: terminal_manager.acknowledge_attention(
-                terminal_id, owner, prior_attention_revision
-            )
-        )
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     return tool_success(_project_snapshot(snapshot))
 
 
@@ -677,13 +671,19 @@ def _acknowledge_after_persistence(
     snapshot: dict[str, Any],
 ) -> None:
     attention = snapshot.get("attention")
-    if not isinstance(attention, dict) or not isinstance(attention.get("revision"), int):
-        return
     terminal_id = str(snapshot["terminal_id"])
-    revision = int(attention["revision"])
-    context.after_result_persisted(
-        lambda: terminal_manager.acknowledge_attention(terminal_id, owner, revision)
-    )
+    screen_revision = int(snapshot["screen_revision"])
+    columns, rows = int(snapshot["columns"]), int(snapshot["rows"])
+
+    def acknowledge() -> None:
+        if not terminal_manager.acknowledge_screen(
+            terminal_id, owner, screen_revision=screen_revision, columns=columns, rows=rows
+        ):
+            return
+        if isinstance(attention, dict) and isinstance(attention.get("revision"), int):
+            terminal_manager.acknowledge_attention(terminal_id, owner, attention["revision"])
+
+    context.after_result_persisted(acknowledge)
 
 
 def _optional_string_array(value: object, *, field_name: str) -> list[str]:
