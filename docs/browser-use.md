@@ -26,11 +26,13 @@ The implementation was compared with the local Hermes Agent snapshot `165c889e5`
 
 | Mode | Browser used | Logins and files |
 | --- | --- | --- |
-| `managed` (default) | vBot starts its own Chrome/Chromium on the server. The optional **Show managed browser** setting displays its window there. | Starts with a fresh profile; cookies remain while the connection is alive. Downloads are available to vBot. |
+| `managed` (default) | vBot starts its own Chrome/Chromium on the server. **Show managed browser** defaults to enabled when the server process has a desktop, and disabled without one. | Starts with a fresh profile; cookies remain while the connection is alive. Downloads are available to vBot. |
 | `existing` | Connects to a running local Chrome with its debugging access enabled. | Uses the user's existing logins and available tabs. Downloads stay on that computer. |
 | `remote` | Connects to the **Remote CDP URL** configured in Extension settings. | Uses the profile and logins of that browser. Upload paths and downloads belong to its computer. |
 
 The connection mode is an Extension setting shared by Agents. It is not a Tool argument the Agent can override. The remote endpoint is stored through vBot's secret settings and may be an HTTP(S) discovery endpoint or a WebSocket CDP URL.
+
+Saved **Show managed browser** values take precedence over the desktop-aware default. On Windows, the default checks the process's visible window station; macOS checks the console owner; Linux checks its display environment. A Pi server without a desktop remains headless. Changing a connection setting takes effect when the current connection is retired and the Agent reconnects.
 
 ### Use an already logged-in Chrome
 
@@ -48,7 +50,13 @@ To use Windows Chrome from such a server, provide a CDP endpoint reachable by th
 
 ## How the Tool works
 
-The Agent starts with `open` or `tabs`. Navigation returns a compact snapshot with element refs. Refs belong to the current snapshot and Run; the Agent refreshes the snapshot after page changes. `read` retrieves bounded, paginated page text. `screenshot` returns an image directly to the Model and a preview to the UI, without a separate file-reading Tool call.
+The Agent starts with `open` or `tabs`. It can first use `status` to inspect the connection mode, managed window setting, and browser host without installing anything or starting a browser. Status reports vBot's tracked connection state; it does not probe external browser liveness. A pending settings change appears separately as `next_connection` without closing the current browser. The first opening result also identifies the connection mode and host, without disclosing its endpoint.
+
+Navigation returns a compact snapshot with element refs, capped at 4000 characters by default. `selector` focuses a section and `limit` expands a snapshot up to 16000 characters; both also apply to an action's requested observation. Truncation preserves complete lines and publishes only refs included in the returned content. Refs belong to the current snapshot and Run; the Agent refreshes the snapshot after page changes. `read` retrieves bounded, paginated page text. `screenshot` returns an image directly to the Model and a preview to the UI, without a separate file-reading Tool call.
+
+Snapshots and reads briefly observe document readiness and changes before collecting content, with bounded retries for navigation races. Results identify the current URL, title, observation state, and the actual HTTP response status when the browser exposes it. Snapshots also include a short visible-text excerpt, so a website error is visible even without interactive elements. A still-changing snapshot withholds actionable refs and directs the Agent to `wait`. A quiet interval is only a momentary observation: delayed site work can start later, so Agents must check the destination and outcome.
+
+`wait` accepts expected visible `text`, an exact destination `url`, or neither for a bounded settling observation. It returns a fresh snapshot by default. An unmet condition after five seconds returns `condition_met: false` alongside the current observation, allowing a decision from the page's actual state. Browser errors distinguish navigation races, timeouts, connection loss, and unavailable elements without returning raw native diagnostics or claiming a website's detection mechanism.
 
 The Agent can fill text inputs and selection fields together with one `fill` call. Fields use `{target, text}` for text inputs or `{target, text, kind: "select"}` for option values. Every field is validated before input begins; if a later field fails, earlier completed fields are reported and remaining fields are skipped. Input operations do not automatically return another snapshot unless `observe` is requested. This avoids repeating the whole form after each field. Errors never silently replay input. Invalid argument errors identify the affected field or action's accepted fields and the valid correction, without echoing form values.
 
@@ -84,6 +92,16 @@ A Windows comparison executed the production `BrowserService.handle` and native 
 
 The audit also reconstructed a real Agent Run that loaded the bundled Skill and attempted the same task. Its Tool results confirmed the error page, but the Model's claim that all search submissions were blocked by automation detection was stronger than the returned evidence. Three repeated submit actions still observed the homepage. Four observations after form input returned 10,362–10,530 snapshot characters, mostly unrelated homepage content.
 
-The live headed probe reproduced an immediate post-Enter observation of the old page, followed by a failed read and an empty interactive snapshot during navigation. A subsequent navigation/read returned real results. Current `observe` behavior does not guarantee a settled destination, and the generic `browser_failed` result does not distinguish this situation from connection failures. The `status` action reports connection mode and state but omits the configured headed setting. These are remaining Agent-interface limitations; the prior local-fixture and argument-shape checks do not establish reliable recovery on dynamic public websites.
+The pre-change headed probe reproduced an immediate post-Enter observation of the old page, followed by a failed read and an empty interactive snapshot during navigation. A subsequent navigation/read returned real results. At that time, observations had no settling phase, generic `browser_failed` results did not distinguish navigation races from connection failures, and `status` omitted the headed setting. The changes and follow-up checks below address these interface defects; a bounded observation still cannot prove that all future site activity has completed.
+
+### Recovery follow-up, 2026-09-07
+
+- The updated production Tool searched DuckDuckGo successfully in a visible managed browser. In headless mode, the post-Enter observation directly exposed the error-page URL and visible error text. That page's actual HTTP response status was **200**; the `418.html` filename is not an HTTP status or proof of automation detection.
+- A live local form with a delayed redirect completed after one submission, and an intentionally unmet wait condition returned the current confirmation page with `condition_met: false`.
+- The free-form Luna workflow now includes 200 unrelated footer links and a 3.5-second response delay with a page busy indicator. The Agent loaded the Skill, filled the mixed form, received a still-changing observation after submission, used `wait`, and completed the download. All eight Tool calls succeeded; the fixture independently verified exactly one correct submission, the downloaded bytes, and the returned reference. Snapshot content remained below the 4000-character default. This exercises recovery after the settling deadline, rather than only an immediately completed form.
+- The expanded 86-case Luna matrix produced 84 exact argument matches. In two deliberately invalid cases the Model removed unsupported fields. Executing the captured arguments against the runtime fixture produced 80 valid successes and six expected validation rejections, with no unexpected runtime failures. These invocation checks remain distinct from free-form workflow understanding.
+- A continuation probe supplied the updated Skill and captured headless DuckDuckGo Tool history to Luna, then executed its next browser calls. It tried three alternative DuckDuckGo URLs and reported the unavailable route and website errors without asserting an automation-detection cause. This is one observed recovery decision, not a guarantee that Models never make unsupported diagnoses.
+
+Automatic regressions cover side-effect-free status, desktop defaults and explicit overrides, bounded observation retries, cancellation and permission changes between retries, invalidated refs, compact and scoped observations, unmet wait conditions, and uncertain input without replay. Platform defaults are tested through controlled OS boundaries; the live browser checks above ran on Windows.
 
 The existing generic Extension settings and Agent Tool-grant UI provide configuration; no frontend changes or browser add-on are involved. See [Extension development](extensions.md) for the shared lifecycle and permission mechanisms.

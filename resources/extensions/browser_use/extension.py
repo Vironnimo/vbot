@@ -25,7 +25,7 @@ from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 from core.utils.ids import write_id_file
 
-from .runtime import BrowserRuntime, SetupError
+from .runtime import BrowserRuntime, SetupError, desktop_available
 
 BROWSER_DESCRIPTION = (
     "Use the configured browser to navigate websites, read pages, fill forms, "
@@ -69,7 +69,10 @@ BROWSER_PARAMETERS = {
         },
         "url": {
             "type": "string",
-            "description": "Web address for open or new_tab. Omit for a blank new tab.",
+            "description": (
+                "Web address for open or new_tab, or exact destination URL for wait. "
+                "Omit for a blank new tab or when wait should not require a URL."
+            ),
         },
         "target": {
             "type": "string",
@@ -115,6 +118,8 @@ BROWSER_PARAMETERS = {
             "description": (
                 "Key combination for press, option value for select, visible text for wait, "
                 "or prompt response for dialog. Omit when accepting a dialog without a response."
+                " For wait, provide text or url, or omit both to observe the page "
+                "after a bounded settling period."
             ),
         },
         "direction": {
@@ -136,14 +141,15 @@ BROWSER_PARAMETERS = {
         "selector": {
             "type": "string",
             "description": (
-                "CSS selector limiting snapshot to a page section. Omit for the whole page."
+                "CSS selector limiting snapshot or an action's requested observation "
+                "to a page section. Omit for the whole page."
             ),
         },
         "observe": {
             "type": "boolean",
             "description": (
-                "Return a fresh snapshot after the action. "
-                "Omit to observe after navigation and tab switching only."
+                "Return a bounded snapshot after the action, waiting briefly for page changes. "
+                "Omit to observe after navigation, tab switching, and wait."
             ),
         },
         "tab": {"type": "string", "description": "Tab id from tabs, for switch_tab or close_tab."},
@@ -160,7 +166,13 @@ BROWSER_PARAMETERS = {
             "type": "integer",
             "description": "Character offset for read. Omit to start at zero.",
         },
-        "limit": {"type": "integer", "description": "Maximum characters for read. Omit for 12000."},
+        "limit": {
+            "type": "integer",
+            "description": (
+                "Maximum characters for read, snapshot, or an action's requested observation. "
+                "Omit for 12000 on read and 4000 on snapshots."
+            ),
+        },
     },
     "required": ["action"],
 }
@@ -189,8 +201,37 @@ MESSAGES = {
     "tab_gone": "The selected tab is closed. Use tabs and switch_tab, or create a new_tab.",
     "changed": "Browser configuration changed. Use open or tabs to connect with the new settings.",
     "shortened": (
-        "Snapshot shortened. Use a selector to inspect a smaller page section, "
-        "or read for page text."
+        "Snapshot shortened. Use snapshot with a selector for the relevant section "
+        "or a larger limit (up to 16000), or read for page text."
+    ),
+    "changing": (
+        "The page is still changing. Use wait with expected visible text or its destination "
+        "URL before continuing; do not repeat the preceding input."
+    ),
+    "page_changed": (
+        "The page changed during the command. Its effect may be uncertain. "
+        "Use wait to obtain a fresh snapshot before repeating input."
+    ),
+    "timeout": (
+        "The browser command timed out. Its effect may be uncertain. "
+        "Use snapshot to inspect the current page before repeating input."
+    ),
+    "connection": (
+        "The browser connection was lost or could not be established. "
+        "Use tabs to check or reconnect before continuing; an existing Chrome "
+        "may need its connection dialog approved."
+    ),
+    "navigation": (
+        "The browser could not load the address. "
+        "Inspect the current page before retrying navigation."
+    ),
+    "element_unavailable": (
+        "The target element is no longer available for this action. "
+        "Take a new snapshot and use its current ref, scrolling or handling an overlay if needed."
+    ),
+    "condition_not_met": (
+        "The requested page condition was not observed within the time limit. "
+        "Inspect the returned page before deciding whether to wait again."
     ),
     "media": (
         "The screenshot is missing, invalid, or too large. Try capturing only the visible viewport."
@@ -206,6 +247,7 @@ MESSAGES = {
     "partial": "Some fields may already be filled. Inspect the page before continuing.",
 }
 MAX_TEXT = 16000
+SNAPSHOT_LIMIT = 4000
 MAX_MEDIA = 32 * 1024 * 1024
 MAX_OUTPUT = 4 * 1024 * 1024
 MIN_VERSION = (0, 36, 0)
@@ -238,7 +280,7 @@ FIELDS = {
     "back": ("observe",),
     "forward": ("observe",),
     "reload": ("observe",),
-    "snapshot": ("full", "selector"),
+    "snapshot": ("full", "selector", "limit"),
     "read": ("target", "offset", "limit"),
     "click": ("target", "observe"),
     "fill": ("fields", "observe"),
@@ -246,7 +288,7 @@ FIELDS = {
     "select": ("target", "text", "observe"),
     "hover": ("target", "observe"),
     "scroll": ("target", "direction", "amount", "observe"),
-    "wait": ("text", "observe"),
+    "wait": ("text", "url", "observe"),
     "screenshot": ("full",),
     "tabs": (),
     "new_tab": ("url", "observe"),
@@ -264,13 +306,45 @@ REQUIRED = {
     "press": ("text",),
     "select": ("target", "text"),
     "hover": ("target",),
-    "wait": ("text",),
     "switch_tab": ("tab",),
     "close_tab": ("tab",),
     "upload": ("target", "files"),
 }
 NAVIGATION = {"open", "back", "forward", "reload", "new_tab", "switch_tab"}
+AUTO_OBSERVE = NAVIGATION | {"wait"}
+for _action, _fields in FIELDS.items():
+    if "observe" in _fields:
+        FIELDS[_action] = (*_fields, "selector", "limit")
 READ_ACTIONS = {"status", "snapshot", "read", "screenshot", "tabs", "wait", "downloads"}
+
+# A temporary observer only reads the document; it installs no persistent page hooks.
+# A quiet interval is evidence of a momentary state, never proof of task completion.
+PAGE_OBSERVER = r"""
+new Promise(resolve => {
+    const start = performance.now();
+    let changed = start;
+    const observer = new MutationObserver(() => { changed = performance.now(); });
+    if (document.documentElement) observer.observe(document.documentElement, {
+        subtree: true, childList: true, characterData: true,
+        attributes: true, attributeFilter: ['hidden', 'aria-busy', 'aria-expanded']
+    });
+    const check = () => {
+        const now = performance.now();
+        const stable = document.readyState !== 'loading'
+            && !document.querySelector('[aria-busy="true"]')
+            && now - changed >= 200 && now - start >= MIN_WAIT;
+        if (!stable && now - start < MAX_WAIT) { setTimeout(check, 50); return; }
+        observer.disconnect();
+        const navigation = performance.getEntriesByType('navigation')[0];
+        const content = document.querySelector('main, [role="main"]') || document.body;
+        resolve({url: location.href, title: document.title.slice(0, 200),
+            observation_state: stable ? 'stable' : 'changing',
+            http_status: navigation?.responseStatus || 0,
+            page_text: (content?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 600)});
+    };
+    check();
+})
+"""
 
 
 class BrowserError(Exception):
@@ -378,6 +452,19 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
         raise BrowserArgumentError(
             "text", "Set accept to true when supplying a prompt response, or omit text."
         )
+    if action == "wait" and "text" in arguments and "url" in arguments:
+        raise BrowserArgumentError(
+            "arguments for wait",
+            "Provide text or url for wait, not both; omit both to observe the settled page.",
+        )
+    if (
+        action not in {"snapshot", "read"}
+        and {"selector", "limit"} & arguments.keys()
+        and not arguments.get("observe", action in AUTO_OBSERVE)
+    ):
+        raise BrowserArgumentError(
+            "observe", "Set observe to true to use selector or limit with this action."
+        )
     if "url" in arguments:
         validate_url(arguments["url"])
     return dict(arguments)
@@ -418,6 +505,7 @@ class BrowserSession:
     last_run: str = ""
     client: Any = None
     browser_executable: str = ""
+    observe_after: float = 0.0
 
 
 class BrowserClient:
@@ -468,7 +556,51 @@ class BrowserClient:
             raise BrowserError("failed") from error
         if not isinstance(payload, dict) or payload.get("success") is not True:
             code = payload.get("code") if isinstance(payload, dict) else None
-            raise BrowserError("tab_gone" if code == "tab_gone" else "failed")
+            diagnostic = payload.get("error", "") if isinstance(payload, dict) else ""
+            if code == "tab_gone":
+                raise BrowserError("tab_gone")
+            # Classify only known native diagnostics. Never echo page values,
+            # endpoint credentials, selectors, or arbitrary backend prose.
+            message = diagnostic.lower() if isinstance(diagnostic, str) else ""
+            if message.startswith(
+                (
+                    "element not found",
+                    "no element found",
+                    "no element at index",
+                    "element exists but is not visible",
+                    "another element is covering",
+                    "element matched multiple results",
+                )
+            ):
+                raise BrowserError("element_unavailable")
+            if message.startswith(
+                ("operation timed out.", "wait timed out after ", "timeout waiting for ")
+            ):
+                raise BrowserError("timeout")
+            if any(
+                marker in message
+                for marker in (
+                    "execution context was destroyed",
+                    "cannot find context with specified id",
+                    "cannot find context with id",
+                    "inspected target navigated",
+                )
+            ):
+                raise BrowserError("page_changed")
+            if message.startswith("navigation failed:"):
+                raise BrowserError("navigation")
+            if message.startswith(
+                (
+                    "browser not launched",
+                    "connection closed",
+                    "connection reset",
+                    "websocket connection closed",
+                    "failed to connect",
+                    "event stream closed",
+                )
+            ):
+                raise BrowserError("connection")
+            raise BrowserError("failed")
         data = payload.get("result")
         if not isinstance(data, dict):
             raise BrowserError("failed")
@@ -503,7 +635,9 @@ class BrowserClient:
                     raise BrowserError("failed")
                 stdout.seek(0)
                 return stdout.read(MAX_OUTPUT + 1).decode("utf-8")
-        except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+        except subprocess.TimeoutExpired as error:
+            raise BrowserError("timeout") from error
+        except (OSError, UnicodeError) as error:
             raise BrowserError("failed") from error
 
 
@@ -522,6 +656,7 @@ class BrowserService:
         self._closed = False
         self._ref_next = 0
         self._ref_end = 0
+        self.default_headed = desktop_available()
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
@@ -533,7 +668,7 @@ class BrowserService:
     def _config(self) -> tuple[str, str, bool]:
         config = self.api.get_config()
         mode = config.get("mode", "managed")
-        headed = config.get("headed", False)
+        headed = config.get("headed", self.default_headed)
         endpoint = self.api.resolve_credential("BROWSER_USE_CDP_URL") if mode == "remote" else ""
         if (
             not isinstance(mode, str)
@@ -587,8 +722,92 @@ class BrowserService:
         self._check_access(context)
         if session.config != self._config():
             raise BrowserError("changed")
-        result: dict[str, Any] = session.client.call(command)
+        try:
+            result: dict[str, Any] = session.client.call(command)
+        except BrowserError as error:
+            if error.code in {"page_changed", "connection", "element_unavailable", "tab_gone"}:
+                session.refs.clear()
+            raise
         return result
+
+    @staticmethod
+    def _connection_info(config: tuple[str, str, bool]) -> dict[str, Any]:
+        mode, _, headed = config
+        return {
+            "mode": mode,
+            "headed": headed if mode == "managed" else None,
+            "browser_host": "remote" if mode == "remote" else "server",
+        }
+
+    def _status(self, context: ToolContext) -> dict[str, Any]:
+        config = self._config()
+        with self._guard:
+            session = self._sessions.get((context.project_id, context.agent_id, context.session_id))
+        if session is None:
+            return {"connected": False, **self._connection_info(config)}
+        with session.lock:
+            self._check_access(context)
+            result = {"connected": session.connected, **self._connection_info(session.config)}
+            if session.config != config:
+                result["next_connection"] = self._connection_info(config)
+            return result
+
+    def _observe_page(self, context: ToolContext, session: BrowserSession) -> dict[str, Any]:
+        deadline = time.monotonic() + 3
+        for attempt in range(3):
+            minimum = max(0, round((session.observe_after - time.monotonic()) * 1000))
+            remaining = max(0, round((deadline - time.monotonic()) * 1000))
+            script = PAGE_OBSERVER.replace("MIN_WAIT", str(minimum)).replace(
+                "MAX_WAIT", str(remaining)
+            )
+            try:
+                payload = self._call(context, session, ["eval", script])
+            except BrowserError as error:
+                if error.code != "page_changed" or attempt == 2 or time.monotonic() >= deadline:
+                    raise
+                continue
+            page = payload.get("result")
+            if (
+                not isinstance(page, dict)
+                or any(not isinstance(page.get(key), str) for key in ("url", "title", "page_text"))
+                or page.get("observation_state") not in {"stable", "changing"}
+            ):
+                raise BrowserError("failed")
+            result = {key: page[key] for key in ("url", "title", "page_text", "observation_state")}
+            status = page.get("http_status")
+            if type(status) is int and 100 <= status <= 599:
+                result["http_status"] = status
+            if page["observation_state"] == "changing":
+                session.refs.clear()
+                result["hint"] = MESSAGES["changing"]
+            return result
+        raise BrowserError("page_changed")
+
+    def _observe(
+        self, context: ToolContext, session: BrowserSession, command: list[str]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        for attempt in range(2):
+            page = self._observe_page(context, session)
+            if (
+                command[:2] == ["get", "text"]
+                and command[2] != "body"
+                and command[2] not in session.refs.values()
+            ):
+                raise BrowserError("stale")
+            if page["observation_state"] == "changing" and command[0] == "snapshot":
+                return page, {"snapshot": "", "refs": {}}
+            try:
+                payload = self._call(context, session, command)
+            except BrowserError as error:
+                if error.code != "page_changed" or attempt:
+                    raise
+                payload = {}
+            if payload.get("origin") == page["url"]:
+                return page, payload
+            session.refs.clear()
+            if command[:2] == ["get", "text"] and command[2] != "body":
+                raise BrowserError("stale")
+        raise BrowserError("page_changed")
 
     def _get_session(self, context: ToolContext) -> BrowserSession:
         key = (context.project_id, context.agent_id, context.session_id)
@@ -744,7 +963,7 @@ class BrowserService:
             command.append("-i")
         if "selector" in args:
             command += ["-s", args["selector"]]
-        payload = self._call(context, session, command)
+        page, payload = self._observe(context, session, command)
         tree, refs = payload.get("snapshot"), payload.get("refs")
         if not isinstance(tree, str) or not isinstance(refs, dict):
             raise BrowserError("failed")
@@ -773,16 +992,18 @@ class BrowserService:
             return replacement
 
         tree = re.sub(r"\bref=(e[1-9][0-9]*)\b", replace_ref, source)
-        truncated = len(tree) > MAX_TEXT
+        limit = args.get("limit", SNAPSHOT_LIMIT)
+        truncated = len(tree) > limit
         if truncated:
-            tree = tree[:MAX_TEXT].rsplit("\n", 1)[0]
+            prefix = tree[:limit]
+            tree = prefix.rsplit("\n", 1)[0] if "\n" in prefix else ""
         for end, label, key in positions:
             if end <= len(tree):
                 session.refs[label] = "@" + key
         result: dict[str, Any] = {
             "snapshot": tree,
-            "url": payload.get("origin", ""),
             "truncated": truncated,
+            **page,
         }
         if truncated:
             result["hint"] = MESSAGES["shortened"]
@@ -819,12 +1040,14 @@ class BrowserService:
         try:
             args = validate_arguments(arguments)
             self._check_access(context)
+            if args["action"] == "status":
+                return tool_success({"action": "status", **self._status(context)})
             key = (context.project_id, context.agent_id, context.session_id)
             with self._guard:
                 connected = key in self._sessions
             if not connected and args["action"] == "close":
                 return tool_success({"action": "close", "closed": True})
-            if not connected and args["action"] not in {"open", "tabs", "new_tab", "status"}:
+            if not connected and args["action"] not in {"open", "tabs", "new_tab"}:
                 raise BrowserError("not_open")
             session = self._get_session(context)
             self._prune(session)
@@ -845,16 +1068,7 @@ class BrowserService:
                 if action == "close":
                     self._close(session)
                     return tool_success({"action": action, "closed": True})
-                if action == "status":
-                    version = session.client.version()
-                    return tool_success(
-                        {
-                            "action": action,
-                            "version": version,
-                            "mode": session.config[0],
-                            "connected": session.connected,
-                        }
-                    )
+                opening = not session.connected
                 if not session.connected:
                     if action not in {"open", "tabs", "new_tab"}:
                         raise BrowserError("not_open")
@@ -862,6 +1076,8 @@ class BrowserService:
                 else:
                     self._ensure_tab(context, session, args)
                 result = self._execute(context, session, args)
+                if opening:
+                    result["browser"] = self._connection_info(session.config)
                 return tool_success({"action": action, **result})
         except SetupError as error:
             self.api.logger.warning("Browser setup failed at stage %s", error.stage)
@@ -883,6 +1099,34 @@ class BrowserService:
             return self._snapshot(context, session, args)
         if action == "tabs":
             return self._tabs(context, session)
+        if action == "wait":
+            session.refs.clear()
+            result: dict[str, Any] = {}
+            condition = (
+                ["--text", args["text"]]
+                if "text" in args
+                else ["--fn", "location.href === " + json.dumps(args["url"])]
+                if "url" in args
+                else []
+            )
+            if condition:
+                try:
+                    self._call(context, session, ["wait", *condition, "--timeout", "5000"])
+                    result["condition_met"] = True
+                except BrowserError as error:
+                    if error.code != "timeout":
+                        raise
+                    result["condition_met"] = False
+                    result["condition_error"] = {
+                        "code": "browser_condition_not_met",
+                        "message": MESSAGES["condition_not_met"],
+                    }
+            result.update(
+                self._snapshot(context, session, args)
+                if args.get("observe", True)
+                else self._observe_page(context, session)
+            )
+            return result
         if action == "downloads":
             if session.config[0] != "managed":
                 raise BrowserError("local_download")
@@ -923,13 +1167,14 @@ class BrowserService:
             return {"screenshot": path.as_posix()}
         if action == "read":
             target = self._ref(session, args["target"]) if "target" in args else "body"
-            payload = self._call(context, session, ["get", "text", target])
+            page, payload = self._observe(context, session, ["get", "text", target])
             text = payload.get("text")
             if not isinstance(text, str):
                 raise BrowserError("failed")
             offset, limit = args.get("offset", 0), args.get("limit", 12000)
             end = min(len(text), offset + limit)
             return {
+                **{key: value for key, value in page.items() if key != "page_text"},
                 "text": text[offset:end],
                 "offset": offset,
                 "total": len(text),
@@ -987,8 +1232,6 @@ class BrowserService:
                     ),
                 ]
             ]
-        elif action == "wait":
-            commands = [["wait", "--text", args["text"]]]
         elif action == "dialog":
             commands = [
                 [
@@ -1017,8 +1260,15 @@ class BrowserService:
                     session.active_target = target_id
                     session.tabs[target_id] = target_id
                 completed += 1
+                if action in NAVIGATION | {"click", "press", "select", "dialog"}:
+                    session.observe_after = time.monotonic() + 0.75
         except BrowserError as error:
-            if action == "close_tab" and error.code in {"failed", "tab_gone"}:
+            if action == "close_tab" and error.code in {
+                "failed",
+                "tab_gone",
+                "timeout",
+                "connection",
+            }:
                 # A lost/failed reply can follow a committed close. Verify the
                 # requested postcondition without ever replaying the input.
                 self._tabs(context, session)
@@ -1033,7 +1283,7 @@ class BrowserService:
                     "hint": MESSAGES["partial"],
                 }
             raise
-        result: dict[str, Any] = {"completed": completed}
+        result = {"completed": completed}
         if action == "close_tab":
             try:
                 self._tabs(context, session)
@@ -1042,9 +1292,9 @@ class BrowserService:
                     "code": "browser_" + error.code,
                     "message": str(error),
                 }
-        if args.get("observe", action in NAVIGATION):
+        if args.get("observe", action in AUTO_OBSERVE):
             try:
-                result.update(self._snapshot(context, session, {}))
+                result.update(self._snapshot(context, session, args))
             except BrowserError as error:
                 # The action succeeded; a failed observation must not invite a duplicate action.
                 result["observation_error"] = {
@@ -1076,6 +1326,7 @@ class BrowserService:
 
 
 def register(api: ExtensionAPI) -> None:
+    service = BrowserService(api)
     api.register_settings(
         [
             {
@@ -1092,9 +1343,10 @@ def register(api: ExtensionAPI) -> None:
                 "key": "headed",
                 "type": "toggle",
                 "label": "Show managed browser",
-                "default": False,
+                "default": service.default_headed,
                 "description": (
-                    "Show a browser window on the server computer. Applies only to managed mode."
+                    "Show a browser window on the server computer. Applies only to managed mode. "
+                    "Enabled by default when the server has a desktop."
                 ),
             },
             {
@@ -1109,7 +1361,6 @@ def register(api: ExtensionAPI) -> None:
             },
         ]
     )
-    service = BrowserService(api)
     api.operations.startup.append(service.start)
     api.on_shutdown(service.close)
     api.on("run_end", service.run_end)

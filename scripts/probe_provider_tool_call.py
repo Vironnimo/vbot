@@ -407,6 +407,33 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "snapshot_full": {"action": "snapshot", "full": True},
     "snapshot_interactive": {"action": "snapshot", "full": False},
     "snapshot_scope": {"action": "snapshot", "selector": "main"},
+    "snapshot_limit": {"action": "snapshot", "limit": 800},
+    "snapshot_expand": {"action": "snapshot", "limit": 16000},
+    "wait_settle": {"action": "wait"},
+    "wait_url": {"action": "wait", "url": "https://example.com/done"},
+    "wait_scoped": {"action": "wait", "text": "Saved", "selector": "main", "limit": 800},
+    "open_scoped": {
+        "action": "open",
+        "url": "https://example.com",
+        "selector": "main",
+        "limit": 800,
+    },
+    "click_scoped": {
+        "action": "click",
+        "target": "r1",
+        "observe": True,
+        "selector": "main",
+        "limit": 800,
+    },
+    "fill_scoped": {
+        "action": "fill",
+        "fields": [{"target": "r1", "text": "Alice"}],
+        "observe": True,
+        "selector": "form",
+        "limit": 800,
+    },
+    "invalid_wait_conditions": {"action": "wait", "url": "https://example.com", "text": "Saved"},
+    "invalid_observation_options": {"action": "click", "target": "r1", "limit": 800},
     "screenshot_full": {"action": "screenshot", "full": True},
     "screenshot_viewport": {"action": "screenshot", "full": False},
     "read_target": {"action": "read", "target": "r1", "offset": 2, "limit": 20},
@@ -4216,13 +4243,18 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
             else:
                 content = (
                     b"<!doctype html><title>Registration</title><main><h1>Registration</h1>"
-                    b"<form onsubmit=\"event.preventDefault();fetch('/submit',"
+                    b'<form onsubmit="event.preventDefault();'
+                    b"document.querySelector('main').setAttribute('aria-busy','true');fetch('/submit',"
                     b"{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(this)))})"
-                    b".then(r=>r.text()).then(t=>document.querySelector('main').innerHTML=t)\">"
+                    b".then(r=>r.text()).then(t=>{const m=document.querySelector('main');"
+                    b"m.innerHTML=t;m.removeAttribute('aria-busy')})\">"
                     b'<label>Name<input name="name" required></label>'
                     b'<label>Email<input name="email" type="email" required></label>'
                     b'<label>Plan<select name="plan"><option>Basic</option><option>Pro</option>'
                     b"</select></label><button>Save registration</button></form></main>"
+                    b"<footer>"
+                    + b'<a href="/help">Unrelated site navigation</a>' * 200
+                    + b"</footer>"
                 )
                 self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -4230,6 +4262,7 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
 
         def do_POST(self) -> None:
             submissions.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            time.sleep(3.5)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -4370,6 +4403,13 @@ async def _probe_browser_workflow(adapter: Any, args: argparse.Namespace) -> dic
                                     ),
                                     "ok": result["ok"],
                                     "seconds": round(time.monotonic() - started, 3),
+                                    "result_chars": len(json.dumps(result, separators=(",", ":"))),
+                                    "snapshot_chars": len(
+                                        (result.get("data") or {}).get("snapshot", "")
+                                    ),
+                                    "observation_state": (result.get("data") or {}).get(
+                                        "observation_state"
+                                    ),
                                 }
                             )
                             messages.append(
