@@ -121,12 +121,14 @@ pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importl
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (protocol token, persisted format, accessibility name, forbidden internal value) or a test-owned sentinel proves transport unchanged. Do not lock editable prose, error wording, or help copy - prefer exception types, error codes, structured fields, DOM roles, and security invariants. Wording quality belongs in scenario evals, not substring tests.
 
-**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; a full local run uses the default auto-fix mode (keep every fix), while scoped Agent runs and CI pass `--check` and therefore validate without mutating the candidate checkout. This preserves the code an Agent just read while it responds to reported failures and ensures CI certifies the exact candidate revision. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit. Full mechanics - pipeline, source-to-test mapping, output contract - live in `scripts/README-quality.md`.
+**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; use `--check` for non-mutating feedback during work and CI, and scoped auto-fix mode before commits (keep every fix). Scope includes affected callers and tests; automatic mapping does not discover cross-domain dependencies. Use full gates when effects are broad or cannot be reliably scoped. Frontend pre-commit runs add `--build`, which builds the whole WebUI without widening lint or test selection. This preserves the code during intermediate feedback and ensures pre-commit tests run after auto-fixes. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit. Full mechanics - pipeline, source-to-test mapping, output contract - live in `scripts/README-quality.md`.
 ```bash
-python scripts/quality.py                                 # Full backend gate; auto-fixes
+python scripts/quality.py <paths...>                      # Scoped pre-commit gate; auto-fixes
+python scripts/quality.py                                 # Full backend gate for broad impact; auto-fixes
 python scripts/quality.py --check <paths...>              # Scoped backend gate; no source edits
 python scripts/quality.py --check --profile               # Full backend validation + 25 slowest tests
-python scripts/quality-frontend.py                        # Full frontend gate; auto-fixes
+python scripts/quality-frontend.py --build <paths...>      # Scoped pre-commit gate; auto-fixes and full build
+python scripts/quality-frontend.py                        # Full frontend gate for broad impact; auto-fixes
 python scripts/quality-frontend.py --check <paths...>     # Scoped frontend gate; no source edits
 ```
 

@@ -273,7 +273,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   --check       Validate without changing source files. Formatting differences fail.
 
 Pipeline:
-  prettier -> eslint -> vitest -> build (complete gate only)
+  prettier -> eslint -> vitest -> build (complete gate or --build)
   The default mode adds Prettier writes and ESLint fixes. --check uses
   `prettier --check` and omits every fix pass.
 
@@ -281,7 +281,9 @@ Path behavior:
   With no PATH, run the complete frontend gate and build. PATH values may be
   project-root-relative (`webui/src/...`) or WebUI-relative (`src/...`) files or
   directories. Source paths select their nearest mirrored Vitest coverage. A scoped
-  run omits the build. Missing paths abort before any quality tool runs.
+  run omits the build unless --build is given. --build adds a full WebUI build
+  without widening the selected lint or test paths. Missing paths abort before
+  any quality tool runs.
 
 Notes:
   npx and npm must be on PATH. The default mode keeps and reports every source-file
@@ -297,6 +299,7 @@ Examples:
   python scripts/quality-frontend.py
   python scripts/quality-frontend.py --check
   python scripts/quality-frontend.py webui/src/lib/
+  python scripts/quality-frontend.py --build webui/src/lib/
   python scripts/quality-frontend.py --check src/components/App.svelte""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -304,6 +307,11 @@ Examples:
         "--check",
         action="store_true",
         help="validate without applying formatter or linter fixes",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="also build the full WebUI when checking selected paths",
     )
     parser.add_argument(
         "paths",
@@ -401,8 +409,8 @@ def main() -> int:
         ]
     )
 
-    # Build is always full-project — only run when no paths were given.
-    if is_full_scan:
+    # Build the whole WebUI without widening scoped lint or test selection.
+    if is_full_scan or args.build:
         steps.append(("build", [npm_exe, "run", "build"], "build", None))
 
     title = "Quality Gates (Frontend)"

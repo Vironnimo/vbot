@@ -396,6 +396,64 @@ def _full_scan_run_factory(build_returncode, build_stdout, build_stderr):
     return fake_run
 
 
+@pytest.mark.parametrize("check", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize("build", [False, True])
+def test_build_selection_preserves_scope_and_fix_mode(monkeypatch, check, scoped, build):
+    module = _load_quality_frontend_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    argv = ["quality-frontend.py"]
+    if check:
+        argv.append("--check")
+    if build:
+        argv.append("--build")
+    if scoped:
+        argv.append("webui/src/lib/settingsView.js")
+    monkeypatch.setattr(module.sys, "argv", argv)
+    monkeypatch.setattr(module, "snapshot_target_files", lambda *args: {})
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs["cwd"] == module.WEBUI_ROOT
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="Tests  1 passed (1)\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+    assert commands.count(["npm", "run", "build"]) == int(build or not scoped)
+    if build or not scoped:
+        assert commands[-1] == ["npm", "run", "build"]
+    assert any("--fix" in cmd for cmd in commands) is not check
+    assert any("--write" in cmd for cmd in commands) is not check
+    lint = next(cmd for cmd in commands if cmd[1] == "eslint" and "--fix" not in cmd)
+    assert lint[2:] == (["src/lib/settingsView.js"] if scoped else ["src/"])
+    vitest = next(cmd for cmd in commands if cmd[1] == "vitest")
+    assert vitest[5:] == (
+        [
+            "src/lib/__tests__/settingsView.test.integration.test.js",
+            "src/lib/__tests__/settingsView.test.normalization.test.js",
+            "src/lib/__tests__/settingsView.test.providers.test.js",
+        ]
+        if scoped
+        else ["src/"]
+    )
+
+
+def test_scoped_build_failure_fails_gate(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        ["quality-frontend.py", "--check", "--build", "webui/src/lib/settingsView.js"],
+    )
+    monkeypatch.setattr(module.subprocess, "run", _full_scan_run_factory(1, "", "build failed"))
+
+    assert module.main() == 1
+    assert "build failed" in capsys.readouterr().out
+
+
 def test_main_surfaces_build_warnings_on_success(monkeypatch, capsys):
     module = _load_quality_frontend_module()
     monkeypatch.setattr(module.shutil, "which", lambda name: name)
