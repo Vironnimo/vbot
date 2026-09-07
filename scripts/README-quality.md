@@ -4,9 +4,11 @@ This document explains how `scripts/quality.py` (backend) and `scripts/quality-f
 
 The short version:
 
-- Run the gate, not the raw tool: for Agent-scoped feedback use `python scripts/quality.py --check <paths...>` and `python scripts/quality-frontend.py --check <paths...>`.
+- Run the gate, not the raw tool: for non-mutating feedback during work use `python scripts/quality.py --check <paths...>` and `python scripts/quality-frontend.py --check <paths...>`.
 - No arguments checks the whole repo; one or more file/dir paths check just those targets (plus their mirrored tests).
-- A full gate auto-fixes what it can; a scoped Agent gate uses `--check`, maps each source file to its tests, filters tool noise, and prints one verdict without changing source files.
+- Before commits, run scoped gates without `--check` to apply fixes before validation; add `--build` for frontend changes. Keep fixes and review the diff. Full gates are for broad effects or effects that cannot be reliably scoped. Docs-only changes need no gate.
+- Include all affected source and test areas, including callers whose behavior may change. Automatic test mapping follows names and directories, not cross-domain dependencies.
+- Both full and scoped gates filter tool noise and print one verdict. `--check` prevents source fixes; it does not choose the test scope.
 - Add `--profile` to the backend gate to print pytest's 25 slowest setup/call/teardown durations while keeping the same path routing and pipeline.
 - Add `--check` to validate without changing source files; run either script with `--help` for its complete command reference.
 - Reach for raw `pytest`/`ruff`/`mypy`/`vitest`/`eslint`/`prettier` only when you genuinely suspect the gate withheld detail you need — and when it did, improve the gate (see [Improving the gate](#improving-the-gate)) instead of making hand-invocation the habit.
@@ -20,6 +22,7 @@ The output is the agent contract. It is meant to be read by an agent deciding wh
 ## Running them
 
 ```bash
+python scripts/quality.py core/runtime/            # scoped pre-commit scan, with fixes
 python scripts/quality.py                          # full backend scan
 python scripts/quality.py --check                  # full backend scan, no source fixes
 python scripts/quality.py --check core/runtime/            # one module, no source fixes
@@ -29,6 +32,7 @@ python scripts/quality.py --check --profile                # full validation + 2
 ```
 
 ```bash
+python scripts/quality-frontend.py --build webui/src/lib/       # scoped pre-commit scan, with fixes and build
 python scripts/quality-frontend.py                             # full frontend scan
 python scripts/quality-frontend.py --check                     # full frontend scan, no source fixes
 python scripts/quality-frontend.py --check webui/src/lib/             # one directory, no source fixes
@@ -40,7 +44,7 @@ Paths may be files or directories. Backend paths are project-root-relative; fron
 
 Both scripts support `-h` / `--help`. Their help is the command-level reference for modes, path behavior, pipeline stages, prerequisites, examples, and exit codes.
 
-The default mode is intentionally mutating: it keeps and reports formatter and linter fixes. Agent-scoped feedback must therefore pass `--check`; this avoids changing the code between the failure report and the Agent's next edit. `--check` replaces the formatting write with `ruff format --check` or `prettier --check`, omits the Ruff/ESLint fix pass, and then runs the same validation, type-check, and test stages. A complete frontend `--check` run still builds the WebUI. The mode does not change source files, but underlying tools may write caches and the frontend build may write generated artifacts.
+The default mode is intentionally mutating: it keeps and reports formatter and linter fixes. Intermediate feedback can pass `--check` to avoid changing the code between the failure report and the Agent's next edit. Pre-commit runs omit `--check` so auto-fixes run before validation on the selected scope. `--check` replaces the formatting write with `ruff format --check` or `prettier --check`, omits the Ruff/ESLint fix pass, and then runs the same validation, type-check, and test stages. A complete frontend `--check` run still builds the WebUI. Add `--build` to a scoped frontend run to include the same full build, with or without `--check`; lint and test targets stay scoped. Full runs always build, and adding `--build` does not duplicate that step. `--check` does not change source files, but underlying tools may write caches and the frontend build may write generated artifacts.
 
 Use the current Python interpreter directly — no virtual environment is assumed. The frontend runner additionally needs `npx` and `npm` on `PATH`; it exits early if they are missing.
 
@@ -60,7 +64,7 @@ Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint
 On a **full scan** (no paths), the tools target fixed defaults rather than the whole tree indiscriminately:
 
 - Backend: ruff → `.`; mypy → `core/ server/ cli/ desktop/ tests/`; pytest → `tests/`. Full-scan mypy does not include `scripts/`; a scoped Python source path is routed to mypy, while `pyproject.toml` triggers these full defaults.
-- Frontend: prettier/eslint/vitest → `src/`; the build step runs only on a full scan.
+- Frontend: prettier/eslint/vitest → `src/`; the build step runs on a full scan or when `--build` is given.
 
 ## Output contract
 
