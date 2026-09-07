@@ -866,6 +866,40 @@ async def test_resize_to_current_dimensions_is_a_no_op(
 
 
 @pytest.mark.asyncio
+async def test_operator_resize_burst_without_output_does_not_wake_agent(tmp_path: Path) -> None:
+    clock = FakeClock()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    try:
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        revision = session.attention_revision
+        for columns, rows in [(70, 20), (160, 48), (100, 30)]:
+            await manager.resize_for_operator(session.terminal_id, columns=columns, rows=rows)
+        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS + 1)
+        assert len(trigger.submissions) == 1
+        assert session.attention_revision == revision
+        assert session.state == "ready"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_resize_hard_deadline_caps_repaint_suppression(tmp_path: Path) -> None:
     """A repaint stream must not suppress Agent delivery past the hard cap."""
     clock = FakeClock()
