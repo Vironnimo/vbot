@@ -687,7 +687,7 @@ def test_targeted_read_never_reuses_ref_invalidated_during_observation(setup):
     assert not session.refs
 
 
-@pytest.mark.parametrize("code", ["page_changed", "timeout", "connection"])
+@pytest.mark.parametrize("code", ["page_changed", "timeout", "connection", "response_lost"])
 def test_input_with_uncertain_effect_is_never_retried(setup, code):
     service, context, session, client = opened(setup)
     ref = next(iter(session.refs))
@@ -701,6 +701,113 @@ def test_input_with_uncertain_effect_is_never_retried(setup, code):
     result = service.handle(context, {"action": "click", "target": ref, "observe": True})
     assert result["error"]["code"] == "browser_" + code
     assert sum(command[0] == "click" for command in client.calls) == 1
+    assert not session.refs
+
+
+@pytest.mark.parametrize("code", ["response_lost", "timeout", "page_changed"])
+@pytest.mark.parametrize("observe", [True, False])
+def test_unconfirmed_open_returns_owned_page_without_replaying_navigation(setup, code, observe):
+    service, context, session, client = opened(setup)
+    old_refs = set(session.refs)
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "open":
+            client.page.update(url="https://example.com/Destination", title="Arrived")
+            raise browser.BrowserError(code)
+
+    client.hook = hook
+    result = service.handle(
+        context,
+        {
+            "action": "open",
+            "url": "https://example.com/destination",
+            "observe": observe,
+            **({"selector": "main", "limit": 100} if observe else {}),
+        },
+    )
+    assert result["ok"]
+    data = result["data"]
+    assert data["navigation_confirmed"] is False and "completed" not in data
+    assert data["navigation_error"]["code"] == "browser_" + code
+    assert data["url"] == "https://example.com/Destination" and data["title"] == "Arrived"
+    assert sum(command[0] == "open" for command in client.calls) == 1
+    assert old_refs.isdisjoint(session.refs)
+    if observe:
+        assert len(data["snapshot"]) <= 100 and session.refs
+        assert ["snapshot", "-c", "-i", "-s", "main"] in client.calls
+    else:
+        assert "snapshot" not in data and not session.refs
+
+
+@pytest.mark.parametrize("state,status", [("stable", 200), ("stable", 403), ("changing", 200)])
+def test_unconfirmed_open_never_treats_readable_old_or_error_page_as_navigation_success(
+    setup, state, status
+):
+    service, context, session, client = opened(setup)
+    client.page.update(observation_state=state, http_status=status)
+    client.hook = lambda command: (
+        (_ for _ in ()).throw(browser.BrowserError("response_lost"))
+        if command[0] == "open"
+        else None
+    )
+    result = service.handle(context, {"action": "open", "url": "https://example.com/new"})
+    assert result["ok"] and result["data"]["navigation_confirmed"] is False
+    assert "completed" not in result["data"]
+    assert result["data"]["url"] == "https://example.com"
+    if state == "changing":
+        assert result["data"]["snapshot"] == "" and not session.refs
+
+
+@pytest.mark.parametrize("failure", ["response_lost", "connection", "failed"])
+def test_failed_navigation_recovery_keeps_original_error_and_never_replays(setup, failure):
+    service, context, session, client = opened(setup)
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] == "open":
+            raise browser.BrowserError("response_lost")
+        if command[0] == "eval":
+            raise browser.BrowserError(failure)
+
+    client.hook = hook
+    result = service.handle(context, {"action": "open", "url": "https://example.com/new"})
+    assert not result["ok"] and result["error"]["code"] == "browser_response_lost"
+    assert result["error"]["retryable"] is False
+    assert sum(command[0] == "open" for command in client.calls) == 1
+    assert not session.refs
+
+
+@pytest.mark.parametrize("change", ["cancel", "revoke", "config", "tab_closed"])
+def test_unconfirmed_navigation_recovery_preserves_authority_and_target(setup, change):
+    service, context, session, client = opened(setup)
+    cancelled = threading.Event()
+    context = replace(context, cancellation_hook=cancelled.is_set)
+    client.calls.clear()
+
+    def hook(command):
+        if command[0] != "open":
+            return
+        if change == "cancel":
+            cancelled.set()
+        elif change == "revoke":
+            setup[2].tool_access = ToolAccess(mode="none")
+        elif change == "config":
+            setup[3]["mode"] = "existing"
+        else:
+            client.tab_rows = [{"targetId": "B" * 32, "active": True}]
+        raise browser.BrowserError("response_lost")
+
+    client.hook = hook
+    result = service.handle(context, {"action": "open", "url": "https://example.com/new"})
+    expected = {
+        "cancel": "cancelled",
+        "revoke": "denied",
+        "config": "changed",
+        "tab_closed": "tab_gone",
+    }[change]
+    assert result["error"]["code"] == "browser_" + expected
+    assert not any(command[0] in {"snapshot", "eval"} for command in client.calls)
     assert not session.refs
 
 
@@ -927,6 +1034,13 @@ def test_backend_failure_is_not_success_or_a_secret_echo(tmp_path, monkeypatch, 
         ("Connection closed secret", "connection"),
         ("Browser not launched secret", "connection"),
         ("Unexpected error from website secret", "failed"),
+        (
+            "Invalid response: EOF while parsing a value at line 1 column 0 "
+            "(after 5 retries - daemon may be busy or unresponsive) secret",
+            "response_lost",
+        ),
+        ("Failed to read: Connection reset secret", "response_lost"),
+        ("Failed to send: Broken pipe secret", "response_lost"),
     ],
 )
 def test_native_error_classification_preserves_only_safe_recovery_code(
@@ -972,14 +1086,15 @@ def test_closed_bound_tab_never_falls_back_to_another_tab(setup):
     assert not session.refs
 
 
-def test_failed_close_reply_is_reconciled_without_repeating_close(setup):
+@pytest.mark.parametrize("code", ["failed", "response_lost"])
+def test_failed_close_reply_is_reconciled_without_repeating_close(setup, code):
     service, context, session, client = opened(setup)
     target = "A" * 32
 
     def hook(command):
         if command[:2] == ["tab", "close"]:
             client.tab_rows = []
-            raise browser.BrowserError("failed")
+            raise browser.BrowserError(code)
 
     client.hook = hook
     result = service.handle(context, {"action": "close_tab", "tab": target})
