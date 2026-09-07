@@ -15,6 +15,51 @@ import pytest
 from resources.extensions.browser_use import runtime as module
 
 
+@pytest.mark.parametrize(
+    "display,wayland,expected", [(None, None, False), (":0", None, True), (None, "wayland-0", True)]
+)
+def test_linux_desktop_detection(monkeypatch, display, wayland, expected):
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    for key, value in (("DISPLAY", display), ("WAYLAND_DISPLAY", wayland)):
+        monkeypatch.delenv(key, raising=False)
+        if value:
+            monkeypatch.setenv(key, value)
+    assert module.desktop_available() is expected
+
+
+@pytest.mark.parametrize("uid,expected", [(0, False), (501, True)])
+def test_macos_desktop_detection(monkeypatch, uid, expected):
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.os, "stat", lambda path: SimpleNamespace(st_uid=uid))
+    assert module.desktop_available() is expected
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_windows_visible_window_station_is_required(monkeypatch, visible):
+    import ctypes
+
+    monkeypatch.setattr(module.sys, "platform", "win32")
+
+    def station():
+        return 123
+
+    def information(handle, index, flags, size, needed):
+        assert handle == 123 and index == 1
+        flags._obj.flags = int(visible)
+        return 1
+
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda *args, **kwargs: SimpleNamespace(
+            GetProcessWindowStation=station,
+            GetUserObjectInformationW=information,
+        ),
+        raising=False,
+    )
+    assert module.desktop_available() is visible
+
+
 @pytest.fixture
 def prepared(tmp_path, monkeypatch):
     runtime = module.BrowserRuntime(tmp_path)
