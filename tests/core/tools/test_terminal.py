@@ -810,6 +810,7 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
     session = terminal_manager.get_session(
         terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
     )
+    callbacks.pop()()
     terminal_manager._set_attention(
         session,
         kind="output_settled",
@@ -828,6 +829,125 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
     assert len(callbacks) == 1
     callbacks.pop()()
     assert session.acknowledged_attention_revision == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "wait", "kill"])
+async def test_resize_notice_is_consumed_only_with_a_persisted_screen(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, action: str
+) -> None:
+    terminal_manager, _factory = manager
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start"})
+    data = cast(dict[str, Any], started["data"])
+    terminal_id = data["terminal_id"]
+    assert "size_change" not in data
+    callbacks.pop()()
+
+    for columns, rows in [(70, 20), (160, 48), (100, 30)]:
+        await terminal_manager.resize_for_operator(terminal_id, columns=columns, rows=rows)
+    arguments: JsonObject = {"action": action, "terminal_id": terminal_id}
+    if action == "wait":
+        arguments["timeout_ms"] = 0
+    result = await call(terminal_manager, context, arguments)
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    assert (data["columns"], data["rows"]) == (100, 30)
+    change = data["size_change"]
+    assert (change["previous_columns"], change["previous_rows"]) == (80, 24)
+    assert isinstance(change["notice"], str) and change["notice"]
+    owner = TerminalOwner("project-a", "agent-a", "session-a")
+    assert "size_change" in await terminal_manager.snapshot(terminal_id, owner)
+    callbacks.pop()()
+    assert "size_change" not in await terminal_manager.snapshot(terminal_id, owner)
+
+
+@pytest.mark.asyncio
+async def test_resize_after_screen_capture_remains_unseen_after_persistence(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, _factory = manager
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    callbacks.pop()()
+    await terminal_manager.resize_for_operator(terminal_id, columns=140, rows=40)
+    await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
+    await terminal_manager.resize_for_operator(terminal_id, columns=160, rows=48)
+    callbacks.pop()()
+
+    result = await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
+    data = cast(dict[str, Any], result["data"])
+    change = data["size_change"]
+    assert (change["previous_columns"], change["previous_rows"]) == (140, 40)
+    assert (data["columns"], data["rows"]) == (160, 48)
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_screen_persistence_cannot_restore_an_old_size(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, _factory = manager
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    callbacks.pop()()
+    for columns, rows in [(140, 40), (160, 48)]:
+        await terminal_manager.resize_for_operator(terminal_id, columns=columns, rows=rows)
+        await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
+    callbacks.pop()()
+    callbacks.pop()()
+    owner = TerminalOwner("project-a", "agent-a", "session-a")
+    assert "size_change" not in await terminal_manager.snapshot(terminal_id, owner)
+    observed = terminal_manager.get_session(terminal_id, owner).observed_screen
+    assert observed is not None
+    assert observed[1:] == (160, 48)
+
+
+@pytest.mark.asyncio
+async def test_returning_to_previous_size_still_reports_intermediate_resizes(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, _factory = manager
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    callbacks.pop()()
+    owner = TerminalOwner("project-a", "agent-a", "session-a")
+    await terminal_manager.resize_for_operator(terminal_id, columns=80, rows=24)
+    assert "size_change" not in await terminal_manager.snapshot(terminal_id, owner)
+    await terminal_manager.resize_for_operator(terminal_id, columns=160, rows=48)
+    await terminal_manager.resize_for_operator(terminal_id, columns=80, rows=24)
+    snapshot = await terminal_manager.snapshot(terminal_id, owner)
+    assert "size_change" in snapshot
+    assert (snapshot["columns"], snapshot["rows"]) == (80, 24)
+
+
+@pytest.mark.asyncio
+async def test_new_attachment_does_not_inherit_another_sessions_screen_observation(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, _factory = manager
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    callbacks.pop()()
+    await terminal_manager.resize_for_operator(terminal_id, columns=160, rows=48)
+    await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
+    await call(terminal_manager, context, {"action": "detach", "terminal_id": terminal_id})
+    new_context = make_context(tmp_path, session_id="session-b")
+    await call(terminal_manager, new_context, {"action": "attach", "terminal_id": terminal_id})
+    callbacks.pop()()
+    snapshot = await terminal_manager.snapshot(
+        terminal_id, TerminalOwner("project-a", "agent-a", "session-b")
+    )
+    assert "size_change" not in snapshot
+    assert (snapshot["columns"], snapshot["rows"]) == (160, 48)
 
 
 @pytest.mark.parametrize(
