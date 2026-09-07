@@ -14,7 +14,9 @@ import pytest
 from PIL import Image
 
 from core.chat import ChatMessage, wire_shaping
-from core.chat.chat import _restore_in_run_tool_result_content
+from core.chat.chat import RequestBuildInputs, _restore_in_run_tool_result_content
+from core.chat.content_blocks import ContentBlock, MediaBlock
+from core.chat.errors import ImageBudgetExceededError
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
@@ -452,6 +454,119 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source,groups",
+    [
+        ("user", [4]),
+        ("user", [51]),
+        ("tool", [4]),
+        ("tool", [1, 1, 1, 1]),
+        ("tool", [51]),
+        ("tool", [17, 17, 17]),
+    ],
+)
+async def test_fresh_images_are_delivered_together_or_fail_explicitly(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    groups: list[int],
+) -> None:
+    count = sum(groups)
+    responses: list[JsonObject] = [{"content": "done", "tool_calls": None}]
+    if source == "tool":
+        responses.insert(
+            0,
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": f"capture-{i}", "name": "capture_images", "arguments": {"count": size}}
+                    for i, size in enumerate(groups)
+                ],
+            },
+        )
+    adapter = FakeAdapter(responses)
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
+    runtime.start()
+    try:
+        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
+
+        def capture(_context: Any, arguments: JsonObject) -> JsonObject:
+            return tool_success(
+                {"count": arguments["count"]},
+                artifacts=[
+                    read_media_artifact(
+                        attachment_id=record.id,
+                        filename=record.filename,
+                        media_type=record.media_type,
+                    )
+                    for _ in range(arguments["count"])
+                ],
+            )
+
+        runtime.tools.register(
+            "capture_images",
+            "Test image source.",
+            {
+                "type": "object",
+                "properties": {"count": {"type": "integer"}},
+                "required": ["count"],
+                "additionalProperties": False,
+            },
+            capture,
+        )
+        content: str | list[ContentBlock] = "inspect the fixture images"
+        if source == "user":
+            content = [
+                MediaBlock("media", record.id, record.filename, record.media_type)
+                for _ in range(count)
+            ]
+        if count > 50:
+            with pytest.raises(ImageBudgetExceededError) as failure:
+                await runtime.chat_loop.send("coder", content, session_id="image-budget")
+            assert failure.value.count == count
+            assert len(adapter.requests) == (0 if source == "user" else 1)
+        else:
+            await runtime.chat_loop.send("coder", content, session_id="image-budget")
+            messages = adapter.requests[-1].messages
+            parts = (
+                _tool_result_content_parts(messages)
+                if source == "tool"
+                else [
+                    part
+                    for message in messages
+                    if message.get("role") == "user" and isinstance(message.get("content"), list)
+                    for part in message["content"]
+                ]
+            )
+            assert sum(part.get("type") == "media" for part in parts) == count
+        persisted = runtime.chat_sessions.get(session_address("coder", "image-budget")).load()
+        assert "base64" not in json.dumps([message.to_dict() for message in persisted])
+        assert Path(record.file_path).read_bytes() == _PNG_BYTES
+        if source == "tool":
+            results = [message for message in persisted if message.role == "tool"]
+            assert [message.tool_call_id for message in results] == [
+                f"capture-{i}" for i in range(len(groups))
+            ]
+            artifact_count = 0
+            for message in results:
+                assert isinstance(message.content, str)
+                artifact_count += len(json.loads(message.content)["artifacts"])
+            assert artifact_count == count
+        if count > 50:
+            assert any(message.role == "error" for message in persisted)
+            assert persisted[-1].to_dict()["status"] == "failed"
+    finally:
+        runtime.stop()
+
+
 def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
     """Return every Run-local rich content part across Tool Results."""
     return [
@@ -616,6 +731,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
         ]
     )
     rebuilt_requests: list[list[JsonObject]] = []
+    live_budgets: list[wire_shaping.RequestImageBudget] = []
 
     class RebuildingAdapter(FakeAdapter):
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
@@ -623,13 +739,19 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 session = runtime.chat_sessions.get(session_address("coder", "session-one"))
                 rebuilt_requests.append(
                     _restore_in_run_tool_result_content(
-                        await runtime.chat_loop._build_request_messages(
-                            agent,
-                            session,
-                            input_modalities=frozenset({"text", "image"}),
-                            wire_media_types=IMAGE_WIRE_MEDIA_TYPES,
-                        ),
+                        (
+                            await runtime.chat_loop.build_request_state(
+                                agent,
+                                session,
+                                inputs=RequestBuildInputs(
+                                    input_modalities=frozenset({"text", "image"}),
+                                    wire_media_types=IMAGE_WIRE_MEDIA_TYPES,
+                                    image_budget=live_budgets[0],
+                                ),
+                            )
+                        ).messages,
                         messages,
+                        image_budget=live_budgets[0],
                     )
                 )
             return await super().send(messages, model_id=model_id, **kwargs)
@@ -645,6 +767,15 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     try:
         # Exercise the exact shared artifact contract used by MCP binary results,
         # alternating with the real read Tool; no external Blender process needed.
+        original_build = runtime.chat_loop.build_request_state
+
+        async def capture_budget(agent: Any, session: Any, *, inputs: RequestBuildInputs) -> Any:
+            if inputs.image_budget is not None and not live_budgets:
+                live_budgets.append(inputs.image_budget)
+            return await original_build(agent, session, inputs=inputs)
+
+        monkeypatch.setattr(runtime.chat_loop, "build_request_state", capture_budget)
+
         def capture(_context: Any, arguments: JsonObject) -> JsonObject:
             index = arguments["index"]
             record = runtime.attachment_store.store(f"frame-{index}.png", frames[index])
@@ -686,7 +817,8 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             ]
             expected_indices = list(range(iteration)) if iteration <= 14 else [*range(14), 0]
             if tight_budget:
-                expected_indices = expected_indices[-4:]
+                starts = [0, 0, 0, 0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12, 12]
+                expected_indices = expected_indices[starts[iteration] :]
             assert [base64.b64decode(part["base64"]) for part in images] == [
                 frames[index] for index in expected_indices
             ]
@@ -694,7 +826,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 sum(len(part["base64"]) for part in images)
                 <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
             )
-            if iteration and not tight_budget:
+            if iteration and (not tight_budget or iteration not in {5, 8, 11, 14}):
                 previous_images = [
                     part
                     for part in _tool_result_content_parts(adapter.requests[iteration - 1].messages)
