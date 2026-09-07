@@ -14,6 +14,7 @@ from core.chat import (
     CommandDispatcher,
     CommandExecutionContext,
     CommandFeedback,
+    CommandNavigation,
     CommandOutcome,
     ExtensionCommandContext,
     PreparedCommand,
@@ -572,6 +573,106 @@ def test_dispatch_status_marks_transient_output() -> None:
 
     assert result.feedback is not None
     assert result.feedback.kind == "detail"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["workflow_ext", "another_ext"])
+async def test_extension_command_opens_only_its_registered_page(owner: str) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    navigation = CommandNavigation(
+        kind="open_extension_page", extension=owner, page="overview", route="items/ä-1"
+    )
+    dispatcher.register_extension_command(
+        owner,
+        name="workflow",
+        description="Open the workflow.",
+        page_ids=frozenset({"overview"}),
+        handler=lambda _context, _argument: CommandOutcome(
+            command="workflow", navigation=navigation
+        ),
+    )
+
+    result = await _execute(dispatcher, "/workflow")
+
+    assert result.navigation == navigation
+    assert result.runs == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"extension": "foreign"},
+        {"page": "undeclared"},
+        {"page": None},
+        {"route": "https://example.org"},
+        {"route": "/outside"},
+        {"route": "items/../outside"},
+        {"route": "items\\outside"},
+        {"route": "x" * 2049},
+        {"route": None},
+        {"agent_id": "forged"},
+        {"session_id": "forged"},
+        {"project_id": "forged"},
+    ],
+)
+async def test_extension_command_rejects_invalid_page_navigation(
+    overrides: dict[str, Any],
+) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    values: dict[str, Any] = {
+        "kind": "open_extension_page",
+        "extension": "workflow_ext",
+        "page": "overview",
+    }
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Open the workflow.",
+        page_ids=frozenset({"overview"}),
+        handler=lambda _context, _argument: CommandOutcome(
+            command="workflow", navigation=CommandNavigation(**(values | overrides))
+        ),
+    )
+
+    result = await _execute(dispatcher, "/workflow")
+
+    assert result.navigation is None
+    assert result.feedback is not None
+
+
+@pytest.mark.asyncio
+async def test_extension_command_drops_navigation_after_owner_retirement() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    entered = asyncio.Event()
+    released = asyncio.Event()
+
+    async def handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+        entered.set()
+        await released.wait()
+        return CommandOutcome(
+            command="workflow",
+            navigation=CommandNavigation(
+                kind="open_extension_page", extension="workflow_ext", page="overview"
+            ),
+        )
+
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Open the workflow.",
+        handler=handler,
+        page_ids=frozenset({"overview"}),
+    )
+    task = asyncio.create_task(_execute(dispatcher, "/workflow"))
+    await entered.wait()
+    dispatcher.unregister_extension_commands("workflow_ext")
+    released.set()
+
+    result = await task
+
+    assert result.navigation is None
+    assert result.feedback is not None
 
 
 def test_dispatch_help_marks_transient_output() -> None:
