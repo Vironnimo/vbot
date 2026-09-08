@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager, RunExecutionOwner
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
@@ -615,3 +616,132 @@ async def test_resume_admits_only_selected_failed_participant(board, monkeypatch
     )
     assert admitted == [peers[1].participant_id]
     assert len(result["runs"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_open_swarm_without_touching_data(board):
+    sid = board.swarm["id"]
+    with pytest.raises(ValueError, match="swarm_not_stopped"):
+        await board.service.operation("swarms.delete", {"swarm_id": sid})
+    assert (await board.store.get_swarm(sid))["state"] == "preparing"
+    with pytest.raises(ValueError, match="group_not_closed"):
+        await board.groups.delete_group(sid)
+    assert all(board.sessions.exists(binding.address) for binding in board.bindings)
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_other_work(board):
+    sid = board.swarm["id"]
+    profile = board.swarm["profile_snapshot"]
+    other = await board.store.create_swarm(
+        profile["id"],
+        "Keep this Swarm",
+        {"cwd": "C:/work"},
+        request_id="other",
+        expected_profile_revision=profile["revision"],
+    )
+    ordinary = SessionAddress(None, "ordinary", "retained")
+    board.sessions.get_or_create(ordinary)
+    binding = board.bindings[0]
+    board.sessions.get(binding.address).append(
+        ChatMessage(
+            id="history",
+            role="user",
+            content="Private history",
+            timestamp="2026-09-08T10:00:00+00:00",
+        )
+    )
+    foreign = board.groups._registry.create(
+        owner_name="other-extension",
+        group_id=sid,
+        participant_id="foreign",
+        config=TemporaryAgentConfig(
+            model="fixture/model",
+            cwd=board.contexts[0].workspace,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="Foreign",
+        ),
+    )
+    await board.store.post_human(sid, text="Delete this Board post", request_id="post")
+    await board.store.prepare_inbox_delivery(sid, binding.participant_id)
+    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    result = await board.service.operation("swarms.delete", {"swarm_id": sid})
+    assert result == {"swarm_id": sid, "deleted": True}
+    assert await board.service.operation("swarms.delete", {"swarm_id": sid}) == result
+    assert not any(board.sessions.exists(item.address) for item in board.bindings)
+    assert board.sessions.exists(ordinary) and board.sessions.exists(foreign.address)
+    assert await board.store.get_profile(profile["id"]) == profile
+    assert [row["id"] for row in (await board.store.list_swarms()).entries] == [other["swarm_id"]]
+    connection = board.store._connection
+    for table in (
+        "posts",
+        "recipients",
+        "delivery_batches",
+        "delivery_batch_entries",
+        "participant_sessions",
+        "swarm_events",
+    ):
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+    assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+    with pytest.raises(ValueError, match="swarm_not_found"):
+        await board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["sessions", "board"])
+async def test_interrupted_delete_remains_retryable_and_cannot_resume(board, monkeypatch, stage):
+    sid = board.swarm["id"]
+    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    await board.store.begin_resume(sid, request_id="resume", actor="user")
+    await board.service.operation(
+        "swarms.stop", {"swarm_id": sid, "request_id": "stop-after-resume"}
+    )
+    target, method = (
+        (board.groups, "delete_group") if stage == "sessions" else (board.store, "delete_swarm")
+    )
+    original = getattr(target, method)
+
+    async def fail(*args, **kwargs):
+        raise OSError("Deletion interrupted")
+
+    monkeypatch.setattr(target, method, fail)
+    with pytest.raises(OSError, match="Deletion interrupted"):
+        await board.service.operation("swarms.delete", {"swarm_id": sid})
+    await board.store.recover_interrupted()
+    assert (await board.store.get_swarm(sid))["state"] == "deleting"
+    for operation, request in (("resume", "resume"), ("stop", "stop")):
+        with pytest.raises(ValueError, match="swarm_closed"):
+            await board.service.operation(
+                f"swarms.{operation}", {"swarm_id": sid, "request_id": request}
+            )
+    monkeypatch.setattr(target, method, original)
+    assert (await board.service.operation("swarms.delete", {"swarm_id": sid}))["deleted"]
+    assert not any(board.sessions.exists(item.address) for item in board.bindings)
+
+
+@pytest.mark.asyncio
+async def test_resume_waits_for_delete_and_cannot_recreate_sessions(board, monkeypatch):
+    sid = board.swarm["id"]
+    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = board.groups.delete_group
+
+    async def delayed(group_id):
+        entered.set()
+        await release.wait()
+        return await original(group_id)
+
+    monkeypatch.setattr(board.groups, "delete_group", delayed)
+    deletion = asyncio.create_task(board.service.operation("swarms.delete", {"swarm_id": sid}))
+    await entered.wait()
+    resume = asyncio.create_task(
+        board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
+    )
+    release.set()
+    assert (await deletion)["deleted"]
+    with pytest.raises(ValueError, match="swarm_not_found"):
+        await resume
+    assert not any(board.sessions.exists(item.address) for item in board.bindings)

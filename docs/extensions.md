@@ -600,6 +600,10 @@ selected inactive participant, including after a failed Run. Usage comes from
 canonical Statistics. Disable/reload retains history; interrupted execution never
 restarts itself.
 
+After Stop, **Delete Swarm** opens a confirmation and permanently removes that
+Swarm's Board and participant Sessions. Its profile remains available for new
+Swarms. Failed deletion can be retried; a partially deleted Swarm cannot Resume.
+
 ## Managed operations and MCP
 
 API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions <name> operations`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.

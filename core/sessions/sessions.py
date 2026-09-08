@@ -1584,6 +1584,12 @@ class ChatSessionManager:
             _decode_state_object(str(row["config_json"]), "temporary Session config"),
         )
 
+    async def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+        """Delete bound participant Sessions after their owner has drained execution."""
+        return await _run_session_io(
+            lambda: self._store.delete_temporary_group(owner_name=owner_name, group_id=group_id)
+        )
+
     async def temporary_bindings_async(
         self,
         *,
