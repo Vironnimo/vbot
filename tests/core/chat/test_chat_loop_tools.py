@@ -188,7 +188,11 @@ async def test_analyze_image_visible_for_nonvision_route_with_usable_binding(
         available_task_models={TASK_IMAGE_UNDERSTANDING},
     )
 
-    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+    loop = build_chat_loop(runtime)
+    preview = await loop.preview_tool_definitions(agent)
+    assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in preview}
+    assert not adapter.requests
+    await loop.send("coder", "Inspect the image", session_id="s1")
 
     assert ANALYZE_IMAGE_TOOL_NAME in _request_tool_names(adapter)
     assert ANALYZE_IMAGE_TOOL_NAME in runtime.system_prompts.effective_tool_name_calls[-1]
@@ -220,7 +224,11 @@ async def test_analyze_image_hidden_when_effective_route_can_view_images(
         available_task_models={TASK_IMAGE_UNDERSTANDING},
     )
 
-    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+    loop = build_chat_loop(runtime)
+    preview = await loop.preview_tool_definitions(agent)
+    assert ANALYZE_IMAGE_TOOL_NAME not in {tool["name"] for tool in preview}
+    assert not adapter.requests
+    await loop.send("coder", "Inspect the image", session_id="s1")
 
     assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
     assert ANALYZE_IMAGE_TOOL_NAME not in runtime.system_prompts.effective_tool_name_calls[-1]

@@ -178,7 +178,10 @@ COMPLETION_RACE_REMINDER = (
     "active. Receive the pending messages with swarm_inbox, consider whether more work is needed, "
     "and call swarm_state with action done again when ready."
 )
-ORIENTATION = (
+DEFAULT_INSTRUCTIONS = (
+    "You are one of several Agents. Every Agent receives the same initial user prompt, "
+    "which describes your shared goal. How you organize yourselves and pursue that goal "
+    "is up to you collectively.\n\n"
     "You are one participant in a group working on the user's shared goal. The other participants "
     "are peers who choose their own contributions. Use the shared Board to agree on useful work, "
     "share findings, and ask for help. Check the Board before duplicating work; coordinate changes "
@@ -201,6 +204,14 @@ ORIENTATION = (
     "If "
     "there is nothing useful to do, wait instead of repeatedly polling."
 )
+DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:skills"]
+DEFAULT_REMINDERS = {"delivery": True, "wake": True, "resume": True, "completion": True}
+REMINDER_TEXTS = {
+    "delivery": DELIVERY_PREFIX,
+    "wake": PULL_WAKE_REMINDER,
+    "resume": RESUME_REMINDER,
+    "completion": COMPLETION_RACE_REMINDER,
+}
 ERRORS = {
     "invalid_arguments": "Use only the fields accepted by the selected action. Omit optional "
     "fields you do not need, and follow their descriptions for required values. "

@@ -46,7 +46,7 @@ The bundled default layout lives in `resources/prompts/layout.json` shipping sou
 
 1. **Dedupe** definitions by id, first-collected wins (core/data/memory first, then contributed, then custom - nothing shadows a core id); collisions log both sources.
 2. **Resolve layout:** matching entries keep order/enabled; entries without definitions are inert (pruned later); absent definitions append at `default_rank` - the user's chosen order is never disturbed by new blocks.
-3. **Resolve text:** dynamic blocks call `render(context)` in isolation (exception drops only that block); static text takes the override cascade then expands `{generated:...}` and `{include:...}` fail-soft plus build-time replacements; data stays verbatim.
+3. **Resolve text:** skip disabled or inactive blocks before rendering; dynamic blocks call `render(context)` in isolation (exception drops only that block); static text takes the override cascade then expands `{generated:...}` and `{include:...}` fail-soft plus build-time replacements; data stays verbatim. Explicit inspection via `block_details` also renders disabled active blocks to show their content, without including them in the combined prompt.
 4. **Three gates:** user-enabled + owner-active (delegated to injected `OwnerActivity`, never hardcoded) + non-empty.
 5. **Normalize:** trim, drop empties, join with exactly one blank line - no padding traces anywhere.
 
@@ -72,6 +72,14 @@ The bundled default layout lives in `resources/prompts/layout.json` shipping sou
 **Block-edit facade** (the `prompt.*` RPC surface): `list_scopes()` reports each custom-prompt Agent scope with `has_customizations` (saved layout or any override) so the editor can confirm before disabling custom prompts. `list_blocks(scope)` gives static metadata in layout order including effective text, `is_modified`, and inheritance layer for editable blocks - owner-active status deliberately excluded (preview's job). `update_block` accepts overrides on editable blocks only (data/dynamic reject); `reset_block` drops to inherited/default (a `user:` block has no default - delete instead). `set_layout` tolerates contributor-gone ids (store prunes them on write); `reset_layout` restores the bundled default leaving text overrides untouched. `create_block`/`remove_block` manage `user:<slug>` blocks only - core/tool/extension blocks toggle off, never delete. `prompt.preview` returns rendered `text`, token counts including the Tool-definition footprint, and `estimated`. Optional boolean `include_tools` adds the same effective Provider definitions with individual token estimates for inspection; it does not mutate definitions or Prompt context. Deferred Tools remain excluded, and omission keeps the compact response. Coverage: `tests/server/rpc/test_operations_methods.py`.
 
 ## Conventions
+
+A temporary Agent's optional `prompt_blocks` selection overrides block enablement
+exhaustively while retaining layout order: `None` inherits the ordinary layout,
+an explicit list includes only selected active non-empty blocks, and newly
+registered blocks remain off. `build_system_prompt(block_details=...)` optionally
+collects rendered content, enabled/active state and actual inclusion for previews.
+Normal rendering does not read disabled block files or invoke their renderers.
+Source/tests: `prompts.py`, `blocks.py`, `test_prompts_layouts_overrides.py`.
 
 - Prompt code depends on Protocols for Agent/Tool/Skill/Channel/Storage shapes and imports no concrete domain classes; contributions arrive as plain `BlockDefinition` objects handed in via the runtime.
 - Bundled default texts are **English Markdown in resources** - a deliberate signed-off i18n exception: the System Prompt is the model-facing English contract, not localized UI string.

@@ -70,6 +70,12 @@ The working-Project functions in `core/projects/resolver.py` expose a process-lo
 
 ## Change Rules
 
+`preview_temporary_agent` and persisted temporary-Agent resolution share
+`_apply_temporary_project`: both enforce the same Project Tool/Skill ceilings,
+while preview constructs no Session binding. Explicit prompt-block selection is
+preserved independently of those ceilings. Evidence: `core/projects/resolver.py`,
+`tests/core/projects/test_resolver_config_agent.py`.
+
 - Add or reorder a fallback tier only in the resolver and update `effective_config()` provenance, RPC/UI presentation, and tests together.
 - Change model availability in the shared Models/Providers checker, not by adding a Project-only exception.
 - Change repository field interpretation in the source-format scanner; resolution should consume the common `ScannedAgent` representation.

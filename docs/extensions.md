@@ -152,6 +152,16 @@ Bridge commands allow up to 64 KiB and host replies up to 8 MiB, including their
 
 Startup receives an owner-bound `ExtensionHost`: `state_dir` is private persistent Extension data, `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
 
+`catalog()` also returns public System Prompt block metadata. When available,
+`await host.inspect_prompt(config, project_id)` previews a `TemporaryAgentConfig`
+without creating a Session or Run: `text` is the assembled System Prompt, `blocks`
+contains rendered content and enabled/active/included state, and `tools` contains
+the separately transmitted Model Tool definitions. Preview applies the ordinary
+Project ceilings, Model Tool routing and this Extension's private Tool grants.
+The optional configuration field `prompt_blocks` is an exhaustive block selection;
+omit it to inherit the normal layout. Include `core:agent_body` to retain the
+configuration's editable instructions. An explicit empty list emits no blocks.
+
 `register_session_runtime` declares `before_request`, `run_finished`, and `quiesce`, with optional `acknowledge_delivery` and `reconcile_tool_batch` callbacks. Return `PreparedSessionDelivery` from the request boundary; Chat commits its note and receipt together before acknowledgment. A successful Tool can request a receipt or graceful turn end through its host-installed `ToolContext` callbacks. Reconciliation runs after every sibling Tool Result is durable and returns `ToolBatchDecision`. Required callback errors propagate; quiesce must drain owned work before its capabilities disappear.
 
 `api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the agent-facing design rules in `.vorch/domain-maps/tools/designing-agent-tools.md` and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.

@@ -65,6 +65,7 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
+from core.prompts.prompts import ProjectPromptContext
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -313,6 +314,7 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             thinking_effort=raw.get("thinking_effort"),
             fallback_models=raw.get("fallback_models"),
             instructions=raw.get("instructions", ""),
+            prompt_blocks=raw.get("prompt_blocks"),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("temporary execution configuration is invalid") from error
@@ -978,6 +980,9 @@ class Runtime:
             temporary_agents=groups,
             state_dir=state_dir,
             catalog=lambda: self._extension_catalog(identity),
+            inspect_prompt=lambda config, project_id: self._inspect_extension_prompt(
+                identity, config, project_id
+            ),
             publish_change=lambda resource, ids, revision: self._publish_extension_change(
                 identity, resource, ids, revision
             ),
@@ -1121,6 +1126,55 @@ class Runtime:
             raise ValueError("Extension registration is no longer current")
         return catalog
 
+    async def _inspect_extension_prompt(
+        self, identity: Any, config: TemporaryAgentConfig, project_id: str | None
+    ) -> dict[str, Any]:
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        agent = await _RUNTIME_WORKERS.run(
+            self.agent_resolver.preview_temporary_agent, config, project_id
+        )
+        record = next(item for item in self._extensions.records() if item.name == identity.name)
+        grants = tuple(tool.name for tool in record.declarations.tools if tool.session_scoped)
+        definitions = await self.chat_loop.preview_tool_definitions(
+            agent, session_tool_grants=grants
+        )
+        result = await _RUNTIME_WORKERS.run(
+            self._extension_prompt_projection, config, project_id, agent, definitions, grants
+        )
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        return result
+
+    def _extension_prompt_projection(
+        self,
+        config: TemporaryAgentConfig,
+        project_id: str | None,
+        agent: Any,
+        definitions: list[dict[str, Any]],
+        grants: tuple[str, ...],
+    ) -> dict[str, Any]:
+        project = self.projects.get(project_id) if project_id else None
+        context = (
+            ProjectPromptContext.from_project(
+                project.project_id, project.display_name, project.cwd, project.auto_load
+            )
+            if project is not None
+            else None
+        )
+        blocks: list[dict[str, Any]] = []
+        text = self.system_prompts.build_system_prompt(
+            agent,
+            agent_body=config.instructions,
+            project_context=context,
+            agent_project_id=project_id,
+            skill_registry=self.skills_for(project_id, None),
+            effective_tool_names=[item["name"] for item in definitions],
+            session_tool_grants=grants,
+            block_details=blocks,
+        )
+        return {"text": text, "blocks": blocks, "tools": definitions}
+
     def _extension_catalog_projection(self) -> dict[str, Any]:
         projects = self.projects.list()
         skill_choices = [
@@ -1181,6 +1235,7 @@ class Runtime:
                 },
             },
             "models": self._extension_catalog_models(),
+            "prompt_blocks": self.system_prompts.list_blocks(),
         }
 
     def _extension_catalog_models(self) -> list[dict[str, Any]]:
