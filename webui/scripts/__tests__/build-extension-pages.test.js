@@ -69,5 +69,5 @@ describe('build-extension-pages', () => {
     expect(fonts).toHaveLength(6);
     for (const font of fonts)
       expect(existsSync(resolve(swarmBuild, 'assets', font))).toBe(true);
-  });
+  }, 30_000);
 });

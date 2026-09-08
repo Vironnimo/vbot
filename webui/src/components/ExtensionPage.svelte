@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import Banner from './ui/Banner.svelte';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import {
     invokeExtensionPageOperation,
     openExtensionPageRun,
@@ -40,6 +41,33 @@
   let observedDescriptor = '';
   let observedInvalidation = null;
   const runSubscriptions = new SvelteMap();
+  const unregisterAutosave = useAutosaveContext().register({
+    hasPending: () => frameContext?.autosavePending === true,
+    flush: flushAutosave,
+  });
+
+  function flushAutosave() {
+    const context = frameContext;
+    if (!context?.autosavePending) return Promise.resolve(true);
+    if (context.autosaveFlush) return context.autosaveFlush.promise;
+    const id = newNonce();
+    let finish;
+    const promise = new Promise((resolve) => {
+      const timer = setTimeout(() => finish(false), 35_000);
+      finish = (saved) => {
+        clearTimeout(timer);
+        context.autosaveFlush = null;
+        resolve(saved === true && frameContext === context);
+      };
+    });
+    context.autosaveFlush = { id, promise, finish };
+    post(context, {
+      ...contextPayload(context),
+      type: 'vbot.extension.autosave.flush',
+      id,
+    });
+    return promise;
+  }
 
   function descriptorIdentity(value) {
     if (!value || typeof value !== 'object') return '';
@@ -150,6 +178,7 @@
   function invalidateContext(reason) {
     const previous = frameContext;
     frameContext = null;
+    previous?.autosaveFlush?.finish(false);
     for (const subscription of runSubscriptions.values()) subscription.close();
     runSubscriptions.clear();
     if (previous?.window)
@@ -228,6 +257,24 @@
     if (data.type === 'vbot.extension.ready') {
       context.ready = true;
       post(context, contextPayload(context));
+      return;
+    }
+    if (
+      context.ready &&
+      data.type === 'vbot.extension.autosave.state' &&
+      typeof data.pending === 'boolean'
+    ) {
+      context.autosavePending = data.pending;
+      return;
+    }
+    if (
+      context.ready &&
+      context.autosaveFlush &&
+      data.type === 'vbot.extension.autosave.result' &&
+      data.id === context.autosaveFlush?.id &&
+      typeof data.saved === 'boolean'
+    ) {
+      context.autosaveFlush.finish(data.saved);
       return;
     }
     if (!context.ready || !validCall(data)) return;
@@ -380,6 +427,7 @@
   onMount(() => window.addEventListener('message', onMessage));
   onDestroy(() => {
     disposed = true;
+    unregisterAutosave();
     invalidateContext('disposed');
     window.removeEventListener('message', onMessage);
   });

@@ -56,6 +56,46 @@ function message(child, data) {
 }
 
 describe('ExtensionPage', () => {
+  it('waits for the current iframe editor to save and rejects a pending flush on reload', async () => {
+    let participant;
+    const autosaveContext = {
+      register: (value) => {
+        participant = value;
+        return () => {};
+      },
+    };
+    component = mount(ExtensionPageHost, {
+      target: document.body,
+      props: { initialDescriptor: descriptor, autosaveContext },
+    });
+    flushSync();
+    const { child, sent, init } = loadFrame();
+    message(child, { ...init, type: 'vbot.extension.ready' });
+    message(child, {
+      ...init,
+      type: 'vbot.extension.autosave.state',
+      pending: true,
+    });
+    expect(participant.hasPending()).toBe(true);
+    const pending = participant.flush();
+    const request = sent.mock.calls.at(-1)[0];
+    message(child, {
+      ...request,
+      type: 'vbot.extension.autosave.result',
+      id: 'wrong',
+      saved: true,
+    });
+    message(child, {
+      ...request,
+      type: 'vbot.extension.autosave.result',
+      saved: true,
+    });
+    await expect(pending).resolves.toBe(true);
+    const interrupted = participant.flush();
+    document.querySelector('iframe').dispatchEvent(new Event('load'));
+    await expect(interrupted).resolves.toBe(false);
+  });
+
   it.each([
     [128 * 1024, 'vbot.extension.result'],
     [8 * 1024 * 1024, 'vbot.extension.error'],

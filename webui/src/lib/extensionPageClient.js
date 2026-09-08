@@ -11,6 +11,28 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const invalidationListeners = new Set();
   const contextListeners = new Set();
   const runEventListeners = new Set();
+  let autosaveParticipant = null;
+
+  function autosaveMessage(type, values = {}) {
+    if (!context) return;
+    target.postMessage(
+      {
+        type,
+        version: BRIDGE_VERSION,
+        nonce: context.nonce,
+        epoch: context.epoch,
+        descriptor: context.descriptor,
+        ...values,
+      },
+      '*',
+    );
+  }
+
+  function notifyAutosave() {
+    autosaveMessage('vbot.extension.autosave.state', {
+      pending: autosaveParticipant?.hasPending() === true,
+    });
+  }
 
   function isPlainObject(value) {
     if (!value || typeof value !== 'object') return false;
@@ -84,9 +106,32 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         '*',
       );
       for (const listener of contextListeners) listener(context);
+      if (autosaveParticipant) notifyAutosave();
       return;
     }
     if (!matchesContext(data)) return;
+    if (
+      data.type === 'vbot.extension.autosave.flush' &&
+      typeof data.id === 'string'
+    ) {
+      const captured = context;
+      Promise.resolve()
+        .then(() => autosaveParticipant?.flush() ?? true)
+        .catch(() => false)
+        .then((saved) => {
+          if (
+            context?.nonce !== captured.nonce ||
+            context?.epoch !== captured.epoch
+          )
+            return;
+          notifyAutosave();
+          autosaveMessage('vbot.extension.autosave.result', {
+            id: data.id,
+            saved: saved === true,
+          });
+        });
+      return;
+    }
     if (data.type === 'vbot.extension.context') {
       context = {
         ...context,
@@ -190,6 +235,18 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     openMedia: (url) => call('media.open', { url }),
     replaceRoute: (route) => call('route.replace', { route }),
     toast: (message, variant = 'info') => call('toast', { message, variant }),
+    registerAutosave(participant) {
+      if (autosaveParticipant)
+        throw new Error('An autosave participant is already registered');
+      autosaveParticipant = participant;
+      notifyAutosave();
+      return () => {
+        if (autosaveParticipant !== participant) return;
+        autosaveParticipant = null;
+        notifyAutosave();
+      };
+    },
+    notifyAutosave,
     subscribeRun: (groupId, runId, afterSequence = 0) =>
       call('run.subscribe', {
         group_id: groupId,
@@ -215,6 +272,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       invalidationListeners.clear();
       contextListeners.clear();
       runEventListeners.clear();
+      autosaveParticipant = null;
       context = null;
     },
   };
