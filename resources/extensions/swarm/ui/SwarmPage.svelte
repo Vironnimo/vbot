@@ -87,37 +87,23 @@
   const call = (operation, arguments_ = {}) =>
     client.operation(operation, arguments_);
   const isActive = (state) =>
-    ['preparing', 'running', 'waiting', 'needs_attention', 'stopping'].includes(
+    ['preparing', 'running', 'idle', 'needs_attention', 'stopping'].includes(
       state,
     );
   const resumableParticipantState = (state) =>
-    [
-      'prepared',
-      'idle',
-      'waiting',
-      'blocked',
-      'failed',
-      'interrupted',
-    ].includes(state);
-  const unfinishedParticipantState = (state) =>
-    !['completed', 'done', 'finishing'].includes(state);
+    ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
   const canResume = $derived(
     selectedSwarm &&
-      (['cancelled', 'interrupted'].includes(selectedSwarm.state)
-        ? (selectedSwarm.participants ?? []).some((participant) =>
-            unfinishedParticipantState(participant.state),
-          )
-        : selectedSwarm.state !== 'completed' &&
-          selectedSwarm.state !== 'stopping' &&
-          selectedSwarm.state !== 'preparing' &&
-          (selectedSwarm.participants ?? []).some((participant) =>
-            resumableParticipantState(participant.state),
-          )),
+      !['stopping', 'preparing'].includes(selectedSwarm.state) &&
+      (selectedSwarm.participants ?? []).some(
+        (participant) =>
+          !participant.run_active &&
+          resumableParticipantState(participant.state),
+      ),
   );
   const tabs = $derived([
     { id: 'board', label: t('swarm.tabs.board', 'Board') },
     { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
-    { id: 'results', label: t('swarm.tabs.results', 'Results') },
     { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
     { id: 'audit', label: t('swarm.tabs.audit', 'Delivery audit') },
   ]);
@@ -632,7 +618,12 @@
         };
       }
       if (
-        ['run_completed', 'run_cancelled', 'run_failed'].includes(event.type)
+        [
+          'run_completed',
+          'run_cancelled',
+          'run_failed',
+          'run_interrupted',
+        ].includes(event.type)
       ) {
         void reconcileActivity(request, swarmId, participant, true);
       }
@@ -812,7 +803,7 @@
               ><i class="dot" class:running={swarm.state === 'running'}></i>{t(
                 `swarm.state.${swarm.state}`,
                 swarm.state,
-              )} · {swarm.done_count}/{swarm.participant_count}</span
+              )} · {swarm.participant_count}</span
             >
           </button>
         {/each}
@@ -1073,7 +1064,7 @@
                         >
                         {t('swarm.context', 'Context')}: {contextTokens}
                       </button>
-                      {#if canResume && selectedParticipant && !selectedParticipant.run_active && (resumableParticipantState(selectedParticipant.state) || selectedParticipant.state === 'cancelled')}
+                      {#if canResume && selectedParticipant && !selectedParticipant.run_active && resumableParticipantState(selectedParticipant.state)}
                         <Button
                           variant="primary"
                           disabled={Boolean(pending)}
@@ -1109,29 +1100,6 @@
                       title={t('swarm.noActivity', 'No retained activity yet.')}
                     />{/each}
                 </article>{/if}
-            </section>
-          {:else if activeTab === 'results'}<section
-              class="panel"
-              role="tabpanel"
-            >
-              <h3>{t('swarm.results', 'Results')}</h3>
-              {#each selectedSwarm.participants?.filter((item) => item.summary) ?? [] as participant (participant.id)}<article
-                  class="result"
-                >
-                  <strong>{participant.display_name}</strong>
-                  <p>{participant.summary}</p>
-                  {#if participant.artifacts?.length}<ul>
-                      {#each participant.artifacts as artifact (artifact)}<li>
-                          {artifact}
-                        </li>{/each}
-                    </ul>{/if}
-                </article>{:else}<EmptyState
-                  density="compact"
-                  title={t(
-                    'swarm.resultsEmpty',
-                    'Completed participant summaries will appear here.',
-                  )}
-                />{/each}
             </section>
           {:else if activeTab === 'usage'}<section
               class="panel"
@@ -1420,7 +1388,10 @@
                 ><option value="idle"
                   >{t('swarm.delivery.idle', 'When idle')}</option
                 ><option value="pull"
-                  >{t('swarm.delivery.pull', 'Pull only')}</option
+                  >{t(
+                    'swarm.delivery.pull',
+                    'On request or when waking',
+                  )}</option
                 ></select
               ></FormField
             ><label class="check"
@@ -1738,7 +1709,6 @@
     gap: 8px;
   }
   .board li,
-  .result,
   .history {
     padding: 12px;
     border-left: 2px solid var(--border-2);
