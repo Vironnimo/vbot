@@ -201,6 +201,9 @@ class _EmittingToolRegistry(ToolRegistry):
             context,
             tool_restriction=self._tool_restriction,
             tool_denial_resolver=self._denial_resolver,
+            background_registration_hook=lambda callback: self._run.register_tool_background(
+                context.tool_call_id, callback
+            ),
         )
         # Publish cancellation readiness before the started event reaches an
         # accessor. Tool-owned cleanup can register a moment later; Run retains

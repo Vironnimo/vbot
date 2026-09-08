@@ -2,12 +2,76 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   appendRunEvent,
+  applyRunControls,
   createChatController,
   createChatState,
   ensureSessionState,
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+
+it('keeps live Run controls authoritative across stale snapshots and other Runs', () => {
+  const session = ensureSessionState(
+    createChatState(),
+    'agent@project',
+    'session',
+  );
+  startRun(session, { run_id: 'one', status: 'running' });
+  appendRunEvent(session, {
+    run_id: 'one',
+    sequence: 5,
+    type: 'run_controls_changed',
+    payload: { compaction: 'pending' },
+  });
+  applyRunControls(session, {
+    run_id: 'one',
+    controls_sequence: 4,
+    controls: { compaction: 'idle' },
+  });
+  applyRunControls(session, {
+    run_id: 'other',
+    controls_sequence: 6,
+    controls: { compaction: 'idle' },
+  });
+  expect(session.currentRun.controls.compaction).toBe('pending');
+  applyRunControls(session, {
+    run_id: 'one',
+    controls_sequence: 6,
+    controls: { compaction: 'running' },
+  });
+  expect(session.currentRun.controls.compaction).toBe('running');
+});
+
+it('submits controls to the captured Session and coalesces clicks', async () => {
+  let resolve;
+  const controlRun = vi.fn(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const { controller, chatState, runStream } = setup({
+    operationOverrides: { controlRun },
+  });
+  const session = ensureSessionState(chatState, 'agent@project', 'session');
+  startRun(session, { run_id: 'one', status: 'running' });
+  const pending = controller.controlRun(session, 'compact');
+  await controller.controlRun(session, 'compact');
+  expect(controlRun).toHaveBeenCalledTimes(1);
+  expect(controlRun).toHaveBeenCalledWith({
+    agentId: 'agent@project',
+    sessionId: 'session',
+    runId: 'one',
+    action: 'compact',
+    toolCallId: undefined,
+  });
+  const response = { run_id: 'one', controls: { compaction: 'pending' } };
+  resolve(response);
+  await pending;
+  expect(runStream.mergeRunResponse).toHaveBeenCalledWith(session, response);
+  expect(session.pendingRunControls).toEqual({});
+  controller.destroy();
+});
 
 function setup({
   operationOverrides = {},

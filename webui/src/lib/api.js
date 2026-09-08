@@ -44,6 +44,7 @@ export const RUN_EVENT_TYPES = [
   'model_fallback_activated',
   'error_message_persisted',
   'compaction_started',
+  'run_controls_changed',
   'compaction_aborted',
   'compaction_completed',
   RUN_EVENT_REASONING_DELTA,
@@ -1637,6 +1638,27 @@ export function cancelRun(runId, options = {}, rpcOptions = {}) {
   }
 
   return rpc('chat.cancel', params, rpcOptions);
+}
+
+export function controlRun(
+  { agentId, sessionId, runId, action, toolCallId } = {},
+  options = {},
+) {
+  const params = {
+    agent_id: agentId,
+    session_id: sessionId,
+    run_id: runId,
+    action,
+  };
+  for (const value of Object.values(params)) {
+    requireNonEmptyString(
+      value,
+      'Run control requires an address, Run id and action',
+      'chat.control_run',
+    );
+  }
+  if (toolCallId) params.tool_call_id = toolCallId;
+  return rpc('chat.control_run', params, options);
 }
 
 export function cancelToolCall(

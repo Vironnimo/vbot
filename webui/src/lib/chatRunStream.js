@@ -5,6 +5,7 @@ import { isPlainObject } from './values.js';
 import {
   TERMINAL_RUN_EVENTS,
   appendRunEvent,
+  applyRunControls,
   ensureSessionState,
   formatAgentAddress,
   highestContiguousRunEventSequence,
@@ -191,6 +192,8 @@ export function createChatRunStream({
     }
     mergeRetainedRunEvents(sessionState, run.events);
 
+    applyRunControls(sessionState, run);
+
     if (!alreadySubscribed) {
       subscribeToRun(sessionState, sseUrl, {
         afterSequence:
@@ -221,6 +224,7 @@ export function createChatRunStream({
       return false;
     }
     mergeRetainedRunEvents(sessionState, run.events);
+    applyRunControls(sessionState, run);
     return true;
   }
 
@@ -1251,6 +1255,8 @@ export function createChatRunStream({
           started_at: activeRun.started_at,
           sse_url: activeRun.sse_url,
           iteration_count: activeRun.iteration_count,
+          controls: activeRun.controls,
+          controls_sequence: activeRun.controls_sequence,
           ...(activeRun.contributes_to_agent_activity === false
             ? { contributes_to_agent_activity: false }
             : {}),
@@ -1258,6 +1264,7 @@ export function createChatRunStream({
         });
       }
       if (!isDisplayedSession(agentAddress, activeRun.session_id)) {
+        applyRunControls(sessionState, activeRun);
         continue;
       }
       attachRunStream(sessionState, {
@@ -1266,6 +1273,8 @@ export function createChatRunStream({
         started_at: activeRun.started_at,
         sse_url: activeRun.sse_url,
         iteration_count: activeRun.iteration_count,
+        controls: activeRun.controls,
+        controls_sequence: activeRun.controls_sequence,
         ...(activeRun.contributes_to_agent_activity === false
           ? { contributes_to_agent_activity: false }
           : {}),

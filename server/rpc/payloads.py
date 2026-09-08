@@ -32,6 +32,8 @@ def _run_response(
         "status": run.status.value,
         "started_at": run.created_at,
         "iteration_count": run.iteration_count,
+        "controls": run.controls(),
+        "controls_sequence": run.events[-1].sequence if run.events else 0,
         "events": [
             remove_opaque_provider_metadata(event.to_dict(), file_delivery=file_delivery)
             for event in run.events

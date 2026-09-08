@@ -241,6 +241,41 @@ describe('ChatAssistantRun cancel buttons', () => {
     expect(findRowCancel('subagent')).toBeFalsy();
   });
 
+  it.each([true, false])(
+    'shows the background action only with server capability: %s',
+    (available) => {
+      const onBackgroundToolCall = vi.fn();
+      mountedComponent = mountRun({
+        item: createAssistantRunItem({
+          runId: 'run-parent-1',
+          items: [
+            createBashToolChild({
+              toolCallId: 'call-bash-2',
+              status: 'running',
+            }),
+          ],
+        }),
+        backgroundToolCallIds: available ? ['call-bash-2'] : [],
+        onBackgroundToolCall,
+      });
+      const button = document.querySelector(
+        '[aria-label="Move to background"]',
+      );
+      expect(Boolean(button)).toBe(available);
+      if (available) {
+        const details = button.closest('details');
+        const wasOpen = details.open;
+        button.click();
+        flushSync();
+        expect(details.open).toBe(wasOpen);
+        expect(onBackgroundToolCall).toHaveBeenCalledWith({
+          runId: 'run-parent-1',
+          toolCallId: 'call-bash-2',
+        });
+      }
+    },
+  );
+
   it('invokes the bash cancel callback with runId and toolCallId', () => {
     const onCancelToolCall = vi.fn();
     const item = createAssistantRunItem({

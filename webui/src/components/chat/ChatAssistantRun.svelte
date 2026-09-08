@@ -61,6 +61,8 @@
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
+    onBackgroundToolCall = () => {},
+    backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
     backgroundBashStatuses = {},
     backgroundBashProcesses = {},
@@ -91,6 +93,22 @@
     const target = subAgentNavigationTarget(tool);
     if (target) {
       await onNavigateToSubAgent(target);
+    }
+  }
+
+  async function handleBackgroundToolCall(event, tool) {
+    event.preventDefault();
+    event.stopPropagation();
+    const actionKey = `background:${tool.toolCallId}`;
+    if (pendingActions[actionKey]) return;
+    pendingActions[actionKey] = true;
+    try {
+      await onBackgroundToolCall({
+        runId: item.runId,
+        toolCallId: tool.toolCallId,
+      });
+    } finally {
+      pendingActions[actionKey] = false;
     }
   }
 
@@ -603,6 +621,28 @@
                 </span>
               {/if}
               {#if isToolCancellable}
+                {#if backgroundToolCallIds.includes(child.toolCallId)}
+                  <Button
+                    variant="tertiary"
+                    icon
+                    class="tool-row-action"
+                    loading={Boolean(
+                      pendingActions[`background:${child.toolCallId}`],
+                    )}
+                    tooltip={t('chat.moveToBackground', 'Move to background')}
+                    ariaLabel={t('chat.moveToBackground', 'Move to background')}
+                    onClick={(event) => handleBackgroundToolCall(event, child)}
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="13"
+                      height="13"
+                      aria-hidden="true"
+                    >
+                      <path d="M2 6V2h8M6 6h8v8H6zM3 3l6 6M5 9h4V5" />
+                    </svg>
+                  </Button>
+                {/if}
                 <Button
                   variant="danger"
                   icon

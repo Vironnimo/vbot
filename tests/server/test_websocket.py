@@ -1141,6 +1141,11 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-05-03T14:30:01+00:00",
                 "iteration_count": 3,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
             },
         )(),
     )
@@ -1179,6 +1184,8 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
             "status": "running",
             "started_at": "2026-05-03T14:30:01+00:00",
             "iteration_count": 3,
+            "controls": {"compaction": "unavailable", "background_tool_call_ids": []},
+            "controls_sequence": 0,
             "sse_url": "/api/runs/run-running/events",
         }
     ]
@@ -1215,6 +1222,11 @@ def test_websocket_handshake_reflection_run_carries_source_session(
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-05-03T14:30:01+00:00",
                 "iteration_count": 0,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
             },
         )(),
     )
@@ -1239,6 +1251,8 @@ def test_websocket_handshake_reflection_run_carries_source_session(
             "status": "running",
             "started_at": "2026-05-03T14:30:01+00:00",
             "iteration_count": 0,
+            "controls": {"compaction": "unavailable", "background_tool_call_ids": []},
+            "controls_sequence": 0,
             "sse_url": "/api/runs/run-refl/events",
             "source_session_id": source.id,
         }
