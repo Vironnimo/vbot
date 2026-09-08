@@ -168,6 +168,8 @@ function suitabilityFields(model, translate) {
 export function buildModelSelectOptions({
   models = [],
   connections = [],
+  // Use unpinned Model values when the caller leaves Connection routing to Runtime.
+  modelOnly = false,
   selectedModelValue = '',
   emptyLabel = '',
   translate = defaultTranslate,
@@ -206,6 +208,16 @@ export function buildModelSelectOptions({
     isUnavailable: false,
   };
   const catalogOptions = models.flatMap((model) => {
+    if (modelOnly) {
+      return [
+        {
+          value: model.id,
+          label: model.id,
+          isUnavailable: false,
+          ...suitabilityFields(model, translate),
+        },
+      ];
+    }
     const providerConnections = connectionsAllowedForModel(
       model,
       connectionsByProvider[model.provider_id] ?? [],
@@ -226,7 +238,10 @@ export function buildModelSelectOptions({
     catalogOptions.some((option) => option.value === canonicalSelectedValue) ||
     selectedModelOption
   ) {
-    return selectedModelOption
+    return selectedModelOption &&
+      !catalogOptions.some(
+        (option) => option.value === selectedModelOption.value,
+      )
       ? [emptyOption, selectedModelOption, ...catalogOptions]
       : [emptyOption, ...catalogOptions];
   }

@@ -563,3 +563,30 @@ describe('modelFilterFooterLabel', () => {
     ).toBe('');
   });
 });
+
+describe('model-only selection', () => {
+  it('reuses suitability and keeps one exact selected value without connection pins', () => {
+    const options = buildModelSelectOptions({
+      models: [catalogModel('demo/model', 'demo'), { id: 'demo/no-tools' }],
+      modelOnly: true,
+      selectedModelValue: 'demo/model',
+    });
+    expect(options.map((option) => option.value)).toEqual([
+      '',
+      'demo/model',
+      'demo/no-tools',
+    ]);
+    expect(
+      filterModelSelectOptions(options).map((option) => option.value),
+    ).toEqual(['', 'demo/model']);
+    const unavailable = buildModelSelectOptions({
+      models: [],
+      modelOnly: true,
+      selectedModelValue: 'demo/removed',
+    });
+    expect(unavailable[1]).toMatchObject({
+      value: 'demo/removed',
+      isUnavailable: true,
+    });
+  });
+});

@@ -74,6 +74,24 @@ async def test_profiles_validate_revision_slug_and_are_immutable(store: SwarmSto
 
 
 @pytest.mark.asyncio
+async def test_automatic_profile_shortcuts_are_unique_and_stable(store: SwarmStore) -> None:
+    profile = _profile()
+    profile.pop("slug")
+    first, second = await asyncio.gather(
+        store.save_profile(profile, expected_revision=None),
+        store.save_profile(profile, expected_revision=None),
+    )
+    assert {first["slug"], second["slug"]} == {"research", "research-2"}
+    original_slug = first.pop("slug")
+    first["name"] = "Renamed"
+    updated = await store.save_profile(first, expected_revision=1)
+    assert updated["slug"] == original_slug
+    assert (await store.get_profile(updated["id"]))["slug"] == updated["slug"]
+    profile["name"] = "研究"
+    assert (await store.save_profile(profile, expected_revision=None))["slug"] == "swarm"
+
+
+@pytest.mark.asyncio
 async def test_profile_defaults_and_strict_nested_validation(store: SwarmStore) -> None:
     profile = _profile()
     profile.pop("delivery")
@@ -1162,6 +1180,7 @@ async def test_settings_enable_returns_wake_intent_and_events_are_bounded(
     )
     page = await store.list_swarms(limit=1)
     assert len(page.entries) == 1 and page.has_more is True and page.cursor is not None
+    assert page.entries[0]["title"] == "Other"
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,13 @@
 <script>
   import ExtensionPage from '../ExtensionPage.svelte';
+  import { provideAutosaveContext } from '../../lib/autosave.js';
 
   let {
     initialDescriptor,
     initialContext = {},
     onRouteChange = () => {},
     onToast = () => {},
+    autosaveContext = null,
   } = $props();
   let descriptor = $state(initialDescriptor);
   let route = $state(initialContext.route ?? '');
@@ -13,6 +15,7 @@
   let locale = $state(initialContext.locale ?? 'en');
   let timezone = $state(initialContext.timezone ?? 'UTC');
   let invalidation = $state(initialContext.invalidation ?? null);
+  if (autosaveContext) provideAutosaveContext(autosaveContext);
 
   export function update(next) {
     if ('descriptor' in next) descriptor = next.descriptor;

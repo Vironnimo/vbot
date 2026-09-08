@@ -17,6 +17,14 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
   Skill and Project choices load when opening a profile editor, not on display
   context updates; failed editor loads leave the overview usable
   (`SwarmPage.test.js`).
+- Profile editing uses the shared Model search/selection and effort helpers,
+  the shared Secondary bar, topic tabs, a bounded scrollport, and a fixed save footer.
+  Creation saves explicitly; saved profiles autosave and flush before navigation
+  through the generic page bridge. Invalidations preserve the mounted draft.
+  The instructions field is the participant's System Prompt contribution;
+  omitted effort uses the Provider default, not shared Agent defaults.
+  All/None Tool actions materialize a selected policy through `toolAccess.js`.
+  Tests: `SwarmPage.test.js` and `test_swarm_store.py`.
 
 ## Invariants that affect changes
 
@@ -24,6 +32,9 @@ Profiles are versioned, revision-checked starting configurations. A started Swar
 retains its prompt and configuration snapshot. The formation is fixed; participant
 Sessions persist across explicit Resume. Temporary execution ownership belongs to
 `core/agents/temporary.py`, not to an Identity Agent or a parent Session.
+Saving without a command shortcut generates a unique name-based shortcut inside
+the profile transaction; omission on an update retains the existing shortcut.
+Explicit shortcuts remain validated and collision-checked (`store.py`).
 
 Board posts are immutable and public within one Swarm. Audience snapshots survive
 later join/leave changes. A public ping takes precedence over discussion/main
@@ -77,3 +88,11 @@ retain pending delivery and expose needs_attention with ids-only diagnostics.
 Use the Sessions, Runs, Chat and Statistics maps before changing their owning
 contracts. Swarm must consume their canonical history and usage instead of
 maintaining a second transcript or authoritative usage counter.
+
+The retained Swarm list projects a bounded first-line goal title from the stored
+prompt. Profile selection opens the editor; New Swarm returns to the goal form.
+Participant selection opens Activity and disposes the previous Run subscription;
+late history/subscription replies cannot replace a newer participant selection.
+Terminal Run events reload canonical history so non-streamed final output appears
+without reopening Activity.
+Evidence: `SwarmPage.test.js` and `test_swarm_store.py`.

@@ -125,7 +125,9 @@ class SwarmStore:
         self, profile: Mapping[str, Any], *, expected_revision: int | None
     ) -> Json:
         normalized = _validate_profile(profile)
-        return await self._run(self._save_profile, normalized, expected_revision)
+        return await self._run(
+            self._save_profile, normalized, expected_revision, "slug" not in profile
+        )
 
     async def get_profile(self, profile_id: str) -> Json:
         return await self._run(self._get_profile, profile_id)
@@ -817,10 +819,12 @@ class SwarmStore:
             raise RuntimeError("SwarmStore is not open")
         return self._connection
 
-    def _save_profile(self, profile: Json, expected_revision: int | None) -> Json:
+    def _save_profile(
+        self, profile: Json, expected_revision: int | None, automatic_slug: bool = False
+    ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
             existing = connection.execute(
-                "SELECT revision FROM profiles WHERE id = ?", (profile["id"],)
+                "SELECT revision, slug FROM profiles WHERE id = ?", (profile["id"],)
             ).fetchone()
             if existing is None:
                 if expected_revision is not None:
@@ -831,6 +835,17 @@ class SwarmStore:
                     raise SwarmStoreError("revision_conflict")
                 revision = int(existing["revision"]) + 1
             profile["revision"] = revision
+            if automatic_slug:
+                if existing is not None:
+                    profile["slug"] = existing["slug"]
+                else:
+                    base = re.sub(r"[^a-z0-9]+", "-", profile["name"].lower()).strip("-") or "swarm"
+                    candidate, suffix = base, 2
+                    while connection.execute(
+                        "SELECT 1 FROM profiles WHERE slug=?", (candidate,)
+                    ).fetchone():
+                        candidate, suffix = f"{base}-{suffix}", suffix + 1
+                    profile["slug"] = candidate
             now = _now()
             try:
                 connection.execute(
@@ -1037,7 +1052,7 @@ class SwarmStore:
         else:
             offset = 0
         rows = connection.execute(
-            "SELECT s.id,s.state,s.created_at,COUNT(p.id) AS participant_count,"
+            "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,COUNT(p.id) AS participant_count,"
             "SUM(CASE WHEN p.state='done' THEN 1 ELSE 0 END) AS done_count,ss.revision AS settings_revision "
             "FROM swarms s JOIN swarm_settings ss ON ss.swarm_id=s.id "
             "LEFT JOIN participants p ON p.swarm_id=s.id WHERE s.rowid<=? "
@@ -1047,6 +1062,7 @@ class SwarmStore:
         entries = [
             {
                 "id": str(row["id"]),
+                "title": str(row["title"]).split("\n", 1)[0],
                 "state": str(row["state"]),
                 "created_at": str(row["created_at"]),
                 "participant_count": int(row["participant_count"]),
@@ -3115,6 +3131,7 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
         profile["id"] = new_id("prf")
     if not isinstance(profile["id"], str) or not profile["id"]:
         raise SwarmStoreError("invalid_arguments", field="id")
+    profile.setdefault("slug", profile["id"])
     if not isinstance(profile.get("slug"), str) or _PROFILE_SLUG.fullmatch(profile["slug"]) is None:
         raise SwarmStoreError("invalid_arguments", field="slug")
     _text(profile.get("name"), "name", 120)

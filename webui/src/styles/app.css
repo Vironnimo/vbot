@@ -911,10 +911,14 @@ svg {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--text-lo);
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-med);
   background: transparent;
+  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -922,9 +926,9 @@ svg {
 }
 
 .btn-tertiary:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-dim);
+  border-color: transparent;
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 /* Icon footprint: primary becomes the 32px send-style square, tertiary the
@@ -938,7 +942,14 @@ svg {
 .btn-tertiary.btn-icon {
   width: 30px;
   height: 30px;
+  padding: 0;
   border-color: transparent;
+}
+
+.btn-secondary.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
 }
 
 /* Danger icon footprint: the 32px stop-style square (composer run cancel).
@@ -3446,6 +3457,7 @@ kbd {
      a ≥40px hit area on phone widths. */
   .btn-primary,
   .btn-secondary,
+  .btn-tertiary,
   .btn-danger,
   .dropdown-trigger,
   .s-dropdown-trigger {
@@ -3453,6 +3465,8 @@ kbd {
   }
 
   .btn-icon {
+    min-width: 40px;
+    min-height: 40px;
     width: 40px;
     height: 40px;
   }

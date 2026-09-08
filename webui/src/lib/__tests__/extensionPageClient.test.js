@@ -38,6 +38,55 @@ afterEach(() => {
 });
 
 describe('extension page client', () => {
+  it('flushes a registered editor and rejects obsolete completion after reinitialization', async () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    let complete;
+    const participant = {
+      hasPending: () => true,
+      flush: vi.fn(() => new Promise((resolve) => (complete = resolve))),
+    };
+    client.registerAutosave(participant);
+    expect(target.postMessage.mock.calls.at(-1)[0]).toMatchObject({
+      type: 'vbot.extension.autosave.state',
+      pending: true,
+    });
+    const request = {
+      type: 'vbot.extension.autosave.flush',
+      version: 1,
+      nonce: 'nonce-a',
+      epoch: 'epoch-a',
+      descriptor,
+      id: 'flush-a',
+    };
+    dispatchFrom(target, request);
+    await Promise.resolve();
+    initialize(target, 'nonce-b', 'epoch-b');
+    complete(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      target.postMessage.mock.calls.some(
+        ([data]) => data.type === 'vbot.extension.autosave.result',
+      ),
+    ).toBe(false);
+    participant.flush.mockResolvedValue(false);
+    dispatchFrom(target, {
+      ...request,
+      id: 'flush-b',
+      nonce: 'nonce-b',
+      epoch: 'epoch-b',
+    });
+    await vi.waitFor(() =>
+      expect(target.postMessage.mock.calls.at(-1)[0]).toMatchObject({
+        type: 'vbot.extension.autosave.result',
+        id: 'flush-b',
+        saved: false,
+      }),
+    );
+  });
+
   it('accepts catalog replies larger than the command limit', async () => {
     const target = parent();
     client = createExtensionPageClient({ target });
