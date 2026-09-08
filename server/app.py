@@ -41,11 +41,12 @@ from server.events import (
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CLIENTS,
     RESOURCE_KIND_CRON,
+    RESOURCE_KIND_EXTENSIONS,
     RESOURCE_KIND_SESSIONS,
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
-from server.file_delivery import PREVIEW_URL_PREFIX, FileDelivery
+from server.file_delivery import EXTENSION_ASSET_URL_PREFIX, PREVIEW_URL_PREFIX, FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
@@ -202,7 +203,9 @@ class _BrowserOriginGuardMiddleware:
         if (
             scope_type == "http"
             and scope.get("method") in {"GET", "HEAD"}
-            and str(scope.get("path", "")).startswith(PREVIEW_URL_PREFIX)
+            and str(scope.get("path", "")).startswith(
+                (PREVIEW_URL_PREFIX, EXTENSION_ASSET_URL_PREFIX)
+            )
             and _scope_header_values(scope, ORIGIN_HEADER_NAME) == ["null"]
         ):
             await self._app(scope, receive, send)
@@ -658,6 +661,45 @@ def create_app(
                 },
             )
 
+    @app.api_route("/api/extension-assets/{token}/{asset_path:path}", methods=["GET", "HEAD"])
+    async def get_extension_asset(request: Request, token: str, asset_path: str) -> Response:
+        """Serve a page asset only while its exact Extension registration survives."""
+        delivery = request.app.state.file_delivery
+        try:
+            claims = await FILE_PREVIEW_WORKERS.run(delivery.extension_page_claims, token)
+            from core.extensions import ExtensionRegistrationIdentity
+
+            identity = ExtensionRegistrationIdentity(claims["extension"], claims["epoch"])
+            registry = request.app.state.runtime.extensions
+            if registry is None or not registry.is_registration_current(identity):
+                raise ValueError("Extension page is unavailable")
+            declarations = await FILE_PREVIEW_WORKERS.run(registry.page_declarations)
+            current = next(
+                (
+                    (declaration, entry)
+                    for candidate, declaration, entry in declarations
+                    if candidate == identity and declaration.page_id == claims["page"]
+                ),
+                None,
+            )
+            if current is None or current[1].parent != Path(claims["root"]):
+                raise ValueError("Extension page is unavailable")
+            _claims, delivered = await FILE_PREVIEW_WORKERS.run(
+                delivery.extension_page_asset, token, asset_path
+            )
+            if (
+                request.app.state.runtime.extensions is not registry
+                or not registry.is_registration_current(identity)
+            ):
+                raise ValueError("Extension page is unavailable")
+            return FileResponse(
+                delivered.path,
+                media_type=delivered.media_type,
+                headers=delivery.extension_page_headers(str(request.base_url), token),
+            )
+        except (OSError, ValueError, KeyError):
+            return Response(status_code=404)
+
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
         chat_runs = _app_chat_runs(request.app.state)
@@ -679,6 +721,57 @@ def create_app(
                 # incremental Run timeline into one late flush.
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    @app.get("/api/extension-runs/{token}/events")
+    async def extension_run_events(request: Request, token: str) -> StreamingResponse:
+        """Stream only a Run still owned by the page identity in its capability."""
+        delivery = request.app.state.file_delivery
+        try:
+            claims = delivery.extension_run_claims(token)
+            registry = request.app.state.runtime.extensions
+            if registry is None:
+                raise ValueError("Extension Run is unavailable")
+            identity, page = await FILE_PREVIEW_WORKERS.run(
+                _current_extension_page,
+                registry,
+                claims,
+            )
+            if identity is None or page is None:
+                raise ValueError("Extension Run is unavailable")
+            host = registry.host_for(identity)
+            temporary_agents = host.temporary_agents
+            if temporary_agents is None:
+                raise ValueError("Extension Run is unavailable")
+            inspection = await temporary_agents.owned_run(claims["group_id"], claims["run_id"])
+            # The checked host may be retired while awaiting durable ownership.
+            # Re-resolve both page and owner before exposing the SSE iterator.
+            if request.app.state.runtime.extensions is not registry:
+                raise ValueError("Extension Run is unavailable")
+            identity, page = await FILE_PREVIEW_WORKERS.run(
+                _current_extension_page,
+                registry,
+                claims,
+            )
+            if identity is None or page is None:
+                raise ValueError("Extension Run is unavailable")
+            verified_host = registry.host_for(identity)
+            verified_groups = verified_host.temporary_agents
+            if verified_groups is None:
+                raise ValueError("Extension Run is unavailable")
+            verified = await verified_groups.owned_run(claims["group_id"], claims["run_id"])
+            if inspection.run is None or verified.run is None:
+                raise ValueError("Extension Run is not live")
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
+        return StreamingResponse(
+            _sse_run_events(
+                verified.run,
+                after_sequence=claims["after_sequence"],
+                file_delivery=delivery,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @app.websocket("/ws")
@@ -772,6 +865,20 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
+    set_extension_change_publisher = getattr(runtime, "set_extension_change_publisher", None)
+    if callable(set_extension_change_publisher):
+        set_extension_change_publisher(
+            lambda owner, resource, ids, revision: publish_resource_changed(
+                app.state,
+                RESOURCE_KIND_EXTENSIONS,
+                scope={
+                    "owner": owner,
+                    "resource": resource,
+                    "ids": list(ids),
+                    "revision": revision,
+                },
+            )
+        )
     app.state.client_registry = ClientRegistry()
     app.state.file_delivery = FileDelivery()
     app.state.run_event_bridge_run_ids = OrderedDict()
@@ -1467,6 +1574,24 @@ def _replay_after_sequence(request: Request) -> int:
     if "after_sequence" in request.query_params:
         return _parse_after_sequence(request.query_params.get("after_sequence"))
     return _parse_after_sequence(request.headers.get("last-event-id"))
+
+
+def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | None, Any | None]:
+    """Resolve the exact current page identity carried by a Run capability."""
+    from core.extensions import ExtensionRegistrationIdentity
+
+    extension = claims.get("extension")
+    page = claims.get("page")
+    epoch = claims.get("epoch")
+    if not all(isinstance(value, str) and value for value in (extension, page, epoch)):
+        return None, None
+    identity = ExtensionRegistrationIdentity(cast(str, extension), cast(str, epoch))
+    if not registry.is_registration_current(identity):
+        return None, None
+    for candidate, declaration, _entry in registry.page_declarations():
+        if candidate == identity and declaration.page_id == page:
+            return identity, declaration
+    return None, None
 
 
 def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:

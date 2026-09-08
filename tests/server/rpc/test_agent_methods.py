@@ -94,6 +94,8 @@ class _FakeSessions:
         self.saved_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
         self.archive_started: asyncio.Event | None = None
         self.archive_release: asyncio.Event | None = None
+        self.archive_error: Exception | None = None
+        self.fork_error: Exception | None = None
 
     def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
         self.created.append(
@@ -109,6 +111,8 @@ class _FakeSessions:
 
     async def archive(self, address: Any) -> Any:
         self.archived.append((address.agent_id, address.session_id, address.project_id))
+        if self.archive_error is not None:
+            raise self.archive_error
         if self.archive_started is not None:
             self.archive_started.set()
         if self.archive_release is not None:
@@ -167,6 +171,8 @@ class _FakeSessions:
         )
         if session_id in self.missing:
             raise ChatSessionError(f"session does not exist: {session_id}")
+        if self.fork_error is not None:
+            raise self.fork_error
         retained = {
             key: value for key, value in self.source_metadata.items() if key not in strip_meta_keys
         }
@@ -754,6 +760,24 @@ async def test_delete_missing_session_is_domain_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_owner_managed_session_is_domain_error() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.archive_error = ChatSessionError(
+        "This Session is managed by an Extension. Use that Extension to resume it."
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+
+    assert exc_info.value.code == "domain_error"
+    assert (
+        exc_info.value.message
+        == "This Session is managed by an Extension. Use that Extension to resume it."
+    )
+    assert _sessions_resource_events(state) == []
+
+
+@pytest.mark.asyncio
 async def test_delete_publishes_sessions_resource_changed() -> None:
     state, _resolver, _sessions = _make_state()
 
@@ -858,6 +882,25 @@ async def test_fork_unknown_session_is_domain_error() -> None:
         await _fork_session(state, {"agent_id": "builder", "session_id": "gone"})
 
     assert exc_info.value.code == "domain_error"
+
+
+@pytest.mark.asyncio
+async def test_fork_owner_managed_session_is_domain_error_without_explicit_export() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.fork_error = ChatSessionError(
+        "This Session is managed by an Extension. Use that Extension to resume it."
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
+
+    assert exc_info.value.code == "domain_error"
+    assert (
+        exc_info.value.message
+        == "This Session is managed by an Extension. Use that Extension to resume it."
+    )
+    assert _sessions_resource_events(state) == []
+    assert sessions.forked[0]["target_agent_id"] is None
 
 
 @pytest.mark.asyncio

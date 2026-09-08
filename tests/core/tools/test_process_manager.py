@@ -21,6 +21,7 @@ import psutil  # type: ignore[import-untyped]
 import pytest
 import pytest_asyncio
 
+from core.runs import RunExecutionOwner
 from core.storage import TemporaryFileManager
 from core.tools import process_manager as process_manager_module
 from core.tools.process_manager import (
@@ -38,6 +39,70 @@ PollResult = dict[str, object]
 AGENT_A = "agent-a"
 AGENT_B = "agent-b"
 SCOPE_A = "run-a"
+
+
+@pytest.mark.asyncio
+async def test_execution_group_stop_keeps_unrelated_process_in_same_scope(manager):
+    owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
+    argv = [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"]
+    owned = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        argv,
+        env=None,
+        cwd=None,
+        execution_owner=owner,
+    )
+    unrelated = await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+    assert manager.has_execution_work(owner)
+    await manager.close_execution_group("fixture", "group", "epoch")
+    assert not manager.has_execution_work(owner)
+    assert manager.get_process(owned, AGENT_A).status == "killed"
+    assert manager.get_process(unrelated, AGENT_A).status == "running"
+    with pytest.raises(process_manager_module.ProcessManagerError):
+        await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            argv,
+            env=None,
+            cwd=None,
+            execution_owner=owner,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execution_group_stop_waits_for_pending_process_creation(manager, monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original = asyncio.create_subprocess_exec
+
+    async def blocked_spawn(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", blocked_spawn)
+    owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
+    launch = asyncio.create_task(
+        manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+            env=None,
+            cwd=None,
+            execution_owner=owner,
+        )
+    )
+    await started.wait()
+    close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
+    await asyncio.sleep(0)
+    assert not close.done()
+    assert manager.has_execution_work(owner)
+    release.set()
+    process_id = await launch
+    await close
+    assert manager.get_process(process_id, AGENT_A).status == "killed"
+    assert not manager.has_execution_work(owner)
 
 
 def terminate_pid_forcibly(pid: int) -> None:

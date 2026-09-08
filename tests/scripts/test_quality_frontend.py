@@ -140,6 +140,106 @@ def test_translate_to_vitest_targets_notes_file_without_any_tests():
     assert "package.json" in notes[0]
 
 
+def test_translate_to_vitest_targets_maps_extension_page_sources_to_build_test():
+    module = _load_quality_frontend_module()
+
+    targets, notes = module.translate_to_vitest_targets(
+        ["../tests/fixtures/extension-pages/alpha/ui/page.js"]
+    )
+
+    assert targets == ["scripts/__tests__/build-extension-pages.test.js"]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_maps_bundled_extension_page_sources_to_build_test():
+    module = _load_quality_frontend_module()
+
+    targets, notes = module.translate_to_vitest_targets(
+        ["../resources/extensions/example/ui/Page.svelte"]
+    )
+
+    assert targets == ["scripts/__tests__/build-extension-pages.test.js"]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_includes_a_page_rendered_test_before_build_smoke(
+    tmp_path, monkeypatch
+):
+    module = _load_quality_frontend_module()
+    ui = tmp_path / "resources" / "extensions" / "alpha" / "ui"
+    tests = ui / "__tests__"
+    tests.mkdir(parents=True)
+    source = ui / "SwarmPage.svelte"
+    source.write_text("<main />", encoding="utf-8")
+    rendered = tests / "SwarmPage.test.js"
+    rendered.write_text("test('rendered', () => {})", encoding="utf-8")
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(module, "WEBUI_ROOT", tmp_path / "webui")
+    monkeypatch.setattr(module, "EXTENSION_UI_ROOT", tmp_path / "resources" / "extensions")
+
+    targets, notes = module.translate_to_vitest_targets(
+        ["../resources/extensions/alpha/ui/SwarmPage.svelte"]
+    )
+
+    assert targets == [
+        "../resources/extensions/alpha/ui/__tests__/SwarmPage.test.js",
+        "scripts/__tests__/build-extension-pages.test.js",
+    ]
+    assert notes == []
+
+
+def test_extension_page_source_excludes_owner_python_and_generated_web(tmp_path, monkeypatch):
+    module = _load_quality_frontend_module()
+    root = tmp_path / "resources" / "extensions"
+    (root / "alpha" / "ui").mkdir(parents=True)
+    monkeypatch.setattr(module, "EXTENSION_UI_ROOT", root)
+
+    assert module._is_extension_page_source(root / "alpha" / "ui" / "Page.svelte")
+    assert not module._is_extension_page_source(root / "alpha" / "extension.py")
+    assert not module._is_extension_page_source(root / "alpha" / "web" / "page.html")
+
+
+def test_main_accepts_extension_page_source_outside_webui(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        ["quality-frontend.py", "tests/fixtures/extension-pages/alpha/ui"],
+    )
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = "Tests  1 passed (1)\n" if cmd[1] == "vitest" else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+    capsys.readouterr()
+    expected_source = "../tests/fixtures/extension-pages/alpha/ui"
+    assert [
+        "npx",
+        "prettier",
+        "--config",
+        "prettier.config.js",
+        "--plugin",
+        "prettier-plugin-svelte",
+        "--write",
+        expected_source,
+    ] in commands
+    assert [
+        "npx",
+        "eslint",
+        "--config",
+        "webui/eslint.config.js",
+        "tests/fixtures/extension-pages/alpha/ui",
+    ] in commands
+    vitest = next(command for command in commands if command[1] == "vitest")
+    assert vitest[5:] == ["scripts/__tests__/build-extension-pages.test.js"]
+
+
 def test_filter_vitest_failure_output_removes_pass_noise():
     module = _load_quality_frontend_module()
     output = (
@@ -414,7 +514,9 @@ def test_build_selection_preserves_scope_and_fix_mode(monkeypatch, check, scoped
     monkeypatch.setattr(module, "snapshot_target_files", lambda *args: {})
 
     def fake_run(cmd, **kwargs):
-        assert kwargs["cwd"] == module.WEBUI_ROOT
+        assert kwargs["cwd"] == (
+            module.PROJECT_ROOT if not scoped and cmd[1] == "eslint" else module.WEBUI_ROOT
+        )
         commands.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="Tests  1 passed (1)\n", stderr="")
 
@@ -427,7 +529,15 @@ def test_build_selection_preserves_scope_and_fix_mode(monkeypatch, check, scoped
     assert any("--fix" in cmd for cmd in commands) is not check
     assert any("--write" in cmd for cmd in commands) is not check
     lint = next(cmd for cmd in commands if cmd[1] == "eslint" and "--fix" not in cmd)
-    assert lint[2:] == (["src/lib/settingsView.js"] if scoped else ["src/"])
+    if scoped:
+        assert lint[2:] == ["src/lib/settingsView.js"]
+    else:
+        expected_scope = ["src/", "scripts/", *module._extension_page_ui_paths()]
+        expected_lint = [
+            (module.WEBUI_ROOT / path).resolve().relative_to(module.PROJECT_ROOT).as_posix()
+            for path in expected_scope
+        ]
+        assert lint[2:] == ["--config", "webui/eslint.config.js", *expected_lint]
     vitest = next(cmd for cmd in commands if cmd[1] == "vitest")
     assert vitest[5:] == (
         [
@@ -436,8 +546,17 @@ def test_build_selection_preserves_scope_and_fix_mode(monkeypatch, check, scoped
             "src/lib/__tests__/settingsView.test.providers.test.js",
         ]
         if scoped
-        else ["src/"]
+        else ["src/", "scripts/"]
     )
+
+
+def test_full_frontend_scope_includes_extension_page_build_sources():
+    module = _load_quality_frontend_module()
+
+    paths = module._extension_page_ui_paths()
+
+    assert "../tests/fixtures/extension-pages/alpha/ui" in paths
+    assert "../tests/fixtures/extension-pages/beta/ui" in paths
 
 
 def test_scoped_build_failure_fails_gate(monkeypatch, capsys):

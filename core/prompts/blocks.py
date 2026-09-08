@@ -490,14 +490,12 @@ def resolve_block_text(
             _LOGGER.warning("Dropping dynamic block %r: render failed: %s", definition.id, exc)
             return ""
 
+    if definition.kind == BLOCK_KIND_DATA:
+        # Data is not editable and may be request-local, with no storage path.
+        return definition.default_text or ""
+
     override = override_resolver(definition, context.scope)
     text = override if override is not None else (definition.default_text or "")
-    if definition.kind == BLOCK_KIND_DATA:
-        # Verbatim data (e.g. a config-agent body): inserted as-is, its "{…}" is
-        # never interpreted. It is still positioned by layout order; "verbatim"
-        # means only that its content is not run through expansion.
-        return text
-
     expanded = expand_generated_markers(text, producers, context)
     included = expand_workspace_includes(
         expanded, context.agent.workspace, on_read=context.read_observer

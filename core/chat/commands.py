@@ -66,7 +66,7 @@ CommandArgumentMode = Literal["none", "optional", "required"]
 CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
-CommandNavigationKind = Literal["continue_in_session", "offer_session"]
+CommandNavigationKind = Literal["continue_in_session", "offer_session", "open_extension_page"]
 CommandRunRole = Literal["primary", "follow_up"]
 CommandSurfaceKind = Literal["webui", "channel"]
 
@@ -168,12 +168,15 @@ class CommandFeedback:
 
 @dataclass(frozen=True)
 class CommandNavigation:
-    """A neutral Session destination and how an accessor should treat it."""
+    """A neutral Session or registered Extension page destination."""
 
     kind: CommandNavigationKind
-    agent_id: str
-    session_id: str
+    agent_id: str = ""
+    session_id: str = ""
     project_id: str | None = None
+    extension: str | None = None
+    page: str | None = None
+    route: str = ""
 
 
 @dataclass(frozen=True)
@@ -262,6 +265,7 @@ class _RegisteredExtensionCommand:
     extension_name: str
     handler: ExtensionCommandHandler
     registration_id: int
+    page_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -551,6 +555,7 @@ class CommandDispatcher:
         execution_mode: str = "serialized",
         argument_execution_mode: str | None = None,
         unavailable_surfaces: object = (),
+        page_ids: frozenset[str] = frozenset(),
     ) -> int:
         """Validate and install one Extension-owned command.
 
@@ -578,6 +583,10 @@ class CommandDispatcher:
             raise ValueError("description must be a non-empty string")
         if not callable(handler):
             raise ValueError("handler must be callable")
+        if not isinstance(page_ids, frozenset) or any(
+            not isinstance(page_id, str) or not page_id for page_id in page_ids
+        ):
+            raise ValueError("page_ids must contain registered page identifiers")
         if not isinstance(argument, str) or argument not in {"none", "optional", "required"}:
             raise ValueError("argument must be one of: none, optional, required")
         if not isinstance(catalog_result, str) or catalog_result not in {
@@ -627,6 +636,7 @@ class CommandDispatcher:
             extension_name=extension_name,
             handler=handler,
             registration_id=registration_id,
+            page_ids=page_ids,
         )
         return registration_id
 
@@ -763,7 +773,14 @@ class CommandDispatcher:
                 extension_context,
                 argument,
             )
-            self._validate_extension_outcome(result, expected_command=registered.spec.name)
+            self._validate_extension_outcome(
+                result,
+                expected_command=registered.spec.name,
+                extension_name=registered.extension_name,
+                page_ids=registered.page_ids,
+            )
+            if self._extension_commands.get(registered.spec.name) is not registered:
+                raise ValueError("Extension command registration changed during execution")
             return cast(CommandOutcome, result)
         except Exception as exc:
             _LOGGER.error(
@@ -779,7 +796,13 @@ class CommandDispatcher:
             )
 
     @staticmethod
-    def _validate_extension_outcome(result: object, *, expected_command: str) -> None:
+    def _validate_extension_outcome(
+        result: object,
+        *,
+        expected_command: str,
+        extension_name: str,
+        page_ids: frozenset[str],
+    ) -> None:
         """Keep malformed Extension values from escaping into surface projectors."""
         if not isinstance(result, CommandOutcome):
             raise TypeError("handler must return CommandOutcome")
@@ -799,7 +822,8 @@ class CommandDispatcher:
             raise TypeError("CommandOutcome.facts must be a mapping with string keys")
         if result.navigation is not None and (
             not isinstance(result.navigation, CommandNavigation)
-            or result.navigation.kind not in {"continue_in_session", "offer_session"}
+            or result.navigation.kind
+            not in {"continue_in_session", "offer_session", "open_extension_page"}
             or not isinstance(result.navigation.agent_id, str)
             or not isinstance(result.navigation.session_id, str)
             or (
@@ -808,6 +832,27 @@ class CommandDispatcher:
             )
         ):
             raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
+        navigation = result.navigation
+        if navigation is not None:
+            if navigation.kind == "open_extension_page":
+                if (
+                    navigation.extension != extension_name
+                    or not isinstance(navigation.page, str)
+                    or navigation.page not in page_ids
+                    or not isinstance(navigation.route, str)
+                    or len(navigation.route) > 2048
+                    or navigation.route.startswith("/")
+                    or any(character in navigation.route for character in ("\\", "\0", ":"))
+                    or any(part in {".", ".."} for part in navigation.route.split("/"))
+                    or navigation.agent_id
+                    or navigation.session_id
+                    or navigation.project_id is not None
+                ):
+                    raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
+            elif (
+                navigation.extension is not None or navigation.page is not None or navigation.route
+            ):
+                raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
         if not isinstance(result.runs, tuple) or any(
             not isinstance(command_run, CommandRun)
             or command_run.role not in {"primary", "follow_up"}

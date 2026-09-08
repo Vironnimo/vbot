@@ -13,6 +13,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
+from core.runs import RunExecutionOwner
 from core.tools.availability import (
     TOOL_ACTIVATION_CONFIGURABLE,
     TOOL_ACTIVATION_FOLLOWS,
@@ -53,6 +54,9 @@ ToolSkillActivationHook = Callable[[str, str], bool]
 ToolResultPersistedCallback = Callable[[], None]
 ToolResultPersistedHook = Callable[[ToolResultPersistedCallback], None]
 ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], None]
+ToolDeliveryReceipt = tuple[str, str, str]
+ToolDeliveryReceiptHook = Callable[[str, ToolDeliveryReceipt], None]
+ToolTurnEndHook = Callable[[str], None]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 _ToolWorkerResult = TypeVar("_ToolWorkerResult")
 ToolReadinessPredicate = Callable[[], bool]
@@ -513,6 +517,7 @@ class ToolContext:
     # Completed Agentic Loop Iteration whose Assistant response requested this
     # Tool Call. Direct callers that do not execute inside Chat leave it at 0.
     iteration_number: int = 0
+    execution_owner: RunExecutionOwner | None = field(default=None, repr=False)
     # Working directory for relative-path resolution by file/shell tools. ``None``
     # falls back to ``workspace`` (the identity-agent home) so every existing
     # caller and identity session keeps today's behavior; a project session
@@ -539,6 +544,14 @@ class ToolContext:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     result_persisted_hook: ToolResultPersistedHook | None = None
+    delivery_receipt_hook: ToolDeliveryReceiptHook | None = field(
+        default=None, repr=False, compare=False
+    )
+    request_turn_end_hook: ToolTurnEndHook | None = field(default=None, repr=False, compare=False)
+    _delivery_receipts: list[ToolDeliveryReceipt] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    _turn_end_requested: bool = field(default=False, init=False, repr=False, compare=False)
     allowed_skills: Sequence[str] | None = None
     # Environment credentials made available by Skills active in this Session.
     # Bash combines these transient grants with the Agent's permanent Tool settings.
@@ -669,6 +682,35 @@ class ToolContext:
             return
         self.result_persisted_hook(callback)
 
+    def record_delivery_receipt(
+        self,
+        receipt_id: str,
+        content_hash: str,
+        effect_kind: str,
+    ) -> None:
+        """Request a receipt atomically persisted with this successful Tool Result."""
+        if self.delivery_receipt_hook is None:
+            raise RuntimeError("Delivery receipts are unavailable for this Tool call")
+        if not all(
+            isinstance(value, str) and value for value in (receipt_id, content_hash, effect_kind)
+        ):
+            raise ValueError("delivery receipt fields must be non-empty strings")
+        self._delivery_receipts.append((receipt_id, content_hash, effect_kind))
+
+    def request_turn_end(self) -> None:
+        """Ask Chat to finish the Run after its complete Tool batch is durable."""
+        if self.request_turn_end_hook is None:
+            raise RuntimeError("Graceful turn completion is unavailable for this Tool call")
+        object.__setattr__(self, "_turn_end_requested", True)
+
+    def _commit_owned_effects(self) -> None:
+        """Hand successful-call effects to the batch owner after validation."""
+        if self.delivery_receipt_hook is not None:
+            for receipt in self._delivery_receipts:
+                self.delivery_receipt_hook(self.tool_call_id, receipt)
+        if self._turn_end_requested and self.request_turn_end_hook is not None:
+            self.request_turn_end_hook(self.tool_call_id)
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -691,6 +733,7 @@ class ToolExecutionConfig:
     data_root: Path
     # Completed Agentic Loop Iteration that produced this execution group.
     iteration_number: int = 0
+    execution_owner: RunExecutionOwner | None = field(default=None, repr=False)
     # Working directory for relative-path resolution; ``None`` falls back to
     # ``workspace`` so existing execution groups keep today's behavior. See
     # ``ToolContext.cwd`` for the contract.
@@ -710,6 +753,8 @@ class ToolExecutionConfig:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     tool_call_result_persisted_registrar: ToolCallResultPersistedRegistrar | None = None
+    tool_delivery_receipt_registrar: ToolDeliveryReceiptHook | None = None
+    tool_turn_end_registrar: ToolTurnEndHook | None = None
     allowed_skills: Sequence[str] | None = None
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
@@ -741,6 +786,9 @@ class Tool:
     # A Session-scoped tool is configurable nowhere and model-visible only when
     # the current Session supplies a matching persisted-state grant.
     session_scoped: bool = False
+    # Public catalog projections hide capability-local tools while the registry
+    # continues to retain them for collision checks, binding, and dispatch.
+    catalog_visible: bool = True
     # Optional presentation grouping. Standalone Tools leave this unset; a family
     # is useful only when multiple Tools share one user-recognizable capability.
     family: str | None = None
@@ -780,6 +828,7 @@ class Tool:
     # handler so valid siblings still run. The handler then owns complete root
     # and per-item validation; the precise Provider schema remains unchanged.
     handler_validates_arguments: bool = False
+    coerce_arguments: bool = True
     definition_profile_resolver: ToolDefinitionProfileResolver | None = field(
         default=None,
         repr=False,
@@ -946,6 +995,7 @@ class ToolRegistry:
         internal: bool = False,
         deferred: bool = False,
         session_scoped: bool = False,
+        catalog_visible: bool = True,
         family: str | None = None,
         activation: str = TOOL_ACTIVATION_CONFIGURABLE,
         activation_source: str | None = None,
@@ -959,6 +1009,7 @@ class ToolRegistry:
         parallel_safe: bool = True,
         open_input_schema: bool = False,
         handler_validates_arguments: bool = False,
+        coerce_arguments: bool = True,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
@@ -995,6 +1046,7 @@ class ToolRegistry:
             internal=internal,
             deferred=deferred,
             session_scoped=session_scoped,
+            catalog_visible=catalog_visible,
             family=family,
             family_label=family_definition.label if family_definition is not None else None,
             activation=activation,
@@ -1008,6 +1060,7 @@ class ToolRegistry:
             parallel_safe=parallel_safe,
             open_input_schema=open_input_schema,
             handler_validates_arguments=handler_validates_arguments,
+            coerce_arguments=coerce_arguments,
             definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
@@ -1146,6 +1199,7 @@ class ToolRegistry:
         *,
         include_internal: bool = False,
         include_session_scoped: bool = True,
+        include_catalog_hidden: bool = True,
         ready_only: bool = False,
     ) -> list[Tool]:
         """Return registered tools filtered by an allowlist.
@@ -1169,6 +1223,9 @@ class ToolRegistry:
 
         if not include_session_scoped:
             tools = [tool for tool in tools if not tool.session_scoped]
+
+        if not include_catalog_hidden:
+            tools = [tool for tool in tools if tool.catalog_visible]
 
         if ready_only:
             tools = [tool for tool in tools if tool_is_ready(tool)]
@@ -1285,7 +1342,9 @@ class ToolRegistry:
                 retryable=False,
             )
         input_contract = context.input_contract or tool.contract
-        normalized_arguments = input_contract.normalize_arguments(arguments)
+        normalized_arguments = (
+            input_contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
+        )
         if not tool.handler_validates_arguments:
             input_contract.validate_arguments(normalized_arguments)
 
@@ -1591,6 +1650,7 @@ class ToolExecutor:
                 vbot_root=config.vbot_root,
                 data_root=config.data_root,
                 iteration_number=config.iteration_number,
+                execution_owner=config.execution_owner,
                 cwd=config.cwd,
                 project_id=config.project_id,
                 skill_project_id=config.skill_project_id,
@@ -1601,6 +1661,8 @@ class ToolExecutor:
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
                 result_persisted_hook=result_persisted_hook,
+                delivery_receipt_hook=config.tool_delivery_receipt_registrar,
+                request_turn_end_hook=config.tool_turn_end_registrar,
                 allowed_skills=config.allowed_skills,
                 skill_env_keys=config.skill_env_keys,
                 tool_settings=config.tool_settings,

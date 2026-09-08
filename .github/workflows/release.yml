@@ -65,7 +65,7 @@ jobs:
       - name: Validate gated release candidate WebUI
         run: |
           test -s webui-dist.tar.gz
-          tar -tzf webui-dist.tar.gz | grep -Fx 'dist/index.html'
+          tar -tzf webui-dist.tar.gz | grep -Fx 'webui/dist/index.html'
 
       - name: Publish release with prebuilt WebUI
         env:

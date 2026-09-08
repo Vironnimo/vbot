@@ -40,6 +40,8 @@ shot-*.png
 # Node / webui
 node_modules/
 webui/dist/
+resources/extensions/*/web/
+tests/fixtures/extension-pages/*/web/
 coverage/
 # Vite/Vitest temp config bundles left behind by interrupted processes
 *.timestamp-*.mjs

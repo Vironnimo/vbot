@@ -64,7 +64,7 @@ Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint
 On a **full scan** (no paths), the tools target fixed defaults rather than the whole tree indiscriminately:
 
 - Backend: ruff → `.`; mypy → `core/ server/ cli/ desktop/ tests/`; pytest → `tests/`. Full-scan mypy does not include `scripts/`; a scoped Python source path is routed to mypy, while `pyproject.toml` triggers these full defaults.
-- Frontend: prettier/eslint/vitest → `src/`; the build step runs on a full scan or when `--build` is given.
+- Frontend: the normal `src/` scope plus bundled Extension page sources and the page builder/tests. The build step runs on a full scan or when `--build` is given, and includes independently built Extension assets with the shared Vite dependencies.
 
 ## Output contract
 
@@ -115,6 +115,8 @@ Two guardrails worth knowing:
 - An input with no tests anywhere (e.g. a config file outside `src/`) selects no Vitest target and reports `NO TESTS` with a `note:`, instead of falling through to a whole-suite run.
 
 Because a source file resolves to its **actual** mirrored test rather than just its parent directory, a scoped run can no longer silently report a green pass while running zero of the tests that cover the change. Vitest still runs with `--passWithNoTests` as a safety net, and — as on the backend — an input path that does not exist under `webui/` aborts with exit 2 before any tool runs.
+
+Bundled Extension page inputs under `resources/extensions/<owner>/ui/` and the two `tests/fixtures/extension-pages/` examples are accepted as repository-relative frontend paths. Mapping includes their tests in the existing frontend test system; generated `web/` assets are build output, not lint inputs. The build owner is `webui/scripts/build-extension-pages.mjs`; there is no second dependency tree.
 
 ## How "auto-fixed files" is detected
 

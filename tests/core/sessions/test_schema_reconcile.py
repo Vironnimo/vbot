@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 
 import pytest
 
+from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import schema as session_schema
 from core.sessions.errors import SessionStoreCorruptError, SessionStoreSchemaMismatchError
 from core.sessions.schema import (
@@ -118,6 +120,99 @@ def test_reconcile_heals_a_missing_column_and_table_and_keeps_rows(tmp_path) -> 
         assert connection.execute("SELECT 1 FROM reconcile_probe_table").fetchone() is None
     finally:
         connection.close()
+
+
+def test_additive_temporary_tables_preserve_a_copied_current_baseline(tmp_path) -> None:
+    """Opening a copied populated baseline adds tables, preserving every prior row."""
+    database = tmp_path / "sessions.db"
+    store = SessionStore(database)
+    address = SessionAddress("project", "agent", "retained")
+    try:
+        store.ensure_live(address)
+        store.replace_metadata(address, {"title": "Retained title", "custom": {"unicode": "Grüße"}})
+        store.replace_activity(address, {"run_id": "retained-run", "state": "interrupted"})
+        store.append_messages(
+            address,
+            [
+                ChatMessage.user("Retained task"),
+                ChatMessage.assistant(
+                    model="provider/model",
+                    content="Retained response",
+                    reasoning="Retained reasoning",
+                    usage={"input_tokens": 17, "output_tokens": 5, "cache_read_tokens": 3},
+                    tool_calls=[
+                        ToolCall(id="retained-call", name="read", arguments={"path": "notes.md"})
+                    ],
+                ),
+                ChatMessage.tool(
+                    tool_call_id="retained-call",
+                    name="read",
+                    content='{"ok":true,"data":{"text":"retained result"}}',
+                ),
+            ],
+        )
+        store.append_continuation(
+            address,
+            [
+                {
+                    "version": 1,
+                    "type": "run_started",
+                    "checkpoint_id": "retained-checkpoint",
+                    "run_id": "retained-run",
+                    "origin_run_id": "retained-run",
+                    "timestamp": "2026-09-07T12:00:00+00:00",
+                    "request": "Retained continuation",
+                }
+            ],
+        )
+        archived = SessionAddress(None, "agent", "archived")
+        store.ensure_live(archived)
+        store.append_messages(archived, [ChatMessage.user("Retained archived task")])
+        store.archive(archived)
+    finally:
+        store.close()
+
+    # Remove only this feature's empty additive relations to obtain the prior
+    # baseline layout. Take an actual database copy before opening the new code.
+    with sqlite3.connect(database) as baseline:
+        baseline.execute("DROP TABLE session_delivery_receipts")
+        baseline.execute("DROP TABLE run_execution_owners")
+        baseline.execute("DROP TABLE temporary_session_bindings")
+        tables = [
+            row[0]
+            for row in baseline.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        previous_rows = {
+            table: sorted(baseline.execute(f'SELECT * FROM "{table}"').fetchall(), key=repr)
+            for table in tables
+        }
+    copy_directory = tmp_path / "copied-baseline"
+    copy_directory.mkdir()
+    copied_database = copy_directory / "sessions.db"
+    with sqlite3.connect(database) as source, sqlite3.connect(copied_database) as destination:
+        source.backup(destination)
+    shutil.copy2(tmp_path / "session-store.json", copy_directory / "session-store.json")
+    copied = SessionStore(copied_database)
+    copied.close()
+
+    with sqlite3.connect(copied_database) as verification:
+        assert verification.execute("PRAGMA user_version").fetchone() == (1,)
+        assert verification.execute("PRAGMA application_id").fetchone() == (APPLICATION_ID,)
+        for table, rows in previous_rows.items():
+            assert (
+                sorted(verification.execute(f'SELECT * FROM "{table}"').fetchall(), key=repr)
+                == rows
+            ), table
+        assert verification.execute(
+            "SELECT COUNT(*) FROM temporary_session_bindings"
+        ).fetchone() == (0,)
+        assert verification.execute(
+            "SELECT COUNT(*) FROM session_delivery_receipts"
+        ).fetchone() == (0,)
+        assert verification.execute("SELECT COUNT(*) FROM run_execution_owners").fetchone() == (0,)
 
 
 def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:

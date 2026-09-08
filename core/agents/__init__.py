@@ -21,6 +21,7 @@ from core.agents.agents import (
     validate_agent_order_data,
     validate_agent_order_file,
 )
+from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 
 __all__ = [
     "WORKSPACE_IDENTITY_FILES",
@@ -42,4 +43,7 @@ __all__ = [
     "validate_agent_file",
     "validate_agent_order_data",
     "validate_agent_order_file",
+    "TemporaryAgent",
+    "TemporaryAgentConfig",
+    "TemporaryAgentRegistry",
 ]

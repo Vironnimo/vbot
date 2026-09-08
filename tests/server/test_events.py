@@ -271,6 +271,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "memories",
         "skills",
         "session_store",
+        "extensions",
     } == ALLOWED_RESOURCE_KINDS
 
 

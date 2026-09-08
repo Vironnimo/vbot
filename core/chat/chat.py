@@ -154,7 +154,7 @@ from core.chat.wire_shaping import (
     limit_request_images,
 )
 from core.debug import DebugContext
-from core.extensions import HookContext
+from core.extensions import HookContext, SessionRequestContext, invoke_extension_handler
 from core.projects import (
     ProjectError,
     resolve_prompt_project,
@@ -162,7 +162,7 @@ from core.projects import (
     resolve_working_project_id,
     runtime_agent_body,
 )
-from core.prompts import PinnedSkillCatalog, ProjectPromptContext
+from core.prompts import BLOCK_KIND_DATA, BlockDefinition, PinnedSkillCatalog, ProjectPromptContext
 from core.prompts.pinned_context import (
     pinned_memory_files,
     pinned_skill_catalog,
@@ -209,11 +209,13 @@ from core.sessions import (
     ChatSession,
     SessionAddress,
     SessionReadCursor,
+    TemporarySessionBinding,
     active_session_messages,
     editable_session_message_index,
     latest_project_tool_context_id,
     project_tool_context_id,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
@@ -598,6 +600,9 @@ class _RunRequest:
     agent_overrides: AgentRunOverrides | None = None
     resume_process_restart: bool = False
     edit_message_id: str | None = None
+    temporary_binding: TemporarySessionBinding | None = None
+    input_already_persisted: bool = False
+    temporary_parent_binding: TemporarySessionBinding | None = None
 
 
 @dataclass(frozen=True)
@@ -752,6 +757,7 @@ class RequestBuildInputs:
     # Request-only message source; ``None`` loads the Session transcript.
     session_messages_override: list[ChatMessage] | None = None
     image_budget: RequestImageBudget | None = None
+    temporary_binding: TemporarySessionBinding | None = None
 
     @classmethod
     def from_context(
@@ -774,6 +780,7 @@ class RequestBuildInputs:
             skill_registry=context.skill_registry,
             skill_catalog=context.skill_catalog,
             image_budget=context.image_budget,
+            temporary_binding=context.request.temporary_binding,
         )
 
     def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:
@@ -1075,6 +1082,7 @@ class ChatLoop:
         *,
         reply_surface: ReplySurface | None = None,
         agent_overrides: AgentRunOverrides | None = None,
+        temporary_parent_binding: TemporarySessionBinding | None = None,
     ) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
@@ -1089,6 +1097,7 @@ class ChatLoop:
             content=content,
             reply_surface=reply_surface,
             agent_overrides=agent_overrides,
+            temporary_parent_binding=temporary_parent_binding,
         )
         return lambda run: self._execute_run(run, request)
 
@@ -1252,6 +1261,7 @@ class ChatLoop:
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
         today's identity behavior.
         """
+        await self._reject_owner_managed_session(project_id, agent_id, session_id)
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
@@ -1387,6 +1397,8 @@ class ChatLoop:
         resume_process_restart: bool = False,
         edit_message_id: str | None = None,
     ) -> Run:
+        if session_id is not None:
+            await self._reject_owner_managed_session(project_id, agent_id, session_id)
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
@@ -1421,6 +1433,123 @@ class ChatLoop:
             ),
         )
 
+    async def start_temporary_run(
+        self,
+        binding: TemporarySessionBinding,
+        content: str,
+        *,
+        owner: Any = None,
+        input_id: str | None = None,
+        input_already_persisted: bool = False,
+    ) -> Run:
+        """Start one owner-authorized temporary Session through the normal Chat engine."""
+
+        current = await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.sessions.temporary_binding, binding.address
+        )
+        if current != binding:
+            raise ChatError(
+                "This Session is no longer available. Check its state through its Extension."
+            )
+        agent = self._dependencies.agent_resolver.resolve_temporary_agent(
+            binding.address, generation_id=binding.generation_id
+        )
+        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
+        await self._get_session_async(
+            binding.address.agent_id,
+            binding.address.session_id,
+            create_missing=False,
+            project_id=binding.address.project_id,
+        )
+        request = _RunRequest(
+            content=content,
+            temporary_binding=binding,
+            input_already_persisted=input_already_persisted,
+        )
+        return await self._dependencies.run_manager.start(
+            binding.address,
+            lambda run: self._execute_run(run, request),
+            admission=RunAdmission(
+                contributes_to_agent_activity=False, owner=owner, input_id=input_id
+            ),
+        )
+
+    async def start_owned_continuation(
+        self,
+        address: SessionAddress,
+        owner: Any,
+        content: str,
+        input_id: str,
+        input_persisted_hook: Callable[[], None] | None = None,
+    ) -> Run:
+        """Continue a normal Session under an Extension-owned descendant Run."""
+        if not isinstance(content, str) or not content:
+            raise ChatError("owned continuation content is required")
+        if not isinstance(input_id, str) or not input_id:
+            raise ChatError("owned continuation input id is required")
+        parent = await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.sessions.temporary_binding_by_participant,
+            owner_name=owner.extension,
+            group_id=owner.group_id,
+            participant_id=owner.participant_id,
+        )
+        if parent is not None and (
+            parent.address.agent_id != address.agent_id
+            or parent.address.project_id != address.project_id
+        ):
+            parent = None
+        agent = (
+            self._dependencies.agent_resolver.resolve_temporary_agent(
+                parent.address, generation_id=parent.generation_id
+            )
+            if parent is not None
+            else self._dependencies.agent_resolver.resolve_agent(
+                address.project_id, address.agent_id
+            )
+        )
+        working_project_id = resolve_working_project_id(address.project_id, agent)
+        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
+        await self._get_session_async(
+            address.agent_id,
+            address.session_id,
+            create_missing=False,
+            project_id=address.project_id,
+        )
+        request = _RunRequest(
+            content=content,
+            internal=True,
+            input_persisted_hook=input_persisted_hook,
+            temporary_parent_binding=parent,
+        )
+        return await self._dependencies.run_manager.start(
+            address,
+            lambda run: self._execute_run(run, request),
+            admission=RunAdmission(
+                working_project_id=working_project_id,
+                run_kind=RunKind.SYSTEM,
+                contributes_to_agent_activity=False,
+                owner=owner,
+                input_id=input_id,
+            ),
+        )
+
+    async def _reject_owner_managed_session(
+        self, project_id: str | None, agent_id: str, session_id: str
+    ) -> None:
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        try:
+            binding = await _CHAT_TRANSFORM_WORKERS.run(
+                self._dependencies.sessions.temporary_binding, address
+            )
+        except SessionNotFoundError:
+            return
+        if binding is not None:
+            raise ChatError(
+                "This Session is managed by an Extension. Use that Extension to resume it."
+            )
+
     async def _execute_run(
         self,
         run: Run,
@@ -1430,6 +1559,14 @@ class ChatLoop:
         session_address = SessionAddress(
             project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
+        await self._dependencies.sessions.record_run_start_async(session_address, run_id=run.id)
+        if run.execution_owner is not None:
+            await self._dependencies.sessions.record_run_owner_async(
+                session_address,
+                run_id=run.id,
+                owner=run.execution_owner,
+                input_id=run.execution_input_id,
+            )
         session = await self._dependencies.sessions.get_async(session_address)
         await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
@@ -1505,7 +1642,42 @@ class ChatLoop:
             session_snapshot = await _SessionSnapshot.load(session)
         project_id = run.project_id
         working_project_id = run.working_project_id
-        if request.agent_overrides is None:
+        temporary_binding = request.temporary_binding
+        temporary_source = temporary_binding or request.temporary_parent_binding
+        project_cwd: Path | None
+        if temporary_binding is not None:
+            if temporary_binding.address != SessionAddress(
+                project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+            ):
+                raise ChatError(
+                    "This Session no longer matches this Run. "
+                    "Ask the user to resume it through its Extension."
+                )
+            agent = self._dependencies.agent_resolver.resolve_temporary_agent(
+                temporary_binding.address, generation_id=temporary_binding.generation_id
+            )
+        elif request.temporary_parent_binding is not None:
+            parent = request.temporary_parent_binding
+            owner = run.execution_owner
+            if (
+                owner is None
+                or owner.extension != parent.owner_name
+                or owner.group_id != parent.group_id
+                or owner.participant_id != parent.participant_id
+                or owner.generation_id != parent.generation_id
+                or run.agent_id != parent.address.agent_id
+                or run.project_id != parent.address.project_id
+            ):
+                raise ChatError(
+                    "This Session no longer matches this Run. "
+                    "Ask the user to resume it through its Extension."
+                )
+            agent = self._dependencies.agent_resolver.resolve_temporary_agent(
+                parent.address,
+                generation_id=parent.generation_id,
+                run_overrides=request.agent_overrides,
+            )
+        elif request.agent_overrides is None:
             agent = self._dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
         else:
             agent = self._dependencies.agent_resolver.resolve_agent(
@@ -1521,7 +1693,16 @@ class ChatLoop:
         run.add_cancel_callback(
             lambda: self._dependencies.process_manager.cancel_scope_async(run.id)
         )
-        project_cwd = self.resolve_project_cwd(working_project_id)
+        if temporary_source is not None:
+            temporary_cwd = getattr(agent, "cwd", None)
+            if not isinstance(temporary_cwd, Path):
+                raise ChatError(
+                    "This Session has an invalid configuration. "
+                    "Ask the user to check it through its Extension."
+                )
+            project_cwd = temporary_cwd
+        else:
+            project_cwd = self.resolve_project_cwd(working_project_id)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
             ProjectPromptContext.from_project(
@@ -1533,34 +1714,41 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
-        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_working_project_context,
-            self._dependencies,
-            run.agent_id,
-            run.session_id,
-            prompt_project,
-            project_prompt_context,
-            project_id,
-        )
-        soul_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_soul_context,
-            self._dependencies,
-            run.agent_id,
-            run.session_id,
-            agent,
-            project_id,
-        )
-        memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_memory_files,
-            self._dependencies,
-            run.agent_id,
-            run.session_id,
-            agent,
-            project_id,
-        )
-        skill_project_id, identity_agent_id = resolve_skill_scope(
-            project_id, prompt_project, run.agent_id
-        )
+        if temporary_source is None:
+            working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
+                pinned_working_project_context,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                prompt_project,
+                project_prompt_context,
+                project_id,
+            )
+            soul_context = await _CHAT_TRANSFORM_WORKERS.run(
+                pinned_soul_context,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                project_id,
+            )
+            memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
+                pinned_memory_files,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                project_id,
+            )
+            skill_project_id, identity_agent_id = resolve_skill_scope(
+                project_id, prompt_project, run.agent_id
+            )
+        else:
+            working_project_context = soul_context = memory_files_context = None
+            # A temporary participant has no identity-owned Skills, but an
+            # explicitly selected Project still supplies its shared Skill pool.
+            skill_project_id = working_project_id
+            identity_agent_id = None
         skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.resolve_skills,
             skill_project_id,
@@ -1602,7 +1790,7 @@ class ChatLoop:
             continuation_reminder=continuation_reminder,
             session_snapshot=session_snapshot,
         )
-        if project_id is None:
+        if project_id is None and temporary_source is None:
             loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)
             if loaded_project_id is not None:
                 await self._apply_project_skill_context(context, loaded_project_id)
@@ -1754,6 +1942,8 @@ class ChatLoop:
                         )
                         session.add_note(request.content)
                         persisted_messages = session.take_deferred_notes()
+                    elif request.input_already_persisted:
+                        persisted_messages = []
                     else:
                         if request.content is None:
                             raise ChatError("content is required for non-retry runs")
@@ -1800,7 +1990,7 @@ class ChatLoop:
                                     exc_info=True,
                                 )
                     await context.session_snapshot.refresh(session)
-                    if not internal:
+                    if not internal and not request.input_already_persisted:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                     if request.input_persisted_hook is not None:
                         try:
@@ -1813,7 +2003,12 @@ class ChatLoop:
                             )
             finally:
                 await session.flush_deferred_notes_async()
-            if not internal:
+            if (
+                not internal
+                and request.temporary_binding is None
+                and request.temporary_parent_binding is None
+                and run.execution_owner is None
+            ):
                 if self._session_title_service is not None:
                     self._session_title_service.notify_user_message(
                         agent_id=run.agent_id,
@@ -1970,14 +2165,18 @@ class ChatLoop:
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
             run_summary_persisted = False
+            owned_finalization_error: Exception | None = None
             try:
                 await session.append_async(run_summary)
                 run_summary_persisted = True
-            except Exception:
+            except Exception as exc:
                 # The model/tool outcome is already established. A failed
                 # terminal annotation must not replace it or prevent the
                 # Continuation journal from being finalized below.
                 _LOGGER.warning("Failed to persist run summary for run %s", run.id, exc_info=True)
+                if run.execution_owner is not None or request.temporary_binding is not None:
+                    owned_finalization_error = exc
+                    outcome = "error"
             if run_summary_persisted:
                 try:
                     await context.session_snapshot.refresh(session)
@@ -2057,6 +2256,28 @@ class ChatLoop:
                     add_note=session.add_note,
                 )
                 try:
+                    binding = request.temporary_binding
+                    if binding is not None:
+                        try:
+                            await extension_registry.dispatch_session_run_finished(
+                                binding,
+                                self._dependencies.tools,
+                                SessionRequestContext(
+                                    binding=binding,
+                                    run_id=run.id,
+                                    agent_id=run.agent_id,
+                                    session_id=run.session_id,
+                                    execution_owner=run.execution_owner,
+                                ),
+                                outcome,
+                            )
+                        except Exception as exc:
+                            owned_finalization_error = owned_finalization_error or exc
+                            _LOGGER.warning(
+                                "Session run-finished callback failed for run %s",
+                                run.id,
+                                exc_info=True,
+                            )
                     await extension_registry.dispatch_run_end(
                         extension_ctx,
                         session_id=run.session_id,
@@ -2070,7 +2291,12 @@ class ChatLoop:
 
             # Background reflection accounting. Fire-and-forget on the service's
             # side; a failure here must never mask the run outcome.
-            if self._reflection_service is not None:
+            if (
+                self._reflection_service is not None
+                and request.temporary_binding is None
+                and request.temporary_parent_binding is None
+                and run.execution_owner is None
+            ):
                 try:
                     self._reflection_service.notify_run_end(
                         run, agent, internal=internal, outcome=outcome
@@ -2081,6 +2307,8 @@ class ChatLoop:
                     )
 
             await _close_adapter(target.adapter)
+            if owned_finalization_error is not None:
+                raise owned_finalization_error
 
     def _get_session(
         self,
@@ -2392,7 +2620,15 @@ class ChatLoop:
         history_grants: tuple[str, ...] = (
             (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
         )
-        session_tool_grants = history_grants
+        session_capability = None
+        extension_registry = self._dependencies.get_extension_registry()
+        if inputs.temporary_binding is not None and extension_registry is not None:
+            session_capability = extension_registry.session_capability(
+                inputs.temporary_binding, self._dependencies.tools
+            )
+        session_tool_grants = history_grants + (
+            session_capability.tool_names if session_capability is not None else ()
+        )
         effective_input_modalities = (
             inputs.input_modalities
             if inputs.input_modalities is not None
@@ -2423,10 +2659,64 @@ class ChatLoop:
         session_tool_grants = tuple(
             name for name in session_tool_grants if name in allowed_tool_name_set
         )
+        if inputs.temporary_binding is not None and (
+            session_capability is None
+            or not set(session_capability.tool_names).issubset(session_tool_grants)
+        ):
+            raise ChatError(
+                "This Session has an invalid configuration. "
+                "Ask the user to check it through its Extension."
+            )
         tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.tools.contracts_for_provider_definitions,
             tools,
         )
+        request_block_definitions: tuple[BlockDefinition, ...] = ()
+        if (
+            session_capability is not None
+            and inputs.temporary_binding is not None
+            and set(session_capability.tool_names).issubset(session_tool_grants)
+        ):
+            assert extension_registry is not None
+            rendered_blocks: list[BlockDefinition] = []
+            for declaration in session_capability.prompt_blocks:
+                try:
+                    rendered = await invoke_extension_handler(
+                        declaration.render, inputs.temporary_binding
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Session prompt block %r failed", declaration.slug, exc_info=True
+                    )
+                    continue
+                if isinstance(rendered, str) and rendered.strip():
+                    rendered_blocks.append(
+                        BlockDefinition(
+                            id=f"extension_session:{declaration.slug}",
+                            owner="always",
+                            kind=BLOCK_KIND_DATA,
+                            default_text=rendered.strip(),
+                            default_rank=10_000,
+                        )
+                    )
+            if not extension_registry.is_registration_current(session_capability.identity):
+                raise ChatError(
+                    "This Session has an invalid configuration. "
+                    "Ask the user to check it through its Extension."
+                )
+            current_capability = extension_registry.session_capability(
+                inputs.temporary_binding, self._dependencies.tools
+            )
+            if (
+                current_capability is None
+                or current_capability.identity != session_capability.identity
+                or not set(current_capability.tool_names).issubset(session_tool_grants)
+            ):
+                raise ChatError(
+                    "This Session has an invalid configuration. "
+                    "Ask the user to check it through its Extension."
+                )
+            request_block_definitions = tuple(rendered_blocks)
         prompt_read_paths: list[Path] = []
         system_prompt = await _run_prompt_method(
             system_prompts,
@@ -2445,6 +2735,7 @@ class ChatLoop:
             read_paths=prompt_read_paths,
             effective_tool_names=allowed_tool_names,
             session_tool_grants=session_tool_grants,
+            request_block_definitions=request_block_definitions,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
         # workspace includes) count as read for this session, so the agent can edit
@@ -2623,6 +2914,64 @@ class ChatLoop:
                 context.request_state = state
             async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
+                binding = context.request.temporary_binding
+                extension_registry = self._dependencies.get_extension_registry()
+                try:
+                    if binding is not None and extension_registry is not None:
+                        delivery = await extension_registry.dispatch_session_before_request(
+                            binding,
+                            self._dependencies.tools,
+                            SessionRequestContext(
+                                binding=binding,
+                                run_id=run.id,
+                                agent_id=run.agent_id,
+                                session_id=run.session_id,
+                                execution_owner=run.execution_owner,
+                            ),
+                        )
+                        if delivery is not None:
+                            previous_delivery = (
+                                await self._dependencies.sessions.lookup_delivery_receipt(
+                                    binding.address,
+                                    binding.generation_id,
+                                    binding.owner_name,
+                                    delivery.delivery_id,
+                                )
+                            )
+                            delivery_note = ChatMessage.note("\n\n".join(delivery.entries))
+                            await self._dependencies.sessions.append_messages_with_receipts_async(
+                                binding.address,
+                                generation_id=binding.generation_id,
+                                owner_name=binding.owner_name,
+                                messages=[delivery_note],
+                                deduplicate_carrier=True,
+                                receipts=[
+                                    (
+                                        0,
+                                        delivery.delivery_id,
+                                        delivery.content_hash,
+                                        delivery.effect_kind,
+                                        "note",
+                                    )
+                                ],
+                            )
+                            if previous_delivery is None:
+                                messages.extend(_notes_to_request_messages([delivery_note]))
+                            await extension_registry.acknowledge_session_delivery(
+                                binding,
+                                self._dependencies.tools,
+                                SessionRequestContext(
+                                    binding=binding,
+                                    run_id=run.id,
+                                    agent_id=run.agent_id,
+                                    session_id=run.session_id,
+                                    execution_owner=run.execution_owner,
+                                ),
+                                delivery,
+                            )
+                except Exception:
+                    await session.flush_deferred_notes_async()
+                    raise
                 try:
                     self._dependencies.deliver_background_completions(run, session)
                 except Exception:
@@ -2905,6 +3254,7 @@ class ChatLoop:
                         session_tool_grants=state.session_tool_grants,
                         tool_contracts=state.tool_contracts,
                         change_tracker=self._dependencies.change_tracker,
+                        allow_owned_effects=context.request.temporary_binding is not None,
                     )
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
@@ -2987,7 +3337,38 @@ class ChatLoop:
                             TOOL_FINALIZATION_NOTE.format(reason=finalization_request_reason)
                         )
                     deferred_notes = session.take_deferred_notes()
-                    await session.append_many_async([*tool_messages, *deferred_notes])
+                    batch_messages = [*tool_messages, *deferred_notes]
+                    binding = context.request.temporary_binding
+                    extension_registry = self._dependencies.get_extension_registry()
+                    if binding is not None and tool_dispatch_context.delivery_receipts:
+                        await self._dependencies.sessions.append_messages_with_receipts_async(
+                            binding.address,
+                            generation_id=binding.generation_id,
+                            owner_name=binding.owner_name,
+                            messages=batch_messages,
+                            receipts=[
+                                (
+                                    next(
+                                        index
+                                        for index, message in enumerate(batch_messages)
+                                        if message.role == "tool"
+                                        and message.tool_call_id == tool_call_id
+                                    ),
+                                    receipt_id,
+                                    content_hash,
+                                    effect_kind,
+                                    "tool",
+                                )
+                                for (
+                                    tool_call_id,
+                                    receipt_id,
+                                    content_hash,
+                                    effect_kind,
+                                ) in tool_dispatch_context.delivery_receipts
+                            ],
+                        )
+                    else:
+                        await session.append_many_async(batch_messages)
                     await context.session_snapshot.refresh(session)
                     for tool_message in tool_messages:
                         assert tool_message.tool_call_id is not None
@@ -3005,6 +3386,67 @@ class ChatLoop:
                         target.input_modalities,
                         target.wire_media_types,
                     )
+                    if binding is not None:
+                        if extension_registry is None:
+                            raise ChatError(
+                                "This Session is no longer available. "
+                                "Check its state through its Extension."
+                            )
+                        decision = await extension_registry.reconcile_session_tool_batch(
+                            binding,
+                            self._dependencies.tools,
+                            SessionRequestContext(
+                                binding=binding,
+                                run_id=run.id,
+                                agent_id=run.agent_id,
+                                session_id=run.session_id,
+                                execution_owner=run.execution_owner,
+                            ),
+                            tool_dispatch_context.delivery_receipts,
+                            tuple(
+                                message.tool_call_id
+                                for message in tool_messages
+                                if message.tool_call_id is not None
+                            ),
+                            tool_dispatch_context.turn_end_requested,
+                        )
+                        continuation = decision.continuation
+                        if continuation is not None:
+                            continuation_note = ChatMessage.note("\n\n".join(continuation.entries))
+                            await self._dependencies.sessions.append_messages_with_receipts_async(
+                                binding.address,
+                                generation_id=binding.generation_id,
+                                owner_name=binding.owner_name,
+                                messages=[continuation_note],
+                                deduplicate_carrier=True,
+                                receipts=[
+                                    (
+                                        0,
+                                        continuation.delivery_id,
+                                        continuation.content_hash,
+                                        continuation.effect_kind,
+                                        "note",
+                                    )
+                                ],
+                            )
+                            await extension_registry.acknowledge_session_delivery(
+                                binding,
+                                self._dependencies.tools,
+                                SessionRequestContext(
+                                    binding=binding,
+                                    run_id=run.id,
+                                    agent_id=run.agent_id,
+                                    session_id=run.session_id,
+                                    execution_owner=run.execution_owner,
+                                ),
+                                continuation,
+                            )
+                            continuation_messages = _notes_to_request_messages([continuation_note])
+                            messages.extend(continuation_messages)
+                            tool_request_messages.extend(continuation_messages)
+                            await context.session_snapshot.refresh(session)
+                        if decision.end:
+                            return assistant_message
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # It is not a full persistence guarantee, though: the forceful

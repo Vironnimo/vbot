@@ -31,6 +31,8 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Tools:** Canonical schema contracts, argument normalization/validation, and concurrency policy live in `tools.md`; the design rules for agent-facing Tool definitions live in `tools/designing-agent-tools.md`.
 
+**Extensions:** API 6 adds owner-bound temporary Sessions/execution groups and isolated built pages. Canonical Sessions own binding, receipt and Run identity; Extension databases own their domain state. The main app supplies a generic page bridge; domain UI stays with the Extension (`extensions.md`).
+
 **Configuration:** The data directory (`~/.vbot`) owns `settings.json` (application settings) and `.env` (user-owned fallback credential snapshot; process environment takes precedence, vBot never rewrites `os.environ`). Every user-editable JSON file is validated by its owning domain before runtime consumption; public accessors configure Settings only through cataloged paths. Contracts and internals live in `settings.md` and `storage.md`; Custom Provider credentials in `providers/connections.md`.
 
 ## Domain Maps
@@ -111,7 +113,7 @@ This checkout carries a git-ignored marker selecting the dev data directory (`~/
 
 **Session store maintenance:** Use `python cli/main.py session-store status|snapshot|incident` for live operator-safe health and `snapshot restore` only against a proven-stopped target; use `python scripts/converters/session_sqlite.py inventory|dry-run|convert|verify|install|resume|export-jsonl` only as an explicit offline workflow on copied legacy data.
 
-**Build frontend:** `cd webui && npm ci && npm run build`
+**Build frontend:** `cd webui && npm ci && npm run build`. The same build compiles bundled Extension `ui/page.html` entries into relative `web/` assets through `webui/scripts/build-extension-pages.mjs`; installers ship these generated assets with their Extension sources. The frontend quality gate includes these external source/test paths using the shared dependency tree.
 
 **Releasing:** When the user wants to release a version, read `.vorch/workflows/release-workflow.md`.
 

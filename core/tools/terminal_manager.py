@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 from core.event_stream import ReplayEventStream
+from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools.process_manager import log_background_task_result
 from core.tools.terminal_backend import (
@@ -230,6 +231,8 @@ class TerminalSession:
     log_path: Path | None
     log_handle: TextIO | None
     log_lease: TemporaryFileLease | None
+    execution_owner: RunExecutionOwner | None = None
+    activity_execution_owner: RunExecutionOwner | None = None
     launch_command: str | None = None
     launch_arguments: tuple[str, ...] = ()
     name: str | None = None
@@ -321,6 +324,8 @@ class TerminalManager:
         self._sleep = sleep
         self._sessions: dict[str, TerminalSession] = {}
         self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
+        self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
+        self._closed_execution_groups: set[tuple[str, str, str]] = set()
         self._closed = False
         self._reader_executor = ThreadPoolExecutor(
             max_workers=TERMINAL_MAX_LIVE_GLOBAL, thread_name_prefix="vbot-terminal-read"
@@ -404,6 +409,7 @@ class TerminalManager:
         initial_text: str | None = None,
         name: str | None = None,
         group_id: str | None = None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> TerminalSession:
         """Start one Agent-owned program behind PTY/ConPTY."""
         _validate_owner(owner)
@@ -418,6 +424,7 @@ class TerminalManager:
             initial_text=initial_text,
             name=name,
             group_id=group_id,
+            execution_owner=execution_owner,
         )
 
     async def spawn_for_operator(
@@ -492,9 +499,22 @@ class TerminalManager:
         """Reserve capacity before starting work and retain ownership through cancellation."""
         if self._closed:
             raise TerminalClosedError("Terminal Session is no longer running")
+        execution_owner = kwargs.get("execution_owner")
+        if (
+            execution_owner is not None
+            and (
+                execution_owner.extension,
+                execution_owner.group_id,
+                execution_owner.epoch,
+            )
+            in self._closed_execution_groups
+        ):
+            raise TerminalClosedError("Terminal Session is no longer running")
         self._enforce_capacity(owner)
         task = asyncio.create_task(self._spawn_admitted(owner, argv, **kwargs))
         self._pending_spawns[task] = owner
+        if execution_owner is not None:
+            self._pending_execution_spawns[task] = execution_owner
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -509,6 +529,7 @@ class TerminalManager:
             raise
         finally:
             self._pending_spawns.pop(task, None)
+            self._pending_execution_spawns.pop(task, None)
 
     async def _discard_cancelled_spawn(self, task: asyncio.Task[TerminalSession]) -> None:
         try:
@@ -532,6 +553,7 @@ class TerminalManager:
         launch_command: str | None = None,
         launch_arguments: tuple[str, ...] = (),
         group_id: str | None = None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> TerminalSession:
         """Start one unmodified program behind PTY/ConPTY."""
         if not argv or not argv[0]:
@@ -598,6 +620,8 @@ class TerminalManager:
             log_path=log_path,
             log_handle=log_handle,
             log_lease=log_lease,
+            execution_owner=execution_owner,
+            activity_execution_owner=execution_owner,
         )
         if group_id is not None:
             self._append_group_terminal(group_id, terminal_id)
@@ -650,6 +674,7 @@ class TerminalManager:
         attachment: TerminalOwner,
         *,
         origin_run_id: str,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> tuple[TerminalSession, bool]:
         """Attach one live Terminal Session without changing its process or lifecycle."""
         _validate_owner(attachment)
@@ -664,6 +689,7 @@ class TerminalManager:
             session.observed_screen = None
         session.attachment = attachment
         session.activity_origin_run_id = origin_run_id
+        session.activity_execution_owner = execution_owner
         session.acknowledged_attention_revision = session.attention_revision
         session.settled_delivery_enabled = True
         # An explicit Agent attach is deliberate contact: the Agent sees the
@@ -1033,6 +1059,7 @@ class TerminalManager:
         expected_screen_revision: int | None,
         origin_run_id: str,
         data: str | None = None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> dict[str, Any]:
         """Write exact data or named terminal input and track generic PTY activity."""
         session = self.get_session(terminal_id, owner)
@@ -1083,6 +1110,7 @@ class TerminalManager:
             prior_state = session.state
             prior_attention_revision = session.attention_revision
             session.activity_origin_run_id = origin_run_id
+            session.activity_execution_owner = execution_owner
             session.state = "working"
             for index, chunk in enumerate(chunks):
                 if index:
@@ -1152,6 +1180,7 @@ class TerminalManager:
                 key="enter",
                 expected_screen_revision=None,
                 origin_run_id=origin_run_id,
+                execution_owner=session.execution_owner,
             )
         except asyncio.CancelledError:
             return
@@ -1238,6 +1267,38 @@ class TerminalManager:
         session = self.get_session(terminal_id, owner)
         await self._terminate_session(session, suppress_attention=True)
         return await self.snapshot(terminal_id, owner, include_name=False)
+
+    def has_execution_work(self, owner: RunExecutionOwner) -> bool:
+        return any(value == owner for value in self._pending_execution_spawns.values()) or any(
+            session.execution_owner == owner and session.state not in {"exited", "error"}
+            for session in self._sessions.values()
+        )
+
+    async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        """Drain exact execution-owned terminals without changing attachment authority."""
+        key = (extension, group_id, epoch)
+        self._closed_execution_groups.add(key)
+        pending = [
+            task
+            for task, owner in self._pending_execution_spawns.items()
+            if (owner.extension, owner.group_id, owner.epoch) == key
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        sessions = [
+            session
+            for session in self._sessions.values()
+            if session.execution_owner is not None
+            and (
+                session.execution_owner.extension,
+                session.execution_owner.group_id,
+                session.execution_owner.epoch,
+            )
+            == key
+        ]
+        await asyncio.gather(
+            *(self._terminate_session(session, suppress_attention=True) for session in sessions)
+        )
 
     async def close_scope(self, owner: TerminalOwner) -> None:
         """Apply Terminal lifecycle and attachment cleanup for a removed Session."""
@@ -1659,6 +1720,7 @@ class TerminalManager:
             origin_run_id=origin_run_id,
             body=_attention_body(session, attention),
             project_id=attachment.project_id,
+            execution_owner=session.activity_execution_owner,
         )
         await delivery
         attention.delivered = True
@@ -1718,6 +1780,7 @@ class TerminalManager:
         self._cancel_delivery(session)
         session.attachment = None
         session.activity_origin_run_id = None
+        session.activity_execution_owner = None
         session.notify_on_settle = False
         session.settled_delivery_enabled = False
         session.observed_screen = None

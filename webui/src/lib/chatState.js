@@ -981,6 +981,16 @@ export function createChatController({
       }
       const run = await operations.startChatRun(params);
       if (run?.command_handled) {
+        const navigation = run?.data?.navigation;
+        if (
+          run.output === 'action' &&
+          navigation?.kind === 'open_extension_page' &&
+          typeof navigation.extension === 'string' &&
+          typeof navigation.page === 'string' &&
+          typeof navigation.route === 'string'
+        ) {
+          return { kind: 'extension_page', navigation };
+        }
         const move = resolveMoveActionFromResponse(run);
         if (move) {
           return { kind: 'move', move };

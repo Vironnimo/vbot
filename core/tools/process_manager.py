@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
+from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
@@ -307,6 +308,7 @@ class TrackedProcess:
     last_poll_at: datetime | None
     last_output_at: datetime | None
     stdin_open: bool
+    execution_owner: RunExecutionOwner | None = None
     foreground_capture_open: bool = True
     buffer_start_offset: int = 0
     poll_offset: int = 0
@@ -350,6 +352,8 @@ class ProcessManager:
         self._processes: dict[str, TrackedProcess] = {}
         self._terminal_callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._sweeper_task: asyncio.Task[None] | None = None
+        self._closed_execution_groups: set[tuple[str, str, str]] = set()
+        self._owned_spawns: dict[asyncio.Task[str], RunExecutionOwner] = {}
 
     def add_terminal_callback(
         self, callback: Callable[[dict[str, Any]], None]
@@ -419,6 +423,59 @@ class ProcessManager:
         project_id: str | None = None,
         env: dict[str, str] | None,
         cwd: str | Path | None,
+        execution_owner: RunExecutionOwner | None = None,
+    ) -> str:
+        if execution_owner is None:
+            return await self._spawn(
+                scope_key, agent_id, argv, project_id=project_id, env=env, cwd=cwd
+            )
+        key = (execution_owner.extension, execution_owner.group_id, execution_owner.epoch)
+        if key in self._closed_execution_groups:
+            raise ProcessManagerError(
+                "This Session is no longer available. Check its state through its Extension."
+            )
+        task = asyncio.create_task(
+            self._spawn(
+                scope_key,
+                agent_id,
+                argv,
+                project_id=project_id,
+                env=env,
+                cwd=cwd,
+                execution_owner=execution_owner,
+            )
+        )
+        self._owned_spawns[task] = execution_owner
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+
+            async def discard() -> None:
+                try:
+                    process_id = await task
+                except Exception:
+                    return
+                await self._kill_process(self._processes[process_id])
+
+            cleanup = asyncio.create_task(discard())
+            while not cleanup.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(cleanup)
+            cleanup.result()
+            raise
+        finally:
+            self._owned_spawns.pop(task, None)
+
+    async def _spawn(
+        self,
+        scope_key: str,
+        agent_id: str,
+        argv: Sequence[str],
+        *,
+        project_id: str | None = None,
+        env: dict[str, str] | None,
+        cwd: str | Path | None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> str:
         """Start a subprocess and return its process id."""
         if not scope_key:
@@ -469,6 +526,7 @@ class ProcessManager:
             last_poll_at=None,
             last_output_at=None,
             stdin_open=proc.stdin is not None,
+            execution_owner=execution_owner,
         )
         self._open_log_file(tracked)
         self._processes[process_id] = tracked
@@ -1005,6 +1063,33 @@ class ProcessManager:
     def _finish_process_lookup_error(tracked: TrackedProcess) -> None:
         tracked.finished_at = _utc_now()
         tracked.stdin_open = False
+
+    def has_execution_work(self, owner: RunExecutionOwner) -> bool:
+        return any(value == owner for value in self._owned_spawns.values()) or any(
+            tracked.execution_owner == owner and tracked.status == "running"
+            for tracked in self._processes.values()
+        )
+
+    async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        """Close process admission and drain exactly this execution group's resources."""
+        key = (extension, group_id, epoch)
+        self._closed_execution_groups.add(key)
+        pending = [
+            task
+            for task, owner in self._owned_spawns.items()
+            if (owner.extension, owner.group_id, owner.epoch) == key
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for tracked in list(self._processes.values()):
+            owner = tracked.execution_owner
+            if owner is not None and (owner.extension, owner.group_id, owner.epoch) == key:
+                watcher = tracked.completion_notification_task
+                if watcher is not None:
+                    watcher.cancel()
+                await self._kill_process(tracked)
+                if watcher is not None:
+                    await asyncio.gather(watcher, return_exceptions=True)
 
     async def cancel_scope_async(self, scope_key: str) -> None:
         """Kill active processes in a run scope without blocking the loop."""

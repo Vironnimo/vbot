@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -21,6 +22,9 @@ FILE_URL_PREFIX = "/api/files/"
 FILE_SNIFF_BYTES = 65_536
 MAX_FILE_TOKEN_LENGTH = 16_384
 PREVIEW_URL_PREFIX = "/api/preview-assets/"
+EXTENSION_ASSET_URL_PREFIX = "/api/extension-assets/"
+EXTENSION_RUN_URL_PREFIX = "/api/extension-runs/"
+EXTENSION_RUN_CAPABILITY_SECONDS = 120
 PREVIEW_MAX_ENTRIES = 5000
 PREVIEW_TYPES = {
     ".html": "text/html",
@@ -147,6 +151,224 @@ class FileDelivery:
             "source": str(entry),
             "root": str(root),
             "revision": revision,
+        }
+
+    def open_extension_page(
+        self, *, extension: str, page: str, epoch: str, entry: Path
+    ) -> JsonObject:
+        """Mint a current-registration capability for one bundled Extension page.
+
+        The caller has already obtained ``entry`` from the live Extension
+        registry.  The token remains deliberately useless as authority by
+        itself: the server route re-checks its owner and epoch against that
+        registry before every file read.
+        """
+        try:
+            resolved = entry.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError("Extension page is unavailable") from exc
+        if not resolved.is_file() or resolved.suffix.lower() not in {".html", ".htm"}:
+            raise ValueError("Extension page is unavailable")
+        payload = {
+            "extension": extension,
+            "page": page,
+            "epoch": epoch,
+            "root": str(resolved.parent),
+            "entry": resolved.name,
+        }
+        encoded = _urlsafe_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(
+                self._secret,
+                b"extension-page:" + encoded.encode("ascii"),
+                hashlib.sha256,
+            )
+        )
+        token = f"{encoded}.{signature}"
+        return {
+            "token": token,
+            "url": f"{EXTENSION_ASSET_URL_PREFIX}{token}/{quote(resolved.name, safe='')}",
+        }
+
+    def extension_page_asset(
+        self, token: str, relative_path: str
+    ) -> tuple[JsonObject, DeliveredFile]:
+        """Resolve one asset without deciding whether its owner is still live."""
+        payload = self.extension_page_claims(token)
+        try:
+            root = Path(payload["root"])
+            delivered = self._scoped_asset_file(root, relative_path)
+            return payload, delivered
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise ValueError("Extension page is unavailable") from exc
+
+    def extension_page_claims(self, token: str) -> JsonObject:
+        """Return signed page claims for the server's current-owner check."""
+        try:
+            if len(token) > MAX_FILE_TOKEN_LENGTH:
+                raise ValueError("Invalid extension page")
+            encoded, signature = token.split(".")
+            expected = _urlsafe_encode(
+                hmac.digest(
+                    self._secret,
+                    b"extension-page:" + encoded.encode("ascii"),
+                    hashlib.sha256,
+                )
+            )
+            if not hmac.compare_digest(expected, signature):
+                raise ValueError("Invalid extension page")
+            payload = json.loads(_urlsafe_decode(encoded).decode("utf-8"))
+            if not (
+                isinstance(payload, dict)
+                and all(
+                    isinstance(payload.get(key), str) and payload[key]
+                    for key in ("extension", "page", "epoch", "root", "entry")
+                )
+            ):
+                raise ValueError("Invalid extension page")
+            root = Path(payload["root"])
+            if not root.is_absolute() or root.resolve(strict=True) != root or not root.is_dir():
+                raise ValueError("Extension page is unavailable")
+            return payload
+        except (
+            OSError,
+            RuntimeError,
+            UnicodeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError("Extension page is unavailable") from exc
+
+    def open_extension_run(
+        self,
+        *,
+        extension: str,
+        page: str,
+        epoch: str,
+        group_id: str,
+        run_id: str,
+        after_sequence: int = 0,
+    ) -> JsonObject:
+        """Mint a short-lived parent-origin SSE capability for one owned Run.
+
+        The caller resolves the owner-bound host before minting. The route still
+        re-checks this registration and ownership on every use, so this token is
+        only a narrow transport capability, never authority by itself.
+        """
+        values = (extension, page, epoch, group_id, run_id)
+        if not all(isinstance(value, str) and value for value in values) or (
+            not isinstance(after_sequence, int)
+            or isinstance(after_sequence, bool)
+            or after_sequence < 0
+        ):
+            raise ValueError("Extension Run is unavailable")
+        payload = {
+            "extension": extension,
+            "page": page,
+            "epoch": epoch,
+            "group_id": group_id,
+            "run_id": run_id,
+            "after_sequence": after_sequence,
+            "expires_at": int(time.time()) + EXTENSION_RUN_CAPABILITY_SECONDS,
+        }
+        encoded = _urlsafe_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(
+                self._secret,
+                b"extension-run:" + encoded.encode("ascii"),
+                hashlib.sha256,
+            )
+        )
+        token = f"{encoded}.{signature}"
+        return {"url": f"{EXTENSION_RUN_URL_PREFIX}{token}/events"}
+
+    def extension_run_claims(self, token: str) -> JsonObject:
+        """Return a valid, unexpired Extension Run capability's claims."""
+        try:
+            if len(token) > MAX_FILE_TOKEN_LENGTH:
+                raise ValueError("Invalid extension Run")
+            encoded, signature = token.split(".")
+            expected = _urlsafe_encode(
+                hmac.digest(
+                    self._secret,
+                    b"extension-run:" + encoded.encode("ascii"),
+                    hashlib.sha256,
+                )
+            )
+            if not hmac.compare_digest(expected, signature):
+                raise ValueError("Invalid extension Run")
+            payload = json.loads(_urlsafe_decode(encoded).decode("utf-8"))
+            text_keys = ("extension", "page", "epoch", "group_id", "run_id")
+            expires_at = payload.get("expires_at") if isinstance(payload, dict) else None
+            after_sequence = payload.get("after_sequence") if isinstance(payload, dict) else None
+            if not (
+                isinstance(payload, dict)
+                and all(isinstance(payload.get(key), str) and payload[key] for key in text_keys)
+                and isinstance(expires_at, int)
+                and not isinstance(expires_at, bool)
+                and isinstance(after_sequence, int)
+                and not isinstance(after_sequence, bool)
+                and after_sequence >= 0
+                and expires_at >= int(time.time())
+            ):
+                raise ValueError("Invalid extension Run")
+            return payload
+        except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Extension Run is unavailable") from exc
+
+    def _scoped_asset_file(self, root: Path, relative_path: str) -> DeliveredFile:
+        if "\\" in relative_path or "\0" in relative_path:
+            raise ValueError("Invalid extension asset path")
+        relative = PurePosixPath(relative_path)
+        if relative.is_absolute() or any(
+            part.startswith(".") or ":" in part or part.casefold() in PREVIEW_EXCLUDED
+            for part in relative.parts
+        ):
+            raise ValueError("Invalid extension asset path")
+        try:
+            path = root.joinpath(*relative.parts)
+            cursor = root
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.resolve(strict=True) != cursor:
+                    raise ValueError("Invalid extension asset path")
+            resolved = path.resolve(strict=True)
+            if resolved != path or not resolved.is_relative_to(root) or not resolved.is_file():
+                raise ValueError("Invalid extension asset path")
+            media_type = PREVIEW_TYPES.get(resolved.suffix.lower())
+            if media_type is None:
+                raise ValueError("Unsupported extension asset")
+            return DeliveredFile(resolved, media_type, True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Extension asset is unavailable") from exc
+
+    @staticmethod
+    def extension_page_headers(base_url: str, token: str) -> dict[str, str]:
+        assets = f"{base_url.rstrip('/')}{EXTENSION_ASSET_URL_PREFIX}{token}/"
+        return {
+            "Content-Security-Policy": "; ".join(
+                [
+                    "sandbox allow-scripts",
+                    "default-src 'none'",
+                    f"script-src {assets}",
+                    f"style-src {assets} 'unsafe-inline'",
+                    f"img-src {assets} data: blob:",
+                    f"font-src {assets} data:",
+                    f"media-src {assets} data: blob:",
+                    "connect-src 'none'",
+                    "worker-src 'none'",
+                    "frame-src 'none'",
+                    "object-src 'none'",
+                    f"base-uri {assets}",
+                    "form-action 'none'",
+                    "frame-ancestors 'self'",
+                ]
+            ),
+            "Access-Control-Allow-Origin": "null",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         }
 
     def _preview_token(self, root: Path) -> str:

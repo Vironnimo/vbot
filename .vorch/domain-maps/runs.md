@@ -77,6 +77,17 @@ New Run/Queue references use `run_`/`que_` plus 16 lowercase base32 characters (
 - `core/automation/`, `core/subagents/`, channels, tools, and slash commands share the same `ChatRunManager`; they must not create parallel per-domain busy-session queues. Channel ingress reservations are manager state, not a separate scheduler, and are transferred to the normal Run FIFO when a turn is busy.
 - `webui/` treats queue state and Run lifecycle truth as server-owned projections.
 
+## Extension execution ownership
+
+`RunAdmission.owner` is immutable execution provenance retained by Runs and Queue
+items. Admission validation runs again under the manager lock, including Queue
+drain; a closed owner epoch cannot admit late descendant work. Ownership is separate
+from Session Tool grants: child Runs can retain cancellation/usage ownership without
+receiving the parent's Session Tools. `core/agents/temporary.py` closes group admission
+before cancelling exact owned Runs, Queue items and injected resource owners.
+Unrelated work in a reused target Session remains outside that group
+(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents.py`).
+
 ## Constraints & Gotchas
 
 - Only one Run may be active per `(project_id, agent_id, session_id)`; Runs in different Sessions (including a project and an identity session sharing agent/session ids) execute in parallel. `Run.project_id` mirrors the key's project dimension and is what the executor's session I/O reads.

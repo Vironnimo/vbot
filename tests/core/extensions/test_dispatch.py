@@ -191,7 +191,7 @@ class TestRetiredPromptAppendEventRemoved:
     that still registers the retired name runs harmlessly into the void.
     """
 
-    def test_dispatch_surface_is_the_five_kept_events(self) -> None:
+    def test_dispatch_surface_keeps_generic_and_session_scoped_events(self) -> None:
         registry = ExtensionRegistry()
         dispatch_methods = {name for name in dir(registry) if name.startswith("dispatch_")}
         assert dispatch_methods == {
@@ -201,6 +201,8 @@ class TestRetiredPromptAppendEventRemoved:
             "dispatch_tool_call",
             "dispatch_tool_result",
             "dispatch_channel_interaction",
+            "dispatch_session_before_request",
+            "dispatch_session_run_finished",
         }
 
     @pytest.mark.asyncio

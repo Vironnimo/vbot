@@ -69,6 +69,7 @@ class StatisticsScope:
 class IndexedStatisticsSession:
     """One compact Session projection hydrated from SQLite."""
 
+    generation_id: str
     summary: JsonObject
     messages: tuple[ChatMessage, ...]
 
@@ -87,6 +88,8 @@ class StatisticsIndex:
         self,
         sessions: StatisticsSessionSource,
         scopes: tuple[StatisticsScope, ...],
+        *,
+        prune: bool = True,
     ) -> dict[tuple[str, str, str], IndexedStatisticsSession]:
         """Reconcile canonical sources and return one consistent compact snapshot."""
         with self._lock:
@@ -96,7 +99,8 @@ class StatisticsIndex:
                 with connection:
                     changes_before = connection.total_changes
                     current_keys = self._reconcile(connection, sessions, scopes)
-                    self._prune_missing(connection, current_keys)
+                    if prune:
+                        self._prune_missing(connection, current_keys)
                     changed = connection.total_changes != changes_before
                     if changed:
                         connection.execute(
@@ -461,12 +465,15 @@ class StatisticsIndex:
         messages: dict[tuple[str, str, str], list[ChatMessage]] = {}
         for row in connection.execute(
             """
-            SELECT project_id, agent_id, session_id, summary_json
+            SELECT project_id, agent_id, session_id, generation_id, summary_json
             FROM statistics_sessions
             """
         ):
             key = (str(row["project_id"]), str(row["agent_id"]), str(row["session_id"]))
-            summaries[key] = _json_object(str(row["summary_json"]))
+            summaries[key] = {
+                "generation_id": str(row["generation_id"]),
+                "summary": _json_object(str(row["summary_json"])),
+            }
             messages[key] = []
         for row in connection.execute(
             """
@@ -479,7 +486,11 @@ class StatisticsIndex:
             payload = _json_object(str(row["payload_json"]))
             messages[key].append(_message_from_projection(payload, int(row["ordinal"])))
         return {
-            key: IndexedStatisticsSession(summary=summary, messages=tuple(messages[key]))
+            key: IndexedStatisticsSession(
+                generation_id=str(summary["generation_id"]),
+                summary=cast(JsonObject, summary["summary"]),
+                messages=tuple(messages[key]),
+            )
             for key, summary in summaries.items()
         }
 

@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.terminal_manager as terminal_module
+from core.runs import RunExecutionOwner
 from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
@@ -179,6 +180,84 @@ def owner(session_id: str = "session-a") -> TerminalOwner:
     return TerminalOwner("project-a", "agent-a", session_id)
 
 
+@pytest.mark.asyncio
+async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_transfer(
+    terminal_manager,
+    tmp_path,
+    monkeypatch,
+):
+    manager, _factory = terminal_manager
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda adapter: adapter.terminate()
+    )
+    execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
+    owned = await manager.spawn(
+        owner(),
+        ["fake"],
+        cwd=tmp_path,
+        env=None,
+        origin_run_id="run",
+        execution_owner=execution,
+    )
+    unrelated = await manager.spawn(
+        owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="other"
+    )
+    manager.detach(owned.terminal_id, owner())
+    await manager.close_execution_group("fixture", "group", "epoch")
+    assert not owned.adapter.is_alive()
+    assert unrelated.adapter.is_alive()
+    with pytest.raises(TerminalClosedError):
+        await manager.spawn(
+            owner(),
+            ["fake"],
+            cwd=tmp_path,
+            env=None,
+            origin_run_id="late",
+            execution_owner=execution,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    factory = AdapterFactory()
+
+    def blocked_factory(*args):
+        started.set()
+        assert release.wait(5)
+        return factory(*args)
+
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda adapter: adapter.terminate()
+    )
+    manager = TerminalManager(adapter_factory=blocked_factory)
+    execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
+    launch = asyncio.create_task(
+        manager.spawn(
+            owner(),
+            ["fake"],
+            cwd=tmp_path,
+            env=None,
+            origin_run_id="run",
+            execution_owner=execution,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
+        await asyncio.sleep(0)
+        assert not close.done()
+        release.set()
+        session = await launch
+        await close
+        assert not session.adapter.is_alive()
+    finally:
+        release.set()
+        await asyncio.gather(launch, return_exceptions=True)
+        await manager.aclose()
+
+
 async def spawn(
     manager: TerminalManager,
     tmp_path: Path,
@@ -252,6 +331,59 @@ async def establish_delivered_baseline(
     trigger.release.set()
     await eventually(lambda: session.attention is not None and session.attention.delivered)
     return session
+
+
+@pytest.mark.asyncio
+async def test_terminal_completion_uses_activity_owner_without_transferring_process_lifetime(
+    tmp_path,
+):
+    clock = FakeClock()
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    manager.start()
+    execution = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    try:
+        session = await establish_delivered_baseline(
+            manager,
+            factory,
+            trigger,
+            clock,
+            tmp_path,
+            quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
+        )
+        manager.attach(
+            session.terminal_id, owner(), origin_run_id="owned-run", execution_owner=execution
+        )
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            data="next\r",
+            text=None,
+            key=None,
+            expected_screen_revision=None,
+            origin_run_id="owned-run",
+            execution_owner=execution,
+        )
+        generation = session.activity_generation
+        factory.adapters[0].emit("new result")
+        await settle_next_activity(
+            clock, session, after_generation=generation, quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS
+        )
+        await eventually(lambda: len(trigger.submissions) == 2)
+        assert trigger.submissions[-1][1]["execution_owner"] == execution
+        assert session.execution_owner is None
+        await manager.close_execution_group("swarm", "group", "epoch")
+        assert session.adapter.is_alive()
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

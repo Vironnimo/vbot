@@ -80,11 +80,19 @@ class ToolDispatchContext:
     session_tool_grants: Sequence[str] = ()
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     change_tracker: ChangeTracker | None = None
+    allow_owned_effects: bool = False
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
         default_factory=dict,
         init=False,
         repr=False,
         compare=False,
+    )
+    _delivery_receipts: list[tuple[str, str, str, str]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    _turn_end_requested: bool = field(default=False, init=False, repr=False, compare=False)
+    _owned_effect_call_ids: set[str] = field(
+        default_factory=set, init=False, repr=False, compare=False
     )
 
     def register_result_persisted(
@@ -106,6 +114,28 @@ class ToolDispatchContext:
                     tool_call_id,
                     exc_info=True,
                 )
+
+    def register_delivery_receipt(self, tool_call_id: str, receipt: tuple[str, str, str]) -> None:
+        receipt_id, content_hash, effect_kind = receipt
+        self._delivery_receipts.append((tool_call_id, receipt_id, content_hash, effect_kind))
+        self._owned_effect_call_ids.add(tool_call_id)
+
+    def request_turn_end(self, _tool_call_id: str) -> None:
+        object.__setattr__(self, "_turn_end_requested", True)
+        self._owned_effect_call_ids.add(_tool_call_id)
+
+    @property
+    def delivery_receipts(self) -> tuple[tuple[str, str, str, str], ...]:
+        return tuple(self._delivery_receipts)
+
+    @property
+    def turn_end_requested(self) -> bool:
+        return self._turn_end_requested
+
+    @property
+    def owned_effect_call_ids(self) -> tuple[str, ...]:
+        """Successful Tool calls whose owner effects crossed this batch boundary."""
+        return tuple(sorted(self._owned_effect_call_ids))
 
 
 class _EmittingToolRegistry(ToolRegistry):
@@ -291,6 +321,8 @@ class _EmittingToolRegistry(ToolRegistry):
                             )
                         ),
                     )
+
+            if self._extension_registry is not None:
                 effective_arguments = decision.effective_input
                 if decision.deny_reason is not None:
                     _LOGGER.warning(
@@ -351,6 +383,9 @@ class _EmittingToolRegistry(ToolRegistry):
                             )
                         ),
                     )
+
+            if result.get("ok") is True:
+                context._commit_owned_effects()
 
             if result.get("ok") is True and context.result_media:
                 self._tool_media[context.tool_call_id] = context.result_media
@@ -521,6 +556,7 @@ async def _dispatch_tool_calls(
             vbot_root=context.vbot_root,
             data_root=context.data_root,
             iteration_number=run.iteration_count,
+            execution_owner=run.execution_owner,
             cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.
@@ -552,6 +588,12 @@ async def _dispatch_tool_calls(
             note_hook=session.add_note,
             skill_activation_hook=session.register_skill_activation,
             tool_call_result_persisted_registrar=context.register_result_persisted,
+            tool_delivery_receipt_registrar=(
+                context.register_delivery_receipt if context.allow_owned_effects else None
+            ),
+            tool_turn_end_registrar=(
+                context.request_turn_end if context.allow_owned_effects else None
+            ),
             nesting_depth=context.nesting_depth,
             input_contracts=context.tool_contracts,
             change_tracker=context.change_tracker,

@@ -399,6 +399,7 @@ async def bash_handler(
             project_id=context.project_id,
             env=env,
             cwd=workdir,
+            execution_owner=context.execution_owner,
         )
     except FileNotFoundError:
         # The shell binary itself (pwsh/bash) was not found. This is not a
@@ -427,6 +428,7 @@ async def bash_handler(
                 project_id=context.project_id,
                 env=env,
                 cwd=workdir,
+                execution_owner=context.execution_owner,
             )
         except (OSError, ValueError) as error:
             return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
@@ -669,6 +671,7 @@ async def _watch_background_process(
         origin_run_id=origin_run_id,
         body=body,
         project_id=project_id,
+        execution_owner=tracked.execution_owner,
     )
     try:
         await delivery
