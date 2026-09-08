@@ -73,6 +73,9 @@ async function openProviders(page) {
   await page.goto("/#settings");
   const settings = page.getByRole("region", { name: "Settings" });
   await settings
+    .getByRole("button", { exact: true, name: "Connections" })
+    .click();
+  await settings
     .getByRole("button", { exact: true, name: "Providers" })
     .click();
   return settings.getByRole("region", { name: "Providers" });

@@ -11,7 +11,6 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   await expect(drawer).toBeVisible();
   const sessionItems = drawer.getByRole("listitem");
   await expect(sessionItems.first()).toBeVisible();
-  const previousCount = await sessionItems.count();
 
   let selectedSession = drawer.locator(
     "li.session-row:has(button.session-row__select--active)",
@@ -65,7 +64,18 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
     .getByRole("button", { exact: true, name: "Delete" })
     .click();
 
-  await expect(sessionItems).toHaveCount(previousCount - 1);
+  await expect(drawer).toBeHidden();
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(drawer).toBeVisible();
+  await expect(
+    drawer.getByText("E2E Managed Session", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    drawer.locator("button.session-row__select--active"),
+  ).toHaveCount(1);
+  await page.reload();
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(drawer).toBeVisible();
   await expect(
     drawer.getByText("E2E Managed Session", { exact: true }),
   ).toHaveCount(0);

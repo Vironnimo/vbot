@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 async function openDebugSettings(page) {
   await page.goto("/#settings");
   const settings = page.getByRole("region", { name: "Settings" });
+  await settings.getByRole("button", { exact: true, name: "System" }).click();
   await settings.getByRole("button", { exact: true, name: "Debug" }).click();
   return settings.getByRole("region", { name: "Debug" });
 }
@@ -15,10 +16,10 @@ test("Debug settings are searchable, validated, persisted, and restorable", asyn
   await settings
     .getByRole("searchbox", { name: "Search settings" })
     .fill("trace limit");
-  await expect(settings.getByRole("status")).toContainText(/Matches: [1-9]/);
   await expect(
-    settings.getByRole("button", { exact: true, name: "Debug" }),
+    settings.getByRole("heading", { name: "Search results" }),
   ).toBeVisible();
+  await expect(settings.getByRole("button", { name: /^Debug/ })).toBeVisible();
 
   let debug = await openDebugSettings(page);
   await debug.getByRole("switch", { name: "Enable debug mode" }).click();
@@ -27,7 +28,7 @@ test("Debug settings are searchable, validated, persisted, and restorable", asyn
   await expect(page.getByText("Debug", { exact: true }).last()).toBeVisible();
 
   await page.reload();
-  debug = page.getByRole("region", { name: "Debug" });
+  debug = await openDebugSettings(page);
   await expect(
     debug.getByRole("switch", { name: "Enable debug mode" }),
   ).toBeChecked();

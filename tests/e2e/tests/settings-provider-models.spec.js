@@ -7,6 +7,9 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
   const settings = page.getByRole("region", { name: "Settings" });
 
   await settings
+    .getByRole("button", { exact: true, name: "Connections" })
+    .click();
+  await settings
     .getByRole("button", { exact: true, name: "Providers" })
     .click();
   const providers = settings.getByRole("region", { name: "Providers" });
@@ -26,10 +29,13 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
     }),
   ).toBeVisible();
 
-  await settings
-    .getByRole("button", { exact: true, name: "Agent defaults" })
+  await page.goto("/#agents");
+  const agents = page.getByRole("region", { name: "Agents" });
+  await agents
+    .getByRole("button", { exact: true, name: "Shared defaults" })
+    .first()
     .click();
-  const defaults = settings.getByRole("region", { name: "Agent defaults" });
+  const defaults = agents.locator("[data-settings-section=defaults]");
   await expect(
     defaults.getByRole("button", { exact: true, name: "Model" }),
   ).toContainText("fake/e2e-primary");
@@ -37,6 +43,10 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
     defaults.getByRole("button", { name: /^Fallback models \d+$/ }),
   ).toContainText("fake/e2e-fallback");
 
+  await page.goto("/#settings");
+  await settings
+    .getByRole("button", { exact: true, name: "Tools & Media" })
+    .click();
   await settings
     .getByRole("button", { exact: true, name: "Specialized Models" })
     .click();

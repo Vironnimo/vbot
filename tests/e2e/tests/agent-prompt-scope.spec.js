@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 async function selectPromptScope(page, systemPrompt, name) {
+  await systemPrompt
+    .getByRole("tab", { name: "Edit blocks", exact: true })
+    .click();
   const promptScope = systemPrompt.getByRole("button", {
     name: "Prompt scope",
   });
@@ -33,12 +36,16 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
     agentList.getByRole("button", { name: /^Prompt Agent(?:\s|$)/ }),
   ).toHaveClass(/active/);
 
+  await agents.getByRole("tab", { name: "Behavior", exact: true }).click();
   await agents.getByRole("switch", { name: "Custom system prompt" }).click();
   await agents.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Agent updated.", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "System Prompt" }).click();
   const systemPrompt = page.getByRole("region", { name: "System Prompt" });
+  await systemPrompt
+    .getByRole("tab", { name: "Edit blocks", exact: true })
+    .click();
   const promptScope = systemPrompt.getByRole("button", {
     name: "Prompt scope",
   });
@@ -83,6 +90,7 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
   await agentList
     .getByRole("button", { name: /^Prompt Agent(?:\s|$)/ })
     .click();
+  await agents.getByRole("tab", { name: "Details", exact: true }).click();
   await agents.getByRole("button", { name: "Delete agent" }).click();
   await expect(page.getByText("Agent deleted.", { exact: true })).toBeVisible();
 });

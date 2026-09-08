@@ -59,6 +59,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
     await agentList
       .getByRole("button", { name: /^E2E Command Agent(?:\s|$)/ })
       .click();
+    await agents.getByRole("tab", { name: "Details", exact: true }).click();
     await agents.getByRole("button", { name: "Delete agent" }).click();
     await expect(
       page.getByText("Agent deleted.", { exact: true }),

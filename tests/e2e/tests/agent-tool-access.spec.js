@@ -23,6 +23,9 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
     agentList.getByRole("button", { name: /^Tool Restricted(?:\s|$)/ }),
   ).toHaveClass(/active/);
 
+  await agents
+    .getByRole("tab", { name: "Tools & Skills", exact: true })
+    .click();
   const toolAccess = agents
     .locator(".tl-section")
     .filter({ hasText: "Tool access" })
@@ -61,6 +64,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
   await agentList
     .getByRole("button", { name: /^Tool Restricted(?:\s|$)/ })
     .click();
+  await agents.getByRole("tab", { name: "Details", exact: true }).click();
   await agents.getByRole("button", { name: "Delete agent" }).click();
   await expect(
     agentList.getByRole("button", { name: /^Tool Restricted(?:\s|$)/ }),
