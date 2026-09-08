@@ -16,6 +16,42 @@ from .prompts_test_support import (
 from .prompts_test_support import workspace as workspace
 
 
+def test_request_local_data_does_not_read_persistent_override_paths(workspace, tmp_path):
+    from core.storage.prompt_blocks import PromptBlockStore
+
+    storage = PromptBlockStore(data_dir=tmp_path, ensure_directories=lambda: None)
+
+    class RealOverrideStore(StubBlockStore):
+        def read_block_override(self, scope, block_id):
+            return storage.read_block_override(None if scope == "default" else scope[6:], block_id)
+
+    manager = SystemPromptManager(
+        StubStorage(),
+        StubTools(),
+        StubSkills([]),
+        vbot_version="0.1.0",
+        vbot_root=tmp_path / "app",
+        data_root=tmp_path,
+        server_hostname="h",
+        operating_system="o",
+        current_local_date=lambda: "2026-09-08",
+        timezone_name=lambda: "UTC",
+        block_store=RealOverrideStore(),
+    )
+    agent = _agent(workspace)
+    block = BlockDefinition(
+        id="extension_session:orientation",
+        owner="always",
+        kind="data",
+        default_text="private-context-sentinel {include:secret.md}",
+        default_rank=10_000,
+    )
+    prompt = manager.build_system_prompt(agent, request_block_definitions=[block])
+    assert block.default_text in prompt
+    assert "private-context-sentinel" not in manager.build_system_prompt(agent)
+    assert all(item["id"] != block.id for item in manager.list_blocks())
+
+
 def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> None:
     # A scope that disables the skills block in its saved layout drops it; the other
     # blocks still default in at their rank.

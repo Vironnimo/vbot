@@ -97,7 +97,7 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
 
     async def reconcile(_context, *, receipts, persisted_call_ids, turn_end_requested):
         assert turn_end_requested
-        assert persisted_call_ids == ("private-call",)
+        assert persisted_call_ids == ("private-call", "sibling-call")
         assert len(receipts) == 2
         return ToolBatchDecision(
             end=not continue_after_batch,
