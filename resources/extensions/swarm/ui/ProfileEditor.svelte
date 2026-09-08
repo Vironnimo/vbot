@@ -163,6 +163,7 @@
       label={t('swarm.profile.name', 'Name')}
       required
       >{#snippet children(control)}<input
+          class="s-input"
           id={control.controlId}
           aria-describedby={control.describedBy}
           bind:value={draft.name}
@@ -173,6 +174,7 @@
       label={t('swarm.profile.slug', 'Command slug')}
       required
       >{#snippet children(control)}<input
+          class="s-input"
           id={control.controlId}
           aria-describedby={control.describedBy}
           bind:value={draft.slug}
@@ -200,6 +202,7 @@
         label={t('swarm.profile.model', 'Model')}
         required
         >{#snippet children(control)}<select
+            class="s-input"
             id={control.controlId}
             aria-describedby={control.describedBy}
             bind:value={formation.model}
@@ -214,6 +217,7 @@
         label={t('swarm.profile.participants', 'Participants')}
         required
         >{#snippet children(control)}<input
+            class="s-input"
             id={control.controlId}
             aria-describedby={control.describedBy}
             type="number"
@@ -244,6 +248,7 @@
       controlId="swarm-directory-source"
       label={t('swarm.profile.directorySource', 'Source')}
       >{#snippet children(control)}<select
+          class="s-input"
           id={control.controlId}
           bind:value={draft.working_directory.kind}
           ><option value="directory"
@@ -257,6 +262,7 @@
         label={t('swarm.profile.project', 'Project')}
         required
         >{#snippet children(control)}<select
+            class="s-input"
             id={control.controlId}
             bind:value={draft.working_directory.project_id}
             ><option value=""
@@ -270,6 +276,7 @@
         label={t('swarm.profile.directory', 'Directory')}
         required
         >{#snippet children(control)}<input
+            class="s-input"
             id={control.controlId}
             bind:value={draft.working_directory.path}
             placeholder={t(
@@ -288,6 +295,7 @@
     )}
     full
     >{#snippet children(control)}<textarea
+        class="text-area text-area--default"
         id={control.controlId}
         rows="5"
         bind:value={draft.instructions}></textarea>{/snippet}</FormField
@@ -345,6 +353,7 @@
                       event.currentTarget.checked,
                     )}
                 />{:else}<input
+                  class="s-input"
                   id={control.controlId}
                   type={entry.setting.type === 'number' ? 'number' : 'text'}
                   value={draft.tools?.[modelId(entry.tool)]?.[
@@ -405,6 +414,7 @@
             controlId={`swarm-delivery-${route}`}
             label={t('swarm.delivery.mode', 'Mode')}
             ><select
+              class="s-input"
               value={draft.delivery[route].mode}
               onchange={(event) =>
                 updateDelivery(route, 'mode', event.currentTarget.value)}
@@ -432,6 +442,7 @@
         controlId="swarm-coalesce"
         label={t('swarm.delivery.coalesce', 'Coalesce messages (ms)')}
         ><input
+          class="s-input"
           id="swarm-coalesce"
           type="number"
           min="0"
@@ -445,6 +456,7 @@
         controlId="swarm-batch-messages"
         label={t('swarm.delivery.batchMessages', 'Messages per batch')}
         ><input
+          class="s-input"
           id="swarm-batch-messages"
           type="number"
           min="1"
@@ -458,6 +470,7 @@
         controlId="swarm-batch-chars"
         label={t('swarm.delivery.batchChars', 'Characters per batch')}
         ><input
+          class="s-input"
           id="swarm-batch-chars"
           type="number"
           min="16000"

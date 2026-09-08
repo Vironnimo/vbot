@@ -174,12 +174,10 @@
     loading = true;
     error = '';
     try {
-      const [nextCatalog, nextProfiles, nextSwarms] = await Promise.all([
-        call('catalog'),
+      const [nextProfiles, nextSwarms] = await Promise.all([
         call('profiles.list', { limit: 100 }),
         call('swarms.list', { limit: 100 }),
       ]);
-      catalog = nextCatalog?.catalog ?? {};
       profiles = page(nextProfiles);
       swarms = page(nextSwarms);
       profilesCursor = nextProfiles.cursor ?? null;
@@ -313,6 +311,19 @@
     editor = null;
     await refresh();
     selectedProfile = saved.profile;
+  }
+  async function openProfile(profile = 'new') {
+    if (pending === 'profile') return;
+    pending = 'profile';
+    error = '';
+    try {
+      catalog = (await call('catalog'))?.catalog ?? {};
+      editor = profile;
+    } catch (cause) {
+      error = cause.message;
+    } finally {
+      pending = '';
+    }
   }
   async function deleteProfile() {
     const profile = deleteCandidate;
@@ -487,13 +498,27 @@
   }
   onMount(() => {
     client ??= bridgeClient ?? createExtensionPageClient();
+    const startupTimeout = setTimeout(() => {
+      loading = false;
+      error = t(
+        'swarm.hostUnavailable',
+        'The Swarm page could not connect. Reopen Swarms to try again.',
+      );
+    }, 10_000);
+    let initialized = false;
     const offContext = client.onContext((next) => {
+      clearTimeout(startupTimeout);
+      const previousRoute = context?.route;
       applyContext(next);
-      routeSelection(next.route);
-      refresh();
+      if (!initialized) {
+        initialized = true;
+        routeSelection(next.route);
+        refresh();
+      } else if (next.route !== previousRoute) routeSelection(next.route);
     });
     const offInvalidation = client.onInvalidation(() => refresh());
     return () => {
+      clearTimeout(startupTimeout);
       currentSubscription?.();
       offContext();
       offInvalidation();
@@ -543,7 +568,10 @@
               })}</strong
             >
           </div>
-          <Button variant="primary" onClick={() => (editor = 'new')}
+          <Button
+            variant="primary"
+            loading={pending === 'profile'}
+            onClick={() => openProfile()}
             >{t('swarm.newProfile', 'New profile')}</Button
           >
         </div>
@@ -570,7 +598,8 @@
           >{/if}{#if selectedProfile}<div class="profile-actions">
             <Button
               variant="tertiary"
-              onClick={() => (editor = selectedProfile)}
+              disabled={pending === 'profile'}
+              onClick={() => openProfile(selectedProfile)}
               >{t('common.edit', 'Edit')}</Button
             ><Button
               variant="danger"
@@ -662,6 +691,7 @@
                   controlId="swarm-discussion"
                   label={t('swarm.board.discussion', 'Discussion')}
                   ><select
+                    class="s-input"
                     id="swarm-discussion"
                     value={selectedDiscussion}
                     onchange={(event) =>
@@ -727,6 +757,7 @@
                       controlId="swarm-post"
                       label={t('swarm.board.post', 'Post to the Board')}
                       ><textarea
+                        class="text-area text-area--default"
                         id="swarm-post"
                         bind:value={postText}
                         rows="3"
@@ -743,6 +774,7 @@
                           'Reply to post ID (optional)',
                         )}
                         ><input
+                          class="s-input"
                           id="swarm-reply"
                           bind:value={replyTo}
                         /></FormField
@@ -753,6 +785,7 @@
                           'Ping participant IDs (comma-separated)',
                         )}
                         ><input
+                          class="s-input"
                           id="swarm-pings"
                           bind:value={postRecipients}
                         /></FormField
@@ -980,6 +1013,7 @@
             </p>
             <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}
               ><textarea
+                class="text-area text-area--default"
                 id="swarm-goal"
                 bind:value={goal}
                 rows="6"
@@ -1031,6 +1065,7 @@
               controlId={`live-delivery-${route}`}
               label={t('swarm.delivery.mode', 'Mode')}
               ><select
+                class="s-input"
                 value={deliveryDraft[route].mode}
                 onchange={(event) =>
                   changeDelivery(route, 'mode', event.currentTarget.value)}
@@ -1063,6 +1098,7 @@
               controlId="live-coalesce"
               label={t('swarm.delivery.coalesce', 'Coalesce messages (ms)')}
               ><input
+                class="s-input"
                 id="live-coalesce"
                 type="number"
                 min="0"
@@ -1079,6 +1115,7 @@
               controlId="live-batch-messages"
               label={t('swarm.delivery.batchMessages', 'Messages per batch')}
               ><input
+                class="s-input"
                 id="live-batch-messages"
                 type="number"
                 min="1"
@@ -1095,6 +1132,7 @@
               controlId="live-batch-chars"
               label={t('swarm.delivery.batchChars', 'Characters per batch')}
               ><input
+                class="s-input"
                 id="live-batch-chars"
                 type="number"
                 min="16000"

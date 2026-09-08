@@ -13,6 +13,10 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 - `agent_text.py` owns the scoped Tool definitions and reviewed runtime wording.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
   shell and page bridge remain generic; built assets live in generated `web/`.
+- The initial overview fetches retained profiles and Swarms only. Model, Tool,
+  Skill and Project choices load when opening a profile editor, not on display
+  context updates; failed editor loads leave the overview usable
+  (`SwarmPage.test.js`).
 
 ## Invariants that affect changes
 

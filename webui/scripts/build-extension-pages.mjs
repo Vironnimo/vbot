@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { build } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
@@ -76,7 +76,19 @@ for (const entry of pages) {
         },
       ],
     },
-    plugins: [svelte()],
+    plugins: [
+      svelte(),
+      {
+        name: 'bundled-font-license',
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'fonts/OFL.txt',
+            source: readFileSync(resolve(root, 'webui/public/fonts/OFL.txt')),
+          });
+        },
+      },
+    ],
     publicDir: false,
     build: {
       outDir: resolve(ui, '..', 'web'),
