@@ -559,14 +559,6 @@ class SwarmStore:
             self._path, isolation_level=None, check_same_thread=False, timeout=1
         )
         connection.row_factory = sqlite3.Row
-        if (
-            connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='lifecycle_intents'"
-            ).fetchone()
-            is not None
-        ):
-            connection.close()
-            raise SwarmStoreError("storage_conversion_required")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=1000")
         connection.execute(
@@ -574,9 +566,6 @@ class SwarmStore:
         )
         connection.execute("PRAGMA synchronous=FULL")
         connection.executescript(_SCHEMA)
-        self._ensure_recipient_columns(connection)
-        self._ensure_participant_columns(connection)
-        self._ensure_delivery_batch_columns(connection)
         connection.execute("BEGIN IMMEDIATE")
         try:
             row = connection.execute(
@@ -593,44 +582,6 @@ class SwarmStore:
             connection.close()
             raise
         self._connection = connection
-
-    @staticmethod
-    def _ensure_recipient_columns(connection: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(recipients)")}
-        for name, definition in (
-            ("delivered_at", "TEXT"),
-            ("receipt_id", "TEXT"),
-            ("content_hash", "TEXT"),
-            ("effect_kind", "TEXT"),
-            ("carrier_kind", "TEXT"),
-            ("carrier_sequence", "INTEGER"),
-            ("prepared_at", "TEXT"),
-        ):
-            if name not in columns:
-                connection.execute(f"ALTER TABLE recipients ADD COLUMN {name} {definition}")
-
-    @staticmethod
-    def _ensure_participant_columns(connection: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(participants)")}
-        if "idle_boundary" not in columns:
-            connection.execute("ALTER TABLE participants ADD COLUMN idle_boundary INTEGER")
-        for name, definition in (
-            ("wake_announced_seq", "INTEGER NOT NULL DEFAULT 0"),
-            ("wake_epoch", "INTEGER NOT NULL DEFAULT 0"),
-            ("wake_pending", "INTEGER NOT NULL DEFAULT 0"),
-            ("wake_pending_seq", "INTEGER NOT NULL DEFAULT 0"),
-        ):
-            if name not in columns:
-                connection.execute(f"ALTER TABLE participants ADD COLUMN {name} {definition}")
-        for name, definition in (("lifecycle_run_id", "TEXT"),):
-            if name not in columns:
-                connection.execute(f"ALTER TABLE participants ADD COLUMN {name} {definition}")
-
-    @staticmethod
-    def _ensure_delivery_batch_columns(connection: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(delivery_batches)")}
-        if "settings_revision" not in columns:
-            connection.execute("ALTER TABLE delivery_batches ADD COLUMN settings_revision INTEGER")
 
     def _close(self) -> None:
         with self._lock:
@@ -2849,7 +2800,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS swarm_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,slug TEXT NOT NULL UNIQUE,name TEXT NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS swarms(id TEXT PRIMARY KEY,prompt TEXT NOT NULL,profile_snapshot TEXT NOT NULL,effective_configuration TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL) STRICT;
-CREATE TABLE IF NOT EXISTS participants(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),model TEXT NOT NULL,display_name TEXT NOT NULL,ordinal INTEGER NOT NULL,state TEXT NOT NULL,UNIQUE(swarm_id,ordinal),UNIQUE(swarm_id,display_name COLLATE NOCASE)) STRICT;
+CREATE TABLE IF NOT EXISTS participants(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),model TEXT NOT NULL,display_name TEXT NOT NULL,ordinal INTEGER NOT NULL,state TEXT NOT NULL,idle_boundary INTEGER,wake_announced_seq INTEGER NOT NULL DEFAULT 0,wake_epoch INTEGER NOT NULL DEFAULT 0,wake_pending INTEGER NOT NULL DEFAULT 0,wake_pending_seq INTEGER NOT NULL DEFAULT 0,lifecycle_run_id TEXT,UNIQUE(swarm_id,ordinal),UNIQUE(swarm_id,display_name COLLATE NOCASE)) STRICT;
 CREATE TABLE IF NOT EXISTS participant_sessions(participant_id TEXT PRIMARY KEY REFERENCES participants(id),project_id TEXT,agent_id TEXT NOT NULL,session_id TEXT NOT NULL,generation_id TEXT NOT NULL,owner_name TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_settings(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),revision INTEGER NOT NULL,delivery_json TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_epochs(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),epoch INTEGER NOT NULL,is_open INTEGER NOT NULL CHECK(is_open IN(0,1))) STRICT;
@@ -2858,8 +2809,8 @@ CREATE TABLE IF NOT EXISTS swarm_events(id INTEGER PRIMARY KEY,swarm_id TEXT NOT
 CREATE TABLE IF NOT EXISTS discussions(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),title TEXT NOT NULL,sequence INTEGER NOT NULL,is_main INTEGER NOT NULL CHECK(is_main IN(0,1)),created_at TEXT NOT NULL,UNIQUE(swarm_id,sequence)) STRICT;
 CREATE TABLE IF NOT EXISTS memberships(discussion_id TEXT NOT NULL REFERENCES discussions(id),participant_id TEXT NOT NULL REFERENCES participants(id),PRIMARY KEY(discussion_id,participant_id)) STRICT;
 CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),discussion_id TEXT NOT NULL REFERENCES discussions(id),sequence INTEGER NOT NULL,author_kind TEXT NOT NULL,author_id TEXT NOT NULL,author_name TEXT NOT NULL,text TEXT NOT NULL,reply_to TEXT,recipients_json TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(swarm_id,sequence)) STRICT;
-CREATE TABLE IF NOT EXISTS recipients(post_id TEXT NOT NULL REFERENCES posts(id),participant_id TEXT NOT NULL REFERENCES participants(id),route_class TEXT NOT NULL,PRIMARY KEY(post_id,participant_id)) STRICT;
-CREATE TABLE IF NOT EXISTS delivery_batches(receipt_id TEXT PRIMARY KEY,participant_id TEXT NOT NULL REFERENCES participants(id),content_hash TEXT NOT NULL,effect_kind TEXT NOT NULL,created_at TEXT NOT NULL,acknowledged_at TEXT,carrier_kind TEXT,carrier_sequence INTEGER) STRICT;
+CREATE TABLE IF NOT EXISTS recipients(post_id TEXT NOT NULL REFERENCES posts(id),participant_id TEXT NOT NULL REFERENCES participants(id),route_class TEXT NOT NULL,delivered_at TEXT,receipt_id TEXT,content_hash TEXT,effect_kind TEXT,carrier_kind TEXT,carrier_sequence INTEGER,prepared_at TEXT,PRIMARY KEY(post_id,participant_id)) STRICT;
+CREATE TABLE IF NOT EXISTS delivery_batches(receipt_id TEXT PRIMARY KEY,participant_id TEXT NOT NULL REFERENCES participants(id),content_hash TEXT NOT NULL,effect_kind TEXT NOT NULL,created_at TEXT NOT NULL,acknowledged_at TEXT,carrier_kind TEXT,carrier_sequence INTEGER,settings_revision INTEGER) STRICT;
 CREATE TABLE IF NOT EXISTS delivery_batch_entries(receipt_id TEXT NOT NULL REFERENCES delivery_batches(receipt_id),post_id TEXT NOT NULL REFERENCES posts(id),participant_id TEXT NOT NULL REFERENCES participants(id),PRIMARY KEY(receipt_id,post_id,participant_id)) STRICT;
 CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,outcome TEXT NOT NULL,PRIMARY KEY(scope,request_id)) STRICT;
 CREATE INDEX IF NOT EXISTS posts_discussion_page ON posts(swarm_id,discussion_id,sequence DESC);
