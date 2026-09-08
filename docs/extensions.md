@@ -600,19 +600,6 @@ selected inactive participant, including after a failed Run. Usage comes from
 canonical Statistics. Disable/reload retains history; interrupted execution never
 restarts itself.
 
-To retain Swarms created with the retired participant-completion system, stop
-the server and run:
-
-```sh
-python scripts/converters/swarm_execution_states.py --source <saved-swarm.db> --output <converted-swarm.db>
-```
-
-The source is `<data-dir>/extension-data/swarm/swarm.db`. Keep the original as a
-backup and replace it with the converted copy before starting the server.
-Conversion keeps Board history and Session bindings and leaves Swarms stopped
-until explicit Resume. Historical completion summaries remain in the original
-backup.
-
 ## Managed operations and MCP
 
 API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions <name> operations`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.

@@ -1025,12 +1025,12 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         thinking_effort=formation.get("thinking_effort"),
         fallback_models=formation.get("fallback_models", []),
         instructions=profile["instructions"],
-        prompt_blocks=["core:agent_body", *profile.get("prompt_blocks", DEFAULT_PROMPT_BLOCKS)],
+        prompt_blocks=["core:agent_body", *profile["prompt_blocks"]],
     )
 
 
 def _reminder(swarm: Json, event: str) -> str:
-    enabled = swarm["profile_snapshot"].get("reminders", DEFAULT_REMINDERS)[event]
+    enabled = swarm["profile_snapshot"]["reminders"][event]
     return REMINDER_TEXTS[event] if enabled else ""
 
 

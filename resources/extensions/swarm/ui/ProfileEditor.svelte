@@ -52,7 +52,7 @@
     },
   };
   let draft = $state(
-    untrack(() => JSON.parse(JSON.stringify({ ...defaults, ...profile }))),
+    untrack(() => JSON.parse(JSON.stringify(profile ?? defaults))),
   );
   const copy = (value) => JSON.parse(JSON.stringify(value));
   const snapshot = (value = draft) => {

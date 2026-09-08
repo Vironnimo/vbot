@@ -89,6 +89,59 @@ async def _swarm(store: SwarmStore, *, count: int = 2) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
+async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_path):
+    path = tmp_path / "swarm.db"
+    original = SwarmStore(path)
+    await original.open()
+    try:
+        profile = await original.save_profile(_profile(), expected_revision=None)
+        started = await original.create_swarm(
+            profile["id"],
+            "Keep the current work",
+            {"cwd": "C:/work"},
+            request_id="create",
+            expected_profile_revision=profile["revision"],
+        )
+        sid = started["swarm_id"]
+        pid = (await original.get_swarm(sid))["participants"][0]["id"]
+        await original.bind_participant_session(
+            TemporarySessionBinding(
+                SessionAddress(None, "temporary", "session"),
+                "generation",
+                "swarm",
+                sid,
+                pid,
+                {},
+            )
+        )
+        await original.set_participant_state(sid, pid, "failed")
+        post = await original.post_human(sid, text="Still pending", request_id="post")
+        snapshot = await original.get_swarm(sid)
+        schema = original._connection.execute(
+            "SELECT name,sql FROM sqlite_master ORDER BY name"
+        ).fetchall()
+    finally:
+        await original.close()
+    reopened = SwarmStore(path)
+    await reopened.open()
+    try:
+        assert await reopened.get_profile(profile["id"]) == profile
+        assert await reopened.get_swarm(sid) == snapshot
+        assert (await reopened.read_human_posts(sid)).entries[0]["id"] == post["post_id"]
+        assert (await reopened.prepare_inbox_delivery(sid, pid))["entries"][0]["id"] == post[
+            "post_id"
+        ]
+        assert (
+            reopened._connection.execute(
+                "SELECT name,sql FROM sqlite_master ORDER BY name"
+            ).fetchall()
+            == schema
+        )
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
 async def test_profiles_validate_revision_slug_and_are_immutable(store: SwarmStore) -> None:
     saved = await store.save_profile(_profile(), expected_revision=None)
     assert saved["revision"] == 1

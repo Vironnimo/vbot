@@ -175,9 +175,6 @@ test_swarm_board.py). Activity offers this action for an inactive
 participant and consumes canonical context usage from history and Run events;
 it never substitutes cumulative Session usage.
 
-The old participant-lifecycle database needs explicit offline conversion with
-`scripts/converters/swarm_execution_states.py`. The converter produces a separate
-SQLite copy, retains Session bindings and Board history, removes completion
-settings/storage and wake-only guidance, and leaves Swarms stopped for explicit
-Resume. The original
-input retains old summaries/audit data. Runtime never migrates the old format.
+The Store creates the complete current schema directly. It has no schema
+upgrades or converter. Saved profiles and Swarm snapshots are consumed as stored;
+input defaults are resolved when a profile is saved or previewed.
