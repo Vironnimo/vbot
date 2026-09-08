@@ -2157,6 +2157,19 @@ class SessionStore:
             ).fetchone()
         return None if row is None else (self._address(row), cast(sqlite3.Row, row))
 
+    def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+        """Delete only this owner's bound participant generations in one transaction."""
+
+        def operation(connection: sqlite3.Connection) -> int:
+            return connection.execute(
+                "DELETE FROM sessions WHERE session_key IN ("
+                "SELECT session_key FROM temporary_session_bindings "
+                "WHERE owner_name=? AND group_id=?)",
+                (owner_name, group_id),
+            ).rowcount
+
+        return cast(int, self._execute_write(operation))
+
     def temporary_bindings(
         self,
         *,

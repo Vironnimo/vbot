@@ -26,6 +26,11 @@ Tool permission persists as root `tool_access`: mode `all`/`selected`/`none`, `s
 
 Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_agent` using an exact canonical Session generation. `core/agents/temporary.py` owns their immutable configuration, indexed bindings and execution groups; Identity creation, workspace seeding and roster operations are not involved. Explicit Project Tool/Skill ceilings still narrow profile selections. Tests: `tests/core/agents/test_temporary.py` and `tests/core/projects/test_resolver_config_agent.py`.
 
+`TemporaryExecutionGroups.delete_group` requires a closed group and current
+registration, waits for draining, deletes its bound participant Sessions through
+the Session manager, and releases its in-memory group. Repeated deletion is safe;
+other owners and groups are outside its scope (`test_swarm_board.py`).
+
 Temporary configurations and persisted bindings carry optional `prompt_blocks`:
 `None` inherits the normal layout; an explicit list selects all allowed System
 Prompt contributions. Prompts owns its assembly semantics. Continuation input may

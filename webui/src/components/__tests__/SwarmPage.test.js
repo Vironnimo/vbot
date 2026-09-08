@@ -1272,6 +1272,102 @@ describe('SwarmPage', () => {
     });
   });
 
+  it('requires Stop before a Swarm can be deleted', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Investigate').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(button('Delete Swarm').disabled).toBe(true);
+    button('Delete Swarm').click();
+    expect(
+      operation.mock.calls.some(([name]) => name === 'swarms.delete'),
+    ).toBe(false);
+  });
+
+  it('confirms deletion, keeps the profile and clears the selected Swarm', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let deleted = false;
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({
+          swarm: { ...structuredClone(swarm), state: 'cancelled' },
+        });
+      if (name === 'swarms.delete') {
+        deleted = true;
+        return Promise.resolve({ deleted: true });
+      }
+      if (name === 'swarms.list' && deleted)
+        return Promise.resolve({ entries: [], has_more: false });
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    button('Delete Swarm').click();
+    await tick();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'participant Sessions',
+    );
+    button('Cancel').click();
+    await tick();
+    expect(
+      operation.mock.calls.some(([name]) => name === 'swarms.delete'),
+    ).toBe(false);
+    button('Delete Swarm').click();
+    await tick();
+    [...document.querySelectorAll('[role="dialog"] button')]
+      .find((node) => node.textContent.trim() === 'Delete')
+      .click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(operation).toHaveBeenCalledWith('swarms.delete', {
+      swarm_id: 'swr-a',
+    });
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.delete'),
+    ).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(button('Investigate')).toBeUndefined();
+    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+    expect(button('Research')).toBeDefined();
+  });
+
+  it('retains the confirmation and allows retry after a failed deletion', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let attempts = 0;
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({
+          swarm: { ...structuredClone(swarm), state: 'deleting' },
+        });
+      if (name === 'swarms.delete') {
+        attempts += 1;
+        return Promise.reject(new Error('Storage unavailable'));
+      }
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(button('Resume')).toBeUndefined();
+    button('Delete Swarm').click();
+    await tick();
+    const confirm = () =>
+      [...document.querySelectorAll('[role="dialog"] button')].find(
+        (node) => node.textContent.trim() === 'Delete',
+      );
+    confirm().click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'Storage unavailable',
+    );
+    expect(confirm().disabled).toBe(false);
+    confirm().click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(attempts).toBe(2);
+  });
+
   it('offers Swarm Resume beside Stop when a participant is idle', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
