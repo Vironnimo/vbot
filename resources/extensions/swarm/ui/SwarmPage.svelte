@@ -42,6 +42,8 @@
     activeTab = $state('board'),
     editor = $state(null),
     deleteCandidate = $state(null),
+    swarmDeleteCandidate = $state(null),
+    deleteError = $state(''),
     settingsOpen = $state(false),
     deliveryDraft = $state(null),
     profileSnapshotOpen = $state(false);
@@ -94,7 +96,7 @@
     ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
   const canResume = $derived(
     selectedSwarm &&
-      !['stopping', 'preparing'].includes(selectedSwarm.state) &&
+      !['stopping', 'preparing', 'deleting'].includes(selectedSwarm.state) &&
       (selectedSwarm.participants ?? []).some(
         (participant) =>
           !participant.run_active &&
@@ -242,7 +244,8 @@
           profiles.find((item) => item.id === selectedProfile.id) ??
           profiles[0] ??
           null;
-      if (selectedSwarm) await selectSwarm(selectedSwarm.id, { silent: true });
+      if (selectedSwarm && pending !== 'delete')
+        await selectSwarm(selectedSwarm.id, { silent: true });
     } catch (cause) {
       error =
         cause.message ?? t('swarm.loadError', 'The Swarm page could not load.');
@@ -422,6 +425,22 @@
       await refresh();
     } catch (cause) {
       error = cause.message;
+    }
+  }
+  async function deleteSwarm() {
+    const candidate = swarmDeleteCandidate;
+    if (!candidate || pending) return;
+    pending = 'delete';
+    deleteError = '';
+    try {
+      await call('swarms.delete', { swarm_id: candidate.id });
+      if (selectedSwarm?.id === candidate.id) newSwarm();
+      swarmDeleteCandidate = null;
+      await refresh();
+    } catch (cause) {
+      deleteError = cause.message;
+    } finally {
+      pending = '';
     }
   }
   async function startSwarm() {
@@ -874,6 +893,19 @@
                     ? t('swarm.resuming', 'Resuming...')
                     : t('swarm.resume', 'Resume')}</Button
                 >{/if}<Button
+                variant="danger"
+                disabled={!!pending || isActive(selectedSwarm.state)}
+                tooltip={isActive(selectedSwarm.state)
+                  ? t(
+                      'swarm.deleteRun.stopFirst',
+                      'Stop the Swarm before deleting it.',
+                    )
+                  : t('swarm.deleteRun.title', 'Delete Swarm')}
+                onClick={() => {
+                  deleteError = '';
+                  swarmDeleteCandidate = selectedSwarm;
+                }}>{t('swarm.deleteRun.title', 'Delete Swarm')}</Button
+              ><Button
                 variant="secondary"
                 onClick={() => (profileSnapshotOpen = true)}
                 icon
@@ -1349,6 +1381,30 @@
         onClick={post}>{t('swarm.board.submit', 'Post')}</Button
       >{/snippet}
   </Modal>{/if}
+{#if swarmDeleteCandidate}<Modal
+    title={t('swarm.deleteRun.title', 'Delete Swarm')}
+    closeDisabled={pending === 'delete'}
+    onClose={() => (swarmDeleteCandidate = null)}
+    >{#snippet body()}<div class="modal-copy">
+        <p>{swarmDeleteCandidate.prompt}</p>
+        <p>
+          {t(
+            'swarm.deleteRun.body',
+            'Permanently delete this Swarm, its Board and participant Sessions? The profile will be kept. This cannot be undone.',
+          )}
+        </p>
+        {#if deleteError}<Banner variant="error">{deleteError}</Banner>{/if}
+      </div>{/snippet}{#snippet footer()}<Button
+        variant="secondary"
+        disabled={pending === 'delete'}
+        onClick={() => (swarmDeleteCandidate = null)}
+        >{t('common.cancel', 'Cancel')}</Button
+      ><Button
+        variant="danger"
+        loading={pending === 'delete'}
+        onClick={deleteSwarm}>{t('common.delete', 'Delete')}</Button
+      >{/snippet}</Modal
+  >{/if}
 {#if deleteCandidate}<Modal
     title={t('swarm.delete.title', 'Delete profile')}
     onClose={() => (deleteCandidate = null)}

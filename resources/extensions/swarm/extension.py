@@ -55,6 +55,7 @@ class SwarmExtension:
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
         self._wake_tasks: dict[str, asyncio.Task[None]] = {}
         self._wake_dirty: set[str] = set()
+        self._control_lock = asyncio.Lock()
 
     async def start(self, host: ExtensionHost) -> None:
         if host.state_dir is None or host.temporary_agents is None:
@@ -274,12 +275,16 @@ class SwarmExtension:
                 "swarms.settings": self._swarms_settings,
                 "swarms.start": self._swarms_start,
                 "swarms.stop": self._swarms_stop,
+                "swarms.delete": self._swarms_delete,
                 "swarms.resume": self._swarms_resume,
                 "swarms.usage": self._swarms_usage,
                 "board.list": self._board_list,
                 "board.read": self._board_read,
                 "board.post": self._board_post,
             }
+            if name in {"swarms.stop", "swarms.resume", "swarms.delete"}:
+                async with self._control_lock:
+                    return await handlers[name](arguments)
             return await handlers[name](arguments)
         except SwarmStoreError as error:
             raise ValueError(error.code) from error
@@ -405,6 +410,24 @@ class SwarmExtension:
         self._changed(swarm_id, result["revision"])
         self._enqueue_wakes(swarm_id)
         return result
+
+    async def _swarms_delete(self, arguments: Json) -> Json:
+        _exact(arguments, {"swarm_id"})
+        swarm_id = _string(arguments, "swarm_id")
+        if await self._store().begin_delete(swarm_id):
+            self._changed(swarm_id, 0)
+            task = self._wake_tasks.get(swarm_id)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            self._wake_dirty.discard(swarm_id)
+            host = self.host
+            if host is None or host.temporary_agents is None:
+                raise SwarmStoreError("swarm_closed")
+            await host.temporary_agents.delete_group(swarm_id)
+            await self._store().delete_swarm(swarm_id)
+        self._changed(swarm_id, 0)
+        return {"swarm_id": swarm_id, "deleted": True}
 
     async def _swarms_stop(self, arguments: Json) -> Json:
         _exact(arguments, {"swarm_id", "request_id"})
@@ -1232,6 +1255,12 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
     },
     "swarms.list": _PAGE,
     "swarms.get": {
+        "type": "object",
+        "properties": {"swarm_id": {"type": "string", "minLength": 1}},
+        "required": ["swarm_id"],
+        "additionalProperties": False,
+    },
+    "swarms.delete": {
         "type": "object",
         "properties": {"swarm_id": {"type": "string", "minLength": 1}},
         "required": ["swarm_id"],

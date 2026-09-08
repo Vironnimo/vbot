@@ -525,6 +525,21 @@ class TemporaryExecutionGroups:
             completion.set_result(None)
             state.pending.discard(completion)
 
+    async def delete_group(self, group_id: str) -> int:
+        """Permanently remove a closed group's bound participant Sessions."""
+        async with self._lifecycle:
+            self._require_current()
+            state = self._groups.get(group_id)
+            if state is not None and state.open:
+                raise ValueError("group_not_closed")
+            await self.close_group(group_id)
+            self._require_current()
+            count = await self._sessions.delete_temporary_group(
+                owner_name=self._identity.name, group_id=group_id
+            )
+            self._groups.pop(group_id, None)
+            return count
+
     async def close_group(self, group_id: str, reason: str = "extension") -> dict[str, Any]:
         state = self._groups.setdefault(group_id, _Group())
         state.open = False
