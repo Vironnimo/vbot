@@ -32,6 +32,7 @@ test("a custom System Prompt block persists, reaches the Provider, and can be re
     .getByRole("region", { name: "System Prompt" })
     .getByRole("listitem")
     .filter({ hasText: "user:e2e_notes" });
+  await customBlock.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(customBlock.getByRole("textbox")).toHaveValue(
     "E2E custom provider context 5821",
   );

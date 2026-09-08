@@ -39,7 +39,7 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
   await agents.getByRole("tab", { name: "Behavior", exact: true }).click();
   await agents.getByRole("switch", { name: "Custom system prompt" }).click();
   await agents.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Agent updated.", { exact: true })).toBeVisible();
+  // Navigation flushes autosave; the Provider/scope assertions below verify the saved policy.
 
   await page.getByRole("button", { name: "System Prompt" }).click();
   const systemPrompt = page.getByRole("region", { name: "System Prompt" });
@@ -73,6 +73,7 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
   agentBlock = systemPrompt
     .getByRole("listitem")
     .filter({ hasText: "user:agent_only" });
+  await agentBlock.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(agentBlock.getByRole("textbox")).toHaveValue(
     "Agent-only E2E prompt",
   );

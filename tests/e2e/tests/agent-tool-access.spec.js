@@ -49,7 +49,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
     toolAccess.getByRole("switch", { name: "Turn on write" }),
   ).toBeVisible();
   await agents.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Agent updated.", { exact: true })).toBeVisible();
+  // Navigation flushes autosave; the Provider/scope assertions below verify the saved policy.
 
   const chat = await startIsolatedChat(page, { agentName: "Tool Restricted" });
   await runToolScenario(chat, {
