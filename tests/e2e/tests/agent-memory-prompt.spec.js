@@ -14,6 +14,7 @@ async function setMemoryMode(page, modeName) {
     .getByRole("button", { name: new RegExp(`^${AGENT_NAME}(?:\\s|$)`) })
     .click();
 
+  await agents.getByRole("tab", { name: "Behavior", exact: true }).click();
   const memoryMode = agents.getByRole("button", {
     exact: true,
     name: "Memory",
@@ -34,6 +35,7 @@ async function deleteAgent(page) {
     .getByRole("button", { name: new RegExp(`^${AGENT_NAME}(?:\\s|$)`) });
   await expect(agentButton).toBeVisible();
   await agentButton.click();
+  await agents.getByRole("tab", { name: "Details", exact: true }).click();
   await agents.getByRole("button", { name: "Delete agent" }).click();
   await expect(page.getByText("Agent deleted.", { exact: true })).toBeVisible();
 }
