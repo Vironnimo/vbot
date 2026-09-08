@@ -145,12 +145,7 @@
       'swarm.profile.reminderDelivery',
       'When Board messages are delivered',
     ),
-    wake: t('swarm.profile.reminderWake', 'When new messages wake an Agent'),
     resume: t('swarm.profile.reminderResume', 'When you resume work'),
-    completion: t(
-      'swarm.profile.reminderCompletion',
-      'When messages arrive during completion',
-    ),
   });
   function setPromptBlock(id, enabled) {
     draft.prompt_blocks = enabled
@@ -220,7 +215,7 @@
     { value: 'idle', label: t('swarm.profile.deliveryIdle', 'When idle') },
     {
       value: 'pull',
-      label: t('swarm.profile.deliveryPull', 'Only when requested'),
+      label: t('swarm.profile.deliveryPull', 'On request or when waking'),
     },
   ]);
   const routes = $derived([

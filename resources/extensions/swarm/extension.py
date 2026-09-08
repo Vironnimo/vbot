@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -31,7 +30,6 @@ from .agent_text import (
     DEFAULT_INSTRUCTIONS,
     DEFAULT_PROMPT_BLOCKS,
     DEFAULT_REMINDERS,
-    DONE_REQUESTED,
     EMPTY_INBOX,
     ERRORS,
     INBOX_DESCRIPTION,
@@ -41,8 +39,6 @@ from .agent_text import (
     REPLAYED,
     STATE_DESCRIPTION,
     STATE_PARAMETERS,
-    USER_WAIT_REQUESTED,
-    WAIT_REQUESTED,
 )
 from .store import Page, SwarmStore, SwarmStoreError, _validate_profile
 
@@ -71,25 +67,9 @@ class SwarmExtension:
                 return None
             return await groups.delivery_receipt(address, generation, receipt_id)
 
-        async def terminal(swarm_id: str, run_id: str):
-            try:
-                return (await groups.owned_run(swarm_id, run_id)).record
-            except Exception:
-                return None
-
-        async def descendants(swarm_id: str, participant_id: str, run_id: str, _epoch: int) -> bool:
-            snapshot = await self._store().get_swarm(swarm_id)
-            execution_epoch = snapshot["execution_epoch"]
-            return bool(
-                execution_epoch
-                and groups.has_descendants(swarm_id, participant_id, run_id, execution_epoch)
-            )
-
         self.store = SwarmStore(
             host.state_dir / "swarm.db",
             lookup_delivery_receipt=receipt,
-            lookup_terminal_proof=terminal,
-            has_owned_descendants=descendants,
         )
         await self.store.open()
         await self.store.recover_interrupted()
@@ -253,78 +233,22 @@ class SwarmExtension:
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            action = _validate_state(arguments)
-            binding, swarm = await self._participant(context)
-            store = self._store()
-            if action == "status":
-                data = await store.participant_status(
-                    binding.group_id,
-                    binding.participant_id,
-                    cursor=arguments.get("cursor"),
-                    limit=arguments.get("limit", 20),
-                    include_summaries=arguments.get("include_summaries", False),
-                )
-                cursor = data.pop("cursor", None)
-                if data["pending_count"]:
-                    data["inbox_call"] = {"tool": "swarm_inbox", "arguments": {}}
-                if data["has_more"]:
-                    data["next_call"] = {
-                        "tool": "swarm_state",
-                        "arguments": {
-                            **arguments,
-                            "cursor": cursor,
-                        },
-                    }
-            elif action == "name":
-                data = await store.rename_participant(
-                    binding.group_id,
-                    binding.participant_id,
-                    arguments["name"],
-                    expected_epoch=swarm["epoch"],
-                )
-            elif action == "wait":
-                data = await store.request_wait(
-                    binding.group_id,
-                    binding.participant_id,
-                    run_id=context.run_id,
-                    expected_epoch=swarm["epoch"],
-                    call_id=context.tool_call_id,
-                    reason=arguments.get("reason", ""),
-                    needs_user=arguments.get("needs_user", False),
-                )
-                data = {
-                    "status": data["status"],
-                    "wake_on_messages": []
-                    if arguments.get("needs_user", False)
-                    else [
-                        route
-                        for route in ("main", "discussion", "ping")
-                        if swarm["delivery"][route]["wake_idle"]
-                    ],
-                    "guidance": USER_WAIT_REQUESTED
-                    if arguments.get("needs_user", False)
-                    else WAIT_REQUESTED,
+            _validate_state(arguments)
+            binding, _ = await self._participant(context)
+            data = await self._store().participant_status(
+                binding.group_id,
+                binding.participant_id,
+                cursor=arguments.get("cursor"),
+                limit=arguments.get("limit", 20),
+            )
+            cursor = data.pop("cursor", None)
+            if data["pending_count"]:
+                data["inbox_call"] = {"tool": "swarm_inbox", "arguments": {}}
+            if data["has_more"]:
+                data["next_call"] = {
+                    "tool": "swarm_state",
+                    "arguments": {**arguments, "cursor": cursor},
                 }
-                context.request_turn_end()
-            else:
-                data = await store.request_done(
-                    binding.group_id,
-                    binding.participant_id,
-                    run_id=context.run_id,
-                    expected_epoch=swarm["epoch"],
-                    call_id=context.tool_call_id,
-                    summary=arguments["summary"],
-                    artifacts=arguments.get("artifacts", []),
-                )
-                if data["status"] == "finish_requested":
-                    data = {"status": data["status"], "guidance": DONE_REQUESTED}
-                    context.request_turn_end()
-                elif data["status"] == "finish_refused":
-                    code = "pending_messages" if data["pending_messages"] else "owned_work_active"
-                    guidance = ERRORS[code]
-                    if data["pending_messages"] and data["owned_work_active"]:
-                        guidance += " " + ERRORS["owned_work_active"]
-                    return tool_failure(code, guidance)
             return tool_success(data)
         except SwarmStoreError as error:
             return _failure(error, arguments, STATE_PARAMETERS)
@@ -673,7 +597,7 @@ class SwarmExtension:
     async def _wake_failed(self, swarm_id: str) -> None:
         try:
             swarm = await self._store().get_swarm(swarm_id)
-            if swarm["state"] in {"running", "waiting", "needs_attention"}:
+            if swarm["state"] in {"running", "idle", "needs_attention"}:
                 await self._store().set_swarm_state(swarm_id, "needs_attention")
                 self._changed(swarm_id, swarm["settings_revision"])
         except SwarmStoreError as error:
@@ -689,11 +613,11 @@ class SwarmExtension:
         while swarm_id in self._wake_dirty:
             self._wake_dirty.discard(swarm_id)
             swarm = await self._store().get_swarm(swarm_id)
-            if swarm["state"] not in {"running", "waiting", "needs_attention"}:
+            if swarm["state"] not in {"running", "idle", "needs_attention"}:
                 return
             await asyncio.sleep(swarm["delivery"]["coalesce_ms"] / 1000)
             swarm = await self._store().get_swarm(swarm_id)
-            if swarm["state"] not in {"running", "waiting", "needs_attention"}:
+            if swarm["state"] not in {"running", "idle", "needs_attention"}:
                 return
             handle = await host.temporary_agents.open_group(swarm_id)
             for participant in swarm["participants"]:
@@ -728,7 +652,7 @@ class SwarmExtension:
                         wake["participant_id"],
                         TemporaryRunInput(
                             "continuation",
-                            _reminder(swarm, "wake"),
+                            "",
                             f"wake:{swarm['epoch']}:{wake['participant_id']}:{wake['announced_sequence']}",
                         ),
                     )
@@ -959,35 +883,13 @@ class SwarmExtension:
         turn_end_requested: bool,
         **_ignored: Any,
     ) -> ToolBatchDecision:
-        binding = context.binding
         owner = context.execution_owner
         if owner is None:
             return ToolBatchDecision(end=turn_end_requested)
         for _, receipt_id, _, _ in receipts:
             if not await self._store().reconcile_delivery(receipt_id):
                 raise SwarmStoreError("delivery_unacknowledged")
-        result = await self._store().reconcile_tool_batch(
-            binding.group_id,
-            binding.participant_id,
-            run_id=context.run_id,
-            expected_epoch=(await self._store().get_swarm(binding.group_id))["epoch"],
-            persisted_call_ids=persisted_call_ids,
-        )
-        if result["continuation_required"]:
-            continuation_id = hashlib.sha256(
-                "\0".join(sorted(persisted_call_ids)).encode()
-            ).hexdigest()
-            return ToolBatchDecision(
-                end=False,
-                continuation=PreparedSessionDelivery(
-                    f"completion:{continuation_id}",
-                    continuation_id,
-                    (_reminder(await self._store().get_swarm(binding.group_id), "completion"),),
-                    "0",
-                    "swarm_completion_race",
-                ),
-            )
-        return ToolBatchDecision(end=bool(result["end_run"]) or turn_end_requested)
+        return ToolBatchDecision(end=turn_end_requested)
 
     async def _run_finished(self, context: SessionRequestContext, *, outcome: str) -> None:
         binding = context.binding
@@ -996,54 +898,16 @@ class SwarmExtension:
             return
         snapshot = await self._store().get_swarm(binding.group_id)
         terminal_outcome = {"success": "completed", "error": "failed"}.get(outcome, outcome)
-        reconciled = await self._store().reconcile_run_finished(
+        await self._store().reconcile_run_finished(
             binding.group_id,
             binding.participant_id,
             run_id=context.run_id,
             expected_epoch=snapshot["epoch"],
             outcome=terminal_outcome,
         )
-        if terminal_outcome == "completed" and reconciled["state"] == "finishing":
-            finalized = await self._store().finalize_participant(
-                binding.group_id,
-                binding.participant_id,
-                run_id=context.run_id,
-                expected_epoch=snapshot["epoch"],
-            )
-            if finalized["state"] == "done":
-                task = asyncio.create_task(
-                    self._run_background(
-                        binding.group_id,
-                        self._close_completed_group(binding.group_id, context.run_id),
-                    )
-                )
-                self._cleanup_tasks.add(task)
-                task.add_done_callback(self._observe_cleanup_task)
         if terminal_outcome == "completed":
             self._enqueue_wakes(binding.group_id)
         self._changed(binding.group_id, snapshot["settings_revision"])
-
-    async def _close_completed_group(self, swarm_id: str, _finishing_run_id: str) -> None:
-        """Drain after the terminal callback returns; never await the current Run here."""
-
-        assert self.host is not None and self.host.temporary_agents is not None
-        swarm = await self._store().get_swarm(swarm_id)
-        if all(participant["state"] == "done" for participant in swarm["participants"]):
-            inspections = await asyncio.gather(
-                *(
-                    self.host.temporary_agents.owned_run(swarm_id, participant["lifecycle_run_id"])
-                    for participant in swarm["participants"]
-                    if participant.get("lifecycle_run_id")
-                )
-            )
-            await asyncio.gather(
-                *(inspection.run.wait() for inspection in inspections if inspection.run is not None)
-            )
-            report = await self.host.temporary_agents.close_group(swarm_id)
-            await self._store().finish_group(
-                swarm_id, expected_epoch=swarm["epoch"], drain_report=report
-            )
-            self._changed(swarm_id, swarm["settings_revision"])
 
 
 def _board_page(page: Page, arguments: Json) -> Json:
@@ -1120,14 +984,6 @@ async def _profile_cwd(profile: Json, catalog: Json) -> tuple[Path, str | None]:
 def _swarm_projection(swarm: Json) -> Json:
     result = dict(swarm)
     result.pop("execution_epoch", None)
-    result["participants"] = [
-        {
-            key: value
-            for key, value in participant.items()
-            if key not in {"summary_json", "artifacts_json"}
-        }
-        for participant in swarm["participants"]
-    ]
     return result
 
 
@@ -1278,44 +1134,16 @@ def _validate_board(arguments: Json) -> str:
     return action
 
 
-def _validate_state(arguments: Json) -> str:
-    fields = {
-        "status": {"cursor", "limit", "include_summaries"},
-        "name": {"name"},
-        "wait": {"reason", "needs_user"},
-        "done": {"summary", "artifacts"},
-    }
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in fields:
-        raise SwarmStoreError("invalid_arguments", field="action")
-    unexpected = sorted(set(arguments) - {"action", *fields[action]})
+def _validate_state(arguments: Json) -> None:
+    unexpected = sorted(set(arguments) - {"cursor", "limit"})
     if unexpected:
         raise SwarmStoreError("inapplicable_field", field=unexpected[0])
-    required = {"name": "name", "done": "summary"}.get(action)
-    if required and required not in arguments:
-        raise SwarmStoreError("invalid_arguments", field=required)
     for key, value in arguments.items():
-        if key == "action":
-            continue
-        valid = (
-            (key == "limit" and type(value) is int and 1 <= value <= 100)
-            or (key == "cursor" and isinstance(value, str) and bool(value.strip()))
-            or (key in {"needs_user", "include_summaries"} and type(value) is bool)
-            or (
-                key == "artifacts"
-                and isinstance(value, list)
-                and all(isinstance(item, str) for item in value)
-            )
-            or (
-                key in {"name", "reason", "summary"}
-                and isinstance(value, str)
-                and (key == "reason" or bool(value.strip()))
-                and len(value) <= {"name": 60, "reason": 2000, "summary": 16000}[key]
-            )
+        valid = (key == "limit" and type(value) is int and 1 <= value <= 100) or (
+            key == "cursor" and isinstance(value, str) and bool(value.strip())
         )
         if not valid:
             raise SwarmStoreError("invalid_arguments", field=key)
-    return action
 
 
 def register(api: ExtensionAPI) -> None:

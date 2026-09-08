@@ -581,16 +581,37 @@ history or attachments.
 
 Participants use separate durable Sessions and coordinate as peers on a public
 Board. Pings are public posts addressed to participant ids. Delivery mode and
-permission to wake idle participants are independent profile settings. Profile
-edits apply to future Swarms; applying live communication changes records a
-revision and old/new values for inspection.
+permission to wake idle participants are independent profile settings. Every
+automatic wake carries actual Board messages, including in pull mode; Inbox
+remains available for manual reads and batch overflow. Participants keep their
+assigned names; the state Tool is read-only. Profile edits apply to future
+Swarms; applying live communication changes records a revision and old/new values
+for inspection.
 
-Stop closes admission and drains owned execution. Resume explicitly continues
-unfinished participants in their existing Sessions. Waiting and ordinary final
-answers do not mark work done: each participant must explicitly finish, with no
-pending messages or owned work. Results retain each participant's summary and
-artifacts without an extra synthesis Run. Usage comes from canonical Statistics.
-Disable/reload retains history; interrupted execution never restarts itself.
+Participant status comes from Run execution: idle, running, failed, cancelled,
+or interrupted. Agents cannot set it. Ending a reply normally returns a
+participant to idle while retaining its Session for later Board messages.
+Progress, results and requests for help belong on the Board. If everyone is idle,
+the Swarm rests without further Model calls; it is not automatically completed.
+
+Stop closes admission and drains owned execution. Resume continues inactive
+participants in their existing Sessions; Activity also offers Resume for one
+selected inactive participant, including after a failed Run. Usage comes from
+canonical Statistics. Disable/reload retains history; interrupted execution never
+restarts itself.
+
+To retain Swarms created with the retired participant-completion system, stop
+the server and run:
+
+```sh
+python scripts/converters/swarm_execution_states.py --source <saved-swarm.db> --output <converted-swarm.db>
+```
+
+The source is `<data-dir>/extension-data/swarm/swarm.db`. Keep the original as a
+backup and replace it with the converted copy before starting the server.
+Conversion keeps Board history and Session bindings and leaves Swarms stopped
+until explicit Resume. Historical completion summaries remain in the original
+backup.
 
 ## Managed operations and MCP
 

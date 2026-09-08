@@ -35,11 +35,11 @@ class SlowClosingAdapter(StubAdapter):
         await self.release_close.wait()
 
 
-async def wait_completed(service: Any, swarm_id: str) -> dict[str, Any]:
+async def wait_idle(service: Any, swarm_id: str) -> dict[str, Any]:
     async with asyncio.timeout(5):
         while True:
             snapshot = await service.store.get_swarm(swarm_id)
-            if snapshot["state"] == "completed":
+            if snapshot["state"] == "idle":
                 return cast(dict[str, Any], snapshot)
             await asyncio.sleep(0.01)
 
@@ -54,20 +54,12 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
             first = (
                 {"content": "An ordinary final response"}
                 if finish_first_run
-                else {
-                    "tool_calls": [
-                        {"id": "status", "name": "swarm_state", "arguments": {"action": "status"}}
-                    ]
-                }
+                else {"tool_calls": [{"id": "status", "name": "swarm_state", "arguments": {}}]}
             )
             super().__init__(
                 [
                     first,
-                    {
-                        "tool_calls": [
-                            {"id": "wait", "name": "swarm_state", "arguments": {"action": "wait"}}
-                        ]
-                    },
+                    {"content": "Run finished"},
                 ]
             )
             self.started = asyncio.Event()
@@ -129,7 +121,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
         f"burst-sentinel-{index}" in str(adapter.requests[1]["messages"]) for index in range(15)
     )
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
-    assert snapshot["state"] == "waiting"
+    assert snapshot["state"] == "idle"
     inbox = await lifecycle.service.store.prepare_inbox_delivery(
         started["swarm_id"], participant["id"]
     )
@@ -145,7 +137,7 @@ async def test_wake_failure_retains_pending_and_reports_attention(
     lifecycle, tmp_path, monkeypatch, caplog
 ):
     lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
-        {"tool_calls": [{"id": "wait", "name": "swarm_state", "arguments": {"action": "wait"}}]}
+        {"content": "Run finished"}
     ]
     profile = await lifecycle.service.store.save_profile(
         {
@@ -191,19 +183,9 @@ async def test_wake_failure_retains_pending_and_reports_attention(
 async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     """Load the production Extension into a real ChatLoop with 40 private Sessions."""
 
-    responses = [
-        {
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": f"done-{index}",
-                    "name": "swarm_state",
-                    "arguments": {"action": "done", "summary": f"participant {index} done"},
-                }
-            ],
-        }
-        for index in range(40)
-    ] + [{"content": "completion recorded"} for _ in range(40)]
+    responses = [{"content": "Run finished"} for index in range(40)] + [
+        {"content": "completion recorded"} for _ in range(40)
+    ]
     tools = ToolRegistry()
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -260,8 +242,8 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
 
 
 @pytest.mark.asyncio
-async def test_forty_participants_complete_through_production_state_tool(lifecycle, tmp_path: Path):
-    """Each participant completes through State, records its owned Run, then closes once."""
+async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycle, tmp_path: Path):
+    """Ordinary final replies leave all Sessions reachable without closing the group."""
 
     profile = await lifecycle.service.store.save_profile(
         {
@@ -285,8 +267,8 @@ async def test_forty_participants_complete_through_production_state_tool(lifecyc
         *(lifecycle.runtime.chat_run_manager.get(run_id).wait() for run_id in run_ids)
     )
 
-    snapshot = await wait_completed(lifecycle.service, started["swarm_id"])
-    assert {item["state"] for item in snapshot["participants"]} == {"done"}
+    snapshot = await wait_idle(lifecycle.service, started["swarm_id"])
+    assert {item["state"] for item in snapshot["participants"]} == {"idle"}
     assert {tool["name"] for tool in lifecycle.runtime.adapter.requests[0]["kwargs"]["tools"]} == {
         "swarm_board",
         "swarm_inbox",
@@ -353,26 +335,8 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
     monkeypatch.setitem(REMINDER_TEXTS, "resume", "resume-guidance-sentinel")
 
     lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
-        {
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "wait",
-                    "name": "swarm_state",
-                    "arguments": {"action": "wait", "reason": "need input"},
-                }
-            ],
-        },
-        {
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "done",
-                    "name": "swarm_state",
-                    "arguments": {"action": "done", "summary": "resumed work done"},
-                }
-            ],
-        },
+        {"content": "Run finished"},
+        {"content": "Run finished"},
         {"content": "completion recorded"},
     ]
     profile = await lifecycle.service.store.save_profile(
@@ -423,23 +387,12 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
 
 
 @pytest.mark.asyncio
-async def test_completion_waits_for_slow_adapter_close_before_draining_group(
-    lifecycle, tmp_path, monkeypatch
-):
-    """Group completion cannot consume its still-finalizing owned Run as a drain report."""
+async def test_run_completion_never_closes_the_swarm(lifecycle, tmp_path, monkeypatch):
+    """A completed Run leaves its execution group open, including after slow cleanup."""
 
     adapter = SlowClosingAdapter(
         [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "done",
-                        "name": "swarm_state",
-                        "arguments": {"action": "done", "summary": "done"},
-                    }
-                ],
-            },
+            {"content": "Run finished"},
             {"content": "completion recorded"},
         ]
     )
@@ -476,7 +429,8 @@ async def test_completion_waits_for_slow_adapter_close_before_draining_group(
     adapter.release_close.set()
     await run.wait()
 
-    assert (await wait_completed(lifecycle.service, started["swarm_id"]))["state"] == "completed"
+    assert (await wait_idle(lifecycle.service, started["swarm_id"]))["state"] == "idle"
+    assert close_calls == []
 
 
 @pytest.mark.asyncio
@@ -526,32 +480,23 @@ async def test_swarm_command_preserves_quoted_unicode_prompt_and_starts_distinct
     [
         ("all", True, "wake message"),
         ("idle", True, "wake message"),
-        ("pull", True, "metadata"),
+        ("pull", True, "wake message"),
         ("all", False, None),
         ("idle", False, None),
         ("pull", False, None),
     ],
 )
-async def test_human_post_wakes_waiting_participant_with_delivery_policy(
+async def test_human_post_wakes_idle_participant_with_delivery_policy(
     lifecycle, tmp_path, mode, wake, expected_request, reminders_enabled, monkeypatch
 ):
-    """A durable post reaches the request, wakes with metadata, or remains idle."""
+    """Every wake carries the post without an Inbox call, even with guidance disabled."""
     from resources.extensions.swarm.agent_text import DEFAULT_REMINDERS, REMINDER_TEXTS
 
-    monkeypatch.setitem(REMINDER_TEXTS, "wake", "wake-guidance-sentinel")
     monkeypatch.setitem(REMINDER_TEXTS, "delivery", "delivery-guidance-sentinel")
 
     lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
-        {
-            "content": None,
-            "tool_calls": [{"id": "wait", "name": "swarm_state", "arguments": {"action": "wait"}}],
-        },
-        {
-            "content": None,
-            "tool_calls": [
-                {"id": "wait-again", "name": "swarm_state", "arguments": {"action": "wait"}}
-            ],
-        },
+        {"content": "Run finished"},
+        {"content": "Run finished"},
     ]
     profile = await lifecycle.service.store.save_profile(
         {
@@ -601,11 +546,6 @@ async def test_human_post_wakes_waiting_participant_with_delivery_policy(
         assert len(pending["entries"]) == 1
     else:
         request = str(lifecycle.runtime.adapter.requests[1]["messages"])
-        assert ("wake-guidance-sentinel" in request) is reminders_enabled
-        assert ("delivery-guidance-sentinel" in request) is (reminders_enabled and mode != "pull")
-        if mode == "pull":
-            assert "wake message" not in request
-            assert len(pending["entries"]) == 1
-        else:
-            assert expected_request in request
-            assert pending["entries"] == []
+        assert ("delivery-guidance-sentinel" in request) is reminders_enabled
+        assert expected_request in request
+        assert pending["entries"] == []

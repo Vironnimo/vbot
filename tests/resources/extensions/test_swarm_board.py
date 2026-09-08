@@ -172,12 +172,8 @@ async def test_state_guidance_reaches_native_model_definition(board):
     definitions = board.tools.provider_definitions(names, session_grants=names)
     state = next(tool for tool in definitions if tool["name"] == "swarm_state")
     assert state["description"] == STATE_DESCRIPTION
-    assert set(state["parameters"]["properties"]["action"]["enum"]) == {
-        "status",
-        "name",
-        "wait",
-        "done",
-    }
+    assert set(state["parameters"]["properties"]) == {"cursor", "limit"}
+    assert state["parameters"]["required"] == []
 
 
 @pytest.mark.asyncio
@@ -481,7 +477,7 @@ async def test_board_validation_identifies_the_field_before_any_effect(board):
 
 
 @pytest.mark.asyncio
-async def test_create_keeps_finished_peers_out_of_opening_and_announcement_delivery(board):
+async def test_create_retains_opening_and_announcement_for_inactive_peers(board):
     peer = board.bindings[1].participant_id
     await board.store.set_participant_state(board.swarm["id"], peer, "cancelled")
     created, _ = await call(
@@ -494,45 +490,8 @@ async def test_create_keeps_finished_peers_out_of_opening_and_announcement_deliv
             "request_id": "inactive-create",
         },
     )
-    assert created["data"]["inactive_recipients"] == [peer]
-    assert not (await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"]
-
-
-@pytest.mark.asyncio
-async def test_status_compact_default_and_complete_summary_pagination(board):
-    summary = "x" * 16000
-    for binding in board.bindings:
-        board.store._connection.execute(
-            "UPDATE participants SET summary_json=?,artifacts_json=? WHERE id=?",
-            (json.dumps({"summary": summary}), json.dumps(["report.md"]), binding.participant_id),
-        )
-    context = replace(
-        board.contexts[0], tool_name="swarm_state", session_tool_grants=("swarm_state",)
-    )
-
-    async def state(arguments):
-        return await board.tools.dispatch(context, arguments, allowed_tools=["swarm_state"])
-
-    default = (await state({"action": "status"}))["data"]
-    assert len(default["roster"]) == 3
-    assert all(
-        row["summary_available"] and "summary" not in row and "artifacts" not in row
-        for row in default["roster"]
-    )
-    assert "settings_revision" not in default and "cursor" not in default
-    assert "model" not in default["roster"][0]
-    assert len(json.dumps(default)) < 1500
-    complete = (await state({"action": "status", "include_summaries": True}))["data"]
-    assert len(complete["roster"]) == 1
-    assert complete["roster"][0]["summary"] == summary
-    assert complete["roster"][0]["artifacts"] == ["report.md"]
-    assert complete["next_call"]["arguments"]["include_summaries"] is True
-    second = (await state(complete["next_call"]["arguments"]))["data"]
-    assert second["roster"][0]["id"] != complete["roster"][0]["id"]
-    changed = await state({**complete["next_call"]["arguments"], "include_summaries": False})
-    assert changed["error"]["code"] == "invalid_cursor"
-    changed_limit = await state({**complete["next_call"]["arguments"], "limit": 1})
-    assert changed_limit["error"]["code"] == "invalid_cursor"
+    assert created["ok"]
+    assert len((await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"]) == 2
 
 
 @pytest.mark.asyncio
@@ -551,12 +510,12 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
         request_id="policy",
         actor="test",
     )
-    result = await board.service.state(board.contexts[0], {"action": "status"})
+    result = await board.service.state(board.contexts[0], {})
     data = result["data"]
     assert data["delivery"] == {
         "automatic": ["ping"],
         "when_idle": ["discussion"],
-        "inbox_only": ["main"],
+        "on_request": ["main"],
     }
     assert data["wake_on_messages"] == ["discussion", "ping"]
     assert data["pending_count"] == 1
@@ -565,78 +524,75 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("needs_user", [False, True])
-async def test_wait_result_describes_admission_without_exposing_internal_handles(board, needs_user):
-    ended = []
+async def test_resume_admits_all_inactive_participants(board, monkeypatch):
+    swarm_id = board.swarm["id"]
+    peers = board.bindings
+    await board.service.store.set_swarm_state(swarm_id, "running")
+    for peer in peers:
+        await board.service.store.set_participant_state(swarm_id, peer.participant_id, "failed")
+    admitted = []
+
+    async def start(handle, participant_id, input):
+        admitted.append(participant_id)
+        return SimpleNamespace(run_id=f"resumed-{participant_id}")
+
+    monkeypatch.setattr(board.groups, "start", start)
+    result = await board.operations.invoke(
+        "swarms.resume",
+        {"swarm_id": swarm_id, "request_id": "one"},
+    )
+    assert admitted == [peer.participant_id for peer in peers]
+    assert len(result["runs"]) == len(peers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "wait"},
+        {"action": "wait", "needs_user": True},
+        {"action": "done", "summary": "Finished"},
+        {"state": "idle"},
+        {"action": "name", "name": "Changed"},
+        {"name": "Changed"},
+        {"action": "status"},
+        {"include_summaries": True},
+    ],
+)
+async def test_state_tool_rejects_all_participant_status_mutations(board, arguments):
     context = replace(
-        board.contexts[0],
-        tool_name="swarm_state",
-        session_tool_grants=("swarm_state",),
-        request_turn_end_hook=lambda _call_id: ended.append(True),
+        board.contexts[0], tool_name="swarm_state", session_tool_grants=("swarm_state",)
     )
-    result = await board.tools.dispatch(
-        context, {"action": "wait", "needs_user": needs_user}, allowed_tools=["swarm_state"]
-    )
-    assert result["ok"] and context._turn_end_requested
-    assert not ended
-    context._commit_owned_effects()
-    assert ended == [True]
-    data = result["data"]
-    assert data["status"] == "wait_requested"
-    assert data["wake_on_messages"] == ([] if needs_user else ["main", "discussion", "ping"])
-    assert "run_id" not in data and "call_id" not in data
-    stored = await board.store.participant_status(
+    before = await board.store.participant_status(
         board.swarm["id"], board.bindings[0].participant_id
     )
-    assert stored["self"]["state"] == "prepared"
+    result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_state"])
+    assert not result["ok"] and result["error"]["code"] == "invalid_arguments"
+    assert not context._turn_end_requested
+    assert (
+        await board.store.participant_status(board.swarm["id"], board.bindings[0].participant_id)
+        == before
+    )
 
 
 @pytest.mark.asyncio
-async def test_done_preserves_both_blockers_and_only_ends_after_acceptance(board, monkeypatch):
-    from resources.extensions.swarm.agent_text import ERRORS
-
-    ended = []
+async def test_status_pages_only_report_automatic_activity(board):
     context = replace(
-        board.contexts[0],
-        tool_name="swarm_state",
-        session_tool_grants=("swarm_state",),
-        request_turn_end_hook=lambda _call_id: ended.append(True),
+        board.contexts[0], tool_name="swarm_state", session_tool_grants=("swarm_state",)
     )
-
-    async def active(*_args):
-        return True
-
-    monkeypatch.setattr(board.store, "_has_owned_descendants", active)
-    monkeypatch.setitem(ERRORS, "pending_messages", "pending-sentinel")
-    monkeypatch.setitem(ERRORS, "owned_work_active", "owned-sentinel")
-    await board.store.post(
-        board.swarm["id"], board.bindings[1].participant_id, text="Question", request_id="question"
-    )
-    refused = await board.service.state(context, {"action": "done", "summary": "Checked"})
-    assert refused["error"]["code"] == "pending_messages"
-    assert refused["error"]["message"] == "pending-sentinel owned-sentinel"
-    assert not ended and not context._turn_end_requested
-    missing = await board.service.state(context, {"action": "done"})
-    assert missing["error"]["code"] == "invalid_arguments" and not ended
-
-
-@pytest.mark.asyncio
-async def test_done_result_exposes_request_state_and_not_internal_handles(board):
-    ended = []
-    context = replace(
-        board.contexts[0],
-        tool_name="swarm_state",
-        session_tool_grants=("swarm_state",),
-        request_turn_end_hook=lambda _call_id: ended.append(True),
-    )
-    accepted = await board.tools.dispatch(
-        context, {"action": "done", "summary": "Checked"}, allowed_tools=["swarm_state"]
-    )
-    assert accepted["data"]["status"] == "finish_requested"
-    assert "run_id" not in accepted["data"] and "call_id" not in accepted["data"]
-    assert context._turn_end_requested and not ended
-    context._commit_owned_effects()
-    assert ended == [True]
+    first = (await board.tools.dispatch(context, {"limit": 1}, allowed_tools=["swarm_state"]))[
+        "data"
+    ]
+    assert set(first["roster"][0]) == {"id", "name", "state"}
+    second = (
+        await board.tools.dispatch(
+            context, first["next_call"]["arguments"], allowed_tools=["swarm_state"]
+        )
+    )["data"]
+    assert first["roster"][0]["id"] != second["roster"][0]["id"]
+    changed = await board.service.state(context, {**first["next_call"]["arguments"], "limit": 2})
+    assert changed["error"]["code"] == "invalid_cursor"
+    assert not context._turn_end_requested
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from core.sessions import DeliveryReceipt, OwnedRunRecord, SessionAddress, TemporarySessionBinding
+from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from core.sessions.schema import required_journal_mode
 from core.settings.agent_defaults import _fallback_chain_entries
 from core.settings.settings import (
@@ -41,31 +41,16 @@ _SWARM_STATES = frozenset(
     {
         "preparing",
         "running",
-        "waiting",
+        "idle",
         "needs_attention",
         "stopping",
         "stopped",
         "cancelled",
         "interrupted",
-        "completed",
     }
 )
-_MUTABLE_SWARM_STATES = frozenset({"preparing", "running", "waiting", "needs_attention"})
-_PARTICIPANT_STATES = frozenset(
-    {
-        "prepared",
-        "starting",
-        "idle",
-        "running",
-        "waiting",
-        "blocked",
-        "failed",
-        "cancelled",
-        "finishing",
-        "done",
-        "interrupted",
-    }
-)
+_MUTABLE_SWARM_STATES = frozenset({"preparing", "running", "idle", "needs_attention"})
+_PARTICIPANT_STATES = frozenset({"idle", "running", "failed", "cancelled", "interrupted"})
 _DELIVERY_DEFAULTS: Json = {
     "main": {"mode": "all", "wake_idle": True},
     "discussion": {"mode": "all", "wake_idle": True},
@@ -75,8 +60,6 @@ _DELIVERY_DEFAULTS: Json = {
     "batch_chars": 24_000,
 }
 DeliveryReceiptLookup = Callable[[SessionAddress, str, str, str], Awaitable[DeliveryReceipt | None]]
-TerminalProofLookup = Callable[[str, str], Awaitable[OwnedRunRecord | None]]
-DescendantLookup = Callable[[str, str, str, int], Awaitable[bool]]
 
 
 class SwarmStoreError(Exception):
@@ -103,8 +86,6 @@ class SwarmStore:
         path: Path,
         *,
         lookup_delivery_receipt: DeliveryReceiptLookup | None = None,
-        lookup_terminal_proof: TerminalProofLookup | None = None,
-        has_owned_descendants: DescendantLookup | None = None,
         worker_pool: BoundedWorkerPool = _WORKERS,
     ) -> None:
         self._path = Path(path)
@@ -112,8 +93,6 @@ class SwarmStore:
         self._connection: sqlite3.Connection | None = None
         self._lock = threading.RLock()
         self._lookup_delivery_receipt = lookup_delivery_receipt
-        self._lookup_terminal_proof = lookup_terminal_proof
-        self._has_owned_descendants = has_owned_descendants
 
     async def open(self) -> None:
         await self._run(self._open)
@@ -187,7 +166,7 @@ class SwarmStore:
         )
 
     async def set_swarm_state(self, swarm_id: str, state: str) -> Json:
-        if state not in {"running", "waiting", "needs_attention"}:
+        if state not in {"running", "idle", "needs_attention"}:
             raise SwarmStoreError("invalid_arguments", field="state")
         return await self._run(self._set_swarm_state, swarm_id, state)
 
@@ -200,28 +179,12 @@ class SwarmStore:
     async def set_participant_state(
         self, swarm_id: str, participant_id: str, state: str, *, idle_boundary: int | None = None
     ) -> Json:
-        if state not in {
-            "starting",
-            "running",
-            "idle",
-            "waiting",
-            "blocked",
-            "failed",
-            "cancelled",
-            "interrupted",
-        } or (idle_boundary is not None and (type(idle_boundary) is not int or idle_boundary < 0)):
+        if state not in _PARTICIPANT_STATES or (
+            idle_boundary is not None and (type(idle_boundary) is not int or idle_boundary < 0)
+        ):
             raise SwarmStoreError("invalid_arguments", field="state")
         return await self._run(
             self._set_participant_state, swarm_id, participant_id, state, idle_boundary
-        )
-
-    async def rename_participant(
-        self, swarm_id: str, participant_id: str, name: str, *, expected_epoch: int | None = None
-    ) -> Json:
-        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
-            raise SwarmStoreError("invalid_arguments", field="name")
-        return await self._run(
-            self._rename_participant, swarm_id, participant_id, name.strip(), expected_epoch
         )
 
     async def participant_status(
@@ -231,17 +194,13 @@ class SwarmStore:
         *,
         cursor: str | None = None,
         limit: int = 20,
-        include_summaries: bool = False,
     ) -> Json:
-        if type(include_summaries) is not bool:
-            raise SwarmStoreError("invalid_arguments", field="include_summaries")
         return await self._run(
             self._participant_status,
             swarm_id,
             participant_id,
             cursor,
             _limit(limit),
-            include_summaries,
         )
 
     async def record_run_started(
@@ -280,23 +239,6 @@ class SwarmStore:
             self._finish_stop, swarm_id, request_id, actor, _json_object(drain_report)
         )
 
-    async def finish_group(
-        self, swarm_id: str, *, expected_epoch: int, drain_report: Mapping[str, Any]
-    ) -> Json:
-        """Close a fully-done epoch after its exact owner group has drained."""
-        if type(expected_epoch) is not int or expected_epoch < 0:
-            raise SwarmStoreError("invalid_arguments", field="expected_epoch")
-        report = _json_object(drain_report)
-        if (
-            set(report) != {"closed", "run_ids"}
-            or type(report["closed"]) is not bool
-            or not isinstance(report["run_ids"], list)
-            or not all(isinstance(run_id, str) and run_id for run_id in report["run_ids"])
-            or len(set(report["run_ids"])) != len(report["run_ids"])
-        ):
-            raise SwarmStoreError("invalid_arguments", field="drain_report")
-        return await self._run(self._finish_group, swarm_id, expected_epoch, report)
-
     async def begin_resume(
         self, swarm_id: str, *, request_id: str, actor: str, participant_id: str | None = None
     ) -> Json:
@@ -313,108 +255,6 @@ class SwarmStore:
     ) -> Page:
         return await self._run(self._list_events, swarm_id, cursor, _limit(limit))
 
-    async def request_wait(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        *,
-        run_id: str,
-        expected_epoch: int,
-        call_id: str,
-        reason: str = "",
-        needs_user: bool = False,
-    ) -> Json:
-        if (
-            not isinstance(run_id, str)
-            or not run_id
-            or not isinstance(reason, str)
-            or len(reason) > 2000
-            or type(needs_user) is not bool
-            or not isinstance(call_id, str)
-            or not call_id
-        ):
-            raise SwarmStoreError("invalid_arguments")
-        return await self._run(
-            self._request_lifecycle,
-            swarm_id,
-            participant_id,
-            run_id,
-            expected_epoch,
-            call_id,
-            "blocked" if needs_user else "waiting",
-            reason,
-            None,
-            (),
-        )
-
-    async def request_done(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        *,
-        run_id: str,
-        expected_epoch: int,
-        call_id: str,
-        summary: str,
-        artifacts: Sequence[str] = (),
-    ) -> Json:
-        _text(summary, "summary", 16_000)
-        if (
-            not isinstance(run_id, str)
-            or not run_id
-            or isinstance(artifacts, (str, bytes))
-            or any(not isinstance(item, str) for item in artifacts)
-            or not isinstance(call_id, str)
-            or not call_id
-        ):
-            raise SwarmStoreError("invalid_arguments")
-        descendants = bool(
-            self._has_owned_descendants
-            and await self._has_owned_descendants(swarm_id, participant_id, run_id, expected_epoch)
-        )
-        return await self._run(
-            self._request_done_intent,
-            swarm_id,
-            participant_id,
-            run_id,
-            expected_epoch,
-            call_id,
-            summary,
-            tuple(artifacts),
-            descendants,
-        )
-
-    async def reconcile_tool_batch(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        *,
-        run_id: str,
-        expected_epoch: int,
-        persisted_call_ids: Sequence[str],
-    ) -> Json:
-        if (
-            not isinstance(run_id, str)
-            or not run_id
-            or isinstance(persisted_call_ids, (str, bytes))
-            or not persisted_call_ids
-            or not all(isinstance(value, str) and value for value in persisted_call_ids)
-        ):
-            raise SwarmStoreError("invalid_arguments")
-        descendants = bool(
-            self._has_owned_descendants
-            and await self._has_owned_descendants(swarm_id, participant_id, run_id, expected_epoch)
-        )
-        return await self._run(
-            self._reconcile_tool_batch,
-            swarm_id,
-            participant_id,
-            run_id,
-            expected_epoch,
-            tuple(dict.fromkeys(persisted_call_ids)),
-            descendants,
-        )
-
     async def bind_execution_epoch(
         self, swarm_id: str, *, expected_epoch: int, execution_epoch: str
     ) -> Json:
@@ -422,26 +262,6 @@ class SwarmStore:
             raise SwarmStoreError("invalid_arguments")
         return await self._run(
             self._bind_execution_epoch, swarm_id, expected_epoch, execution_epoch
-        )
-
-    async def finalize_participant(
-        self, swarm_id: str, participant_id: str, *, run_id: str, expected_epoch: int
-    ) -> Json:
-        if self._lookup_terminal_proof is None:
-            raise RuntimeError("SwarmStore has no terminal-proof lookup")
-        proof = await self._lookup_terminal_proof(swarm_id, run_id)
-        descendants = bool(
-            self._has_owned_descendants
-            and await self._has_owned_descendants(swarm_id, participant_id, run_id, expected_epoch)
-        )
-        return await self._run(
-            self._finalize_participant,
-            swarm_id,
-            participant_id,
-            run_id,
-            expected_epoch,
-            proof,
-            descendants,
         )
 
     async def bind_participant_session(self, binding: TemporarySessionBinding) -> None:
@@ -739,6 +559,14 @@ class SwarmStore:
             self._path, isolation_level=None, check_same_thread=False, timeout=1
         )
         connection.row_factory = sqlite3.Row
+        if (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='lifecycle_intents'"
+            ).fetchone()
+            is not None
+        ):
+            connection.close()
+            raise SwarmStoreError("storage_conversion_required")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=1000")
         connection.execute(
@@ -794,13 +622,7 @@ class SwarmStore:
         ):
             if name not in columns:
                 connection.execute(f"ALTER TABLE participants ADD COLUMN {name} {definition}")
-        for name, definition in (
-            ("lifecycle_run_id", "TEXT"),
-            ("wait_reason", "TEXT"),
-            ("summary_json", "TEXT"),
-            ("artifacts_json", "TEXT"),
-            ("completion_call_id", "TEXT"),
-        ):
+        for name, definition in (("lifecycle_run_id", "TEXT"),):
             if name not in columns:
                 connection.execute(f"ALTER TABLE participants ADD COLUMN {name} {definition}")
 
@@ -985,7 +807,7 @@ class SwarmStore:
                     name = f"Participant {ordinal}"
                     connection.execute(
                         "INSERT INTO participants(id,swarm_id,model,display_name,ordinal,state) VALUES(?,?,?,?,?,?)",
-                        (participant_id, swarm_id, formation["model"], name, ordinal, "prepared"),
+                        (participant_id, swarm_id, formation["model"], name, ordinal, "idle"),
                     )
                     connection.execute(
                         "INSERT INTO memberships(discussion_id,participant_id) VALUES(?,?)",
@@ -1006,8 +828,7 @@ class SwarmStore:
         if row is None:
             raise SwarmStoreError("swarm_not_found")
         participants = connection.execute(
-            "SELECT p.id,p.model,p.display_name,p.ordinal,p.state,p.lifecycle_run_id,p.wait_reason,"
-            "p.summary_json,p.artifacts_json,"
+            "SELECT p.id,p.model,p.display_name,p.ordinal,p.state,p.lifecycle_run_id,"
             "(SELECT COUNT(*) FROM recipients r JOIN posts ps ON ps.id=r.post_id "
             "WHERE r.participant_id=p.id AND r.delivered_at IS NULL AND ps.swarm_id=p.swarm_id) "
             "AS pending_count FROM participants p WHERE p.swarm_id=? ORDER BY p.ordinal",
@@ -1044,16 +865,7 @@ class SwarmStore:
                     (swarm_id,),
                 ).fetchone()
             ),
-            "participants": [
-                {
-                    **dict(value),
-                    "summary": _load(value["summary_json"])["summary"]
-                    if value["summary_json"]
-                    else None,
-                    "artifacts": _load(value["artifacts_json"]) if value["artifacts_json"] else [],
-                }
-                for value in participants
-            ],
+            "participants": [dict(value) for value in participants],
         }
 
     def _list_swarms(self, cursor: str | None, limit: int) -> Page:
@@ -1070,7 +882,7 @@ class SwarmStore:
             offset = 0
         rows = connection.execute(
             "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,COUNT(p.id) AS participant_count,"
-            "SUM(CASE WHEN p.state='done' THEN 1 ELSE 0 END) AS done_count,ss.revision AS settings_revision "
+            "ss.revision AS settings_revision "
             "FROM swarms s JOIN swarm_settings ss ON ss.swarm_id=s.id "
             "LEFT JOIN participants p ON p.swarm_id=s.id WHERE s.rowid<=? "
             "GROUP BY s.id ORDER BY s.rowid DESC LIMIT ? OFFSET ?",
@@ -1083,7 +895,6 @@ class SwarmStore:
                 "state": str(row["state"]),
                 "created_at": str(row["created_at"]),
                 "participant_count": int(row["participant_count"]),
-                "done_count": int(row["done_count"] or 0),
                 "settings_revision": int(row["settings_revision"]),
             }
             for row in rows
@@ -1202,10 +1013,7 @@ class SwarmStore:
                     "SELECT id,state,wake_pending,wake_announced_seq FROM participants WHERE swarm_id=?",
                     (swarm_id,),
                 ):
-                    if (
-                        participant["state"] not in {"idle", "waiting"}
-                        or participant["wake_pending"]
-                    ):
+                    if participant["state"] not in {"idle"} or participant["wake_pending"]:
                         continue
                     placeholders = ",".join("?" for _ in newly_enabled)
                     pending = connection.execute(
@@ -1252,8 +1060,6 @@ class SwarmStore:
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
-            if row["state"] == "completed" and row["state"] != state:
-                raise SwarmStoreError("swarm_closed")
             if row["state"] not in _MUTABLE_SWARM_STATES:
                 raise SwarmStoreError("invalid_lifecycle_state")
             connection.execute("UPDATE swarms SET state=? WHERE id=?", (state, swarm_id))
@@ -1276,18 +1082,20 @@ class SwarmStore:
 
     def _refresh_swarm_state(self, connection: sqlite3.Connection, swarm_id: str) -> None:
         row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
-        if row is None or row["state"] not in {"running", "waiting", "needs_attention"}:
+        if row is None or row["state"] not in {"running", "idle", "needs_attention"}:
             return
         states = {
             str(item["state"])
             for item in connection.execute(
-                "SELECT state FROM participants WHERE swarm_id=? AND state!='done'", (swarm_id,)
+                "SELECT state FROM participants WHERE swarm_id=?", (swarm_id,)
             )
         }
-        if states & {"blocked", "failed"}:
+        if "running" in states:
+            state = "running"
+        elif states & {"failed", "cancelled", "interrupted"}:
             state = "needs_attention"
-        elif states and states <= {"idle", "waiting"}:
-            state = "waiting"
+        elif states and states <= {"idle"}:
+            state = "idle"
         else:
             state = "running"
         connection.execute("UPDATE swarms SET state=? WHERE id=?", (state, swarm_id))
@@ -1298,14 +1106,12 @@ class SwarmStore:
         def operation(connection: sqlite3.Connection) -> Json:
             self._assert_mutable(connection, swarm_id)
             participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] == "done" and participant["state"] != state:
-                raise SwarmStoreError("participant_inactive")
             connection.execute(
                 "UPDATE participants SET state=?,idle_boundary=?,wake_pending=? WHERE id=?",
                 (
                     state,
                     idle_boundary,
-                    0 if state in {"starting", "running"} else participant["wake_pending"],
+                    0 if state == "running" else participant["wake_pending"],
                     participant_id,
                 ),
             )
@@ -1318,39 +1124,12 @@ class SwarmStore:
 
         return self._write(operation)
 
-    def _rename_participant(
-        self, swarm_id: str, participant_id: str, name: str, expected_epoch: int | None
-    ) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            self._assert_mutable(connection, swarm_id)
-            if expected_epoch is not None:
-                self._assert_epoch(connection, swarm_id, expected_epoch)
-            if name.casefold() in {"user", "system"}:
-                raise SwarmStoreError("name_unavailable")
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "blocked", "cancelled", "failed", "interrupted"}:
-                raise SwarmStoreError("participant_inactive")
-            conflict = connection.execute(
-                "SELECT 1 FROM participants WHERE swarm_id=? AND display_name=? COLLATE NOCASE AND id!=?",
-                (swarm_id, name, participant_id),
-            ).fetchone()
-            if conflict is not None:
-                raise SwarmStoreError("name_unavailable")
-            if participant["display_name"] != name:
-                connection.execute(
-                    "UPDATE participants SET display_name=? WHERE id=?", (name, participant_id)
-                )
-            return {"participant_id": participant_id, "name": name}
-
-        return self._write(operation)
-
     def _participant_status(
         self,
         swarm_id: str,
         participant_id: str,
         cursor: str | None,
         limit: int,
-        include_summaries: bool,
     ) -> Json:
         connection = self._require_connection()
         self._participant(connection, swarm_id, participant_id)
@@ -1359,28 +1138,12 @@ class SwarmStore:
                 "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
             ).fetchone()[0]
         )
-        scope = f"{swarm_id}:{participant_id}:{limit}:{int(include_summaries)}"
+        scope = f"{swarm_id}:{participant_id}:{limit}"
         offset = self._cursor(cursor, "status", scope, high)[0] if cursor else 0
         rows = connection.execute(
-            "SELECT id,display_name,state,wait_reason,summary_json,artifacts_json FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+            "SELECT id,display_name,state FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
             (swarm_id, limit + 1, offset),
         ).fetchall()
-
-        def item(row: sqlite3.Row) -> Json:
-            result = {
-                "id": row["id"],
-                "name": row["display_name"],
-                "state": row["state"],
-                "summary_available": row["summary_json"] is not None,
-            }
-            if row["wait_reason"]:
-                result["wait_reason"] = row["wait_reason"]
-            if include_summaries:
-                result["summary"] = (
-                    _load(row["summary_json"])["summary"] if row["summary_json"] else None
-                )
-                result["artifacts"] = _load(row["artifacts_json"]) if row["artifacts_json"] else []
-            return result
 
         self_row = connection.execute(
             "SELECT id,state FROM participants WHERE id=?",
@@ -1397,22 +1160,16 @@ class SwarmStore:
             "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
         delivery = _load(settings["delivery_json"])
-        budget = int(delivery["batch_chars"])
         receive = {
             label: [
                 route for route in ("main", "discussion", "ping") if delivery[route]["mode"] == mode
             ]
-            for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("inbox_only", "pull"))
+            for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("on_request", "pull"))
         }
-        roster: list[Json] = []
-        summary_chars = 0
-        for row in rows[:limit]:
-            value = item(row)
-            size = len(value.get("summary") or "")
-            if roster and summary_chars + size > budget:
-                break
-            roster.append(value)
-            summary_chars += size
+        roster = [
+            {"id": row["id"], "name": row["display_name"], "state": row["state"]}
+            for row in rows[:limit]
+        ]
         consumed = len(roster)
         has_more = consumed < len(rows)
         main = self._main(connection, swarm_id)
@@ -1437,7 +1194,13 @@ class SwarmStore:
     ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
             self._assert_epoch(connection, swarm_id, expected_epoch)
-            self._participant(connection, swarm_id, participant_id)
+            participant = self._participant(connection, swarm_id, participant_id)
+            if participant["lifecycle_run_id"] == run_id:
+                return {
+                    "participant_id": participant_id,
+                    "run_id": run_id,
+                    "state": participant["state"],
+                }
             connection.execute(
                 "UPDATE participants SET state='running',lifecycle_run_id=? WHERE id=?",
                 (run_id, participant_id),
@@ -1455,12 +1218,7 @@ class SwarmStore:
             participant = self._participant(connection, swarm_id, participant_id)
             if participant["lifecycle_run_id"] != run_id:
                 raise SwarmStoreError("stale_run")
-            state = (
-                participant["state"]
-                if outcome == "completed"
-                and participant["state"] in {"waiting", "blocked", "finishing"}
-                else ("idle" if outcome == "completed" else outcome)
-            )
+            state = "idle" if outcome == "completed" else outcome
             connection.execute(
                 "UPDATE participants SET state=? WHERE id=?", (state, participant_id)
             )
@@ -1473,7 +1231,7 @@ class SwarmStore:
         def operation(connection: sqlite3.Connection) -> list[Json]:
             rows = connection.execute(
                 "SELECT id,state FROM swarms WHERE state IN (?,?,?,?,?)",
-                ("preparing", "running", "waiting", "needs_attention", "stopping"),
+                ("preparing", "running", "idle", "needs_attention", "stopping"),
             ).fetchall()
             result: list[Json] = []
             for row in rows:
@@ -1483,8 +1241,7 @@ class SwarmStore:
                 )
                 connection.execute("UPDATE swarms SET state='interrupted' WHERE id=?", (swarm_id,))
                 connection.execute(
-                    "UPDATE participants SET state='interrupted',wake_pending=0 "
-                    "WHERE swarm_id=? AND state!='done'",
+                    "UPDATE participants SET state=CASE WHEN state='running' THEN 'interrupted' ELSE state END,wake_pending=0 WHERE swarm_id=?",
                     (swarm_id,),
                 )
                 connection.execute(
@@ -1515,8 +1272,6 @@ class SwarmStore:
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
-            if row["state"] == "completed":
-                raise SwarmStoreError("swarm_closed")
             epoch = connection.execute(
                 "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
             ).fetchone()
@@ -1569,7 +1324,7 @@ class SwarmStore:
             if row["state"] != "stopping":
                 raise SwarmStoreError("invalid_lifecycle_state")
             connection.execute(
-                "UPDATE participants SET state='cancelled',wake_pending=0 WHERE swarm_id=? AND state!='done'",
+                "UPDATE participants SET state=CASE WHEN state='running' THEN 'cancelled' ELSE state END,wake_pending=0 WHERE swarm_id=?",
                 (swarm_id,),
             )
             connection.execute("UPDATE swarms SET state='cancelled' WHERE id=?", (swarm_id,))
@@ -1589,43 +1344,6 @@ class SwarmStore:
 
         return self._write(operation)
 
-    def _finish_group(self, swarm_id: str, expected_epoch: int, drain_report: Json) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
-            if row is None:
-                raise SwarmStoreError("swarm_not_found")
-            if row["state"] == "completed":
-                return {"swarm_id": swarm_id, "state": "completed", "replayed": True}
-            self._assert_epoch(connection, swarm_id, expected_epoch)
-            if not drain_report["closed"] or drain_report["run_ids"]:
-                raise SwarmStoreError("owned_work_active")
-            unfinished = connection.execute(
-                "SELECT COUNT(*) FROM participants WHERE swarm_id=? AND state!='done'", (swarm_id,)
-            ).fetchone()[0]
-            wakes = connection.execute(
-                "SELECT COUNT(*) FROM participants WHERE swarm_id=? AND wake_pending=1", (swarm_id,)
-            ).fetchone()[0]
-            if unfinished or wakes:
-                raise SwarmStoreError("owned_work_active")
-            connection.execute("UPDATE swarm_epochs SET is_open=0 WHERE swarm_id=?", (swarm_id,))
-            connection.execute("UPDATE swarms SET state='completed' WHERE id=?", (swarm_id,))
-            connection.execute(
-                "INSERT INTO swarm_events(swarm_id,kind,actor,old_json,new_json,settings_revision,created_at) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (
-                    swarm_id,
-                    "completed",
-                    "system",
-                    _dump({"state": row["state"]}),
-                    _dump({"state": "completed"}),
-                    None,
-                    _now(),
-                ),
-            )
-            return {"swarm_id": swarm_id, "state": "completed", "drain_report": _copy(drain_report)}
-
-        return self._write(operation)
-
     def _begin_resume(
         self, swarm_id: str, request_id: str, actor: str, participant_id: str | None
     ) -> Json:
@@ -1638,7 +1356,7 @@ class SwarmStore:
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
-            if row["state"] in {"completed", "stopping", "preparing"}:
+            if row["state"] in {"stopping", "preparing"}:
                 raise SwarmStoreError("swarm_closed")
             epoch = connection.execute(
                 "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
@@ -1650,9 +1368,7 @@ class SwarmStore:
                 ).fetchone()
                 if target is None:
                     raise SwarmStoreError("participant_not_found")
-                eligible = {"prepared", "idle", "waiting", "blocked", "failed", "interrupted"}
-                if not epoch["is_open"]:
-                    eligible.add("cancelled")
+                eligible = {"idle", "failed", "cancelled", "interrupted"}
                 if target["state"] not in eligible:
                     raise SwarmStoreError("participant_not_resumable")
             if epoch["is_open"]:
@@ -1660,7 +1376,7 @@ class SwarmStore:
                     str(item["id"])
                     for item in connection.execute(
                         "SELECT id FROM participants WHERE swarm_id=? "
-                        "AND state IN ('prepared','idle','waiting','blocked','failed','interrupted') "
+                        "AND state IN ('idle','failed','cancelled','interrupted') "
                         "ORDER BY ordinal",
                         (swarm_id,),
                     )
@@ -1690,14 +1406,14 @@ class SwarmStore:
             participants = [
                 str(item["id"])
                 for item in connection.execute(
-                    "SELECT id FROM participants WHERE swarm_id=? AND state!='done' ORDER BY ordinal",
+                    "SELECT id FROM participants WHERE swarm_id=? ORDER BY ordinal",
                     (swarm_id,),
                 )
             ]
             if participant_id is not None:
                 participants = [participant_id]
             connection.executemany(
-                "UPDATE participants SET state='prepared',wake_pending=0 WHERE swarm_id=? AND id=?",
+                "UPDATE participants SET state='idle',wake_pending=0 WHERE swarm_id=? AND id=?",
                 [(swarm_id, peer_id) for peer_id in participants],
             )
             connection.execute(
@@ -1762,285 +1478,6 @@ class SwarmStore:
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
             (scope, request_id, payload_hash, _dump(result)),
         )
-
-    def _request_lifecycle(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        run_id: str,
-        expected_epoch: int,
-        call_id: str,
-        state: str,
-        reason: str,
-        summary: str | None,
-        artifacts: tuple[str, ...],
-    ) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "cancelled"}:
-                raise SwarmStoreError("participant_inactive")
-            payload = {
-                "action": "wait",
-                "state": state,
-                "reason": reason,
-                "run_id": run_id,
-            }
-            existing = connection.execute(
-                "SELECT payload_hash,outcome FROM lifecycle_intents WHERE swarm_id=? AND participant_id=? "
-                "AND run_id=? AND call_id=?",
-                (swarm_id, participant_id, run_id, call_id),
-            ).fetchone()
-            if existing is not None:
-                if existing["payload_hash"] != _hash(payload):
-                    raise SwarmStoreError("request_conflict")
-                result = _load(existing["outcome"])
-                result["replayed"] = True
-                return result
-            result = {
-                "participant_id": participant_id,
-                "state": state,
-                "run_id": run_id,
-                "call_id": call_id,
-                "status": "wait_requested",
-            }
-            connection.execute(
-                "INSERT INTO lifecycle_intents(swarm_id,participant_id,run_id,call_id,action,payload_hash,"
-                "state,reason,summary_json,artifacts_json,outcome,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    swarm_id,
-                    participant_id,
-                    run_id,
-                    call_id,
-                    "wait",
-                    _hash(payload),
-                    state,
-                    reason,
-                    None,
-                    _dump([]),
-                    _dump(result),
-                    _now(),
-                ),
-            )
-            return result
-
-        return self._write(operation)
-
-    def _request_done_intent(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        run_id: str,
-        expected_epoch: int,
-        call_id: str,
-        summary: str,
-        artifacts: tuple[str, ...],
-        descendants: bool,
-    ) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "cancelled"}:
-                raise SwarmStoreError("participant_inactive")
-            payload = {
-                "action": "done",
-                "summary": summary,
-                "artifacts": list(artifacts),
-                "run_id": run_id,
-            }
-            existing = connection.execute(
-                "SELECT payload_hash,outcome FROM lifecycle_intents WHERE swarm_id=? AND participant_id=? "
-                "AND run_id=? AND call_id=?",
-                (swarm_id, participant_id, run_id, call_id),
-            ).fetchone()
-            if existing is not None:
-                if existing["payload_hash"] != _hash(payload):
-                    raise SwarmStoreError("request_conflict")
-                result = _load(existing["outcome"])
-                result["replayed"] = True
-                return result
-            pending = self._pending_count(connection, swarm_id, participant_id)
-            if pending or descendants:
-                result = {
-                    "participant_id": participant_id,
-                    "state": str(participant["state"]),
-                    "run_id": run_id,
-                    "call_id": call_id,
-                    "status": "finish_refused",
-                    "pending_messages": pending,
-                    "owned_work_active": descendants,
-                }
-            else:
-                result = {
-                    "participant_id": participant_id,
-                    "state": "finishing",
-                    "run_id": run_id,
-                    "call_id": call_id,
-                    "status": "finish_requested",
-                }
-            connection.execute(
-                "INSERT INTO lifecycle_intents(swarm_id,participant_id,run_id,call_id,action,payload_hash,"
-                "state,reason,summary_json,artifacts_json,outcome,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    swarm_id,
-                    participant_id,
-                    run_id,
-                    call_id,
-                    "done",
-                    _hash(payload),
-                    "finishing",
-                    "",
-                    _dump({"summary": summary}),
-                    _dump(list(artifacts)),
-                    _dump(result),
-                    _now(),
-                ),
-            )
-            return result
-
-        return self._write(operation)
-
-    def _finalize_participant(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        run_id: str,
-        expected_epoch: int,
-        proof: OwnedRunRecord | None,
-        descendants: bool,
-    ) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] != "finishing" or participant["lifecycle_run_id"] != run_id:
-                raise SwarmStoreError("participant_inactive")
-            binding = connection.execute(
-                "SELECT project_id,agent_id,session_id,generation_id,owner_name FROM participant_sessions WHERE participant_id=?",
-                (participant_id,),
-            ).fetchone()
-            execution = connection.execute(
-                "SELECT execution_epoch FROM swarm_execution_epochs WHERE swarm_id=? AND epoch=?",
-                (swarm_id, expected_epoch),
-            ).fetchone()
-            if (
-                proof is None
-                or binding is None
-                or proof.run_id != run_id
-                or proof.address
-                != SessionAddress(binding["project_id"], binding["agent_id"], binding["session_id"])
-                or proof.generation_id != binding["generation_id"]
-                or proof.owner.extension != binding["owner_name"]
-                or proof.owner.group_id != swarm_id
-                or proof.owner.participant_id != participant_id
-                or proof.owner.generation_id != binding["generation_id"]
-                or execution is None
-                or proof.owner.epoch != execution["execution_epoch"]
-            ):
-                raise SwarmStoreError("terminal_proof_missing")
-            if proof.terminal_status == "completed" and (
-                proof.terminal_sequence is None or proof.terminal_sequence < proof.start_sequence
-            ):
-                raise SwarmStoreError("terminal_proof_missing")
-            if descendants:
-                return {
-                    "participant_id": participant_id,
-                    "state": "finishing",
-                    "owned_work_active": True,
-                }
-            terminal_state = (
-                "done"
-                if proof.terminal_status == "completed"
-                else ("cancelled" if proof.terminal_status == "cancelled" else "failed")
-            )
-            connection.execute(
-                "UPDATE participants SET state=? WHERE id=?", (terminal_state, participant_id)
-            )
-            self._refresh_swarm_state(connection, swarm_id)
-            return {"participant_id": participant_id, "state": terminal_state}
-
-        return self._write(operation)
-
-    def _reconcile_tool_batch(
-        self,
-        swarm_id: str,
-        participant_id: str,
-        run_id: str,
-        expected_epoch: int,
-        call_ids: tuple[str, ...],
-        descendants: bool,
-    ) -> Json:
-        def operation(connection: sqlite3.Connection) -> Json:
-            self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "cancelled"}:
-                raise SwarmStoreError("participant_inactive")
-            placeholders = ",".join("?" for _ in call_ids)
-            intents = connection.execute(
-                "SELECT * FROM lifecycle_intents WHERE swarm_id=? AND participant_id=? AND run_id=? "
-                f"AND call_id IN ({placeholders}) ORDER BY id",
-                (swarm_id, participant_id, run_id, *call_ids),
-            ).fetchall()
-            done = next(
-                (
-                    row
-                    for row in intents
-                    if row["action"] == "done"
-                    and _load(row["outcome"])["status"] == "finish_requested"
-                ),
-                None,
-            )
-            if done is not None:
-                pending = self._pending_count(connection, swarm_id, participant_id)
-                if pending or descendants:
-                    connection.execute(
-                        "UPDATE participants SET state='running',lifecycle_run_id=NULL,completion_call_id=NULL WHERE id=?",
-                        (participant_id,),
-                    )
-                    return {
-                        "participant_id": participant_id,
-                        "state": "running",
-                        "end_run": False,
-                        "continuation_required": True,
-                        "pending_messages": pending,
-                        "owned_work_active": descendants,
-                    }
-                connection.execute(
-                    "UPDATE participants SET state='finishing',lifecycle_run_id=?,completion_call_id=?,"
-                    "wait_reason='',summary_json=?,artifacts_json=? WHERE id=?",
-                    (
-                        run_id,
-                        done["call_id"],
-                        done["summary_json"],
-                        done["artifacts_json"],
-                        participant_id,
-                    ),
-                )
-                return {
-                    "participant_id": participant_id,
-                    "state": "finishing",
-                    "end_run": True,
-                    "continuation_required": False,
-                }
-            wait = next((row for row in intents if row["action"] == "wait"), None)
-            if wait is not None:
-                connection.execute(
-                    "UPDATE participants SET state=?,lifecycle_run_id=?,wait_reason=? WHERE id=?",
-                    (wait["state"], run_id, wait["reason"], participant_id),
-                )
-                return {
-                    "participant_id": participant_id,
-                    "state": str(wait["state"]),
-                    "end_run": True,
-                    "continuation_required": False,
-                }
-            return {
-                "participant_id": participant_id,
-                "state": str(participant["state"]),
-                "end_run": False,
-                "continuation_required": False,
-            }
-
-        return self._write(operation)
 
     def _bind_execution_epoch(
         self, swarm_id: str, expected_epoch: int, execution_epoch: str
@@ -2181,7 +1618,7 @@ class SwarmStore:
             resolved_boundary = (
                 int(participant["idle_boundary"] or 0) if boundary is None else boundary
             )
-            if participant["state"] in {"blocked", "failed", "done", "cancelled"}:
+            if participant["state"] in {"failed", "cancelled", "interrupted"}:
                 return {"entries": [], "wake": False, "pending_remaining": 0}
             settings_row = connection.execute(
                 "SELECT revision,delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
@@ -2204,7 +1641,7 @@ class SwarmStore:
                 wake = (
                     newest > int(participant["wake_announced_seq"] or 0)
                     and not participant["wake_pending"]
-                    and participant["state"] in {"idle", "waiting"}
+                    and participant["state"] in {"idle"}
                     and any(
                         settings[row["route_class"]]["wake_idle"]
                         for row in connection.execute(
@@ -2245,10 +1682,12 @@ class SwarmStore:
             eligible = []
             for row in pending:
                 policy = settings[row["route_class"]]
-                if policy["mode"] == "pull":
+                if policy["mode"] == "pull" and not (
+                    participant["state"] == "idle" and policy["wake_idle"]
+                ):
                     continue
                 if policy["mode"] == "idle" and (
-                    participant["state"] not in {"idle", "waiting"}
+                    participant["state"] not in {"idle"}
                     and resolved_boundary != participant["idle_boundary"]
                 ):
                     continue
@@ -2265,7 +1704,7 @@ class SwarmStore:
                 newest > announced
                 and not participant["wake_pending"]
                 and any(settings[row["route_class"]]["wake_idle"] for row in pending)
-                and participant["state"] in {"idle", "waiting"}
+                and participant["state"] in {"idle"}
             )
             if wake:
                 connection.execute(
@@ -2276,7 +1715,6 @@ class SwarmStore:
                 return {
                     "entries": [],
                     "wake": wake,
-                    "pull_reminder": bool(pending),
                     "pending_remaining": len(pending),
                     "settings_revision": int(settings_row["revision"]),
                     "admission_boundary": resolved_boundary,
@@ -2401,7 +1839,6 @@ class SwarmStore:
             participant = self._participant(connection, swarm_id, participant_id)
             if (
                 not participant["wake_pending"]
-                and participant["state"] == "running"
                 and participant["lifecycle_run_id"] == run_id
                 and participant["idle_boundary"] == boundary
             ):
@@ -2414,10 +1851,12 @@ class SwarmStore:
                 }
             if not participant["wake_pending"] or participant["idle_boundary"] != boundary:
                 raise SwarmStoreError("wake_unavailable")
+            state = participant["state"] if participant["lifecycle_run_id"] == run_id else "running"
             connection.execute(
-                "UPDATE participants SET wake_pending=0,wake_announced_seq=wake_pending_seq,state='running',lifecycle_run_id=?,idle_boundary=? WHERE id=?",
-                (run_id, boundary, participant_id),
+                "UPDATE participants SET wake_pending=0,wake_announced_seq=wake_pending_seq,state=?,lifecycle_run_id=?,idle_boundary=? WHERE id=?",
+                (state, run_id, boundary, participant_id),
             )
+            self._refresh_swarm_state(connection, swarm_id)
             return {
                 "participant_id": participant_id,
                 "run_id": run_id,
@@ -2741,14 +2180,6 @@ class SwarmStore:
                 if author_kind == "participant"
                 else None
             )
-            if sender is not None and sender["state"] in {
-                "done",
-                "blocked",
-                "cancelled",
-                "failed",
-                "interrupted",
-            }:
-                raise SwarmStoreError("participant_inactive")
             target = None
             if reply_to is not None:
                 target = connection.execute(
@@ -2802,14 +2233,6 @@ class SwarmStore:
                     raise SwarmStoreError("invalid_recipient")
                 audience[recipient] = "ping"
             audience.pop(sender_id, None)
-            inactive_recipients = sorted(
-                participant_id
-                for participant_id in audience
-                if self._participant(connection, swarm_id, participant_id)["state"]
-                in {"done", "cancelled", "finishing"}
-            )
-            for participant_id in inactive_recipients:
-                audience.pop(participant_id)
             sequence = int(
                 connection.execute(
                     "SELECT COALESCE(MAX(sequence),0)+1 FROM posts WHERE swarm_id=?", (swarm_id,)
@@ -2846,7 +2269,6 @@ class SwarmStore:
                     route: sum(1 for value in audience.values() if value == route)
                     for route in ("ping", "discussion", "main")
                 },
-                "inactive_recipients": inactive_recipients,
             }
             connection.execute(
                 "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -2870,9 +2292,7 @@ class SwarmStore:
             self._assert_mutable(connection, swarm_id)
             if expected_epoch is not None:
                 self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "blocked", "cancelled", "failed", "interrupted"}:
-                raise SwarmStoreError("participant_inactive")
+            self._participant(connection, swarm_id, participant_id)
             payload = {"title": title, "text": text, "recipients": recipients}
             scope = f"create:{swarm_id}:{participant_id}"
             replay = connection.execute(
@@ -2900,12 +2320,6 @@ class SwarmStore:
                     is None
                 ):
                     raise SwarmStoreError("invalid_recipient")
-            inactive = [
-                recipient
-                for recipient in recipients
-                if self._participant(connection, swarm_id, recipient)["state"]
-                in {"done", "cancelled", "finishing"}
-            ]
             discussion_id = new_id("dsc")
             connection.execute(
                 "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,0,?)",
@@ -2944,7 +2358,6 @@ class SwarmStore:
                 "opening_post_id": opening_id,
                 "main_announcement_id": announcement_id,
                 "joined": True,
-                "inactive_recipients": inactive,
             }
             connection.execute(
                 "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -3000,12 +2413,6 @@ class SwarmStore:
         audience.update(dict.fromkeys(recipients, "ping"))
         audience.pop(sender_id, None)
         for recipient, route in audience.items():
-            if self._participant(connection, swarm_id, recipient)["state"] in {
-                "done",
-                "cancelled",
-                "finishing",
-            }:
-                continue
             connection.execute(
                 "INSERT INTO recipients(post_id,participant_id,route_class) VALUES(?,?,?)",
                 (post_id, recipient, route),
@@ -3024,9 +2431,7 @@ class SwarmStore:
             self._assert_mutable(connection, swarm_id)
             if expected_epoch is not None:
                 self._assert_epoch(connection, swarm_id, expected_epoch)
-            participant = self._participant(connection, swarm_id, participant_id)
-            if participant["state"] in {"done", "blocked", "cancelled", "failed", "interrupted"}:
-                raise SwarmStoreError("participant_inactive")
+            self._participant(connection, swarm_id, participant_id)
             discussion = self._discussion(connection, swarm_id, discussion_id)
             if not joining and discussion["is_main"]:
                 raise SwarmStoreError("main_membership_required")
@@ -3436,7 +2841,6 @@ CREATE TABLE IF NOT EXISTS participant_sessions(participant_id TEXT PRIMARY KEY 
 CREATE TABLE IF NOT EXISTS swarm_settings(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),revision INTEGER NOT NULL,delivery_json TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_epochs(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),epoch INTEGER NOT NULL,is_open INTEGER NOT NULL CHECK(is_open IN(0,1))) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_execution_epochs(swarm_id TEXT NOT NULL REFERENCES swarms(id),epoch INTEGER NOT NULL,execution_epoch TEXT NOT NULL,PRIMARY KEY(swarm_id,epoch)) STRICT;
-CREATE TABLE IF NOT EXISTS lifecycle_intents(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),participant_id TEXT NOT NULL REFERENCES participants(id),run_id TEXT NOT NULL,call_id TEXT NOT NULL,action TEXT NOT NULL,payload_hash TEXT NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,summary_json TEXT,artifacts_json TEXT NOT NULL,outcome TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(swarm_id,participant_id,run_id,call_id)) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_events(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),kind TEXT NOT NULL,actor TEXT NOT NULL,old_json TEXT,new_json TEXT,settings_revision INTEGER,created_at TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS discussions(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),title TEXT NOT NULL,sequence INTEGER NOT NULL,is_main INTEGER NOT NULL CHECK(is_main IN(0,1)),created_at TEXT NOT NULL,UNIQUE(swarm_id,sequence)) STRICT;
 CREATE TABLE IF NOT EXISTS memberships(discussion_id TEXT NOT NULL REFERENCES discussions(id),participant_id TEXT NOT NULL REFERENCES participants(id),PRIMARY KEY(discussion_id,participant_id)) STRICT;

@@ -8,7 +8,7 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 - `extension.py` owns registration, management operations, the three Tool handlers,
   and coordination with owner-bound temporary execution groups.
 - `store.py` owns the SQLite profile, Board, audience, delivery, lifecycle and audit
-  transactions. It receives canonical receipt and terminal-proof lookups; it must
+  transactions. It receives canonical receipt lookups; it must
   not open the Session database directly.
 - `agent_text.py` owns the scoped Tool definitions and reviewed runtime wording.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
@@ -42,7 +42,7 @@ It returns rendered block details and separately transmitted Tool definitions;
 draft changes invalidate the displayed preview. Evidence: `test_swarm_lifecycle.py`,
 `test_runtime_extensions.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
 
-Delivery, wake, explicit Resume and completion-race guidance are individually
+Delivery and explicit Resume guidance are individually
 switchable in the snapshot. Their complete wording is inspectable in the editor.
 Disabling guidance preserves Board payloads and lifecycle behavior; empty
 continuation receipts add no Model-visible reminder. Existing Session history is
@@ -75,31 +75,37 @@ request id is payload-bound; reusing it with changed content is a conflict.
 
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
-carrier is saved. Delivery mode and idle wake permission are independent. Read
-pages are bounded and cursors cannot cross queries.
+carrier is saved. Delivery mode and idle wake permission are independent. A wake
+always delivers actual pending Board content, including pull-mode messages on a
+wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
+overflow remains available through Inbox. Read pages are bounded and cursors
+cannot cross queries.
 
 Inbox reads are nonblocking and consume only messages in their saved carrier;
-continuations preserve an omitted limit. Empty results direct waiting through
-`swarm_state`, without ending the Run themselves (`test_swarm_inbox.py`).
+continuations preserve an omitted limit. Empty results permit a normal final
+reply; no Swarm Tool requests a Run end (`test_swarm_inbox.py`).
 
-Status defaults to a compact roster; `include_summaries` retrieves complete
-summaries and artifact references, bounded by the existing summary budget.
-Status cursors bind both page size and summary selection. Delivery results expose
-receiving and wake behavior without scheduler configuration. Wait/done Tool
-results expose requested transitions; canonical Run/Call ids remain internal.
-Coverage: `test_swarm_board.py`, `test_swarm_store.py`, and the state probe matrix.
+`swarm_state` is read-only, with optional cursor and limit. It returns a compact paged
+roster, pending count and delivery/wake policy; cursors bind page size. Participants
+cannot rename themselves. Progress, results and requests for help belong on the
+Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
+completion reservation, summary store or automatic group completion.
 
-Wait, blocked, failed, cancelled and done are distinct. Done first records an
-intent, then reserves completion under the same transaction boundary as Board
-posts. Unread messages and owned work prevent completion. Only exact canonical
-successful Run evidence finalizes the participant; an ordinary final answer does
-not. Whole-group completion additionally requires a closed, drained execution
-group and every participant done.
+Participant status is an execution projection: `idle`, `running`, `failed`,
+`cancelled` or `interrupted`. A successful Run returns to idle and leaves the
+same Session reachable. All-idle Swarms remain open without polling Models;
+eligible new Board messages trigger Runs through the existing wake/receipt path.
+Messages are retained for every addressed participant, including failed or
+cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
+failed/cancelled/interrupted peers. Stop and startup recovery mark only active
+Runs cancelled/interrupted, retaining other participants' last outcomes.
+Evidence: `test_swarm_store.py`, `test_swarm_board.py`, `test_swarm_lifecycle.py`.
 
-Participant transitions recompute the open Swarm's aggregate state: unfinished
-idle/waiting peers yield waiting, blocked/failed peers require attention, and
-active work stays running. The page's active Run indicator comes from exact
-canonical Run inspection, not a retained lifecycle Run id.
+Run callbacks recompute the open Swarm's aggregate state: any running peer keeps
+it running, unsuccessful inactive peers require attention, and all-idle peers
+yield idle. Repeated start/wake acknowledgments cannot overwrite the same Run's
+terminal outcome. The page's active Run indicator uses exact canonical Run
+inspection, not the presence of a retained Run id.
 
 The Store's integer lifecycle epoch and the temporary facade's opaque admission
 epoch are different identities and are linked explicitly. Stop closes admission;
@@ -107,11 +113,11 @@ retained records are not deleted. Startup recovery marks unfinished execution
 interrupted and never admits work automatically. Stale callbacks cannot reuse an
 old registration to start or mutate new execution.
 
-Explicit Resume may continue inactive unfinished peers in an open epoch while
+Explicit Resume may continue inactive peers in an open epoch while
 other peers run. A closed attempt opens a fresh epoch. Preparation failure closes
 that newly opened epoch so a later Resume can retry; existing Sessions and the
 initial-input receipt remain authoritative. Resume is rejected while initial
-preparation or Stop is still in progress. Background wake/completion failures
+preparation or Stop is still in progress. Background wake failures
 retain pending delivery and expose needs_attention with ids-only diagnostics.
 
 ## Verification routes
@@ -126,7 +132,7 @@ retain pending delivery and expose needs_attention with ids-only diagnostics.
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
   under `tests/scripts/test_probe_provider_tool_call.py`. The `unassisted` case
   supplies the goal without prescribing Tools; success requires receiving peer
-  feedback, a later public contribution, and a reserved completion. It evaluates
+  feedback, a later public contribution, and a normal final response. It evaluates
   coordination effects, not the semantic quality of the generated checklist.
   The probe purges cached Extension modules before loading its own checkout.
 - Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`;
@@ -156,6 +162,13 @@ Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
 selected participant, leaving other participants unchanged. The existing group
 admission path starts only the returned targets (test_swarm_store.py,
-test_swarm_board.py). Activity offers this action for an inactive unfinished
+test_swarm_board.py). Activity offers this action for an inactive
 participant and consumes canonical context usage from history and Run events;
 it never substitutes cumulative Session usage.
+
+The old participant-lifecycle database needs explicit offline conversion with
+`scripts/converters/swarm_execution_states.py`. The converter produces a separate
+SQLite copy, retains Session bindings and Board history, removes completion
+settings/storage and wake-only guidance, and leaves Swarms stopped for explicit
+Resume. The original
+input retains old summaries/audit data. Runtime never migrates the old format.

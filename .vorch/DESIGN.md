@@ -582,4 +582,6 @@ complete wrapping prompt. Status sits at the right of the content tabs; the
 Swarm id belongs under Usage. Board participants form a wrapping horizontal row
 above the messages, and Write post opens the shared Modal. Each Board message
 has a compact author/time header separated from prose by a thin border. Activity
-keeps context usage and the selected participant's Resume action in its header.
+keeps context usage and the selected inactive participant's Resume action in its header.
+Participant status reflects Run execution only. Swarms has no separate Results
+tab or completed-participant counter; results are shared on the Board.
