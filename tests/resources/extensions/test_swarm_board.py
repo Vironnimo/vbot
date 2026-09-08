@@ -128,6 +128,7 @@ async def board(tmp_path):
         sessions=sessions,
         tools=tools,
         registry=registry,
+        groups=groups,
     )
     try:
         yield fixture
@@ -141,6 +142,28 @@ async def call(board, arguments, peer=0):
     context = replace(board.contexts[peer])
     result = await board.tools.get("swarm_board").handler(context, arguments)
     return result, context
+
+
+@pytest.mark.asyncio
+async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
+    participant = board.swarm["participants"][0]
+
+    async def active(_swarm_id, _run_id):
+        return SimpleNamespace(run=SimpleNamespace(status=SimpleNamespace(value="running")))
+
+    await board.store.record_run_started(
+        board.swarm["id"], participant["id"], run_id="run-active", expected_epoch=0
+    )
+    monkeypatch.setattr(board.groups, "owned_run", active)
+    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    assert projected["swarm"]["participants"][0]["run_active"] is True
+
+    async def retained(_swarm_id, _run_id):
+        return SimpleNamespace(run=None)
+
+    monkeypatch.setattr(board.groups, "owned_run", retained)
+    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    assert projected["swarm"]["participants"][0]["run_active"] is False
 
 
 @pytest.mark.asyncio
@@ -281,3 +304,40 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert discussions["entries"][0]["id"] == board.swarm["main_discussion_id"]
     page = await operations.invoke("board.read", {"swarm_id": board.swarm["id"]})
     assert page["entries"][-1]["text"] == "operator note"
+
+
+@pytest.mark.asyncio
+async def test_resume_recovers_after_missing_binding_creation_failure(board, monkeypatch):
+    swarm_id = board.swarm["id"]
+    await board.store.begin_stop(swarm_id, request_id="stop", actor="test")
+    await board.groups.close_group(swarm_id)
+    await board.store.finish_stop(
+        swarm_id, request_id="stop", actor="test", drain_report={"closed": True, "run_ids": []}
+    )
+    original_list = board.groups.list
+    original_create = board.groups.create
+
+    async def no_bindings(*_args, **_kwargs):
+        return []
+
+    async def fail_create(*_args, **_kwargs):
+        raise RuntimeError("fixture binding failure")
+
+    monkeypatch.setattr(board.groups, "list", no_bindings)
+    monkeypatch.setattr(board.groups, "create", fail_create)
+    with pytest.raises(RuntimeError, match="fixture binding failure"):
+        await board.service.operation("swarms.resume", {"swarm_id": swarm_id, "request_id": "bad"})
+    assert (await board.store.get_swarm(swarm_id))["state"] == "needs_attention"
+    monkeypatch.setattr(board.groups, "list", original_list)
+    monkeypatch.setattr(board.groups, "create", original_create)
+
+    async def admit(_handle, participant_id, _input):
+        return SimpleNamespace(run_id=f"resumed-{participant_id}")
+
+    monkeypatch.setattr(board.groups, "start", admit)
+    resumed = await board.service.operation(
+        "swarms.resume", {"swarm_id": swarm_id, "request_id": "good"}
+    )
+    assert len(resumed["runs"]) == len(board.bindings)
+    assert all("run_id" in admission and "error" not in admission for admission in resumed["runs"])
+    assert await board.groups.list(swarm_id) == await original_list(swarm_id)

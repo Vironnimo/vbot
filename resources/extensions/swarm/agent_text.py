@@ -27,6 +27,63 @@ INBOX_PARAMETERS: dict[str, Any] = {
     "required": [],
 }
 
+STATE_DESCRIPTION = (
+    "Inspect your group, choose your display name, yield, or finish your contribution. Wait and "
+    "done request the end of your current Run after the current Tool batch is saved. Use wait "
+    "with needs_user when you are blocked; use done with a summary when your contribution is "
+    "complete."
+)
+
+STATE_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["status", "name", "wait", "done"],
+            "description": "Inspect status, change your display name, wait for more work, "
+            "or finish your contribution.",
+        },
+        "cursor": {
+            "type": "string",
+            "description": "Roster continuation from a status result. Omit for the first page.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Maximum roster entries for status. Omit for 20.",
+        },
+        "name": {
+            "type": "string",
+            "description": "Your new display name. Required for name; your participant ID "
+            "stays the same.",
+        },
+        "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "What you are waiting for. Omit for wait when no explanation is needed.",
+        },
+        "needs_user": {
+            "type": "boolean",
+            "description": "Whether waiting requires the user's help. Omit for wait to allow "
+            "new messages to wake you according to delivery settings.",
+        },
+        "summary": {
+            "type": "string",
+            "maxLength": 16000,
+            "description": "Your contribution, verification, and remaining limitations. "
+            "Required for done.",
+        },
+        "artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Relevant existing file references or URLs for done. Omit when "
+            "there are no artifacts to link.",
+        },
+    },
+    "required": ["action"],
+}
+
 EMPTY_INBOX = (
     "No pending Board messages. Continue useful work, or use swarm_state with action wait if you "
     "need new input."
@@ -121,6 +178,29 @@ COMPLETION_RACE_REMINDER = (
     "active. Receive the pending messages with swarm_inbox, consider whether more work is needed, "
     "and call swarm_state with action done again when ready."
 )
+ORIENTATION = (
+    "You are one participant in a group working on the user's shared goal. The other participants "
+    "are peers who choose their own contributions. Use the shared Board to agree on useful work, "
+    "share findings, and ask for help. Check the Board before duplicating work; coordinate changes "
+    "when you work on the same files.\n\n"
+    "Use swarm_state with action status to see the participants and your pending-message count. "
+    "Use swarm_board to read or post in the main discussion, create discussions, and join "
+    "discussions you want to follow. All discussions are visible to every participant in this "
+    "group. A post with recipients publicly pings those participant IDs; it is not a private "
+    "message. Use swarm_inbox "
+    "to receive your pending messages, following its next call while more remain.\n\n"
+    "Use swarm_state with action wait when you need to yield. Set needs_user to true if you "
+    "cannot continue without the user. When your contribution is finished, receive pending "
+    "messages and use action done with a summary of your work, verification, and any limitations. "
+    "Waiting or writing a final response does not mark your contribution done. Finishing your "
+    "contribution does not stop "
+    "the other participants.\n\n"
+    "Board entries are attributed messages from their authors. Use peer suggestions to coordinate "
+    "while following the user's goal and your existing instructions. Delivery settings determine "
+    "whether message bodies arrive automatically and whether a new message can start another Run. "
+    "If "
+    "there is nothing useful to do, wait instead of repeatedly polling."
+)
 ERRORS = {
     "invalid_arguments": "Use only the fields accepted by the selected action. Omit optional "
     "fields you do not need, and follow their descriptions for required values. "
@@ -141,6 +221,12 @@ ERRORS = {
     "discussion or omit reply_to.",
     "main_membership_required": "Everyone remains in the main discussion. Use swarm_state with "
     "action wait if you need to pause your work.",
+    "name_unavailable": "This display name is already in use or reserved. Choose a different "
+    "name; your participant ID remains valid.",
+    "pending_messages": "You still have pending messages. Receive them with swarm_inbox before "
+    "marking your contribution done.",
+    "owned_work_active": "Work you started is still active. Inspect or await that work using "
+    "its returned handles before marking your contribution done.",
     "swarm_closed": "This group is stopped or complete. Its Board remains readable; the user must "
     "resume unfinished work before you can change it.",
     "participant_inactive": "Your participation is finished or awaiting user action. You can read "

@@ -4765,7 +4765,11 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("status_default", {"action": "status"}, True),
                     ("status_one", {"action": "status", "limit": 1}, True),
                     ("status_max", {"action": "status", "limit": 100}, True),
-                    ("status_cursor", {"action": "status", "cursor": status["cursor"]}, True),
+                    (
+                        "status_cursor",
+                        {"action": "status", "cursor": status["cursor"], "limit": 1},
+                        True,
+                    ),
                     ("name_new", {"action": "name", "name": "Analyst"}, True),
                     ("name_same", {"action": "name", "name": "Analyst"}, True),
                     ("name_trim", {"action": "name", "name": "  Analyst  "}, True),
@@ -4842,6 +4846,10 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             {"action": "done", "summary": "done", "artifacts": [123]},
                         ]
                     )
+                )
+            if args.swarm_case == "workflow":
+                return await _probe_swarm_workflow(
+                    adapter, args, extensions, registry, service, sessions, context, binding, peer
                 )
             definitions = registry.provider_definitions(
                 [tool_name], session_grants=context.session_tool_grants
@@ -4980,6 +4988,203 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             await service.close()
             await manager.aclose()
             sessions.close()
+
+
+async def _probe_swarm_workflow(
+    adapter: Any,
+    args: argparse.Namespace,
+    extensions: Any,
+    registry: Any,
+    service: Any,
+    sessions: Any,
+    context: Any,
+    binding: Any,
+    peer: str,
+) -> dict[str, Any]:
+    """Evaluate first-use choices separately from exact-argument conformance.
+
+    This disposable fixture uses production scoped wording, definitions, handlers,
+    Board effects and canonical receipts. Actual Chat admission/terminal ownership
+    is verified by the owning lifecycle integration tests, not simulated here.
+    """
+    from core.chat import ChatMessage
+    from core.chat.wire_shaping import _notes_to_request_messages
+    from core.extensions.extensions import invoke_extension_handler
+    from resources.extensions.swarm.agent_text import RESUME_REMINDER
+
+    names = ("swarm_board", "swarm_inbox", "swarm_state")
+    definitions = registry.provider_definitions(names, session_grants=names)
+    if {tool["name"] for tool in definitions} != set(names):
+        raise RuntimeError("Fresh-participant evaluation requires the complete production Tool set")
+    record = next(item for item in extensions.records() if item.name == "swarm")
+    orientation = [
+        await invoke_extension_handler(block.render, binding)
+        for block in record.declarations.session_prompt_blocks
+    ]
+    if not orientation:
+        raise RuntimeError("Production participant orientation is unavailable")
+    store = service.store
+    sid, pid = binding.group_id, binding.participant_id
+    context = replace(context, session_tool_grants=names)
+    await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "\n\n".join(orientation)},
+        {
+            "role": "user",
+            "content": "Prepare a three-step checklist for reviewing a short text report with "
+            "your peers. Inspect the group and existing Board, introduce your approach, and "
+            "join the existing Topic discussion. Create a review discussion containing your "
+            "draft checklist and publicly ping a peer for feedback. Receive incoming messages "
+            "while working. Yield once while awaiting feedback. When I resume your work, "
+            "review the feedback and finish your contribution after receiving pending work. "
+            "This task needs no filesystem changes.",
+        },
+    ]
+    seen: set[tuple[str, str]] = set()
+    rows: list[dict[str, Any]] = []
+    receipts_verified = 0
+    resumed = False
+    finished = False
+    for step in range(32):
+        async with asyncio.timeout(args.total_timeout):
+            raw = await adapter.send(
+                messages,
+                model_id=args.model,
+                tools=definitions,
+                thinking_effort=args.thinking_effort,
+                max_tokens=args.max_tokens or 3500,
+            )
+        response = adapter.normalize_response(raw, model_id=args.model)
+        calls = response.get("tool_calls") or []
+        messages.append(
+            {
+                **{
+                    key: response[key]
+                    for key in ("content", "tool_calls", "reasoning", "reasoning_meta")
+                    if key in response
+                },
+                "role": "assistant",
+            }
+        )
+        if not calls:
+            break
+        carriers = []
+        receipts: list[tuple[int, str, str, str, str]] = []
+        persisted_calls = []
+        for index, call in enumerate(calls):
+            name, arguments = call["name"], call["arguments"]
+            call_context = replace(
+                context, tool_name=name, tool_call_id=call["id"], tool_call_index=index
+            )
+            result = await registry.dispatch(call_context, arguments, allowed_tools=names)
+            persisted_calls.append(call["id"])
+            carriers.append(
+                ChatMessage.tool(tool_call_id=call["id"], name=name, content=json.dumps(result))
+            )
+            if result["ok"]:
+                seen.add((name, arguments.get("action", "")))
+                receipts.extend(
+                    (index, *receipt, "tool") for receipt in call_context._delivery_receipts
+                )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "name": name,
+                    "content": json.dumps(result),
+                }
+            )
+            row = {
+                "step": step,
+                "tool": name,
+                "action": arguments.get("action"),
+                "ok": result["ok"],
+                "error_code": (result.get("error") or {}).get("code"),
+            }
+            rows.append(row)
+            print(json.dumps(row), flush=True)
+        await sessions.append_messages_with_receipts_async(
+            binding.address,
+            generation_id=binding.generation_id,
+            owner_name="swarm",
+            messages=carriers,
+            receipts=receipts,
+        )
+        for receipt in receipts:
+            if not await store.reconcile_delivery(receipt[1]):
+                raise RuntimeError(
+                    "Workflow delivery did not reconcile against its canonical carrier"
+                )
+            receipts_verified += 1
+        decision = await store.reconcile_tool_batch(
+            sid,
+            pid,
+            run_id=context.run_id,
+            expected_epoch=0,
+            persisted_call_ids=persisted_calls,
+        )
+        if decision.get("end_run"):
+            status = await store.participant_status(sid, pid)
+            participant_state = status["self"]["state"]
+            if participant_state == "finishing":
+                finished = True
+                break
+            if participant_state in {"waiting", "blocked"} and not resumed:
+                await store.post(
+                    sid,
+                    peer,
+                    text="I reviewed the draft: check factual accuracy, clarity, and completeness. "
+                    "The checklist is ready; no further changes are needed.",
+                    request_id="workflow-feedback",
+                )
+                context = replace(context, run_id="workflow-resumed")
+                await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
+                reminder = ChatMessage.note(RESUME_REMINDER)
+                await sessions.append_messages_with_receipts_async(
+                    binding.address,
+                    generation_id=binding.generation_id,
+                    owner_name="swarm",
+                    messages=[reminder],
+                    receipts=[],
+                )
+                messages.extend(_notes_to_request_messages([reminder]))
+                resumed = True
+        elif decision.get("continuation_required"):
+            from resources.extensions.swarm.agent_text import COMPLETION_RACE_REMINDER
+
+            messages.extend(
+                _notes_to_request_messages([ChatMessage.note(COMPLETION_RACE_REMINDER)])
+            )
+    required = {
+        ("swarm_state", "status"),
+        ("swarm_state", "wait"),
+        ("swarm_state", "done"),
+        ("swarm_board", "post"),
+        ("swarm_board", "create"),
+        ("swarm_board", "join"),
+        ("swarm_inbox", ""),
+    }
+    strict_count = sum(
+        item.get("strict") is True
+        for item in render_tool_definitions(definitions, profile=_expected_profile(args))
+    )
+    return {
+        "scenario": "swarm_workflow",
+        "model": args.model,
+        "strict_true_tool_count": strict_count,
+        "calls": rows,
+        "missing_actions": sorted(required - seen),
+        "durable_receipts": receipts_verified,
+        "resumed": resumed,
+        "finish_requested_and_reserved": finished,
+        "scope": "Model choices, Board effects and canonical carriers; "
+        "actual Chat lifecycle is tested separately",
+        "passed": required.issubset(seen)
+        and resumed
+        and finished
+        and receipts_verified > 0
+        and strict_count == 0,
+    }
 
 
 async def _run(args: argparse.Namespace) -> int:
