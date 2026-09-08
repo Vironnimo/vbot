@@ -295,10 +295,58 @@ async def test_forty_participants_complete_through_production_state_tool(lifecyc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [[], ["core:runtime"]])
+async def test_profile_prompt_selection_reaches_model_without_hidden_orientation(
+    lifecycle, tmp_path, selected
+):
+    from tests.core.prompts.prompts_test_support import StubStorage, _manager
+
+    lifecycle.runtime.system_prompts = _manager(
+        tmp_path,
+        tools=lifecycle.tools,
+        storage=StubStorage({"runtime.md": "runtime-sentinel", "tools.md": "tools-sentinel"}),
+    )
+    saved = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Prompt control",
+            "slug": "prompt-control",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+            "instructions": "profile-body-sentinel",
+            "prompt_blocks": selected,
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start",
+        {
+            "profile_id": saved["id"],
+            "prompt": "goal-sentinel",
+            "request_id": "start",
+        },
+    )
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    messages = lifecycle.runtime.adapter.requests[0]["messages"]
+    assert [message["content"] for message in messages if message["role"] == "system"] == [
+        "runtime-sentinel\n\nprofile-body-sentinel" if selected else "profile-body-sentinel"
+    ]
+    assert [message["content"] for message in messages if message["role"] == "user"] == [
+        "goal-sentinel"
+    ]
+    assert not lifecycle.runtime.extensions.records()[0].declarations.session_prompt_blocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reminder_enabled", [True, False])
 async def test_stop_resume_preserves_one_initial_input_for_unfinished_participant(
-    lifecycle, tmp_path
+    lifecycle, tmp_path, monkeypatch, reminder_enabled
 ):
     """A stopped waiting participant resumes from its Session without replaying the initial goal."""
+    from resources.extensions.swarm.agent_text import DEFAULT_REMINDERS, REMINDER_TEXTS
+
+    monkeypatch.setitem(REMINDER_TEXTS, "resume", "resume-guidance-sentinel")
 
     lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
         {
@@ -327,6 +375,7 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
         {
             "schema_version": 1,
             "slug": "resume",
+            "reminders": {**DEFAULT_REMINDERS, "resume": reminder_enabled},
             "name": "Resume participant",
             "participants": [{"model": "fixture/model", "count": 1}],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
@@ -352,6 +401,18 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
     binding = (await lifecycle.groups.list(started["swarm_id"]))[0]
     history = lifecycle.runtime.chat_sessions.get(binding.address).load()
     assert [message.content for message in history if message.role == "user"] == ["shared goal"]
+    resumed_messages = lifecycle.runtime.adapter.requests[-1]["messages"]
+    assert (
+        any(
+            "resume-guidance-sentinel" in str(message.get("content", ""))
+            for message in resumed_messages
+        )
+        is reminder_enabled
+    )
+    assert all(
+        message.get("content") != "<system-reminder>\n\n</system-reminder>"
+        for message in resumed_messages
+    )
     assert (
         await lifecycle.groups.owned_run(started["swarm_id"], resumed_run_id)
     ).record.terminal_status == ("completed")
@@ -455,6 +516,7 @@ async def test_swarm_command_preserves_quoted_unicode_prompt_and_starts_distinct
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reminders_enabled", [True, False])
 @pytest.mark.parametrize(
     ("mode", "wake", "expected_request"),
     [
@@ -467,9 +529,13 @@ async def test_swarm_command_preserves_quoted_unicode_prompt_and_starts_distinct
     ],
 )
 async def test_human_post_wakes_waiting_participant_with_delivery_policy(
-    lifecycle, tmp_path, mode, wake, expected_request
+    lifecycle, tmp_path, mode, wake, expected_request, reminders_enabled, monkeypatch
 ):
     """A durable post reaches the request, wakes with metadata, or remains idle."""
+    from resources.extensions.swarm.agent_text import DEFAULT_REMINDERS, REMINDER_TEXTS
+
+    monkeypatch.setitem(REMINDER_TEXTS, "wake", "wake-guidance-sentinel")
+    monkeypatch.setitem(REMINDER_TEXTS, "delivery", "delivery-guidance-sentinel")
 
     lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
         {
@@ -488,6 +554,7 @@ async def test_human_post_wakes_waiting_participant_with_delivery_policy(
             "schema_version": 1,
             "slug": f"wake-{mode}-{int(wake)}",
             "name": "Wake",
+            "reminders": dict.fromkeys(DEFAULT_REMINDERS, reminders_enabled),
             "participants": [{"model": "fixture/model", "count": 1}],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
             "tool_access": {"mode": "selected", "allowed": []},
@@ -530,6 +597,8 @@ async def test_human_post_wakes_waiting_participant_with_delivery_policy(
         assert len(pending["entries"]) == 1
     else:
         request = str(lifecycle.runtime.adapter.requests[1]["messages"])
+        assert ("wake-guidance-sentinel" in request) is reminders_enabled
+        assert ("delivery-guidance-sentinel" in request) is (reminders_enabled and mode != "pull")
         if mode == "pull":
             assert "wake message" not in request
             assert len(pending["entries"]) == 1

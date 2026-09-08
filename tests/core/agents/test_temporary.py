@@ -73,6 +73,7 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
         name="Participant",
         fallback_models=["provider/fallback"],
         instructions="shared",
+        prompt_blocks=["core:agent_body", "core:skills"],
     )
 
     first = registry.create(
@@ -87,6 +88,7 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
     assert agent is not None
     assert agent.workspace == ""
     assert agent.fallback_models == ["provider/fallback"]
+    assert agent.prompt_blocks == ["core:agent_body", "core:skills"]
     assert not (tmp_path / "agents").exists()
     sessions.close()
 
@@ -96,6 +98,9 @@ def test_temporary_agent_create_is_idempotent_without_identity_files(tmp_path: P
         owner_name="extension", group_id="group", participant_id="participant", config=config
     )
     assert restored == first
+    restored_agent = reopened.resolve(restored.address, generation_id=restored.generation_id)
+    assert restored_agent is not None
+    assert restored_agent.prompt_blocks == agent.prompt_blocks
     with pytest.raises(ChatSessionError):
         reopened.create(
             owner_name="extension",

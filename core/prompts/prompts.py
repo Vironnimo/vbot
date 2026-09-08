@@ -1000,6 +1000,7 @@ class SystemPromptManager:
         effective_tool_names: Sequence[str] | None = None,
         session_tool_grants: Sequence[str] = (),
         request_block_definitions: Sequence[BlockDefinition] = (),
+        block_details: list[JsonObject] | None = None,
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -1069,6 +1070,18 @@ class SystemPromptManager:
             layout=layout,
             request_block_definitions=request_block_definitions,
         )
+        selected_blocks = getattr(agent, "prompt_blocks", None)
+        if selected_blocks is not None:
+            # An explicit per-participant selection overrides shared enablement.
+            # Every unselected contribution stays off, including future additions.
+            layout = [
+                LayoutEntry(
+                    id=block.definition.id,
+                    enabled=block.definition.id in selected_blocks,
+                    source=block.definition.source,
+                )
+                for block in resolve_layout(definitions, layout)
+            ]
         return assemble_system_prompt(
             definitions,
             layout,
@@ -1084,6 +1097,7 @@ class SystemPromptManager:
             override_resolver=self._build_override_resolver(prompt_scope),
             producers=producers,
             replacements=self._runtime_replacements(agent),
+            block_details=block_details,
         )
 
     async def build_system_prompt_async(
