@@ -7,9 +7,10 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryRunInput
+from core.chat import CommandFeedback, CommandNavigation, CommandOutcome, ExtensionCommandContext
 from core.extensions import (
     ExtensionAPI,
     PreparedSessionDelivery,
@@ -22,6 +23,7 @@ from core.sessions import SessionAddress, TemporarySessionBinding
 from core.tools import ToolContext, tool_failure, tool_success
 from core.tools.availability import normalize_tool_access
 from core.tools.tools import run_tool_worker
+from core.utils.ids import new_id
 
 from .agent_text import (
     BOARD_DESCRIPTION,
@@ -32,9 +34,13 @@ from .agent_text import (
     ERRORS,
     INBOX_DESCRIPTION,
     INBOX_PARAMETERS,
+    ORIENTATION,
     POST_SAVED,
+    PULL_WAKE_REMINDER,
     REPLAYED,
     RESUME_REMINDER,
+    STATE_DESCRIPTION,
+    STATE_PARAMETERS,
 )
 from .store import Page, SwarmStore, SwarmStoreError
 
@@ -49,6 +55,8 @@ class SwarmExtension:
         self.host: ExtensionHost | None = None
         self.store: SwarmStore | None = None
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._wake_tasks: dict[str, asyncio.Task[None]] = {}
+        self._wake_dirty: set[str] = set()
 
     async def start(self, host: ExtensionHost) -> None:
         if host.state_dir is None or host.temporary_agents is None:
@@ -89,10 +97,18 @@ class SwarmExtension:
             await self.host.temporary_agents.quiesce()
         if self._cleanup_tasks:
             await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+        for task in self._wake_tasks.values():
+            task.cancel()
+        if self._wake_tasks:
+            await asyncio.gather(*self._wake_tasks.values(), return_exceptions=True)
         if self.store is not None:
             await self.store.close()
             self.store = None
         self.host = None
+
+    async def _quiesce(self) -> None:
+        if self.host is not None and self.host.temporary_agents is not None:
+            await self.host.temporary_agents.quiesce()
 
     def _store(self) -> SwarmStore:
         if self.store is None or self.host is None:
@@ -188,6 +204,8 @@ class SwarmExtension:
                 )
             if action in {"post", "create", "join", "leave"}:
                 self._changed(sid, swarm["settings_revision"])
+            if action in {"post", "create"}:
+                self._enqueue_wakes(sid)
             return tool_success(data)
         except SwarmStoreError as error:
             return _failure(error)
@@ -230,6 +248,64 @@ class SwarmExtension:
         except SwarmStoreError as error:
             return _failure(error)
 
+    async def state(self, context: ToolContext, arguments: Json) -> Json:
+        try:
+            action = _validate_state(arguments)
+            binding, swarm = await self._participant(context)
+            store = self._store()
+            if action == "status":
+                data = await store.participant_status(
+                    binding.group_id,
+                    binding.participant_id,
+                    cursor=arguments.get("cursor"),
+                    limit=arguments.get("limit", 20),
+                )
+                if data["has_more"]:
+                    data["next_call"] = {
+                        "tool": "swarm_state",
+                        "arguments": {
+                            "action": "status",
+                            "cursor": data.pop("cursor"),
+                            **({"limit": arguments["limit"]} if "limit" in arguments else {}),
+                        },
+                    }
+            elif action == "name":
+                data = await store.rename_participant(
+                    binding.group_id,
+                    binding.participant_id,
+                    arguments["name"],
+                    expected_epoch=swarm["epoch"],
+                )
+            elif action == "wait":
+                data = await store.request_wait(
+                    binding.group_id,
+                    binding.participant_id,
+                    run_id=context.run_id,
+                    expected_epoch=swarm["epoch"],
+                    call_id=context.tool_call_id,
+                    reason=arguments.get("reason", ""),
+                    needs_user=arguments.get("needs_user", False),
+                )
+                context.request_turn_end()
+            else:
+                data = await store.request_done(
+                    binding.group_id,
+                    binding.participant_id,
+                    run_id=context.run_id,
+                    expected_epoch=swarm["epoch"],
+                    call_id=context.tool_call_id,
+                    summary=arguments["summary"],
+                    artifacts=arguments.get("artifacts", []),
+                )
+                if data["status"] == "finish_requested":
+                    context.request_turn_end()
+                elif data["status"] == "finish_refused":
+                    code = "pending_messages" if data["pending_messages"] else "owned_work_active"
+                    return tool_failure(code, ERRORS[code])
+            return tool_success(data)
+        except SwarmStoreError as error:
+            return _failure(error)
+
     def _changed(self, swarm_id: str, revision: int) -> None:
         if self.host is not None and self.host.publish_change is not None:
             self.host.publish_change("swarms", [swarm_id], revision)
@@ -248,7 +324,10 @@ class SwarmExtension:
                 "swarms.get": self._swarms_get,
                 "swarms.events": self._swarms_events,
                 "swarms.settings": self._swarms_settings,
+                "swarms.start": self._swarms_start,
                 "swarms.stop": self._swarms_stop,
+                "swarms.resume": self._swarms_resume,
+                "swarms.usage": self._swarms_usage,
                 "board.list": self._board_list,
                 "board.read": self._board_read,
                 "board.post": self._board_post,
@@ -297,11 +376,24 @@ class SwarmExtension:
 
     async def _swarms_get(self, arguments: Json) -> Json:
         _exact(arguments, {"swarm_id"})
-        return {
-            "swarm": _swarm_projection(
-                await self._store().get_swarm(_string(arguments, "swarm_id"))
-            )
-        }
+        swarm = await self._store().get_swarm(_string(arguments, "swarm_id"))
+        host = self.host
+        groups = None if host is None else host.temporary_agents
+
+        async def active(participant: Json) -> bool:
+            run_id = participant.get("lifecycle_run_id")
+            if groups is None or not run_id:
+                return False
+            try:
+                inspection = await groups.owned_run(swarm["id"], run_id)
+            except Exception:
+                return False
+            return inspection.run is not None and inspection.run.status.value == "running"
+
+        values = await asyncio.gather(*(active(item) for item in swarm["participants"]))
+        for participant, run_active in zip(swarm["participants"], values, strict=True):
+            participant["run_active"] = run_active
+        return {"swarm": _swarm_projection(swarm)}
 
     async def _swarms_events(self, arguments: Json) -> Json:
         _exact(arguments, {"swarm_id", "cursor", "limit"}, required={"swarm_id"})
@@ -323,7 +415,8 @@ class SwarmExtension:
             request_id=_string(arguments, "request_id"),
             actor="user",
         )
-        self._changed(swarm_id, result["settings_revision"])
+        self._changed(swarm_id, result["revision"])
+        self._enqueue_wakes(swarm_id)
         return result
 
     async def _swarms_stop(self, arguments: Json) -> Json:
@@ -333,10 +426,109 @@ class SwarmExtension:
             request_id=_string(arguments, "request_id"),
             actor="user",
         )
-        # A stop needs group draining, which only exists after full participant
-        # lifecycle registration. Keep partial Swarms impossible to start.
+        host = self.host
+        if host is None or host.temporary_agents is None:
+            raise SwarmStoreError("swarm_closed")
+        task = self._wake_tasks.get(result["swarm_id"])
+        if task is not None:
+            task.cancel()
+        report = await host.temporary_agents.close_group(result["swarm_id"], reason="swarm_stop")
+        finished = await self._store().finish_stop(
+            result["swarm_id"],
+            request_id=_string(arguments, "request_id"),
+            actor="user",
+            drain_report=report,
+        )
         self._changed(result["swarm_id"], 0)
-        return result
+        return finished
+
+    async def _swarms_start(self, arguments: Json) -> Json:
+        _exact(
+            arguments,
+            {"profile_id", "prompt", "request_id", "expected_profile_revision"},
+            required={"profile_id", "prompt", "request_id"},
+        )
+        return await self._start_swarm(
+            _string(arguments, "profile_id"),
+            _string(arguments, "prompt"),
+            _string(arguments, "request_id"),
+            expected_profile_revision=(
+                _integer(arguments, "expected_profile_revision", minimum=1)
+                if "expected_profile_revision" in arguments
+                else None
+            ),
+        )
+
+    async def _swarms_resume(self, arguments: Json) -> Json:
+        _exact(arguments, {"swarm_id", "request_id"}, required={"swarm_id", "request_id"})
+        return await self._resume_swarm(
+            _string(arguments, "swarm_id"), _string(arguments, "request_id")
+        )
+
+    async def _swarms_usage(self, arguments: Json) -> Json:
+        _exact(arguments, {"swarm_id", "participant_id"}, required={"swarm_id"})
+        host = self.host
+        if host is None or host.temporary_agents is None:
+            raise SwarmStoreError("swarm_closed")
+        query = {key: arguments[key] for key in {"participant_id"} if key in arguments}
+        return {"usage": await host.temporary_agents.usage(_string(arguments, "swarm_id"), query)}
+
+    async def command(
+        self, context: ExtensionCommandContext, argument: str | None
+    ) -> CommandOutcome:
+        if argument is None:
+            return CommandOutcome(
+                command="swarm",
+                feedback=CommandFeedback(
+                    kind="notice", text="Open Swarms to choose a profile and goal."
+                ),
+                navigation=CommandNavigation(
+                    kind="open_extension_page", extension="swarm", page="swarms", route=""
+                ),
+            )
+        profile_id, prompt = _swarm_command_argument(argument)
+        profile_id = await self._profile_id_for_slug(profile_id)
+        result = await self._start_swarm(profile_id, prompt, new_id("req"))
+        return CommandOutcome(
+            command="swarm",
+            feedback=CommandFeedback(kind="notice", text="Swarm started."),
+            facts={"swarm_id": result["swarm_id"]},
+            navigation=CommandNavigation(
+                kind="open_extension_page",
+                extension="swarm",
+                page="swarms",
+                route=f"swarms/{result['swarm_id']}",
+            ),
+        )
+
+    async def orientation(self, binding: TemporarySessionBinding) -> str:
+        swarm = await self._store().get_swarm(binding.group_id)
+        participant = next(
+            (item for item in swarm["participants"] if item["id"] == binding.participant_id), None
+        )
+        if participant is None:
+            return ""
+        data = {
+            "participant_id": participant["id"],
+            "display_name": participant["display_name"],
+            "main_discussion_id": swarm["main_discussion_id"],
+            "participant_count": len(swarm["participants"]),
+            "delivery": swarm["delivery"],
+            "settings_revision": swarm["settings_revision"],
+        }
+        return f"{ORIENTATION}\n\n{json.dumps(data, ensure_ascii=False)}"
+
+    async def _profile_id_for_slug(self, slug: str) -> str:
+        cursor = None
+        while True:
+            page = await self._store().list_profiles(cursor=cursor, limit=100)
+            for profile in page.entries:
+                if profile.get("slug") == slug:
+                    return str(profile["id"])
+            if not page.has_more:
+                break
+            cursor = page.cursor
+        raise SwarmStoreError("profile_not_found")
 
     async def _board_list(self, arguments: Json) -> Json:
         _exact(arguments, {"swarm_id", "cursor", "limit"}, required={"swarm_id"})
@@ -368,9 +560,142 @@ class SwarmExtension:
         )
         snapshot = await self._store().get_swarm(swarm_id)
         self._changed(swarm_id, snapshot["settings_revision"])
+        self._enqueue_wakes(swarm_id)
         return result
 
-    async def _start_swarm(self, profile_id: str, prompt: str, request_id: str) -> Json:
+    async def _schedule_wakes(self, swarm_id: str) -> None:
+        """Admit at most one continuation Run for each durable wake intent."""
+
+        self._wake_dirty.add(swarm_id)
+        current = self._wake_tasks.get(swarm_id)
+        if current is None or current.done():
+            current = asyncio.create_task(
+                self._run_background(swarm_id, self._drain_wakes(swarm_id))
+            )
+            self._wake_tasks[swarm_id] = current
+            current.add_done_callback(
+                lambda task: (
+                    self._wake_tasks.pop(swarm_id, None)
+                    if self._wake_tasks.get(swarm_id) is task
+                    else None
+                )
+            )
+        await asyncio.shield(current)
+
+    def _enqueue_wakes(self, swarm_id: str) -> None:
+        task = asyncio.create_task(self._schedule_wakes(swarm_id))
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._observe_cleanup_task)
+
+    def _observe_cleanup_task(self, task: asyncio.Task[None]) -> None:
+        self._cleanup_tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                self.api.logger.error(
+                    "Swarm background cleanup failed (error=%s)", type(error).__name__
+                )
+
+    async def _run_background(self, swarm_id: str, operation: Awaitable[None]) -> None:
+        try:
+            await operation
+        except asyncio.CancelledError:
+            raise
+        except SwarmStoreError as error:
+            if error.code in {"stale_epoch", "swarm_closed", "swarm_not_found"}:
+                return
+            self.api.logger.warning(
+                "Swarm background operation failed (swarm_id=%s, code=%s)", swarm_id, error.code
+            )
+            await self._wake_failed(swarm_id)
+        except Exception as error:
+            self.api.logger.error(
+                "Swarm background operation failed (swarm_id=%s, error=%s)",
+                swarm_id,
+                type(error).__name__,
+            )
+            await self._wake_failed(swarm_id)
+
+    async def _wake_failed(self, swarm_id: str) -> None:
+        try:
+            swarm = await self._store().get_swarm(swarm_id)
+            if swarm["state"] in {"running", "waiting", "needs_attention"}:
+                await self._store().set_swarm_state(swarm_id, "needs_attention")
+                self._changed(swarm_id, swarm["settings_revision"])
+        except SwarmStoreError as error:
+            if error.code not in {"swarm_closed", "swarm_not_found", "stale_epoch"}:
+                raise
+
+    async def _drain_wakes(self, swarm_id: str) -> None:
+        """Coalesce changes before claiming the Store's durable wake work."""
+
+        host = self.host
+        if host is None or host.temporary_agents is None:
+            return
+        while swarm_id in self._wake_dirty:
+            self._wake_dirty.discard(swarm_id)
+            swarm = await self._store().get_swarm(swarm_id)
+            if swarm["state"] not in {"running", "waiting", "needs_attention"}:
+                return
+            await asyncio.sleep(swarm["delivery"]["coalesce_ms"] / 1000)
+            swarm = await self._store().get_swarm(swarm_id)
+            if swarm["state"] not in {"running", "waiting", "needs_attention"}:
+                return
+            handle = await host.temporary_agents.open_group(swarm_id)
+            for participant in swarm["participants"]:
+                await self._store().prepare_wake(
+                    swarm_id, participant["id"], expected_epoch=swarm["epoch"]
+                )
+            while True:
+                page = await self._store().list_wake_intents(swarm_id, limit=100)
+                if not page.entries:
+                    break
+                claimed_count = 0
+                for wake in page.entries:
+                    claim = await self._store().claim_wake(
+                        swarm_id, wake["participant_id"], expected_epoch=swarm["epoch"]
+                    )
+                    if not claim["pending"]:
+                        continue
+                    claimed_count += 1
+                    participant = next(
+                        item
+                        for item in swarm["participants"]
+                        if item["id"] == wake["participant_id"]
+                    )
+                    if participant.get("lifecycle_run_id"):
+                        prior = await host.temporary_agents.owned_run(
+                            swarm_id, participant["lifecycle_run_id"]
+                        )
+                        if prior.run is not None:
+                            await prior.run.wait()
+                    admission = await host.temporary_agents.start(
+                        handle,
+                        wake["participant_id"],
+                        TemporaryRunInput(
+                            "continuation",
+                            PULL_WAKE_REMINDER,
+                            f"wake:{swarm['epoch']}:{wake['participant_id']}:{wake['announced_sequence']}",
+                        ),
+                    )
+                    await self._store().mark_wake_admitted(
+                        swarm_id,
+                        wake["participant_id"],
+                        expected_epoch=swarm["epoch"],
+                        run_id=admission.run_id,
+                        boundary=claim["boundary"],
+                    )
+                if claimed_count == 0 or len(page.entries) < 100:
+                    break
+
+    async def _start_swarm(
+        self,
+        profile_id: str,
+        prompt: str,
+        request_id: str,
+        *,
+        expected_profile_revision: int | None = None,
+    ) -> Json:
         """Prepare every bound participant before admitting any initial Run.
 
         This is intentionally private until the complete three-Tool grant set is
@@ -382,6 +707,11 @@ class SwarmExtension:
         if host is None or host.temporary_agents is None or host.catalog is None:
             raise SwarmStoreError("swarm_closed")
         profile = await self._store().get_profile(profile_id)
+        if (
+            expected_profile_revision is not None
+            and profile["revision"] != expected_profile_revision
+        ):
+            raise SwarmStoreError("revision_conflict")
         catalog = await host.catalog()
         cwd, project_id = await _profile_cwd(profile, catalog)
         _validate_profile_catalog(profile, catalog)
@@ -391,7 +721,7 @@ class SwarmExtension:
             prompt,
             effective,
             request_id=request_id,
-            expected_profile_revision=profile["revision"],
+            expected_profile_revision=expected_profile_revision or profile["revision"],
         )
         snapshot = await self._store().get_swarm(swarm["swarm_id"])
         group = host.temporary_agents
@@ -412,7 +742,7 @@ class SwarmExtension:
             admissions = await self._admit_initial(snapshot, handle, prompt, request_id)
         except BaseException:
             await group.close_group(snapshot["id"])
-            await self._store().set_swarm_state(snapshot["id"], "needs_attention")
+            await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
             raise
         self._changed(snapshot["id"], snapshot["settings_revision"])
         return {**swarm, "runs": admissions}
@@ -424,15 +754,46 @@ class SwarmExtension:
         resumed = await self._store().begin_resume(swarm_id, request_id=request_id, actor="user")
         snapshot = await self._store().get_swarm(swarm_id)
         group = host.temporary_agents
-        handle = await group.open_group(swarm_id)
-        await self._store().bind_execution_epoch(
-            swarm_id, expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch
-        )
-        bindings = {binding.participant_id: binding for binding in await group.list(swarm_id)}
+        existing: dict[str, TemporarySessionBinding] = {}
+        try:
+            after = ""
+            while True:
+                page = await group.list(swarm_id, after=after)
+                existing.update((binding.participant_id, binding) for binding in page)
+                if len(page) < 100:
+                    break
+                after = page[-1].participant_id
+            profile = snapshot["profile_snapshot"]
+            cwd = Path(snapshot["effective_configuration"]["cwd"])
+            project_id = snapshot["effective_configuration"].get("project_id")
+            for participant in snapshot["participants"]:
+                if participant["id"] not in existing:
+                    binding = await group.create(
+                        swarm_id,
+                        participant["id"],
+                        _participant_config(profile, participant, cwd),
+                        project_id=project_id,
+                    )
+                    await self._store().bind_participant_session(binding)
+                    existing[participant["id"]] = binding
+            handle = await group.open_group(swarm_id)
+            await self._store().bind_execution_epoch(
+                swarm_id, expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch
+            )
+            await self._store().set_swarm_state(swarm_id, "running")
+        except BaseException:
+            if not resumed.get("reused_epoch"):
+                await group.close_group(swarm_id)
+                await self._store().fail_startup(swarm_id, expected_epoch=snapshot["epoch"])
+            raise
+        bindings = existing
         admissions: list[Json] = []
         for participant_id in resumed["participant_ids"]:
             try:
                 binding = bindings[participant_id]
+                await self._store().prepare_wake(
+                    swarm_id, participant_id, expected_epoch=snapshot["epoch"]
+                )
                 initial = await group.delivery_receipt(
                     binding.address,
                     binding.generation_id,
@@ -574,14 +935,15 @@ class SwarmExtension:
         if owner is None:
             return
         snapshot = await self._store().get_swarm(binding.group_id)
-        await self._store().reconcile_run_finished(
+        terminal_outcome = {"success": "completed", "error": "failed"}.get(outcome, outcome)
+        reconciled = await self._store().reconcile_run_finished(
             binding.group_id,
             binding.participant_id,
             run_id=context.run_id,
             expected_epoch=snapshot["epoch"],
-            outcome=outcome,
+            outcome=terminal_outcome,
         )
-        if outcome == "completed":
+        if terminal_outcome == "completed" and reconciled["state"] == "finishing":
             finalized = await self._store().finalize_participant(
                 binding.group_id,
                 binding.participant_id,
@@ -589,21 +951,39 @@ class SwarmExtension:
                 expected_epoch=snapshot["epoch"],
             )
             if finalized["state"] == "done":
-                task = asyncio.create_task(self._close_completed_group(binding.group_id))
+                task = asyncio.create_task(
+                    self._run_background(
+                        binding.group_id,
+                        self._close_completed_group(binding.group_id, context.run_id),
+                    )
+                )
                 self._cleanup_tasks.add(task)
-                task.add_done_callback(self._cleanup_tasks.discard)
+                task.add_done_callback(self._observe_cleanup_task)
+        if terminal_outcome == "completed":
+            self._enqueue_wakes(binding.group_id)
+        self._changed(binding.group_id, snapshot["settings_revision"])
 
-    async def _close_completed_group(self, swarm_id: str) -> None:
+    async def _close_completed_group(self, swarm_id: str, _finishing_run_id: str) -> None:
         """Drain after the terminal callback returns; never await the current Run here."""
 
-        await asyncio.sleep(0)
+        assert self.host is not None and self.host.temporary_agents is not None
         swarm = await self._store().get_swarm(swarm_id)
         if all(participant["state"] == "done" for participant in swarm["participants"]):
-            assert self.host is not None and self.host.temporary_agents is not None
+            inspections = await asyncio.gather(
+                *(
+                    self.host.temporary_agents.owned_run(swarm_id, participant["lifecycle_run_id"])
+                    for participant in swarm["participants"]
+                    if participant.get("lifecycle_run_id")
+                )
+            )
+            await asyncio.gather(
+                *(inspection.run.wait() for inspection in inspections if inspection.run is not None)
+            )
             report = await self.host.temporary_agents.close_group(swarm_id)
             await self._store().finish_group(
                 swarm_id, expected_epoch=swarm["epoch"], drain_report=report
             )
+            self._changed(swarm_id, swarm["settings_revision"])
 
 
 def _board_page(page: Page, arguments: Json) -> Json:
@@ -699,14 +1079,24 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
     allowed = profile["tool_access"].get("allowed", [])
     if any(item not in known_tools for item in allowed):
         raise SwarmStoreError("invalid_arguments", field="tool_access")
+    project = next(
+        (
+            item
+            for item in catalog.get("projects", [])
+            if item.get("id") == profile["working_directory"].get("project_id")
+        ),
+        None,
+    )
     known_skills = {item.get("name") for item in catalog.get("skills", [])}
+    known_skills.update((project or {}).get("allowed_skills", []))
     if any(item != "*" and item not in known_skills for item in profile["allowed_skills"]):
         raise SwarmStoreError("invalid_arguments", field="allowed_skills")
 
 
 def _participant_config(profile: Json, participant: Json, cwd: Path) -> TemporaryAgentConfig:
+    ordinal = participant["ordinal"]
     formation = next(
-        item for item in profile["participants"] if item["model"] == participant["model"]
+        item for item in profile["participants"] if (ordinal := ordinal - item["count"]) <= 0
     )
     return TemporaryAgentConfig(
         model=participant["model"],
@@ -720,6 +1110,22 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         fallback_models=formation.get("fallback_models", []),
         instructions=profile["instructions"],
     )
+
+
+def _swarm_command_argument(argument: str) -> tuple[str, str]:
+    profile_id, separator, remainder = argument.strip().partition(" ")
+    prompt = remainder.strip()
+    if not profile_id or not separator or not prompt:
+        raise SwarmStoreError("invalid_arguments", field="argument")
+    if prompt.startswith('"'):
+        try:
+            value = json.loads(prompt)
+        except json.JSONDecodeError as error:
+            raise SwarmStoreError("invalid_arguments", field="argument") from error
+        if not isinstance(value, str) or not value.strip():
+            raise SwarmStoreError("invalid_arguments", field="argument")
+        prompt = value
+    return profile_id, prompt
 
 
 def _failure(error: SwarmStoreError) -> Json:
@@ -780,12 +1186,73 @@ def _validate_board(arguments: Json) -> str:
     return action
 
 
+def _validate_state(arguments: Json) -> str:
+    fields = {
+        "status": {"cursor", "limit"},
+        "name": {"name"},
+        "wait": {"reason", "needs_user"},
+        "done": {"summary", "artifacts"},
+    }
+    action = arguments.get("action")
+    if (
+        not isinstance(action, str)
+        or action not in fields
+        or set(arguments) - {"action", *fields[action]}
+    ):
+        raise SwarmStoreError("invalid_arguments")
+    if action in {"name", "done"} and ("name" if action == "name" else "summary") not in arguments:
+        raise SwarmStoreError("invalid_arguments")
+    for key, value in arguments.items():
+        if key == "action":
+            continue
+        valid = (
+            (key == "limit" and type(value) is int and 1 <= value <= 100)
+            or (key == "cursor" and isinstance(value, str) and bool(value.strip()))
+            or (key == "needs_user" and type(value) is bool)
+            or (
+                key == "artifacts"
+                and isinstance(value, list)
+                and all(isinstance(item, str) for item in value)
+            )
+            or (
+                key in {"name", "reason", "summary"}
+                and isinstance(value, str)
+                and (key == "reason" or bool(value.strip()))
+                and len(value) <= {"name": 60, "reason": 2000, "summary": 16000}[key]
+            )
+        )
+        if not valid:
+            raise SwarmStoreError("invalid_arguments", field=key)
+    return action
+
+
 def register(api: ExtensionAPI) -> None:
     service = SwarmExtension(api)
     api.operations.startup.append(service.start)
     api.on_shutdown(service.close)
     api.register_session_tool("swarm_board", BOARD_DESCRIPTION, BOARD_PARAMETERS, service.board)
     api.register_session_tool("swarm_inbox", INBOX_DESCRIPTION, INBOX_PARAMETERS, service.inbox)
+    api.register_session_tool(
+        "swarm_state", STATE_DESCRIPTION, STATE_PARAMETERS, service.state, parallel_safe=False
+    )
+    api.register_session_runtime(
+        before_request=service._before_request,
+        run_finished=service._run_finished,
+        quiesce=service._quiesce,
+        acknowledge_delivery=service._acknowledge_delivery,
+        reconcile_tool_batch=service._reconcile_tool_batch,
+    )
+    api.register_session_prompt_block(
+        "orientation", render=cast(Callable[..., str], service.orientation)
+    )
+    api.register_page("swarms", "Swarms", "web/page.html")
+    api.register_command(
+        "swarm",
+        "Start a Swarm from a profile and goal.",
+        service.command,
+        argument="optional",
+        execution_mode="immediate",
+    )
     for name, schema in _OPERATION_SCHEMAS.items():
         api.operations.register(
             name,
@@ -865,6 +1332,17 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
         "required": ["swarm_id", "delivery", "expected_revision", "request_id"],
         "additionalProperties": False,
     },
+    "swarms.start": {
+        "type": "object",
+        "properties": {
+            "profile_id": {"type": "string", "minLength": 1},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 16000},
+            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "expected_profile_revision": {"type": "integer", "minimum": 1},
+        },
+        "required": ["profile_id", "prompt", "request_id"],
+        "additionalProperties": False,
+    },
     "swarms.stop": {
         "type": "object",
         "properties": {
@@ -872,6 +1350,24 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
             "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
         },
         "required": ["swarm_id", "request_id"],
+        "additionalProperties": False,
+    },
+    "swarms.resume": {
+        "type": "object",
+        "properties": {
+            "swarm_id": {"type": "string", "minLength": 1},
+            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        },
+        "required": ["swarm_id", "request_id"],
+        "additionalProperties": False,
+    },
+    "swarms.usage": {
+        "type": "object",
+        "properties": {
+            "swarm_id": {"type": "string", "minLength": 1},
+            "participant_id": {"type": "string", "minLength": 1},
+        },
+        "required": ["swarm_id"],
         "additionalProperties": False,
     },
     "board.list": {

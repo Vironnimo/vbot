@@ -189,6 +189,12 @@ class SwarmStore:
             raise SwarmStoreError("invalid_arguments", field="state")
         return await self._run(self._set_swarm_state, swarm_id, state)
 
+    async def fail_startup(self, swarm_id: str, *, expected_epoch: int) -> Json:
+        """Close a partially prepared epoch while preserving the Swarm for Resume."""
+        if type(expected_epoch) is not int or expected_epoch < 0:
+            raise SwarmStoreError("invalid_arguments", field="expected_epoch")
+        return await self._run(self._fail_startup, swarm_id, expected_epoch)
+
     async def set_participant_state(
         self, swarm_id: str, participant_id: str, state: str, *, idle_boundary: int | None = None
     ) -> Json:
@@ -444,9 +450,19 @@ class SwarmStore:
         return await self._run(self._claim_wake, swarm_id, participant_id, expected_epoch)
 
     async def mark_wake_admitted(
-        self, swarm_id: str, participant_id: str, *, expected_epoch: int, run_id: str, boundary: int
+        self,
+        swarm_id: str,
+        participant_id: str,
+        *,
+        expected_epoch: int,
+        run_id: str,
+        boundary: int | None,
     ) -> Json:
-        if not isinstance(run_id, str) or not run_id or type(boundary) is not int or boundary < 0:
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or (boundary is not None and (type(boundary) is not int or boundary < 0))
+        ):
             raise SwarmStoreError("invalid_arguments")
         return await self._run(
             self._mark_wake_admitted, swarm_id, participant_id, expected_epoch, run_id, boundary
@@ -488,6 +504,16 @@ class SwarmStore:
             participant_id,
             expected_epoch,
             admission_boundary,
+        )
+
+    async def prepare_wake(
+        self, swarm_id: str, participant_id: str, *, expected_epoch: int
+    ) -> Json:
+        """Freeze one idle boundary and prepare its delivery before Run admission."""
+        if type(expected_epoch) is not int or expected_epoch < 0:
+            raise SwarmStoreError("invalid_arguments", field="expected_epoch")
+        return await self._run(
+            self._prepare_automatic_delivery, swarm_id, participant_id, expected_epoch, None
         )
 
     async def reconcile_delivery(self, receipt_id: str) -> bool:
@@ -905,6 +931,7 @@ class SwarmStore:
                 "INSERT INTO swarms(id,prompt,profile_snapshot,effective_configuration,state,created_at) VALUES(?,?,?,?,?,?)",
                 (swarm_id, prompt, _dump(profile_snapshot), _dump(effective), "preparing", now),
             )
+            self._refresh_swarm_state(connection, swarm_id)
             connection.execute(
                 "INSERT INTO swarm_settings(swarm_id,revision,delivery_json) VALUES(?,?,?)",
                 (swarm_id, 1, _dump(profile_snapshot["delivery"])),
@@ -1201,6 +1228,37 @@ class SwarmStore:
 
         return self._write(operation)
 
+    def _fail_startup(self, swarm_id: str, expected_epoch: int) -> Json:
+        def operation(connection: sqlite3.Connection) -> Json:
+            self._assert_epoch(connection, swarm_id, expected_epoch)
+            row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+            if row is None:
+                raise SwarmStoreError("swarm_not_found")
+            connection.execute("UPDATE swarm_epochs SET is_open=0 WHERE swarm_id=?", (swarm_id,))
+            connection.execute("DELETE FROM swarm_execution_epochs WHERE swarm_id=?", (swarm_id,))
+            connection.execute("UPDATE swarms SET state='needs_attention' WHERE id=?", (swarm_id,))
+            return {"swarm_id": swarm_id, "state": "needs_attention"}
+
+        return self._write(operation)
+
+    def _refresh_swarm_state(self, connection: sqlite3.Connection, swarm_id: str) -> None:
+        row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+        if row is None or row["state"] not in {"running", "waiting", "needs_attention"}:
+            return
+        states = {
+            str(item["state"])
+            for item in connection.execute(
+                "SELECT state FROM participants WHERE swarm_id=? AND state!='done'", (swarm_id,)
+            )
+        }
+        if states & {"blocked", "failed"}:
+            state = "needs_attention"
+        elif states and states <= {"idle", "waiting"}:
+            state = "waiting"
+        else:
+            state = "running"
+        connection.execute("UPDATE swarms SET state=? WHERE id=?", (state, swarm_id))
+
     def _set_participant_state(
         self, swarm_id: str, participant_id: str, state: str, idle_boundary: int | None
     ) -> Json:
@@ -1218,6 +1276,7 @@ class SwarmStore:
                     participant_id,
                 ),
             )
+            self._refresh_swarm_state(connection, swarm_id)
             return {
                 "participant_id": participant_id,
                 "state": state,
@@ -1336,6 +1395,7 @@ class SwarmStore:
                 "UPDATE participants SET state='running',lifecycle_run_id=? WHERE id=?",
                 (run_id, participant_id),
             )
+            self._refresh_swarm_state(connection, swarm_id)
             return {"participant_id": participant_id, "run_id": run_id, "state": "running"}
 
         return self._write(operation)
@@ -1357,6 +1417,7 @@ class SwarmStore:
             connection.execute(
                 "UPDATE participants SET state=? WHERE id=?", (state, participant_id)
             )
+            self._refresh_swarm_state(connection, swarm_id)
             return {"participant_id": participant_id, "run_id": run_id, "state": state}
 
         return self._write(operation)
@@ -1504,7 +1565,15 @@ class SwarmStore:
             connection.execute(
                 "INSERT INTO swarm_events(swarm_id,kind,actor,old_json,new_json,settings_revision,created_at) "
                 "VALUES(?,?,?,?,?,?,?)",
-                (swarm_id, "completed", "system", _dump({"state": row["state"]}), _dump({"state": "completed"}), None, _now()),
+                (
+                    swarm_id,
+                    "completed",
+                    "system",
+                    _dump({"state": row["state"]}),
+                    _dump({"state": "completed"}),
+                    None,
+                    _now(),
+                ),
             )
             return {"swarm_id": swarm_id, "state": "completed", "drain_report": _copy(drain_report)}
 
@@ -1526,7 +1595,34 @@ class SwarmStore:
                 "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
             ).fetchone()
             if epoch["is_open"]:
-                raise SwarmStoreError("invalid_lifecycle_state")
+                participants = [
+                    str(item["id"])
+                    for item in connection.execute(
+                        "SELECT id FROM participants WHERE swarm_id=? "
+                        "AND state IN ('prepared','idle','waiting','blocked','failed','interrupted') "
+                        "ORDER BY ordinal",
+                        (swarm_id,),
+                    )
+                ]
+                result = {
+                    "swarm_id": swarm_id,
+                    "state": str(row["state"]),
+                    "epoch": int(epoch["epoch"]),
+                    "participant_ids": participants,
+                    "reused_epoch": True,
+                }
+                self._record_lifecycle_request(
+                    connection,
+                    scope,
+                    request_id,
+                    payload_hash,
+                    swarm_id,
+                    "resume_requested",
+                    actor,
+                    row["state"],
+                    result,
+                )
+                return result
             next_epoch = int(epoch["epoch"]) + 1
             participants = [
                 str(item["id"])
@@ -1794,6 +1890,7 @@ class SwarmStore:
             connection.execute(
                 "UPDATE participants SET state=? WHERE id=?", (terminal_state, participant_id)
             )
+            self._refresh_swarm_state(connection, swarm_id)
             return {"participant_id": participant_id, "state": terminal_state}
 
         return self._write(operation)
@@ -2016,6 +2113,9 @@ class SwarmStore:
         def operation(connection: sqlite3.Connection) -> Json:
             self._assert_epoch(connection, swarm_id, expected_epoch)
             participant = self._participant(connection, swarm_id, participant_id)
+            resolved_boundary = (
+                int(participant["idle_boundary"] or 0) if boundary is None else boundary
+            )
             if participant["state"] in {"blocked", "failed", "done", "cancelled"}:
                 return {"entries": [], "wake": False, "pending_remaining": 0}
             settings_row = connection.execute(
@@ -2083,11 +2183,8 @@ class SwarmStore:
                 if policy["mode"] == "pull":
                     continue
                 if policy["mode"] == "idle" and (
-                    boundary is None
-                    or (
-                        participant["state"] not in {"idle", "waiting"}
-                        and boundary != participant["idle_boundary"]
-                    )
+                    participant["state"] not in {"idle", "waiting"}
+                    and resolved_boundary != participant["idle_boundary"]
                 ):
                     continue
                 eligible.append(row)
@@ -2108,7 +2205,7 @@ class SwarmStore:
             if wake:
                 connection.execute(
                     "UPDATE participants SET wake_epoch=?,wake_pending=1,wake_pending_seq=?,idle_boundary=? WHERE id=?",
-                    (epoch_value, newest, boundary, participant_id),
+                    (epoch_value, newest, resolved_boundary, participant_id),
                 )
             if not eligible:
                 return {
@@ -2117,6 +2214,7 @@ class SwarmStore:
                     "pull_reminder": bool(pending),
                     "pending_remaining": len(pending),
                     "settings_revision": int(settings_row["revision"]),
+                    "admission_boundary": resolved_boundary,
                 }
             rows = self._pending_rows_from_rows(
                 eligible, settings["batch_messages"], settings["batch_chars"]
@@ -2154,6 +2252,7 @@ class SwarmStore:
                 "wake": wake,
                 "pending_remaining": len(pending) - len(entries),
                 "settings_revision": int(settings_row["revision"]),
+                "admission_boundary": resolved_boundary,
             }
 
         return self._write(operation)
@@ -2225,7 +2324,12 @@ class SwarmStore:
         )
 
     def _mark_wake_admitted(
-        self, swarm_id: str, participant_id: str, expected_epoch: int, run_id: str, boundary: int
+        self,
+        swarm_id: str,
+        participant_id: str,
+        expected_epoch: int,
+        run_id: str,
+        boundary: int | None,
     ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
             self._assert_epoch(connection, swarm_id, expected_epoch)

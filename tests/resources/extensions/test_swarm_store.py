@@ -1314,7 +1314,9 @@ async def test_failed_or_cancelled_terminal_overrides_persisted_wait(store: Swar
 
 
 @pytest.mark.asyncio
-async def test_finish_group_requires_clean_drain_and_every_participant_done(store: SwarmStore) -> None:
+async def test_finish_group_requires_clean_drain_and_every_participant_done(
+    store: SwarmStore,
+) -> None:
     started = await _swarm(store)
     swarm_id = started["swarm_id"]
     with pytest.raises(SwarmStoreError, match="owned_work_active"):
@@ -1326,7 +1328,8 @@ async def test_finish_group_requires_clean_drain_and_every_participant_done(stor
     assert connection is not None
     connection.execute("UPDATE participants SET state='done' WHERE swarm_id=?", (swarm_id,))
     connection.execute(
-        "UPDATE participants SET wake_pending=1 WHERE id=(SELECT id FROM participants WHERE swarm_id=? LIMIT 1)",
+        "UPDATE participants SET wake_pending=1 WHERE id=("
+        "SELECT id FROM participants WHERE swarm_id=? LIMIT 1)",
         (swarm_id,),
     )
     with pytest.raises(SwarmStoreError, match="owned_work_active"):
@@ -1521,3 +1524,28 @@ async def test_newer_run_blocks_old_finished_callback_and_status_limit_100(
             started["swarm_id"], participant, run_id="new", expected_epoch=0, outcome="completed"
         )
     )["state"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_participant_lifecycle_aggregates_swarm_state(store: SwarmStore) -> None:
+    started = await _swarm(store, count=2)
+    swarm_id = started["swarm_id"]
+    first, second = [item["id"] for item in (await store.get_swarm(swarm_id))["participants"]]
+    await store.set_swarm_state(swarm_id, "running")
+    await store.set_participant_state(swarm_id, first, "waiting")
+    await store.set_participant_state(swarm_id, second, "idle")
+    assert (await store.get_swarm(swarm_id))["state"] == "waiting"
+    await store.set_participant_state(swarm_id, second, "blocked")
+    assert (await store.get_swarm(swarm_id))["state"] == "needs_attention"
+
+
+@pytest.mark.asyncio
+async def test_open_epoch_resume_excludes_busy_participant(store: SwarmStore) -> None:
+    started = await _swarm(store, count=2)
+    swarm_id = started["swarm_id"]
+    waiting, busy = [item["id"] for item in (await store.get_swarm(swarm_id))["participants"]]
+    await store.set_participant_state(swarm_id, waiting, "waiting")
+    await store.record_run_started(swarm_id, busy, run_id="busy", expected_epoch=0)
+    resumed = await store.begin_resume(swarm_id, request_id="open", actor="test")
+    assert resumed["reused_epoch"] and resumed["participant_ids"] == [waiting]
+    assert (await store.get_swarm(swarm_id))["participants"][1]["lifecycle_run_id"] == "busy"
