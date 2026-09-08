@@ -28,7 +28,10 @@ from .agent_text import (
     BOARD_PARAMETERS,
     COMPLETION_RACE_REMINDER,
     DELIVERY_PREFIX,
+    EMPTY_INBOX,
     ERRORS,
+    INBOX_DESCRIPTION,
+    INBOX_PARAMETERS,
     POST_SAVED,
     REPLAYED,
     RESUME_REMINDER,
@@ -199,6 +202,33 @@ class SwarmExtension:
             context.record_delivery_receipt(
                 prepared["receipt_id"], prepared["content_hash"], prepared["effect_kind"]
             )
+
+    async def inbox(self, context: ToolContext, arguments: Json) -> Json:
+        try:
+            if set(arguments) - {"limit"}:
+                raise SwarmStoreError("invalid_arguments")
+            limit = arguments.get("limit", 20)
+            if type(limit) is not int or not 1 <= limit <= 100:
+                raise SwarmStoreError("invalid_arguments", field="limit")
+            binding, _swarm = await self._participant(context)
+            prepared = await self._store().prepare_inbox_delivery(
+                binding.group_id, binding.participant_id, limit=limit
+            )
+            if prepared.get("receipt_id"):
+                context.record_delivery_receipt(
+                    prepared["receipt_id"], prepared["content_hash"], prepared["effect_kind"]
+                )
+            data: Json = {
+                "entries": prepared["entries"],
+                "pending_remaining": prepared["pending_remaining"],
+            }
+            if not prepared["entries"]:
+                data["guidance"] = EMPTY_INBOX
+            elif prepared["pending_remaining"]:
+                data["next_call"] = {"tool": "swarm_inbox", "arguments": dict(arguments)}
+            return tool_success(data)
+        except SwarmStoreError as error:
+            return _failure(error)
 
     def _changed(self, swarm_id: str, revision: int) -> None:
         if self.host is not None and self.host.publish_change is not None:
@@ -570,7 +600,10 @@ class SwarmExtension:
         swarm = await self._store().get_swarm(swarm_id)
         if all(participant["state"] == "done" for participant in swarm["participants"]):
             assert self.host is not None and self.host.temporary_agents is not None
-            await self.host.temporary_agents.close_group(swarm_id)
+            report = await self.host.temporary_agents.close_group(swarm_id)
+            await self._store().finish_group(
+                swarm_id, expected_epoch=swarm["epoch"], drain_report=report
+            )
 
 
 def _board_page(page: Page, arguments: Json) -> Json:
@@ -752,6 +785,7 @@ def register(api: ExtensionAPI) -> None:
     api.operations.startup.append(service.start)
     api.on_shutdown(service.close)
     api.register_session_tool("swarm_board", BOARD_DESCRIPTION, BOARD_PARAMETERS, service.board)
+    api.register_session_tool("swarm_inbox", INBOX_DESCRIPTION, INBOX_PARAMETERS, service.inbox)
     for name, schema in _OPERATION_SCHEMAS.items():
         api.operations.register(
             name,

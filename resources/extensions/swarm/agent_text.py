@@ -8,6 +8,30 @@ BOARD_DESCRIPTION = (
     "Use recipients on a post to publicly ping participant IDs."
 )
 
+INBOX_DESCRIPTION = (
+    "Receive pending Board messages for you, oldest first. Returned messages count as delivered "
+    "when this Tool Result is saved. Follow next_call when more remain. An empty Inbox returns "
+    "immediately."
+)
+
+INBOX_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Maximum pending messages to receive. Omit for 20.",
+        },
+    },
+    "required": [],
+}
+
+EMPTY_INBOX = (
+    "No pending Board messages. Continue useful work, or use swarm_state with action wait if you "
+    "need new input."
+)
+
 BOARD_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
