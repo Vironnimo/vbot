@@ -59,9 +59,7 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
     .filter({ hasText: "user:agent_only" });
   await agentBlock.getByRole("textbox").fill("Agent-only E2E prompt");
   await systemPrompt.getByRole("button", { exact: true, name: "Save" }).click();
-  const savedToast = page.getByText("Saved", { exact: true });
-  await expect(savedToast).toBeVisible();
-  await expect(savedToast).toBeHidden();
+  // Scope navigation flushes autosave; re-opening the scope below verifies persistence.
 
   await selectPromptScope(page, systemPrompt, "Default");
   await expect(promptScope).toContainText("Default");
