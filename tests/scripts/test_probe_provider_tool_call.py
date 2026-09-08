@@ -26,6 +26,33 @@ def _load_module() -> ModuleType:
 PROBE = _load_module()
 
 
+def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            assert kwargs["tools"][0]["name"] == "swarm_board"
+            arguments = json.loads(messages[-1]["content"].split(": ", 1)[1])
+            return {
+                "tool_calls": [
+                    {"id": "fixture-call", "name": "swarm_board", "arguments": arguments}
+                ]
+            }
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(
+        ["--scenario", "swarm_tool", "--profile", "explicit_non_strict"]
+    )
+    result = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert result["passed"]
+    assert len(result["cases"]) >= 50
+    assert result["strict_true_tool_count"] == 0
+    args.swarm_case = "bounds"
+    bounds = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert bounds["passed"]
+    assert len(bounds["cases"]) == 8
+
+
 def test_browser_workflow_probe_rejects_a_claim_without_submission_or_download():
     class Adapter:
         async def send(self, *args, **kwargs):
