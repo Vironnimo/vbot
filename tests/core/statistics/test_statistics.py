@@ -274,7 +274,9 @@ async def test_group_usage_empty_owned_run_does_not_claim_same_sequence_successo
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(120)
 async def test_group_usage_pages_canonical_boundaries_above_one_hundred_participants(tmp_path):
+    # This paging test creates 101 durable Sessions; Windows disk flushes can exceed 30 seconds.
     manager = ChatSessionManager(tmp_path)
     service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
     for index in range(101):
