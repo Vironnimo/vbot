@@ -76,7 +76,7 @@ async def test_inbox_continuation_preserves_default_and_empty_does_not_end_run(b
     result = await board.tools.dispatch(context, {}, allowed_tools=["swarm_inbox"])
     assert len(result["data"]["entries"]) == 20
     assert result["data"]["next_call"]["arguments"] == {}
-    assert not ended
+    assert not ended and not context._turn_end_requested
     empty_context = replace(
         board.contexts[1],
         tool_name="swarm_inbox",
@@ -88,4 +88,4 @@ async def test_inbox_continuation_preserves_default_and_empty_does_not_end_run(b
     assert empty["data"]["pending_remaining"] == 0
     assert "next_call" not in empty["data"]
     assert empty_context._delivery_receipts == []
-    assert not ended
+    assert not ended and not empty_context._turn_end_requested

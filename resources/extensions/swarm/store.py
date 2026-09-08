@@ -225,10 +225,23 @@ class SwarmStore:
         )
 
     async def participant_status(
-        self, swarm_id: str, participant_id: str, *, cursor: str | None = None, limit: int = 20
+        self,
+        swarm_id: str,
+        participant_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 20,
+        include_summaries: bool = False,
     ) -> Json:
+        if type(include_summaries) is not bool:
+            raise SwarmStoreError("invalid_arguments", field="include_summaries")
         return await self._run(
-            self._participant_status, swarm_id, participant_id, cursor, _limit(limit)
+            self._participant_status,
+            swarm_id,
+            participant_id,
+            cursor,
+            _limit(limit),
+            include_summaries,
         )
 
     async def record_run_started(
@@ -1330,7 +1343,12 @@ class SwarmStore:
         return self._write(operation)
 
     def _participant_status(
-        self, swarm_id: str, participant_id: str, cursor: str | None, limit: int
+        self,
+        swarm_id: str,
+        participant_id: str,
+        cursor: str | None,
+        limit: int,
+        include_summaries: bool,
     ) -> Json:
         connection = self._require_connection()
         self._participant(connection, swarm_id, participant_id)
@@ -1339,29 +1357,31 @@ class SwarmStore:
                 "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
             ).fetchone()[0]
         )
-        offset = (
-            self._cursor(cursor, "status", f"{swarm_id}:{participant_id}", high)[0] if cursor else 0
-        )
+        scope = f"{swarm_id}:{participant_id}:{limit}:{int(include_summaries)}"
+        offset = self._cursor(cursor, "status", scope, high)[0] if cursor else 0
         rows = connection.execute(
-            "SELECT id,display_name,model,state,wait_reason,summary_json,artifacts_json FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+            "SELECT id,display_name,state,wait_reason,summary_json,artifacts_json FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
             (swarm_id, limit + 1, offset),
         ).fetchall()
 
-        def item(row: sqlite3.Row, *, include_summary: bool = True) -> Json:
-            summary = _load(row["summary_json"])["summary"] if row["summary_json"] else None
-            return {
+        def item(row: sqlite3.Row) -> Json:
+            result = {
                 "id": row["id"],
                 "name": row["display_name"],
-                "model": row["model"],
                 "state": row["state"],
-                "wait_reason": row["wait_reason"],
-                "summary": summary if include_summary else None,
-                "summary_available": summary is not None,
-                "artifacts": _load(row["artifacts_json"]) if row["artifacts_json"] else [],
+                "summary_available": row["summary_json"] is not None,
             }
+            if row["wait_reason"]:
+                result["wait_reason"] = row["wait_reason"]
+            if include_summaries:
+                result["summary"] = (
+                    _load(row["summary_json"])["summary"] if row["summary_json"] else None
+                )
+                result["artifacts"] = _load(row["artifacts_json"]) if row["artifacts_json"] else []
+            return result
 
         self_row = connection.execute(
-            "SELECT id,display_name,model,state,wait_reason,summary_json,artifacts_json FROM participants WHERE id=?",
+            "SELECT id,state FROM participants WHERE id=?",
             (participant_id,),
         ).fetchone()
         totals = {
@@ -1372,14 +1392,21 @@ class SwarmStore:
             )
         }
         settings = connection.execute(
-            "SELECT revision,delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
-        budget = int(_load(settings["delivery_json"])["batch_chars"])
+        delivery = _load(settings["delivery_json"])
+        budget = int(delivery["batch_chars"])
+        receive = {
+            label: [
+                route for route in ("main", "discussion", "ping") if delivery[route]["mode"] == mode
+            ]
+            for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("inbox_only", "pull"))
+        }
         roster: list[Json] = []
         summary_chars = 0
         for row in rows[:limit]:
             value = item(row)
-            size = len(value["summary"] or "")
+            size = len(value.get("summary") or "")
             if roster and summary_chars + size > budget:
                 break
             roster.append(value)
@@ -1388,17 +1415,17 @@ class SwarmStore:
         has_more = consumed < len(rows)
         main = self._main(connection, swarm_id)
         return {
-            "self": item(self_row, include_summary=False),
+            "self": {"id": self_row["id"], "state": self_row["state"]},
             "main_discussion_id": main,
-            "delivery": _load(settings["delivery_json"]),
-            "settings_revision": int(settings["revision"]),
+            "delivery": {label: routes for label, routes in receive.items() if routes},
+            "wake_on_messages": [
+                route for route in ("main", "discussion", "ping") if delivery[route]["wake_idle"]
+            ],
             "pending_count": self._pending_count(connection, swarm_id, participant_id),
             "state_totals": totals,
             "roster": roster,
             "has_more": has_more,
-            "cursor": self._make_cursor(
-                "status", f"{swarm_id}:{participant_id}", high, offset + consumed
-            )
+            "cursor": self._make_cursor("status", scope, high, offset + consumed)
             if has_more
             else None,
         }

@@ -30,14 +30,11 @@ INBOX_PARAMETERS: dict[str, Any] = {
 }
 
 STATE_DESCRIPTION = (
-    "Inspect your group, choose your display name, pause your participation, or finish it. "
-    "Use wait when you expect to continue after more input, including replies from other Agents; "
-    "set needs_user only if continuing requires the user's help. Use done with a summary only "
-    "when your work on the shared goal, including any remaining discussion or review you are "
-    "responsible for, is complete. Posting a message or finishing a speaking turn does not "
-    "complete your participation. Once finalized as done, you will not be woken by new Board "
-    "messages or included in Resume. Both wait and done request the end of the current Run "
-    "after the current Tool batch is saved."
+    "Inspect participants and pending messages, change your display name, pause, or finish "
+    "your contribution. Use wait when you need more input. Use done only when your work, "
+    "including discussion and review you still owe, is complete. A final reply or Board post "
+    "alone does not finish participation. Both wait and done end the current Run after the "
+    "Tool batch is saved. Once done is finalized, new messages and Resume cannot reactivate you."
 )
 
 STATE_PARAMETERS: dict[str, Any] = {
@@ -59,6 +56,11 @@ STATE_PARAMETERS: dict[str, Any] = {
             "maximum": 100,
             "description": "Maximum roster entries for status. Omit for 20.",
         },
+        "include_summaries": {
+            "type": "boolean",
+            "description": "Include complete participant summaries and artifact references in "
+            "status. Omit for a compact roster when you only need identities or progress.",
+        },
         "name": {
             "type": "string",
             "description": "Your new display name. Required for name; your participant ID "
@@ -71,8 +73,9 @@ STATE_PARAMETERS: dict[str, Any] = {
         },
         "needs_user": {
             "type": "boolean",
-            "description": "Whether waiting requires the user's help. Omit for wait to allow "
-            "new messages to wake you according to delivery settings.",
+            "description": "Whether wait requires the user's help. When true, only the user can "
+            "resume you. Omit for ordinary waiting; messages may wake you according to "
+            "the group's delivery settings.",
         },
         "summary": {
             "type": "string",
@@ -89,6 +92,19 @@ STATE_PARAMETERS: dict[str, Any] = {
     },
     "required": ["action"],
 }
+
+WAIT_REQUESTED = (
+    "Your Run will end after this Tool batch is saved. wake_on_messages lists which new "
+    "messages can resume you; the user can also Resume unfinished work."
+)
+USER_WAIT_REQUESTED = (
+    "Your Run will end after this Tool batch is saved. Your participation will remain "
+    "blocked until the user resumes it; Board messages will not wake you."
+)
+DONE_REQUESTED = (
+    "Completion requested. Your Run will end after this Tool batch is saved. If new "
+    "messages prevent completion, receive them and request done again when ready."
+)
 
 EMPTY_INBOX = (
     "No pending Board messages. Continue useful work, or use swarm_state with action wait if you "
