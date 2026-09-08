@@ -1575,7 +1575,9 @@ class SwarmStore:
                     return {"entries": [], "receipt_id": None, "pending_remaining": 0}
                 placeholders = ",".join("?" for _ in post_ids)
                 rows = connection.execute(
-                    "SELECT p.*,r.content_hash FROM recipients r JOIN posts p ON p.id=r.post_id "
+                    "SELECT p.*,r.route_class,d.title AS discussion_title "
+                    "FROM recipients r JOIN posts p ON p.id=r.post_id "
+                    "JOIN discussions d ON d.id=p.discussion_id "
                     f"WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL AND p.id IN ({placeholders}) ORDER BY p.sequence",
                     (swarm_id, participant_id, *post_ids),
                 ).fetchall()
@@ -1889,7 +1891,9 @@ class SwarmStore:
         batch_chars: int,
     ) -> list[sqlite3.Row]:
         candidates = connection.execute(
-            "SELECT p.*,r.content_hash FROM recipients r JOIN posts p ON p.id=r.post_id "
+            "SELECT p.*,r.route_class,d.title AS discussion_title "
+            "FROM recipients r JOIN posts p ON p.id=r.post_id "
+            "JOIN discussions d ON d.id=p.discussion_id "
             "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence LIMIT ?",
             (swarm_id, participant_id, limit),
         ).fetchall()
@@ -2052,7 +2056,11 @@ class SwarmStore:
         self._participant(connection, swarm_id, participant_id)
         if message_id is not None:
             row = connection.execute(
-                "SELECT * FROM posts WHERE id=? AND swarm_id=?", (message_id, swarm_id)
+                "SELECT p.*,d.title AS discussion_title,r.route_class FROM posts p "
+                "JOIN discussions d ON d.id=p.discussion_id "
+                "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
+                "WHERE p.id=? AND p.swarm_id=?",
+                (participant_id, message_id, swarm_id),
             ).fetchone()
             if row is None:
                 raise SwarmStoreError("message_not_found")
@@ -2107,9 +2115,12 @@ class SwarmStore:
             ).fetchone()[0]
         )["batch_chars"]
         rows = connection.execute(
-            "SELECT * FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence<=? "
-            "ORDER BY sequence DESC LIMIT ? OFFSET ?",
-            (swarm_id, discussion_id, high_water, limit + 1, offset),
+            "SELECT p.*,d.title AS discussion_title,r.route_class FROM posts p "
+            "JOIN discussions d ON d.id=p.discussion_id "
+            "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
+            "WHERE p.swarm_id=? AND p.discussion_id=? AND p.sequence<=? "
+            "ORDER BY p.sequence DESC LIMIT ? OFFSET ?",
+            (participant_id, swarm_id, discussion_id, high_water, limit + 1, offset),
         ).fetchall()
         selected = self._pending_rows_from_rows(rows, limit, batch_chars)
         values = [_post(row) for row in reversed(selected)]
@@ -2825,9 +2836,11 @@ def _post(row: sqlite3.Row) -> Json:
         "reply_to": row["reply_to"],
         "recipients": _load(row["recipients_json"]),
     }
-    if "route_class" in row:
+    # sqlite3.Row membership checks values, not column names.
+    columns = row.keys()
+    if "route_class" in columns and row["route_class"] is not None:
         value["route_class"] = row["route_class"]
-    if "discussion_title" in row:
+    if "discussion_title" in columns:
         value["discussion_title"] = row["discussion_title"]
     return value
 

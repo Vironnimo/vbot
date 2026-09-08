@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -120,6 +122,21 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     assert all(
         f"burst-sentinel-{index}" in str(adapter.requests[1]["messages"]) for index in range(15)
     )
+    delivered = []
+    for message in adapter.requests[1]["messages"]:
+        content = message.get("content", "")
+        if isinstance(content, str) and "burst-sentinel-" in content:
+            payload, _ = json.JSONDecoder().raw_decode(content[content.index("{") :])
+            delivered.extend(payload["entries"])
+    assert [entry["sequence"] for entry in delivered] == list(range(1, 16))
+    assert len({entry["id"] for entry in delivered}) == 15
+    for entry in delivered:
+        assert entry["route_class"] == "main"
+        assert entry["discussion_title"] == "Main"
+        assert entry["author"] == {"kind": "user", "id": "user", "name": "User"}
+        assert datetime.fromisoformat(entry["created_at"]).utcoffset() == timedelta(0)
+        assert entry["reply_to"] is None and entry["recipients"] == []
+
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
     assert snapshot["state"] == "idle"
     inbox = await lifecycle.service.store.prepare_inbox_delivery(
