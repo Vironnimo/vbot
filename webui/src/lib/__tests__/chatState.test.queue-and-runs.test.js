@@ -290,6 +290,8 @@ describe('chat state helpers', () => {
     expect(sessionState.currentRun).toEqual({
       runId: 'run-from-ws',
       sseUrl: '',
+      controls: {},
+      controlsSequence: 0,
       status: CHAT_STATUS_RUNNING,
       startedAt: '2026-08-05T18:04:00.000Z',
       iterationCount: 0,

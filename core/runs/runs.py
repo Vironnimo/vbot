@@ -348,6 +348,53 @@ class Run:
         self.tool_call_names: set[str] = set()
         self.input_token_total = 0
         self.output_token_total = 0
+        self.compaction_state = "unavailable"
+        self._user_compaction_requested = False
+        self._tool_background_callbacks: dict[str, Callable[[], bool]] = {}
+
+    def controls(self) -> JsonObject:
+        """Project live accessor controls; terminal Runs expose no actions."""
+        active = self.status == RunStatus.RUNNING and not self.cancel_requested
+        return {
+            "compaction": self.compaction_state if active else "unavailable",
+            "background_tool_call_ids": list(self._tool_background_callbacks) if active else [],
+        }
+
+    def set_compaction_state(self, state: str) -> None:
+        if self.compaction_state != state:
+            self.compaction_state = state
+            self.emit("run_controls_changed", self.controls())
+
+    def request_compaction(self) -> bool:
+        if self.controls()["compaction"] not in {"idle", "pending", "running"}:
+            return False
+        if self.compaction_state == "idle":
+            self._user_compaction_requested = True
+            self.set_compaction_state("pending")
+            _LOGGER.info("Compaction requested (run=%s session=%s)", self.id, self.session_id)
+        return True
+
+    def register_tool_background(self, tool_call_id: str, callback: Callable[[], bool]) -> None:
+        if self.cancel_requested or self.tool_call_cancelled(tool_call_id):
+            return
+        self._tool_background_callbacks[tool_call_id] = callback
+        self.emit("run_controls_changed", self.controls())
+
+    def background_tool_call(self, tool_call_id: str) -> bool:
+        if (
+            self.status != RunStatus.RUNNING
+            or self.cancel_requested
+            or self.tool_call_cancelled(tool_call_id)
+        ):
+            return False
+        callback = self._tool_background_callbacks.pop(tool_call_id, None)
+        if callback is None:
+            return False
+        accepted = callback()
+        self.emit("run_controls_changed", self.controls())
+        if accepted:
+            _LOGGER.info("Tool background requested (run=%s tool_call=%s)", self.id, tool_call_id)
+        return accepted
 
     @property
     def events(self) -> list[RunEvent]:
@@ -417,6 +464,8 @@ class Run:
         if entry is None or entry is _CANCELLED_TOOL_CALL:
             return False
         self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
+        if self._tool_background_callbacks.pop(tool_call_id, None) is not None:
+            self.emit("run_controls_changed", self.controls())
         if entry is not _ACTIVE_TOOL_CALL:
             self._schedule_cancel_callback(cast(CancelCallback, entry))
         return True
@@ -454,6 +503,8 @@ class Run:
     def clear_tool_cancel(self, tool_call_id: str) -> None:
         """Remove the per-tool-call cancel registry entry."""
         self._tool_cancel_callbacks.pop(tool_call_id, None)
+        if self._tool_background_callbacks.pop(tool_call_id, None) is not None:
+            self.emit("run_controls_changed", self.controls())
 
     def raise_if_cancelled(self) -> None:
         """Stop executor progress once cancellation has been requested."""
@@ -483,6 +534,12 @@ class Run:
             and not allow_after_cancel
         ):
             return None
+        if self._user_compaction_requested and event_type in {
+            COMPACTION_STARTED_EVENT,
+            COMPACTION_ABORTED_EVENT,
+            COMPACTION_COMPLETED_EVENT,
+        }:
+            payload = {**(payload or {}), "requested_by_user": True}
         event = RunEvent(
             sequence=self._next_sequence,
             run_id=self.id,
@@ -497,6 +554,12 @@ class Run:
         self._next_sequence += 1
         self._event_stream.publish(event)
         self.updated_at = event.timestamp
+        if self.compaction_state != "unavailable":
+            if event_type == COMPACTION_STARTED_EVENT:
+                self.set_compaction_state("running")
+            elif event_type in {COMPACTION_COMPLETED_EVENT, COMPACTION_ABORTED_EVENT}:
+                self._user_compaction_requested = False
+                self.set_compaction_state("idle")
         return event
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent, None]:

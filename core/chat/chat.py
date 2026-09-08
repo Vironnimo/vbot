@@ -1615,7 +1615,13 @@ class ChatLoop:
                 continuation_reminder=continuation_reminder,
                 continuation_tracker=continuation_tracker,
             )
-            return await self._execute_run_impl(context)
+            if self._compaction_service is not None:
+                run.set_compaction_state("idle")
+            try:
+                return await self._execute_run_impl(context)
+            finally:
+                if run.compaction_state == "pending":
+                    run.emit("compaction_aborted", {"reason": "run_finished"})
         except BaseException as exc:
             if continuation_tracker is not None and not continuation_tracker.closed:
                 cause: ContinuationCause = (

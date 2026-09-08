@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
@@ -8,6 +9,7 @@ import {
   cancelProcess as requestCancelProcess,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
+  controlRun as requestControlRun,
   createSession as requestCreateSession,
   editChatMessage as requestEditChatMessage,
   inspectSubAgentWork as requestInspectSubAgentWork,
@@ -128,6 +130,7 @@ function defaultChatOperations() {
     cancelProcess: (...args) => requestCancelProcess(...args),
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
+    controlRun: (...args) => requestControlRun(...args),
     createSession: (...args) => requestCreateSession(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
@@ -1065,6 +1068,36 @@ export function createChatController({
     }
   }
 
+  async function controlRun(sessionState, action, { runId, toolCallId } = {}) {
+    const currentRun = sessionState?.currentRun;
+    const targetRunId = runId ?? currentRun?.runId;
+    if (
+      !currentRun ||
+      currentRun.runId !== targetRunId ||
+      currentRun.status !== 'running'
+    )
+      return;
+    const pendingKey = toolCallId ?? action;
+    sessionState.pendingRunControls ??= {};
+    if (sessionState.pendingRunControls[pendingKey]) return;
+    sessionState.pendingRunControls[pendingKey] = true;
+    sessionState.actionError = '';
+    try {
+      const run = await operations.controlRun({
+        agentId: sessionState.agentId,
+        sessionId: sessionState.sessionId,
+        runId: targetRunId,
+        action,
+        toolCallId,
+      });
+      runStream.mergeRunResponse(sessionState, run);
+    } catch (error) {
+      sessionState.actionError = `${translate('chat.controlRunError', 'Run action could not be applied.')} ${errorMessage(error)}`;
+    } finally {
+      delete sessionState.pendingRunControls[pendingKey];
+    }
+  }
+
   async function cancelTool({
     sessionState,
     agentId = '',
@@ -1415,6 +1448,7 @@ export function createChatController({
     cancelBackgroundProcess,
     cancelSubAgent,
     cancelTool,
+    controlRun,
     createSession: (agentAddress) => operations.createSession(agentAddress),
     destroy,
     editMessage,
@@ -1840,6 +1874,8 @@ function findLastUsage(messages) {
 export function startRun(sessionState, run) {
   sessionState.currentRun = {
     runId: run.run_id,
+    controls: run.controls ?? {},
+    controlsSequence: run.controls_sequence ?? 0,
     sseUrl: run.sse_url,
     status: run.status ?? CHAT_STATUS_RUNNING,
     startedAt:
@@ -1922,6 +1958,23 @@ export function appendRunEvent(sessionState, event) {
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
   }
+  if (normalizedEvent.type === 'run_controls_changed') {
+    applyRunControls(sessionState, {
+      run_id: normalizedEvent.run_id,
+      controls: normalizedEvent.payload,
+      controls_sequence: normalizedEvent.sequence,
+    });
+  }
+  if (
+    normalizedEvent.type === 'compaction_aborted' &&
+    normalizedEvent.payload?.requested_by_user &&
+    sessionState.currentRun?.runId === normalizedEvent.run_id
+  ) {
+    sessionState.actionError = t(
+      'chat.compactionNotApplied',
+      'Compaction was not applied. The Run continues with its current context.',
+    );
+  }
   if (normalizedEvent.type === 'model_step_usage') {
     applyModelStepUsage(sessionState, normalizedEvent.payload);
   }
@@ -1930,6 +1983,19 @@ export function appendRunEvent(sessionState, event) {
     finishRun(sessionState, normalizedEvent);
   }
   return normalizedEvent;
+}
+
+export function applyRunControls(sessionState, run) {
+  const current = sessionState?.currentRun;
+  if (
+    !current ||
+    current.runId !== run?.run_id ||
+    !run.controls ||
+    (run.controls_sequence ?? 0) < (current.controlsSequence ?? 0)
+  )
+    return;
+  current.controls = run.controls;
+  current.controlsSequence = run.controls_sequence ?? 0;
 }
 
 function applyModelStepUsage(sessionState, payload) {
@@ -1961,6 +2027,8 @@ function beginRunFromEvent(sessionState, event) {
   const currentSseUrl = isSameRun ? currentRun.sseUrl : '';
   sessionState.currentRun = {
     runId: event.run_id,
+    controls: isSameRun ? currentRun.controls : {},
+    controlsSequence: isSameRun ? currentRun.controlsSequence : 0,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
     startedAt:

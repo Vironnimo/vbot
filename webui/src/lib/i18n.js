@@ -487,6 +487,13 @@ export const englishCatalog = Object.freeze({
   'chat.voice.transcriptionFailed': 'Speech transcription failed.',
   'chat.cancelRun': 'Cancel run',
   'chat.cancelToolCall': 'Cancel',
+  'chat.moveToBackground': 'Move to background',
+  'chat.forceCompaction': 'Force compaction',
+  'chat.compactionPending': 'Compaction requested…',
+  'chat.compactionRunning': 'Compacting…',
+  'chat.controlRunError': 'Run action could not be applied.',
+  'chat.compactionNotApplied':
+    'Compaction was not applied. The Run continues with its current context.',
   'chat.cancelToolCallAria': 'Cancel running tool call',
   'chat.cancelSubAgent': 'Cancel',
   'chat.cancelSubAgentAria': 'Cancel running sub-agent',

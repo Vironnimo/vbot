@@ -28,6 +28,8 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 ## Constraints & Gotchas
 
+- Accessors can request handoff of an already-running foreground/auto Bash through its exact Run and Tool Call. The handler advertises this capability only after spawn and only when the existing depth policy permits background work. The foreground loop consumes the request through the existing handoff result, process tracking, timeout, and completion watcher; it never starts another command. Cancellation or a process that already finished wins over handoff. Coverage: `tests/core/tools/test_bash.py`, `tests/core/runs/test_runs_tool_cancellation.py`.
+
 - Combined `output` and the streamed stdout/stderr Run events are ANSI-stripped - terminal color/escape sequences are removed before the text reaches the model or UI. Stripping happens once in `ProcessManager` (shared `core/utils/ansi.strip_ansi`); see `process.md`.
 - A login shell environment is probed and cached with a bounded TTL
   (`SHELL_ENV_CACHE_TTL_SECONDS`, default 300 s). Concurrent first Bash calls

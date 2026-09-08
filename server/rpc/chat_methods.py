@@ -654,6 +654,31 @@ async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
+async def _control_run_chat(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "run_id", "action", "tool_call_id"}, "chat.control_run"
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    run_id = _required_string(params, "run_id")
+    action = _required_string(params, "action")
+    try:
+        run = state.chat_runs.get(run_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if (run.agent_id, run.project_id, run.session_id) != (agent_id, project_id, session_id):
+        raise RpcError(RPC_ERROR_RUN_NOT_FOUND, "Run not found.")
+    if action == "compact" and "tool_call_id" not in params:
+        accepted = run.request_compaction()
+    elif action == "background_tool":
+        accepted = run.background_tool_call(_required_string(params, "tool_call_id"))
+    else:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Invalid Run control action.")
+    if not accepted:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "This action is no longer available.")
+    return _run_response(run)
+
+
 async def _cancel_process_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
@@ -833,6 +858,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.edit": _edit_chat,
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
+        "chat.control_run": _control_run_chat,
         "chat.cancel_process": _cancel_process_chat,
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,

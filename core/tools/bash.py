@@ -1083,6 +1083,20 @@ async def _run_foreground_phase(
         if background_after_seconds is not None
         else None
     )
+    background_requested = False
+
+    def request_background() -> bool:
+        nonlocal background_requested
+        tracked = process_manager.get_process(
+            process_id, context.agent_id, project_id=context.project_id
+        )
+        if tracked.status != "running" or context.is_cancelled() or context.was_cancelled_by_user():
+            return False
+        background_requested = True
+        return True
+
+    if not _background_blocked_at_depth(context) and context.background_registration_hook:
+        context.background_registration_hook(request_background)
 
     while True:
         poll_result = await process_manager.poll(
@@ -1106,13 +1120,24 @@ async def _run_foreground_phase(
                 process_id,
                 command=command,
             )
-        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+        if background_requested or (
+            deadline is not None and asyncio.get_running_loop().time() >= deadline
+        ):
             return await _background_result(
                 process_manager,
                 context,
                 process_id,
-                mode=mode,
-                handoff_after=background_after_seconds,
+                mode="auto" if background_requested else mode,
+                handoff_after=(
+                    (
+                        datetime.now(UTC)
+                        - process_manager.get_process(
+                            process_id, context.agent_id, project_id=context.project_id
+                        ).started_at
+                    ).total_seconds()
+                    if background_requested
+                    else background_after_seconds
+                ),
             )
 
         sleep_seconds = FOREGROUND_POLL_INTERVAL_SECONDS

@@ -48,6 +48,59 @@ describe('ChatComposer', () => {
     document.body.innerHTML = '';
   });
 
+  it('keeps the context card open across pointer travel and invokes compaction', async () => {
+    vi.useFakeTimers();
+    try {
+      const onForceCompaction = vi.fn();
+      mountedComponent = mount(ChatComposer, {
+        target: document.body,
+        props: {
+          contextUsage: { tokens: 4000, estimated: true },
+          contextWindow: 10000,
+          compactionState: 'idle',
+          onForceCompaction,
+        },
+      });
+      flushSync();
+      const anchor = document.querySelector('.context-ring');
+      anchor.dispatchEvent(new Event('pointerenter'));
+      const card = document.querySelector('.context-hover-card');
+      expect(card.parentElement).toBe(document.body);
+      expect(card.dataset.floatingOpen).toBe('true');
+      anchor.dispatchEvent(new Event('pointerleave'));
+      card.dispatchEvent(new Event('pointerenter'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(card.dataset.floatingOpen).toBe('true');
+      card.querySelector('button').click();
+      expect(onForceCompaction).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(card.dataset.floatingOpen).not.toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['pending', 'running', 'unavailable'])(
+    'disables compaction while %s',
+    (compactionState) => {
+      const onForceCompaction = vi.fn();
+      mountedComponent = mount(ChatComposer, {
+        target: document.body,
+        props: {
+          contextUsage: { tokens: 4000 },
+          contextWindow: 10000,
+          compactionState,
+          onForceCompaction,
+        },
+      });
+      flushSync();
+      const button = document.querySelector('.context-hover-card button');
+      expect(button.disabled).toBe(true);
+      button.click();
+      expect(onForceCompaction).not.toHaveBeenCalled();
+    },
+  );
+
   it('offers slash skill autocomplete at the start of the message', async () => {
     mountedComponent = mount(ChatComposer, {
       target: document.body,

@@ -70,6 +70,8 @@ New Run/Queue references use `run_`/`que_` plus 16 lowercase base32 characters (
 
 ## Cross-Domain Contracts
 
+- Run owns transient accessor controls: Compaction request state and Tool-registered background callbacks. Chat enables Compaction and consumes requests only through its Compaction coordinator; Tools advertise their own eligibility. `run_controls_changed` carries the authoritative projection, also exposed in Run responses and reconnect snapshots with a sequence so stale replies cannot restore retired actions. Cancelling/completing a Tool retires its callback; terminal/cancelled Runs expose no actions. Exact Agent/Project/Session/Run validation is at `chat.control_run` (`tests/server/rpc/test_chat_methods.py`, `tests/core/runs/test_runs_tool_cancellation.py`).
+
 - `core/chat/` owns provider calls, tool execution, message persistence, retry/fallback behavior, and which Run events to emit. New chat execution paths should call the manager instead of constructing `Run` directly.
 - `core/chat/` records the admitted Run's `run_kind` on its Session when execution begins; fork creators that must expose a classified Session before the Run starts may record it earlier through Sessions' idempotent API.
 - `core/sessions/` owns durable history. Run timelines are process-local replay buffers and are not a substitute for canonical SQLite Session history. `session.delete` and Agent Takeover hold Run Admission Guards across their awaited archive/move and follow-up metadata writes; a Session `write_lock` alone cannot prevent a later Run from recreating a moved or archived address.

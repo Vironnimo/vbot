@@ -24,6 +24,39 @@ import { tick } from 'svelte';
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
 
+  it('settles a Background Bash completion without a reactive update loop', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        backgroundBashStatusEvents: [
+          {
+            payload: {
+              process_id: 'proc-test',
+              status: 'completed',
+              started_at: '2026-09-08T12:00:00Z',
+              finished_at: '2026-09-08T12:00:10Z',
+              output: 'finished',
+              exit_code: 0,
+            },
+          },
+        ],
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    const input = document.querySelector('textarea');
+    setInputValue(input, 'Continue after completion');
+    flushSync();
+    expect(input.value).toBe('Continue after completion');
+    expect(document.querySelector('[aria-label="Send message"]').disabled).toBe(
+      false,
+    );
+  });
+
   it('batches run SSE deltas before updating the rendered timeline', async () => {
     const closeSubscription = vi.fn();
     subscribeRunEventsMock.mockReturnValue({
