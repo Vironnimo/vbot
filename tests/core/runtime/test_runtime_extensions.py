@@ -990,6 +990,10 @@ def _catalog_runtime(
             list_tools=lambda: [
                 SimpleNamespace(
                     name="read",
+                    family="files",
+                    family_label="Files",
+                    activation="configurable",
+                    activation_source=None,
                     description="read sentinel",
                     parameters={"type": "object"},
                     constraints=(),
@@ -1018,6 +1022,16 @@ def _catalog_runtime(
                     "provider",
                     SimpleNamespace(
                         model_id="model-a",
+                        context_window=128000,
+                        capabilities=SimpleNamespace(
+                            tools=True,
+                            reasoning=SimpleNamespace(
+                                supported=True,
+                                control="levels",
+                                levels=("low", "high"),
+                                budget_max=None,
+                            ),
+                        ),
                         name="Model A",
                         connections=("usable", "unavailable"),
                     ),
@@ -1062,6 +1076,8 @@ def test_extension_catalog_projects_tools_settings_and_models_are_safe(
     ]
     assert catalog["skills"] == [{"name": "global-skill", "description": "global sentinel"}]
     assert [tool["name"] for tool in catalog["tools"]] == ["read"]
+    assert catalog["tools"][0]["family"] == "files"
+    assert catalog["tools"][0]["activation"] == "configurable"
     assert catalog["tool_settings"] == {
         "bash": {
             "type": "object",
@@ -1087,7 +1103,21 @@ def test_extension_catalog_projects_tools_settings_and_models_are_safe(
         },
     }
     assert catalog["models"] == [
-        {"id": "provider/model-a", "name": "Model A", "connections": ["usable"]}
+        {
+            "id": "provider/model-a",
+            "name": "Model A",
+            "connections": ["usable"],
+            "context_window": 128000,
+            "capabilities": {
+                "tools": True,
+                "reasoning": {
+                    "supported": True,
+                    "control": "levels",
+                    "levels": ["low", "high"],
+                    "budget_max": None,
+                },
+            },
+        }
     ]
 
 

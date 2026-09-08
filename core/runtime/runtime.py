@@ -1147,6 +1147,10 @@ class Runtime:
                     "parameters": tool.parameters,
                     "constraints": list(tool.constraints),
                     "requires_opt_in": tool.requires_opt_in,
+                    "family": tool.family,
+                    "family_label": tool.family_label,
+                    "activation": tool.activation,
+                    "activation_source": tool.activation_source,
                 }
                 for tool in self.tools.list_tools()
                 if tool.catalog_visible and not tool.session_scoped
@@ -1195,6 +1199,16 @@ class Runtime:
                         "id": f"{provider_id}/{model.model_id}",
                         "name": model.name,
                         "connections": connections,
+                        "context_window": model.context_window,
+                        "capabilities": {
+                            "tools": model.capabilities.tools,
+                            "reasoning": {
+                                "supported": model.capabilities.reasoning.supported,
+                                "control": model.capabilities.reasoning.control,
+                                "levels": list(model.capabilities.reasoning.levels),
+                                "budget_max": model.capabilities.reasoning.budget_max,
+                            },
+                        },
                     }
                 )
         return models

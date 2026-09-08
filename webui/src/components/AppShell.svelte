@@ -774,6 +774,11 @@
                   <rect x="5.5" y="5" width="5" height="7.5" rx="2.5" />
                   <path d="M6.5 5 5 3m4.5 2L11 3" />
                   <path d="M5.5 7.5H3m2.5 3-2 1.5m7-4.5H13m-2.5 3 2 1.5" />
+                {:else}
+                  <path d="m7 5-3 5m5-5 3 5M5 12h6" />
+                  <circle cx="8" cy="3" r="2" />
+                  <circle cx="3" cy="12" r="2" />
+                  <circle cx="13" cy="12" r="2" />
                 {/if}
               </svg>
               <span class="app-shell__nav-label">

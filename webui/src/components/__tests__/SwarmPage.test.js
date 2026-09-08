@@ -63,17 +63,60 @@ const swarm = {
 
 function button(text) {
   return [...document.querySelectorAll('button')].find((item) =>
-    item.textContent.includes(text),
+    (item.getAttribute('aria-label') || item.textContent).includes(text),
   );
 }
 
 function createBridge() {
-  const operation = vi.fn((name) => {
+  let storedProfile = structuredClone(profile);
+  let autosaveParticipant;
+  let invalidate;
+  let runListener;
+  const operation = vi.fn((name, args) => {
+    if (name === 'profiles.save') {
+      storedProfile = {
+        ...structuredClone(args.profile),
+        id: args.profile.id ?? 'prf-new',
+        revision: (args.expected_revision ?? 0) + 1,
+        slug: args.profile.slug ?? 'generated-shortcut',
+      };
+      return Promise.resolve({ profile: structuredClone(storedProfile) });
+    }
     if (name === 'catalog')
-      return Promise.resolve({ catalog: { models: ['demo/model'] } });
+      return Promise.resolve({
+        catalog: {
+          models: [
+            {
+              id: 'demo/model',
+              name: 'Demo',
+              context_window: 128000,
+              capabilities: {
+                tools: true,
+                reasoning: {
+                  supported: true,
+                  control: 'levels',
+                  levels: ['low', 'high'],
+                },
+              },
+            },
+            {
+              id: 'demo/plain',
+              name: 'Plain',
+              context_window: 128000,
+              capabilities: { tools: true, reasoning: { supported: false } },
+            },
+          ],
+          tools: [
+            { name: 'read' },
+            { name: 'write' },
+            { name: 'browser', requires_opt_in: true },
+          ],
+          projects: [{ id: 'project-a', name: 'Project A', cwd: 'C:/project' }],
+        },
+      });
     if (name === 'profiles.list')
       return Promise.resolve({
-        entries: [structuredClone(profile)],
+        entries: [structuredClone(storedProfile)],
         has_more: false,
       });
     if (name === 'swarms.list')
@@ -92,8 +135,7 @@ function createBridge() {
     if (name === 'swarms.usage')
       return Promise.resolve({
         usage: {
-          participant_id:
-            'participant_id' in arguments ? arguments.participant_id : null,
+          participant_id: args.participant_id ?? null,
           participant_count: 2,
           usage: {
             measured_input_tokens: 30,
@@ -103,8 +145,7 @@ function createBridge() {
             models: [
               {
                 provider: 'demo',
-                model:
-                  arguments.participant_id === 'prt-b' ? 'fallback' : 'model',
+                model: args.participant_id === 'prt-b' ? 'fallback' : 'model',
                 runs: 1,
                 measured_input_tokens: 30,
                 measured_output_tokens: 20,
@@ -123,6 +164,18 @@ function createBridge() {
     operation,
     bridge: {
       operation,
+      registerAutosave: vi.fn((participant) => {
+        autosaveParticipant = participant;
+        return () => (autosaveParticipant = null);
+      }),
+      notifyAutosave: vi.fn(),
+      toast: vi.fn(),
+      get autosave() {
+        return autosaveParticipant;
+      },
+      invalidate() {
+        invalidate?.();
+      },
       openLink: (url) => operation('link.open', { url }),
       openMedia: (url) => operation('media.open', { url }),
       replaceRoute: vi.fn(),
@@ -145,11 +198,16 @@ function createBridge() {
         context = callback;
         return () => {};
       },
-      onInvalidation() {
+      onInvalidation(callback) {
+        invalidate = callback;
         return () => {};
       },
-      onRunEvent() {
-        return () => {};
+      onRunEvent(callback) {
+        runListener = callback;
+        return () => (runListener = null);
+      },
+      emitRun(id, event) {
+        runListener?.(id, event);
       },
       dispose: vi.fn(),
       show() {
@@ -157,6 +215,22 @@ function createBridge() {
       },
     },
   };
+}
+
+function fill(id, value) {
+  const input = document.getElementById(id);
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+async function choose(id, text) {
+  document.getElementById(id).click();
+  await tick();
+  const option = [...document.querySelectorAll('[role="option"]')].find((el) =>
+    el.textContent.trim().startsWith(text),
+  );
+  expect(option).toBeDefined();
+  option.click();
+  await tick();
 }
 
 async function render(bridge) {
@@ -200,7 +274,7 @@ describe('SwarmPage', () => {
   it('loads retained lists without requesting the profile catalog', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    expect(document.body.textContent).toContain('New profile');
+    expect(button('New profile')).toBeDefined();
     expect(document.body.textContent).toContain('Retained Swarms');
     expect(operation).toHaveBeenCalledWith('profiles.list', { limit: 100 });
     expect(operation.mock.calls.some(([name]) => name === 'catalog')).toBe(
@@ -243,17 +317,10 @@ describe('SwarmPage', () => {
     button('New profile').click();
     await tick();
     flushSync();
-    const inputs = document.querySelectorAll('input');
-    inputs[0].value = 'New profile';
-    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-    inputs[1].value = 'new-profile';
-    inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
-    const model = document.querySelectorAll('select')[0];
-    model.value = 'demo/model';
-    model.dispatchEvent(new Event('change', { bubbles: true }));
-    const directory = document.querySelector('input[placeholder]');
-    directory.value = 'C:/work';
-    directory.dispatchEvent(new Event('input', { bubbles: true }));
+    fill('swarm-profile-name', 'New profile');
+    await choose('swarm-model-0', 'demo/model');
+    await choose('swarm-effort-0', 'high');
+    fill('swarm-directory', 'C:/work');
     await tick();
     button('Save profile').click();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -265,16 +332,385 @@ describe('SwarmPage', () => {
         expected_revision: null,
         profile: expect.objectContaining({
           name: 'New profile',
-          slug: 'new-profile',
+          participants: [
+            { model: 'demo/model', count: 2, thinking_effort: 'high' },
+          ],
         }),
       }),
+    );
+  });
+
+  it('filters Models and resets incompatible reasoning when the Model changes', async () => {
+    const { bridge } = createBridge();
+    await render(bridge);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    document.getElementById('swarm-model-0').click();
+    await tick();
+    const search = document.querySelector('[role="combobox"]');
+    search.value = 'plain';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    expect(
+      [...document.querySelectorAll('[role="option"]')].map((el) =>
+        el.textContent.trim(),
+      ),
+    ).toEqual(['demo/plain']);
+    document.querySelector('[role="option"]').click();
+    await tick();
+    expect(document.getElementById('swarm-effort-0').disabled).toBe(true);
+    await choose('swarm-model-0', 'demo/model');
+    await choose('swarm-effort-0', 'high');
+    await choose('swarm-model-0', 'demo/plain');
+    expect(document.getElementById('swarm-effort-0').textContent.trim()).toBe(
+      'Provider default',
+    );
+  });
+
+  it('keeps drafts across tabs and materializes All and None tool selections', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    fill('swarm-instructions', 'test-owned instruction body');
+    button('Tools & Skills').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(document.getElementById('swarm-profile-panel-access').hidden).toBe(
+      false,
+    );
+    document.querySelector('[role="radio"][aria-label="All"]')?.click();
+    const radio = [...document.querySelectorAll('[role="radio"]')].find(
+      (el) => el.textContent.trim() === 'All',
+    );
+    radio.click();
+    await tick();
+    button('Save changes').click();
+    await tick();
+    await tick();
+    const saved = operation.mock.calls
+      .filter(([name]) => name === 'profiles.save')
+      .at(-1)[1].profile;
+    expect(saved.tool_access).toEqual({
+      mode: 'selected',
+      allowed: ['read', 'write'],
+    });
+    expect(saved.instructions).toBe('test-owned instruction body');
+    expect(saved.slug).toBe('research');
+    await new Promise((resolve) => setTimeout(resolve));
+    button('Tools & Skills').click();
+    await tick();
+    [...document.querySelectorAll('[role="radio"]')]
+      .find((el) => el.textContent.trim() === 'None')
+      .click();
+    await tick();
+    button('Save changes').click();
+    await tick();
+    await tick();
+    expect(
+      operation.mock.calls
+        .filter(([name]) => name === 'profiles.save')
+        .at(-1)[1].profile.tool_access,
+    ).toEqual({ mode: 'selected', allowed: [] });
+  });
+
+  it('switches working-directory sources without sending stale fields', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    await choose('swarm-directory-source', 'Project');
+    await choose('swarm-project', 'Project A');
+    button('Save changes').click();
+    await tick();
+    await tick();
+    expect(
+      operation.mock.calls
+        .filter(([name]) => name === 'profiles.save')
+        .at(-1)[1].profile.working_directory,
+    ).toEqual({ kind: 'project', project_id: 'project-a' });
+  });
+
+  it('returns to the invalid field and keeps failed saves editable', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    button('Communication').click();
+    await tick();
+    button('Save profile').click();
+    await tick();
+    expect(document.getElementById('swarm-profile-panel-overview').hidden).toBe(
+      false,
+    );
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(document.activeElement.id).toBe('swarm-profile-name');
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.save'),
+    ).toBe(false);
+    fill('swarm-profile-name', 'Retry');
+    fill('swarm-directory', 'C:/work');
+    await choose('swarm-model-0', 'demo/model');
+    operation.mockRejectedValueOnce(new Error('save-failure-test'));
+    button('Save profile').click();
+    await tick();
+    await tick();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alert"]')).not.toBeNull(),
+    );
+    expect(document.getElementById('swarm-profile-name').value).toBe('Retry');
+    expect(button('Save profile').disabled).toBe(false);
+  });
+
+  it('autosaves after the shared debounce without closing or replacing the editor', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    vi.useFakeTimers();
+    fill('swarm-profile-name', 'Autosaved profile');
+    await tick();
+    await vi.advanceTimersByTimeAsync(799);
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.save'),
+    ).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await tick();
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'profiles.save'),
+    ).toHaveLength(1);
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Autosaved profile',
+    );
+    expect(bridge.autosave.hasPending()).toBe(false);
+    bridge.invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Autosaved profile',
+    );
+    button('Save changes').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'profiles.save'),
+    ).toHaveLength(1);
+    expect(bridge.toast).toHaveBeenCalled();
+  });
+
+  it('flushes newer edits made during an in-flight save with the returned revision', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    const saved = {
+      ...structuredClone(profile),
+      name: 'First edit',
+      revision: 2,
+    };
+    let complete;
+    operation.mockImplementationOnce(
+      () => new Promise((resolve) => (complete = resolve)),
+    );
+    fill('swarm-profile-name', 'First edit');
+    await tick();
+    const flushing = bridge.autosave.flush();
+    await tick();
+    fill('swarm-profile-name', 'Second edit');
+    await tick();
+    complete({ profile: saved });
+    await expect(flushing).resolves.toBe(true);
+    const writes = operation.mock.calls.filter(
+      ([name]) => name === 'profiles.save',
+    );
+    expect(writes).toHaveLength(2);
+    expect(writes[1][1]).toMatchObject({
+      expected_revision: 2,
+      profile: { name: 'Second edit' },
+    });
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Second edit',
+    );
+    expect(bridge.autosave.hasPending()).toBe(false);
+  });
+
+  it('blocks a topic transition on save failure and discards only when requested', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    fill('swarm-profile-name', 'Unsaved');
+    await tick();
+    operation.mockRejectedValueOnce(new Error('autosave-failure-test'));
+    button('Communication').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull(),
+    );
+    expect(document.getElementById('swarm-profile-panel-overview').hidden).toBe(
+      false,
+    );
+    button('Discard and continue').click();
+    await tick();
+    expect(
+      document.getElementById('swarm-profile-panel-communication').hidden,
+    ).toBe(false);
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Research',
+    );
+    expect(bridge.autosave.hasPending()).toBe(false);
+  });
+
+  it('keeps the profile navigation and draft mounted during invalidation without Refresh in the editor', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    const input = document.getElementById('swarm-profile-name');
+    fill('swarm-profile-name', 'Draft survives');
+    await tick();
+    bridge.invalidate();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(document.getElementById('swarm-profile-name')).toBe(input);
+    expect(input.value).toBe('Draft survives');
+    expect(document.querySelector('nav[aria-label="Profiles"]')).not.toBeNull();
+    expect(button('Refresh')).toBeUndefined();
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.save'),
+    ).toBe(false);
+  });
+
+  it('opens participant Activity directly from the Board and detaches its Run when leaving', async () => {
+    const { bridge } = createBridge();
+    const previousRun = swarm.participants[0].lifecycle_run_id;
+    swarm.participants[0].lifecycle_run_id = 'run-live-test';
+    bridge.subscribeRun.mockResolvedValue({
+      subscription_id: 'subscription-live-test',
+    });
+    try {
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.participant-pane')).not.toBeNull(),
+      );
+      button('Alpha').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.history')).not.toBeNull(),
+      );
+      expect(
+        document.querySelector('[role="tab"][aria-selected="true"]')
+          .textContent,
+      ).toContain('Activity');
+      expect(bridge.subscribeRun).toHaveBeenCalledWith(
+        'swr-a',
+        'run-live-test',
+      );
+      button('New Swarm').click();
+      await tick();
+      expect(bridge.unsubscribeRun).toHaveBeenCalledWith(
+        'subscription-live-test',
+      );
+      expect(document.querySelector('.history')).toBeNull();
+    } finally {
+      swarm.participants[0].lifecycle_run_id = previousRun;
+    }
+  });
+
+  it('reconciles canonical final output even when completion arrives before the subscription reply', async () => {
+    const { bridge } = createBridge();
+    const previousRun = swarm.participants[0].lifecycle_run_id;
+    swarm.participants[0].lifecycle_run_id = 'run-final-test';
+    bridge.readHistory.mockResolvedValueOnce({
+      messages: [],
+      status: 'running',
+    });
+    bridge.readHistory.mockResolvedValue({
+      messages: [
+        {
+          id: 'msg-final-test',
+          role: 'assistant',
+          content: 'final-output-sentinel',
+          timestamp: '2026-09-08T09:00:00+00:00',
+        },
+      ],
+      status: 'completed',
+    });
+    bridge.subscribeRun.mockImplementation(() => {
+      bridge.emitRun('subscription-final-test', {
+        type: 'run_completed',
+        run_id: 'run-final-test',
+        sequence: 1,
+      });
+      return Promise.resolve({ subscription_id: 'subscription-final-test' });
+    });
+    try {
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.participant-pane')).not.toBeNull(),
+      );
+      button('Alpha').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.history')?.textContent).toContain(
+          'final-output-sentinel',
+        ),
+      );
+      expect(bridge.readHistory).toHaveBeenCalledTimes(2);
+      expect(document.querySelectorAll('.history article')).toHaveLength(1);
+    } finally {
+      swarm.participants[0].lifecycle_run_id = previousRun;
+    }
+  });
+
+  it('flushes profile edits before leaving for a retained Swarm', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Research').click();
+    await tick();
+    flushSync();
+    fill('swarm-profile-name', 'Before navigation');
+    await tick();
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    const calls = operation.mock.calls.map(([name]) => name);
+    expect(calls.indexOf('profiles.save')).toBeLessThan(
+      calls.indexOf('swarms.get'),
+    );
+    expect(document.querySelector('.editor')).toBeNull();
+    expect(button('Refresh')).toBeDefined();
+  });
+
+  it('keeps a failed profile save open when selecting a retained Swarm', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Research').click();
+    await tick();
+    flushSync();
+    fill('swarm-profile-name', 'Unsaved navigation');
+    await tick();
+    operation.mockRejectedValueOnce(new Error('navigation-save-failure'));
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull(),
+    );
+    expect(document.getElementById('swarm-profile-name').value).toBe(
+      'Unsaved navigation',
+    );
+    expect(operation.mock.calls.some(([name]) => name === 'swarms.get')).toBe(
+      false,
     );
   });
 
   it('posts a Board reply with explicit public recipients', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await tick();
     await tick();
     flushSync();
@@ -308,7 +744,7 @@ describe('SwarmPage', () => {
   it('changes Board discussion without treating a human read as a mutation', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await tick();
     await tick();
     await new Promise((resolve) => setTimeout(resolve));
@@ -327,7 +763,7 @@ describe('SwarmPage', () => {
   it('renders canonical per-participant Model usage and tool-call totals', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     await tick();
     button('Usage').click();
@@ -345,7 +781,7 @@ describe('SwarmPage', () => {
   it('renders canonical UsageSection totals and participant Model rows', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Usage').click();
     await tick();
@@ -363,7 +799,7 @@ describe('SwarmPage', () => {
   it('opens Activity links through the extension bridge', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Alpha').click();
     await tick();
@@ -381,7 +817,7 @@ describe('SwarmPage', () => {
   it('offers explicit Resume beside Stop when a participant is waiting', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     expect(button('Stop')).toBeDefined();
     button('Resume').click();
@@ -418,7 +854,7 @@ describe('SwarmPage', () => {
         return originalGet(name, arguments_);
       });
       await render(bridge);
-      button('swr-a').click();
+      button('Investigate').click();
       await new Promise((resolve) => setTimeout(resolve));
       expect(button('Resume')).toBeDefined();
       button('Resume').click();
@@ -433,7 +869,7 @@ describe('SwarmPage', () => {
   it('does not autosave delivery changes and stops only on an explicit click', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('swr-a').click();
+    button('Investigate').click();
     await tick();
     await tick();
     flushSync();
