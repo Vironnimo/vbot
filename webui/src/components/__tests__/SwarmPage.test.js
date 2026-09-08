@@ -163,10 +163,12 @@ function createBridge(initialProfile = profile) {
           participant_id: args.participant_id ?? null,
           participant_count: 2,
           usage: {
-            measured_input_tokens: 30,
-            measured_output_tokens: 20,
-            estimated_input_tokens: 10,
-            estimated_output_tokens: 5,
+            totals: {
+              measured_input_tokens: 30,
+              measured_output_tokens: 20,
+              estimated_input_tokens: 10,
+              estimated_output_tokens: 5,
+            },
             models: [
               {
                 provider: 'demo',
@@ -1129,6 +1131,102 @@ describe('SwarmPage', () => {
       swarm_id: 'swr-a',
       participant_id: 'prt-a',
     });
+  });
+
+  it('shows newest Board posts first and appends earlier pages below them', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const posts = (ids) =>
+      ids.map((id) => ({
+        id: `post-${id}`,
+        text: `message-${id}`,
+        sender_id: 'prt-a',
+        created_at: '2026-09-08T09:00:00+00:00',
+      }));
+    operation.mockImplementation((name, args) =>
+      name === 'board.read'
+        ? Promise.resolve(
+            args.cursor
+              ? { entries: posts([1, 2]), cursor: null, has_more: false }
+              : {
+                  entries: posts([3, 4]),
+                  cursor: 'older-page',
+                  has_more: true,
+                },
+          )
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelectorAll('.board li')).toHaveLength(2),
+    );
+    const messages = () =>
+      [...document.querySelectorAll('.board li p')].map((el) =>
+        el.textContent.trim(),
+      );
+    expect(messages()).toEqual(['message-4', 'message-3']);
+    button('Load earlier messages').click();
+    await vi.waitFor(() =>
+      expect(messages()).toEqual([
+        'message-4',
+        'message-3',
+        'message-2',
+        'message-1',
+      ]),
+    );
+    expect(operation).toHaveBeenCalledWith('board.read', {
+      swarm_id: swarm.id,
+      discussion_id: swarm.main_discussion_id,
+      limit: 100,
+      cursor: 'older-page',
+    });
+    expect(button('Load earlier messages')).toBeUndefined();
+  });
+
+  it.each([
+    [0, '0'],
+    [999, '999'],
+    [1000, '1 k'],
+    [12523, '12.5 k'],
+    [1000000, '1 mio'],
+    [11512523, '11.5 mio'],
+    [1250000000, '1.3 mrd'],
+  ])('formats Usage counts consistently for %s', async (value, expected) => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    operation.mockImplementation(async (name, args) => {
+      const result = await original(name, args);
+      if (name === 'swarms.usage') {
+        const counts = {
+          measured_input_tokens: value,
+          measured_output_tokens: 0,
+          estimated_input_tokens: 0,
+          estimated_output_tokens: value,
+        };
+        Object.assign(result.usage.usage.totals, counts);
+        Object.assign(result.usage.usage.models[0], counts, { runs: value });
+        result.usage.tools.total_calls = value;
+      }
+      return result;
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    button('Usage').click();
+    await tick();
+    expect(
+      [...document.querySelectorAll('.usage-summary dd')].map((el) =>
+        el.textContent.trim(),
+      ),
+    ).toEqual([expected, expected, expected]);
+    for (const row of document.querySelectorAll('.table-wrap tbody tr')) {
+      expect(
+        [...row.querySelectorAll('td')]
+          .slice(2)
+          .map((el) => el.textContent.trim()),
+      ).toEqual([expected, expected, expected]);
+    }
   });
 
   it('renders canonical UsageSection totals and participant Model rows', async () => {

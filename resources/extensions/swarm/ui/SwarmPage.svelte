@@ -130,6 +130,22 @@
         }).format(new Date(value))
       : '';
   const discussionOptions = $derived(discussions);
+  function usageCount(value) {
+    if (!Number.isFinite(value))
+      return t('swarm.usage.unavailable', 'Unavailable');
+    const units = [
+      [1e9, t('swarm.usage.billion', 'mrd')],
+      [1e6, t('swarm.usage.million', 'mio')],
+      [1e3, t('swarm.usage.thousand', 'k')],
+    ];
+    const [scale, suffix] = units.find(
+      ([scale]) => Math.abs(value) >= scale,
+    ) ?? [1, ''];
+    const number = new Intl.NumberFormat(activeLocaleTag(), {
+      maximumFractionDigits: scale === 1 ? 0 : 1,
+    }).format(value / scale);
+    return suffix ? `${number} ${suffix}` : number;
+  }
   const settingChanges = $derived(
     deliveryDraft && selectedSwarm
       ? [
@@ -329,7 +345,8 @@
       limit: 100,
       ...(cursor ? { cursor } : {}),
     });
-    board = cursor ? [...board, ...page(result)] : page(result);
+    const posts = [...page(result)].reverse();
+    board = cursor ? [...board, ...posts] : posts;
     boardCursor = result.next_cursor ?? result.cursor ?? null;
   }
   async function chooseDiscussion(id) {
@@ -1132,8 +1149,10 @@
                     </dt>
                     <dd>
                       {usage.usage.usage?.totals
-                        ? usage.usage.usage.totals.measured_input_tokens +
-                          usage.usage.usage.totals.measured_output_tokens
+                        ? usageCount(
+                            usage.usage.usage.totals.measured_input_tokens +
+                              usage.usage.usage.totals.measured_output_tokens,
+                          )
                         : t('swarm.usage.unavailable', 'Unavailable')}
                     </dd>
                   </div>
@@ -1143,16 +1162,17 @@
                     </dt>
                     <dd>
                       {usage.usage.usage?.totals
-                        ? usage.usage.usage.totals.estimated_input_tokens +
-                          usage.usage.usage.totals.estimated_output_tokens
+                        ? usageCount(
+                            usage.usage.usage.totals.estimated_input_tokens +
+                              usage.usage.usage.totals.estimated_output_tokens,
+                          )
                         : t('swarm.usage.unavailable', 'Unavailable')}
                     </dd>
                   </div>
                   <div>
                     <dt>{t('swarm.usage.toolCalls', 'Tool Calls')}</dt>
                     <dd>
-                      {usage.usage.tools?.total_calls ??
-                        t('swarm.usage.unavailable', 'Unavailable')}
+                      {usageCount(usage.usage.tools?.total_calls)}
                     </dd>
                   </div>
                 </dl>
@@ -1179,12 +1199,16 @@
                             ><td>{row.participant}</td><td
                               >{row.model.provider}/{row.model.model}</td
                             ><td
-                              >{row.model.measured_input_tokens +
-                                row.model.measured_output_tokens}</td
+                              >{usageCount(
+                                row.model.measured_input_tokens +
+                                  row.model.measured_output_tokens,
+                              )}</td
                             ><td
-                              >{row.model.estimated_input_tokens +
-                                row.model.estimated_output_tokens}</td
-                            ><td>{row.model.runs}</td></tr
+                              >{usageCount(
+                                row.model.estimated_input_tokens +
+                                  row.model.estimated_output_tokens,
+                              )}</td
+                            ><td>{usageCount(row.model.runs)}</td></tr
                           >{/each}</tbody
                       >
                     </table>
