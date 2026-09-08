@@ -1803,6 +1803,10 @@
         outcome.sessionSwitch.sessionId,
       );
       requestComposerFocus({ includeMobile: true });
+    } else if (outcome.kind === 'extension_page') {
+      window.dispatchEvent(
+        new CustomEvent('vbot-extension-page', { detail: outcome.navigation }),
+      );
     } else if (outcome.kind === 'transient') {
       appendTransientCard(outcome.reply, sessionState);
     } else if (outcome.kind === 'toast') {
