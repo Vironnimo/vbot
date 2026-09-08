@@ -1,6 +1,6 @@
 # Release Workflow
 
-How to cut a tagged GitHub release of vBot. Releases are how end users install: the public `install.sh`/`install.ps1` entrypoints and `vbot update` consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly — the notes format and the attached asset are not optional.
+How to cut a tagged GitHub release of vBot. Releases are how end users install: the public `install.sh`/`install.ps1` entrypoints and `vbot update` consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly â€” the notes format and the attached asset are not optional.
 
 ## Steps
 
@@ -14,13 +14,13 @@ git describe --tags --abbrev=0 origin/main
 gh release view --json tagName,publishedAt,url
 ```
 
-The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` → `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
+The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` â†’ `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
 
 Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
 ### 2. Bump the version
 
-The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump it (semver):
+The version lives in exactly **one** place: `pyproject.toml` â†’ `version`. Bump it (semver):
 
 ```toml
 version = "X.Y.Z"
@@ -46,7 +46,7 @@ Dispatch `.github/workflows/release.yml` from `main`. Pass the version without t
 gh workflow run release.yml --ref main -f version=X.Y.Z
 ```
 
-The workflow calls the complete reusable CI workflow first. In parallel where dependencies allow, CI runs the full Backend gate on Linux x64, Linux ARM64, and Windows; the Frontend gate; the complete Chromium E2E suite; and one WebUI release-candidate build. The exact resulting `webui-dist.tar.gz` then feeds pre-publish Candidate Smokes on Linux x64, Linux ARM64, and Windows. Those smokes install the checked-out candidate with the real packaged WebUI, start the server, probe `/health` and the WebUI, uninstall through the recorded interpreter, and verify that product data survived. `.github/workflows/ci.yml` remains callable-only, so this release matrix runs when the Release workflow calls it. Only after every gate passes does the workflow create `vX.Y.Z` at the exact dispatched commit and attach the already-tested `webui-dist.tar.gz`; the publish job never rebuilds or repackages the candidate.
+The workflow calls the complete reusable CI workflow first. In parallel where dependencies allow, CI runs the full Backend gate on Linux x64, Linux ARM64, and Windows; the Frontend gate; the complete Chromium E2E suite; and one WebUI release-candidate build. The exact resulting `webui-dist.tar.gz` then feeds pre-publish Candidate Smokes on Linux x64, Linux ARM64, and Windows. Those smokes install the checked-out candidate with the real packaged WebUI, start the server, probe `/health` and the WebUI, uninstall through the recorded interpreter, and verify that product data survived. `.github/workflows/ci.yml` is reusable and also manually dispatchable. Windows Backend jobs use two pytest workers to limit competing durable database writes and shell startups; the full test selection remains unchanged. Large Session/participant fixtures have explicit 120-second test budgets. Only after every gate passes does the workflow create `vX.Y.Z` at the exact dispatched commit and attach the already-tested `webui-dist.tar.gz`; the publish job never rebuilds or repackages the candidate.
 
 After publication, the workflow calls `.github/workflows/release-smoke.yml` as a thin Public Distribution canary. It validates the public tag and mandatory asset, then exercises the two public Installer implementations on Linux x64 and Windows against the exact new tag: install from GitHub, validate the checked-out tag and project version, start the installed server, probe `/health` and the WebUI, uninstall, and confirm that product data survived. Linux ARM64 behavior is already covered by the pre-publish Candidate Smoke, while the Unix public acquisition path is shared with Linux x64. Publication must happen first because the Installer consumes the real GitHub Release and asset; therefore a canary failure still marks the Release workflow red but cannot unpublish the already-created release. The canary should now expose only public GitHub acquisition discrepancies rather than first discovering candidate runtime or platform-install failures. The smoke workflow remains manually dispatchable for any existing release tag.
 
@@ -56,7 +56,7 @@ To re-run only the public-distribution smoke test without creating or changing a
 gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 ```
 
-The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
+The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` â†’ `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
 `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
 ### 6. Verify the workflow ran and the asset attached
@@ -84,7 +84,7 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 ## Gotchas
 
 - **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
-- **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
+- **Notes**: only the auto-generated Full Changelog line â€” no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
 - **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
 - **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and asset cannot be acquired before publication. Candidate behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
