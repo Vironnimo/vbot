@@ -707,7 +707,9 @@ async def test_quiesce_waits_for_creation_and_permanently_retires_owner(tmp_path
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(120)
 async def test_forty_temporary_participants_use_actual_chat_and_independent_history(tmp_path):
+    # Keep all forty real Runs while allowing for durable writes on Windows CI disks.
     from tests.core.chat.chat_loop_support import (
         StubAdapter,
         StubAgent,

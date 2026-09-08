@@ -396,7 +396,9 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
     assert json.loads(row["run_kinds_json"]) == ["subagent"]
 
 
+@pytest.mark.timeout(120)
 def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manager) -> None:
+    # The paging fixture writes forty durable Sessions with large metadata payloads.
     normal_ids: list[str] = []
     for index in range(40):
         session_id = f"normal-{index:02d}"
