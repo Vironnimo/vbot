@@ -417,6 +417,7 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
             before_cursor=None,
         ),
         session_usage={"input_tokens": 2},
+        context_messages=(),
     )
 
     class Groups:
@@ -448,6 +449,7 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
         "messages": [{"role": "assistant", "content": "[report](/api/files/capability.signature)"}],
         "has_more": False,
         "session_usage": {"input_tokens": 2},
+        "context_usage": None,
         "file_urls": ["/api/files/capability.signature"],
     }
 
@@ -834,3 +836,30 @@ async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path:
     ]
     names = [extension["name"] for extension in result["result"]["extensions"]]
     assert names == ["guard_bash"]
+
+
+def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
+    from core.chat import ChatMessage
+    from server.rpc.extensions_methods import _temporary_history_projection
+
+    snapshot = SimpleNamespace(
+        page=SimpleNamespace(messages=(), has_more=True, before_cursor="older"),
+        session_usage={"input_tokens": 5000},
+        context_messages=(
+            ChatMessage(
+                id="context-anchor",
+                timestamp="2026-09-08T09:00:00+00:00",
+                role="assistant",
+                content="measured",
+                usage={"input_tokens": 120, "output_tokens": 30},
+            ),
+        ),
+    )
+    result = _temporary_history_projection(snapshot, None)
+    assert result["context_usage"] == {
+        "tokens": 150,
+        "estimated": False,
+        "provider_input_tokens": 120,
+        "provider_output_tokens": 30,
+    }
+    assert result["messages"] == []

@@ -297,11 +297,13 @@ class SwarmStore:
             raise SwarmStoreError("invalid_arguments", field="drain_report")
         return await self._run(self._finish_group, swarm_id, expected_epoch, report)
 
-    async def begin_resume(self, swarm_id: str, *, request_id: str, actor: str) -> Json:
+    async def begin_resume(
+        self, swarm_id: str, *, request_id: str, actor: str, participant_id: str | None = None
+    ) -> Json:
         _request_id(request_id)
         if not isinstance(actor, str) or not actor:
             raise SwarmStoreError("invalid_arguments", field="actor")
-        return await self._run(self._begin_resume, swarm_id, request_id, actor)
+        return await self._run(self._begin_resume, swarm_id, request_id, actor, participant_id)
 
     async def list_swarms(self, *, cursor: str | None = None, limit: int = 20) -> Page:
         return await self._run(self._list_swarms, cursor, _limit(limit))
@@ -1624,10 +1626,12 @@ class SwarmStore:
 
         return self._write(operation)
 
-    def _begin_resume(self, swarm_id: str, request_id: str, actor: str) -> Json:
+    def _begin_resume(
+        self, swarm_id: str, request_id: str, actor: str, participant_id: str | None
+    ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
             scope = f"resume:{swarm_id}"
-            payload_hash = _hash({"action": "begin"})
+            payload_hash = _hash({"action": "begin", "participant_id": participant_id})
             replay = self._request_replay(connection, scope, request_id, payload_hash)
             if replay is not None:
                 return replay
@@ -1639,6 +1643,18 @@ class SwarmStore:
             epoch = connection.execute(
                 "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
             ).fetchone()
+            if participant_id is not None:
+                target = connection.execute(
+                    "SELECT state FROM participants WHERE swarm_id=? AND id=?",
+                    (swarm_id, participant_id),
+                ).fetchone()
+                if target is None:
+                    raise SwarmStoreError("participant_not_found")
+                eligible = {"prepared", "idle", "waiting", "blocked", "failed", "interrupted"}
+                if not epoch["is_open"]:
+                    eligible.add("cancelled")
+                if target["state"] not in eligible:
+                    raise SwarmStoreError("participant_not_resumable")
             if epoch["is_open"]:
                 participants = [
                     str(item["id"])
@@ -1649,6 +1665,8 @@ class SwarmStore:
                         (swarm_id,),
                     )
                 ]
+                if participant_id is not None:
+                    participants = [participant_id]
                 result = {
                     "swarm_id": swarm_id,
                     "state": str(row["state"]),
@@ -1676,9 +1694,11 @@ class SwarmStore:
                     (swarm_id,),
                 )
             ]
-            connection.execute(
-                "UPDATE participants SET state='prepared',wake_pending=0 WHERE swarm_id=? AND state!='done'",
-                (swarm_id,),
+            if participant_id is not None:
+                participants = [participant_id]
+            connection.executemany(
+                "UPDATE participants SET state='prepared',wake_pending=0 WHERE swarm_id=? AND id=?",
+                [(swarm_id, peer_id) for peer_id in participants],
             )
             connection.execute(
                 "UPDATE swarm_epochs SET epoch=?,is_open=1 WHERE swarm_id=?", (next_epoch, swarm_id)
@@ -3389,6 +3409,7 @@ def _post(row: sqlite3.Row) -> Json:
     value = {
         "id": row["id"],
         "sequence": row["sequence"],
+        "created_at": row["created_at"],
         "discussion_id": row["discussion_id"],
         "author": {
             "kind": row["author_kind"],

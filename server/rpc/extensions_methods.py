@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from core.chat import latest_session_context_usage
 from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, SettingsFieldDeclaration
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -18,6 +20,7 @@ from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
+_HISTORY_WORKERS = BoundedWorkerPool(name="extension-history", max_workers=2)
 _FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 
@@ -429,12 +432,15 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         if temporary_agents is None:
             raise ValueError("Extension page is unavailable; refresh the page")
         snapshot = await temporary_agents.inspect(group_id, participant_id, query)
+        projection = await _HISTORY_WORKERS.run(
+            _temporary_history_projection, snapshot, state.file_delivery
+        )
         if state.runtime.extensions is not registry or not registry.is_registration_current(
             identity
         ):
             raise ValueError("Extension page is unavailable; refresh the page")
         await _validate_page_context(state.runtime, registry, name, page)
-        return _temporary_history_projection(snapshot, state.file_delivery)
+        return projection
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
 
@@ -450,6 +456,7 @@ def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
         "messages": messages,
         "has_more": snapshot.page.has_more,
         "session_usage": snapshot.session_usage,
+        "context_usage": latest_session_context_usage(list(snapshot.context_messages)),
         "file_urls": _projected_file_urls(messages, delivery),
     }
     if snapshot.page.before_cursor is not None:

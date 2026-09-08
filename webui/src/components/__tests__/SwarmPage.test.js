@@ -235,6 +235,9 @@ function createBridge(initialProfile = profile) {
         runListener?.(id, event);
       },
       dispose: vi.fn(),
+      updateContext(next) {
+        context(next);
+      },
       show() {
         context({ route: '' });
       },
@@ -277,6 +280,148 @@ afterEach(async () => {
 });
 
 describe('SwarmPage', () => {
+  it('renders complete prompt, timestamped author headers and participants above posts', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const prompt = 'test-owned long prompt '.repeat(15) + '\nsecond line';
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({
+          swarm: { ...structuredClone(swarm), prompt },
+        });
+      if (name === 'board.read')
+        return Promise.resolve({
+          entries: [
+            {
+              id: 'post-time',
+              author: { name: 'Alpha' },
+              text: 'test-owned board text',
+              created_at: '2026-09-08T09:15:00+00:00',
+            },
+          ],
+        });
+      return original(name, args);
+    });
+    await render(bridge);
+    bridge.updateContext({
+      locale: 'en',
+      timezone: 'Europe/Berlin',
+      theme: {},
+    });
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.board time')).not.toBeNull(),
+    );
+    expect(document.querySelector('.goal').textContent).toBe(prompt);
+    expect(document.querySelector('.swarm-head').textContent).not.toContain(
+      'swr-a',
+    );
+    expect(document.querySelector('.swarm-tabs .chip')).not.toBeNull();
+    expect(document.querySelector('.post-header strong').textContent).toBe(
+      'Alpha',
+    );
+    expect(document.querySelector('.board time').dateTime).toBe(
+      '2026-09-08T09:15:00+00:00',
+    );
+    expect(document.querySelector('.board time').textContent).toMatch(/11:15/);
+    const roster = document.querySelector('.participant-pane');
+    expect(
+      roster.compareDocumentPosition(document.querySelector('.board')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    button('Usage').click();
+    await tick();
+    expect(document.querySelector('.swarm-identity dd').textContent).toBe(
+      'swr-a',
+    );
+  });
+
+  it('keeps a failed post in the modal and closes only after successful submission', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let fail = true;
+    operation.mockImplementation((name, args) =>
+      name === 'board.post' && fail
+        ? Promise.reject(new Error('post-failed-sentinel'))
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(button('Write post')).toBeDefined());
+    button('Write post').click();
+    await tick();
+    expect(
+      document.querySelector('[role="dialog"] #swarm-post'),
+    ).not.toBeNull();
+    fill('swarm-post', 'retained-draft-sentinel');
+    await tick();
+    button('Post').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[role="dialog"] [role="alert"]').textContent,
+      ).toContain('post-failed-sentinel'),
+    );
+    expect(document.getElementById('swarm-post').value).toBe(
+      'retained-draft-sentinel',
+    );
+    fail = false;
+    button('Post').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="dialog"]')).toBeNull(),
+    );
+  });
+
+  it('shows canonical context and resumes only the selected inactive participant', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.get'
+        ? Promise.resolve({
+            swarm: {
+              ...structuredClone(swarm),
+              participants: swarm.participants.map((peer) => ({
+                ...peer,
+                state: peer.id === 'prt-a' ? 'running' : 'failed',
+                run_active: peer.id === 'prt-a',
+              })),
+            },
+          })
+        : original(name, args),
+    );
+    bridge.readHistory.mockImplementation((_swarm, participant) =>
+      Promise.resolve({
+        messages: [],
+        context_usage: {
+          tokens: participant === 'prt-a' ? 120 : 850,
+          estimated: participant !== 'prt-a',
+        },
+        session_usage: { input_tokens: 99000 },
+      }),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(button('Beta')).toBeDefined());
+    button('Beta').click();
+    await vi.waitFor(() => expect(button('Resume participant')).toBeDefined());
+    expect(document.querySelector('.context-usage').textContent).toContain(
+      '~850',
+    );
+    button('Resume participant').click();
+    await vi.waitFor(() =>
+      expect(operation).toHaveBeenCalledWith(
+        'swarms.resume',
+        expect.objectContaining({ swarm_id: 'swr-a', participant_id: 'prt-b' }),
+      ),
+    );
+    button('Alpha').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.context-usage').textContent).toContain(
+        '120 / 128,000',
+      ),
+    );
+    expect(button('Resume participant')).toBeUndefined();
+  });
+
   it('shows prompt contributions and persists independent context and reminder switches', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
@@ -806,6 +951,16 @@ describe('SwarmPage', () => {
       expect(bridge.subscribeRun).toHaveBeenCalledWith(
         'swr-a',
         'run-live-test',
+      );
+      bridge.emitRun('subscription-live-test', {
+        type: 'model_step_usage',
+        run_id: 'run-live-test',
+        sequence: 1,
+        payload: { context_usage: { tokens: 2468, estimated: true } },
+      });
+      await tick();
+      expect(document.querySelector('.context-usage').textContent).toContain(
+        '~2,468',
       );
       button('New Swarm').click();
       await tick();
