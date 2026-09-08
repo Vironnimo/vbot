@@ -34,9 +34,45 @@ function initialize(target, nonce = 'nonce-a', epoch = 'epoch-a') {
 afterEach(() => {
   client?.dispose();
   client = null;
+  vi.useRealTimers();
 });
 
 describe('extension page client', () => {
+  it('accepts catalog replies larger than the command limit', async () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    const pending = client.operation('catalog');
+    const call = target.postMessage.mock.calls.at(-1)[0];
+    const result = { catalog: { description: 'x'.repeat(128 * 1024) } };
+    dispatchFrom(target, { ...call, type: 'vbot.extension.result', result });
+    await expect(pending).resolves.toEqual(result);
+  });
+
+  it('rejects a missing reply and allows a fresh request without replaying it', async () => {
+    vi.useFakeTimers();
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    const failed = expect(client.operation('catalog')).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await failed;
+    const pending = client.operation('catalog');
+    const call = target.postMessage.mock.calls.at(-1)[0];
+    dispatchFrom(target, {
+      ...call,
+      type: 'vbot.extension.result',
+      result: {},
+    });
+    await expect(pending).resolves.toEqual({});
+    expect(vi.getTimerCount()).toBe(0);
+    expect(
+      target.postMessage.mock.calls.filter(
+        ([data]) => data.type === 'vbot.extension.call',
+      ),
+    ).toHaveLength(2);
+  });
+
   it('accepts only a versioned matching init and publishes its display context', () => {
     const target = parent();
     const contexts = vi.fn();

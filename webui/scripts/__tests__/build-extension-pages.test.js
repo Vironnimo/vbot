@@ -53,5 +53,21 @@ describe('build-extension-pages', () => {
         'vbot.extension.init',
       );
     }
+    // Check the production page too: shared CSS must not import fonts that its
+    // opaque-origin CSP blocks, and every bundled font must actually ship.
+    const swarmBuild = resolve(projectRoot, 'resources/extensions/swarm/web');
+    const swarmHtml = readFileSync(resolve(swarmBuild, 'page.html'), 'utf8');
+    const stylesheet = swarmHtml.match(/href="(\.\/assets\/[^"]+\.css)"/)[1];
+    const css = readFileSync(resolve(swarmBuild, stylesheet), 'utf8');
+    expect(css).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
+    expect(
+      readFileSync(resolve(swarmBuild, 'fonts/OFL.txt'), 'utf8'),
+    ).toContain('SIL OPEN FONT LICENSE');
+    const fonts = [
+      ...css.matchAll(/url\((?:["']?)([^)"']+\.ttf)(?:["']?)\)/g),
+    ].map((match) => match[1]);
+    expect(fonts).toHaveLength(6);
+    for (const font of fonts)
+      expect(existsSync(resolve(swarmBuild, 'assets', font))).toBe(true);
   });
 });

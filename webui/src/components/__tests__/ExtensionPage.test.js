@@ -56,6 +56,39 @@ function message(child, data) {
 }
 
 describe('ExtensionPage', () => {
+  it.each([
+    [128 * 1024, 'vbot.extension.result'],
+    [8 * 1024 * 1024, 'vbot.extension.error'],
+  ])(
+    'settles a catalog reply of %i bytes instead of dropping it',
+    async (size, type) => {
+      component = mount(ExtensionPageHost, {
+        target: document.body,
+        props: { initialDescriptor: descriptor },
+      });
+      flushSync();
+      const { child, sent, init } = loadFrame();
+      message(child, { ...init, type: 'vbot.extension.ready' });
+      const result = { catalog: { description: 'x'.repeat(size) } };
+      operation.mockResolvedValue(result);
+      message(child, {
+        ...init,
+        type: 'vbot.extension.call',
+        id: 'catalog',
+        method: 'operation',
+        params: { operation: 'catalog', arguments: {} },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      const reply = sent.mock.calls
+        .map(([data]) => data)
+        .find((data) => data.id === 'catalog');
+      expect(reply?.type).toBe(type);
+      if (type === 'vbot.extension.result')
+        expect(reply.result).toEqual(result);
+    },
+  );
+
   it('requires matching Ready before it invokes an owner-bound operation', async () => {
     const routeChange = vi.fn();
     component = mount(ExtensionPageHost, {

@@ -11,6 +11,7 @@
 
   const BRIDGE_VERSION = 1;
   const MAX_MESSAGE_BYTES = 64 * 1024;
+  const MAX_HOST_MESSAGE_BYTES = 8 * 1024 * 1024;
   const MAX_REQUEST_ID_LENGTH = 128;
   const METHODS = new Set([
     'operation',
@@ -60,12 +61,11 @@
     return prototype === Object.prototype || prototype === null;
   }
 
-  function valid(value) {
+  function valid(value, maxBytes = MAX_MESSAGE_BYTES) {
     try {
       return (
         isPlainObject(value) &&
-        new TextEncoder().encode(JSON.stringify(value)).byteLength <=
-          MAX_MESSAGE_BYTES
+        new TextEncoder().encode(JSON.stringify(value)).byteLength <= maxBytes
       );
     } catch {
       return false;
@@ -94,8 +94,12 @@
   }
 
   function post(context, data) {
-    if (!disposed && frameContext === context && context.window && valid(data))
-      context.window.postMessage(data, '*');
+    if (disposed || frameContext !== context || !context.window) return;
+    // Replies include catalogs and canonical history, not just small commands.
+    // Never drop a reply silently: onMessage returns this failure to its caller.
+    if (!valid(data, MAX_HOST_MESSAGE_BYTES))
+      throw new Error('Extension response is too large');
+    context.window.postMessage(JSON.parse(JSON.stringify(data)), '*');
   }
 
   function projectedFileUrls(result) {
@@ -280,7 +284,10 @@
         if (typeof url === 'string' && url.startsWith('/api/extension-runs/')) {
           const subscription = subscribeRunEvents(url, {
             onEvent: (event) => {
-              if (frameContext === context && valid(event)) {
+              if (
+                frameContext === context &&
+                valid(event, MAX_HOST_MESSAGE_BYTES)
+              ) {
                 post(context, {
                   type: 'vbot.extension.stream',
                   version: BRIDGE_VERSION,

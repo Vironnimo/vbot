@@ -174,15 +174,67 @@ async function render(bridge) {
 afterEach(async () => {
   if (mounted) mounted = await unmount(mounted);
   document.body.innerHTML = '';
+  vi.useRealTimers();
 });
 
 describe('SwarmPage', () => {
-  it('leaves loading after the catalog and retained lists resolve', async () => {
+  it('shows a connection failure if the host never initializes the page', async () => {
+    vi.useFakeTimers();
+    const { bridge } = createBridge();
+    mounted = mount(SwarmPage, {
+      target: document.body,
+      props: { bridgeClient: bridge },
+    });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    flushSync();
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    expect(button('Refresh').disabled).toBe(false);
+    bridge.show();
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(button('New profile')).toBeDefined();
+  });
+
+  it('loads retained lists without requesting the profile catalog', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     expect(document.body.textContent).toContain('New profile');
     expect(document.body.textContent).toContain('Retained Swarms');
     expect(operation).toHaveBeenCalledWith('profiles.list', { limit: 100 });
+    expect(operation.mock.calls.some(([name]) => name === 'catalog')).toBe(
+      false,
+    );
+    bridge.show();
+    await tick();
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'profiles.list'),
+    ).toHaveLength(1);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'catalog'),
+    ).toHaveLength(1);
+    expect(document.querySelector('input')).not.toBeNull();
+  });
+
+  it('keeps the overview usable when the profile catalog fails and retries on request', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    operation.mockRejectedValueOnce(new Error('catalog-unavailable-test'));
+    button('New profile').click();
+    await tick();
+    flushSync();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'catalog-unavailable-test',
+    );
+    expect(button('New profile').disabled).toBe(false);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    expect(document.querySelector('input')).not.toBeNull();
   });
 
   it('saves a new profile through the bridge', async () => {

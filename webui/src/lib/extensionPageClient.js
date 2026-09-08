@@ -1,6 +1,8 @@
 const BRIDGE_VERSION = 1;
 const MAX_MESSAGE_BYTES = 64 * 1024;
+const MAX_HOST_MESSAGE_BYTES = 8 * 1024 * 1024;
 const MAX_REQUEST_ID_LENGTH = 128;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export function createExtensionPageClient({ target = window.parent } = {}) {
   let context = null;
@@ -16,12 +18,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     return prototype === Object.prototype || prototype === null;
   }
 
-  function validMessage(value) {
+  function validMessage(value, maxBytes = MAX_MESSAGE_BYTES) {
     try {
       return (
         isPlainObject(value) &&
-        new TextEncoder().encode(JSON.stringify(value)).byteLength <=
-          MAX_MESSAGE_BYTES
+        new TextEncoder().encode(JSON.stringify(value)).byteLength <= maxBytes
       );
     } catch {
       return false;
@@ -45,7 +46,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   }
 
   const onMessage = (event) => {
-    if (event.source !== target || !validMessage(event.data)) return;
+    if (
+      event.source !== target ||
+      !validMessage(event.data, MAX_HOST_MESSAGE_BYTES)
+    )
+      return;
     const data = event.data;
     if (data.type === 'vbot.extension.init') {
       if (
@@ -146,8 +151,26 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     if (!validMessage(message))
       return Promise.reject(new Error('Extension request is too large'));
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      target.postMessage(message, '*');
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error('Extension request timed out. Refresh to try again.'));
+      }, REQUEST_TIMEOUT_MS);
+      pending.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      try {
+        target.postMessage(JSON.parse(JSON.stringify(message)), '*');
+      } catch (error) {
+        pending.get(id).reject(error);
+        pending.delete(id);
+      }
     });
   }
 
