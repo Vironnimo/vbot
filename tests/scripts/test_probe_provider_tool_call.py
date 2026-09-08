@@ -45,7 +45,7 @@ def test_swarm_workflow_rejects_a_claim_without_coordination():
     result = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
     assert result["passed"] is False
     assert result["missing_actions"]
-    assert result["finish_requested_and_reserved"] is False
+    assert result["final_response_received"] is True
 
 
 def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
@@ -75,7 +75,7 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
                 "",
             )
             sequence = [
-                ("swarm_state", {"action": "status"}),
+                ("swarm_state", {}),
                 ("swarm_board", {"action": "list"}),
                 (
                     "swarm_board",
@@ -109,14 +109,15 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
                     },
                 ),
                 ("swarm_inbox", {}),
-                ("swarm_state", {"action": "wait"}),
+                ("final", {}),
                 ("swarm_inbox", {}),
-                ("swarm_state", {"action": "done", "summary": "Checklist reviewed"}),
             ]
             if self.step >= len(sequence):
                 return {"content": "complete"}
             name, arguments = sequence[self.step]
             self.step += 1
+            if name == "final":
+                return {"content": "Draft ready for review"}
             return {
                 "tool_calls": [{"id": f"call-{self.step}", "name": name, "arguments": arguments}]
             }
@@ -165,7 +166,9 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
     args.swarm_tool = "swarm_state"
     state = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
     assert state["passed"]
-    assert len(state["cases"]) >= 40
+    assert {"status_default", "status_cursor", "name_rejected", "name_field_rejected"} <= {
+        row["case"] for row in state["cases"]
+    }
 
 
 def test_browser_workflow_probe_rejects_a_claim_without_submission_or_download():
@@ -1564,7 +1567,6 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
                         {"action": "post", "text": "Revised checklist", "request_id": "revision"},
                     )
                 )
-            calls.append(("swarm_state", {"action": "done", "summary": "Checklist reviewed"}))
             if self.step >= len(calls):
                 return {"content": "Finished"}
             name, arguments = calls[self.step]

@@ -6,8 +6,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from core.runs.runs import RunExecutionOwner
-from core.sessions import DeliveryReceipt, OwnedRunRecord, SessionAddress, TemporarySessionBinding
+from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 
 
@@ -70,7 +69,7 @@ async def test_prompt_selection_and_reminders_are_snapshotted(store):
         {"prompt_blocks": [2]},
         {"prompt_blocks": ["core:agent_body"]},
         {"reminders": {"resume": False}},
-        {"reminders": {"delivery": True, "wake": True, "resume": 1, "completion": True}},
+        {"reminders": {"delivery": True, "wake": True, "resume": 1}},
     ],
 )
 async def test_prompt_controls_reject_invalid_values(store, fields):
@@ -87,22 +86,6 @@ async def _swarm(store: SwarmStore, *, count: int = 2) -> dict[str, object]:
         request_id="start-1",
         expected_profile_revision=profile["revision"],
     )
-
-
-async def _reserve_done(store: SwarmStore, swarm_id: str, participant_id: str, run_id: str) -> None:
-    await store.bind_execution_epoch(swarm_id, expected_epoch=0, execution_epoch="host-epoch")
-    await store.request_done(
-        swarm_id,
-        participant_id,
-        run_id=run_id,
-        expected_epoch=0,
-        call_id="done-call",
-        summary="done",
-    )
-    result = await store.reconcile_tool_batch(
-        swarm_id, participant_id, run_id=run_id, expected_epoch=0, persisted_call_ids=("done-call",)
-    )
-    assert result["state"] == "finishing"
 
 
 @pytest.mark.asyncio
@@ -641,9 +624,9 @@ async def test_automatic_policy_modes_and_wake_watermark(
         admission_boundary=1 if state == "idle" else None,
     )
     assert result["wake"] is (wake_idle and state == "idle")
-    if mode == "pull":
-        assert result["entries"] == [] and result["pull_reminder"] is True
-    elif mode == "idle" and state == "running":
+    if (mode == "pull" and not (wake_idle and state == "idle")) or (
+        mode == "idle" and state == "running"
+    ):
         assert result["entries"] == []
     else:
         assert len(result["entries"]) == 1
@@ -701,404 +684,6 @@ async def test_stop_resume_retires_old_epoch_and_settings_toggle_retracts_wake(
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_done_requires_matching_completed_owned_run(tmp_path) -> None:
-    record: OwnedRunRecord | None = None
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return record
-
-    store = SwarmStore(tmp_path / "life.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        swarm = await store.get_swarm(started["swarm_id"])
-        participant = swarm["participants"][0]["id"]
-        address = SessionAddress(None, "tmp", "ses")
-        binding = TemporarySessionBinding(
-            address, "gen", "swarm", started["swarm_id"], participant, {}
-        )
-        await store.bind_participant_session(binding)
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        owner = RunExecutionOwner("swarm", started["swarm_id"], participant, "gen", "host-epoch")
-        record = OwnedRunRecord(1, address, "gen", "run", owner, 2, "completed", 2)
-        assert (
-            await store.finalize_participant(
-                started["swarm_id"], participant, run_id="run", expected_epoch=0
-            )
-        )["state"] == "done"
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_post_committed_after_finish_request_blocks_finalization(tmp_path) -> None:
-    record: OwnedRunRecord | None = None
-    store: SwarmStore
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        # This callback is the deterministic boundary between the persisted
-        # finish intent and Store finalization.
-        await store.post(started["swarm_id"], sender, text="late", request_id="late-post")
-        return record
-
-    store = SwarmStore(tmp_path / "finish-race.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        swarm = await store.get_swarm(started["swarm_id"])
-        sender, participant = [item["id"] for item in swarm["participants"]]
-        address = SessionAddress(None, "tmp", "ses_finish_race")
-        await store.bind_participant_session(
-            TemporarySessionBinding(address, "gen", "swarm", started["swarm_id"], participant, {})
-        )
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        record = OwnedRunRecord(
-            1,
-            address,
-            "gen",
-            "run",
-            RunExecutionOwner("swarm", started["swarm_id"], participant, "gen", "host-epoch"),
-            1,
-            "completed",
-            2,
-        )
-
-        result = await store.finalize_participant(
-            started["swarm_id"], participant, run_id="run", expected_epoch=0
-        )
-
-        assert result == {"participant_id": participant, "state": "done"}
-        assert (await store.get_swarm(started["swarm_id"]))["participants"][1]["state"] == "done"
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_post_after_committed_done_is_retained_with_inactive_recipient(tmp_path) -> None:
-    record: OwnedRunRecord | None = None
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return record
-
-    store = SwarmStore(tmp_path / "done-post.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        swarm = await store.get_swarm(started["swarm_id"])
-        sender, participant = [item["id"] for item in swarm["participants"]]
-        address = SessionAddress(None, "tmp", "ses_done_post")
-        await store.bind_participant_session(
-            TemporarySessionBinding(address, "gen", "swarm", started["swarm_id"], participant, {})
-        )
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        record = OwnedRunRecord(
-            1,
-            address,
-            "gen",
-            "run",
-            RunExecutionOwner("swarm", started["swarm_id"], participant, "gen", "host-epoch"),
-            1,
-            "completed",
-            2,
-        )
-        assert (
-            await store.finalize_participant(
-                started["swarm_id"], participant, run_id="run", expected_epoch=0
-            )
-        )["state"] == "done"
-
-        posted = await store.post(
-            started["swarm_id"], sender, text="after", request_id="after-done"
-        )
-
-        assert posted["inactive_recipients"] == [participant]
-        assert (await store.read_posts(started["swarm_id"], sender)).entries[-1]["text"] == "after"
-        assert (await store.prepare_inbox_delivery(started["swarm_id"], participant))[
-            "entries"
-        ] == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_done_reservation_requires_persisted_call_and_rejects_post_race(
-    store: SwarmStore,
-) -> None:
-    started = await _swarm(store)
-    swarm = await store.get_swarm(started["swarm_id"])
-    sender, participant = [item["id"] for item in swarm["participants"]]
-    await store.bind_execution_epoch(
-        started["swarm_id"], expected_epoch=0, execution_epoch="opaque"
-    )
-    requested = await store.request_done(
-        started["swarm_id"],
-        participant,
-        run_id="run",
-        expected_epoch=0,
-        call_id="call",
-        summary="done",
-    )
-    assert requested["status"] == "finish_requested"
-    assert (await store.get_swarm(started["swarm_id"]))["participants"][1]["state"] == "prepared"
-    await store.post(started["swarm_id"], sender, text="late", request_id="late")
-    result = await store.reconcile_tool_batch(
-        started["swarm_id"],
-        participant,
-        run_id="run",
-        expected_epoch=0,
-        persisted_call_ids=("call",),
-    )
-    assert result["continuation_required"] is True
-    assert result["end_run"] is False
-
-
-@pytest.mark.asyncio
-async def test_lifecycle_rejects_wrong_or_failed_terminal_proof(tmp_path) -> None:
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return OwnedRunRecord(
-            1,
-            SessionAddress(None, "wrong", "ses"),
-            "bad",
-            "run",
-            RunExecutionOwner("swarm", "bad", "bad", "bad", "0"),
-            1,
-            "failed",
-            1,
-        )
-
-    store = SwarmStore(tmp_path / "bad.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        swarm = await store.get_swarm(started["swarm_id"])
-        participant = swarm["participants"][0]["id"]
-        await store.bind_participant_session(
-            TemporarySessionBinding(
-                SessionAddress(None, "tmp", "ses"),
-                "gen",
-                "swarm",
-                started["swarm_id"],
-                participant,
-                {},
-            )
-        )
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        with pytest.raises(SwarmStoreError, match="terminal_proof_missing"):
-            await store.finalize_participant(
-                started["swarm_id"], participant, run_id="run", expected_epoch=0
-            )
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("terminal_status", ["failed", "cancelled"])
-async def test_lifecycle_rejects_matching_noncompleted_terminal_proof(
-    tmp_path, terminal_status: str
-) -> None:
-    record: OwnedRunRecord | None = None
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return record
-
-    store = SwarmStore(tmp_path / f"{terminal_status}.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
-        address = SessionAddress(None, "tmp", f"ses_{terminal_status}")
-        await store.bind_participant_session(
-            TemporarySessionBinding(address, "gen", "swarm", started["swarm_id"], participant, {})
-        )
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        record = OwnedRunRecord(
-            1,
-            address,
-            "gen",
-            "run",
-            RunExecutionOwner("swarm", started["swarm_id"], participant, "gen", "host-epoch"),
-            1,
-            terminal_status,
-            2,
-        )
-
-        assert (
-            await store.finalize_participant(
-                started["swarm_id"], participant, run_id="run", expected_epoch=0
-            )
-        )["state"] == terminal_status
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_wait_and_needs_user_remain_distinct(store: SwarmStore) -> None:
-    started = await _swarm(store)
-    swarm = await store.get_swarm(started["swarm_id"])
-    participant = swarm["participants"][0]["id"]
-    assert (
-        await store.request_wait(
-            started["swarm_id"], participant, run_id="wait", expected_epoch=0, call_id="wait"
-        )
-    )["state"] == "waiting"
-    assert (
-        await store.request_wait(
-            started["swarm_id"],
-            participant,
-            run_id="block",
-            expected_epoch=0,
-            call_id="block",
-            needs_user=True,
-        )
-    )["state"] == "blocked"
-
-
-@pytest.mark.asyncio
-async def test_wait_can_wake_but_needs_user_blocks_automatic_delivery(store: SwarmStore) -> None:
-    started = await _swarm(store)
-    swarm = await store.get_swarm(started["swarm_id"])
-    sender, participant = [item["id"] for item in swarm["participants"]]
-    await store.request_wait(
-        started["swarm_id"], participant, run_id="wait", expected_epoch=0, call_id="wait"
-    )
-    await store.reconcile_tool_batch(
-        started["swarm_id"],
-        participant,
-        run_id="wait",
-        expected_epoch=0,
-        persisted_call_ids=("wait",),
-    )
-    await store.post(started["swarm_id"], sender, text="wake", request_id="wait-wake")
-    waiting = await store.prepare_automatic_delivery(
-        started["swarm_id"], participant, expected_epoch=0, admission_boundary=1
-    )
-    assert waiting["wake"] is True and len(waiting["entries"]) == 1
-    await store.request_wait(
-        started["swarm_id"],
-        participant,
-        run_id="block",
-        expected_epoch=0,
-        call_id="block",
-        needs_user=True,
-    )
-    await store.reconcile_tool_batch(
-        started["swarm_id"],
-        participant,
-        run_id="block",
-        expected_epoch=0,
-        persisted_call_ids=("block",),
-    )
-    await store.post(started["swarm_id"], sender, text="hold", request_id="blocked-hold")
-    blocked = await store.prepare_automatic_delivery(
-        started["swarm_id"], participant, expected_epoch=0, admission_boundary=2
-    )
-    assert blocked == {"entries": [], "wake": False, "pending_remaining": 0}
-
-
-@pytest.mark.asyncio
-async def test_done_is_rejected_while_owned_descendant_is_active(tmp_path) -> None:
-    async def descendants(*_args: object) -> bool:
-        return True
-
-    store = SwarmStore(tmp_path / "desc.db", has_owned_descendants=descendants)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
-        assert (
-            await store.request_done(
-                started["swarm_id"],
-                participant,
-                run_id="run",
-                expected_epoch=0,
-                call_id="done",
-                summary="done",
-            )
-        )["owned_work_active"]
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_descendant_started_after_finish_intent_blocks_finalization(tmp_path) -> None:
-    descendants_active = False
-    record: OwnedRunRecord | None = None
-
-    async def descendants(*_args: object) -> bool:
-        return descendants_active
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return record
-
-    store = SwarmStore(
-        tmp_path / "late-descendant.db",
-        lookup_terminal_proof=lookup,
-        has_owned_descendants=descendants,
-    )
-    await store.open()
-    try:
-        started = await _swarm(store)
-        participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
-        address = SessionAddress(None, "tmp", "ses_late_descendant")
-        await store.bind_participant_session(
-            TemporarySessionBinding(address, "gen", "swarm", started["swarm_id"], participant, {})
-        )
-        await _reserve_done(store, started["swarm_id"], participant, "run")
-        descendants_active = True
-        record = OwnedRunRecord(
-            1,
-            address,
-            "gen",
-            "run",
-            RunExecutionOwner("swarm", started["swarm_id"], participant, "gen", "host-epoch"),
-            1,
-            "completed",
-            2,
-        )
-
-        result = await store.finalize_participant(
-            started["swarm_id"], participant, run_id="run", expected_epoch=0
-        )
-        assert result["state"] == "finishing" and result["owned_work_active"] is True
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_stale_epoch_finalize_is_rejected(tmp_path) -> None:
-    async def lookup(_swarm_id: str, _run: str) -> OwnedRunRecord | None:
-        return None
-
-    store = SwarmStore(tmp_path / "stale-final.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
-        await store.request_done(
-            started["swarm_id"],
-            participant,
-            run_id="run",
-            expected_epoch=0,
-            call_id="done",
-            summary="done",
-        )
-        await store.begin_stop(started["swarm_id"], request_id="stop", actor="test")
-        await store.finish_stop(
-            started["swarm_id"],
-            request_id="stop-finish",
-            actor="test",
-            drain_report={"drained": True},
-        )
-        await store.begin_resume(started["swarm_id"], request_id="resume", actor="test")
-        with pytest.raises(SwarmStoreError, match="stale_epoch"):
-            await store.finalize_participant(
-                started["swarm_id"], participant, run_id="run", expected_epoch=0
-            )
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
 async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) -> None:
     path = tmp_path / "recovery.db"
     first = SwarmStore(path)
@@ -1118,7 +703,7 @@ async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) 
         ]
         snapshot = await recovered.get_swarm(started["swarm_id"])
         assert snapshot["state"] == "interrupted"
-        assert all(item["state"] == "interrupted" for item in snapshot["participants"])
+        assert [item["state"] for item in snapshot["participants"]] == ["interrupted", "idle"]
         assert await recovered.recover_interrupted() == []
         with pytest.raises(SwarmStoreError, match="swarm_closed"):
             await recovered.prepare_automatic_delivery(
@@ -1126,65 +711,6 @@ async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) 
             )
     finally:
         await recovered.close()
-
-
-@pytest.mark.asyncio
-async def test_stop_resume_intents_are_idempotent_and_skip_done_participants(tmp_path) -> None:
-    record: OwnedRunRecord | None = None
-
-    async def lookup(_swarm_id: str, _run_id: str) -> OwnedRunRecord | None:
-        return record
-
-    store = SwarmStore(tmp_path / "resume.db", lookup_terminal_proof=lookup)
-    await store.open()
-    try:
-        started = await _swarm(store)
-        swarm = await store.get_swarm(started["swarm_id"])
-        done_participant, unfinished = [item["id"] for item in swarm["participants"]]
-        address = SessionAddress(None, "tmp", "ses_resume")
-        await store.bind_participant_session(
-            TemporarySessionBinding(
-                address, "gen", "swarm", started["swarm_id"], done_participant, {}
-            )
-        )
-        await _reserve_done(store, started["swarm_id"], done_participant, "run")
-        record = OwnedRunRecord(
-            1,
-            address,
-            "gen",
-            "run",
-            RunExecutionOwner("swarm", started["swarm_id"], done_participant, "gen", "host-epoch"),
-            1,
-            "completed",
-            2,
-        )
-        assert (
-            await store.finalize_participant(
-                started["swarm_id"], done_participant, run_id="run", expected_epoch=0
-            )
-        )["state"] == "done"
-        stop = await store.begin_stop(started["swarm_id"], request_id="stop", actor="user")
-        assert (await store.begin_stop(started["swarm_id"], request_id="stop", actor="user"))[
-            "replayed"
-        ]
-        assert stop["state"] == "stopping"
-        await store.finish_stop(
-            started["swarm_id"], request_id="finish", actor="user", drain_report={"drained": True}
-        )
-        resumed = await store.begin_resume(started["swarm_id"], request_id="resume", actor="user")
-
-        assert resumed["participant_ids"] == [unfinished]
-        assert resumed["epoch"] == 1
-        assert (await store.begin_resume(started["swarm_id"], request_id="resume", actor="user"))[
-            "replayed"
-        ]
-        states = {
-            item["id"]: item["state"]
-            for item in (await store.get_swarm(started["swarm_id"]))["participants"]
-        }
-        assert states == {done_participant: "done", unfinished: "prepared"}
-    finally:
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -1267,14 +793,11 @@ async def test_wake_claim_preserves_idle_boundary_for_running_idle_delivery(
 
 
 @pytest.mark.asyncio
-async def test_status_rename_and_exact_run_finish(store: SwarmStore) -> None:
+async def test_status_and_exact_run_finish(store: SwarmStore) -> None:
     started = await _swarm(store)
     participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
-    assert (await store.rename_participant(started["swarm_id"], participant, " Reviewer "))[
-        "name"
-    ] == "Reviewer"
     status = await store.participant_status(started["swarm_id"], participant, limit=1)
-    assert status["roster"][0]["name"] == "Reviewer"
+    assert status["roster"][0]["name"] == "Participant 1"
     assert "epoch" not in status and "usage" not in status
     await store.record_run_started(started["swarm_id"], participant, run_id="new", expected_epoch=0)
     with pytest.raises(SwarmStoreError, match="stale_run"):
@@ -1356,73 +879,7 @@ async def test_reopen_reannounces_unadmitted_prepared_delivery(store: SwarmStore
 
 
 @pytest.mark.asyncio
-async def test_failed_or_cancelled_terminal_overrides_persisted_wait(store: SwarmStore) -> None:
-    started = await _swarm(store)
-    participants = [
-        item["id"] for item in (await store.get_swarm(started["swarm_id"]))["participants"]
-    ]
-    for participant, outcome in zip(participants, ("failed", "cancelled"), strict=True):
-        run_id = f"wait-{outcome}"
-        await store.request_wait(
-            started["swarm_id"], participant, run_id=run_id, expected_epoch=0, call_id=run_id
-        )
-        batch = await store.reconcile_tool_batch(
-            started["swarm_id"],
-            participant,
-            run_id=run_id,
-            expected_epoch=0,
-            persisted_call_ids=(run_id,),
-        )
-        assert batch["state"] == "waiting"
-        finished = await store.reconcile_run_finished(
-            started["swarm_id"], participant, run_id=run_id, expected_epoch=0, outcome=outcome
-        )
-        assert finished["state"] == outcome
-
-
-@pytest.mark.asyncio
-async def test_finish_group_requires_clean_drain_and_every_participant_done(
-    store: SwarmStore,
-) -> None:
-    started = await _swarm(store)
-    swarm_id = started["swarm_id"]
-    with pytest.raises(SwarmStoreError, match="owned_work_active"):
-        await store.finish_group(
-            swarm_id, expected_epoch=0, drain_report={"closed": True, "run_ids": []}
-        )
-
-    connection = store._connection  # noqa: SLF001 - exact completion transaction fixture
-    assert connection is not None
-    connection.execute("UPDATE participants SET state='done' WHERE swarm_id=?", (swarm_id,))
-    connection.execute(
-        "UPDATE participants SET wake_pending=1 WHERE id=("
-        "SELECT id FROM participants WHERE swarm_id=? LIMIT 1)",
-        (swarm_id,),
-    )
-    with pytest.raises(SwarmStoreError, match="owned_work_active"):
-        await store.finish_group(
-            swarm_id, expected_epoch=0, drain_report={"closed": True, "run_ids": []}
-        )
-    connection.execute("UPDATE participants SET wake_pending=0 WHERE swarm_id=?", (swarm_id,))
-    with pytest.raises(SwarmStoreError, match="owned_work_active"):
-        await store.finish_group(
-            swarm_id, expected_epoch=0, drain_report={"closed": True, "run_ids": ["active-run"]}
-        )
-
-    completed = await store.finish_group(
-        swarm_id, expected_epoch=0, drain_report={"closed": True, "run_ids": []}
-    )
-    assert completed["state"] == "completed"
-    assert (await store.get_swarm(swarm_id))["state"] == "completed"
-    assert (
-        await store.finish_group(
-            swarm_id, expected_epoch=0, drain_report={"closed": True, "run_ids": []}
-        )
-    )["replayed"]
-
-
-@pytest.mark.asyncio
-async def test_stale_rename_and_foreign_ping_have_exact_codes(store: SwarmStore) -> None:
+async def test_foreign_ping_after_resume_has_exact_code(store: SwarmStore) -> None:
     started = await _swarm(store)
     sender = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
     await store.begin_stop(started["swarm_id"], request_id="stop-r", actor="test")
@@ -1430,8 +887,6 @@ async def test_stale_rename_and_foreign_ping_have_exact_codes(store: SwarmStore)
         started["swarm_id"], request_id="finish-r", actor="test", drain_report={}
     )
     await store.begin_resume(started["swarm_id"], request_id="resume-r", actor="test")
-    with pytest.raises(SwarmStoreError, match="stale_epoch"):
-        await store.rename_participant(started["swarm_id"], sender, "Later", expected_epoch=0)
     with pytest.raises(SwarmStoreError, match="invalid_recipient"):
         await store.post(
             started["swarm_id"],
@@ -1444,65 +899,6 @@ async def test_stale_rename_and_foreign_ping_have_exact_codes(store: SwarmStore)
 
 
 @pytest.mark.asyncio
-async def test_status_keeps_whole_16k_summaries_and_pages_at_delivery_budget(
-    store: SwarmStore,
-) -> None:
-    started = await _swarm(store)
-    participants = (await store.get_swarm(started["swarm_id"]))["participants"]
-    swarm = await store.get_swarm(started["swarm_id"])
-    await store.apply_delivery_settings(
-        started["swarm_id"],
-        {**swarm["delivery"], "batch_chars": 16_000},
-        expected_revision=1,
-        request_id="budget",
-        actor="test",
-    )
-    connection = store._connection  # noqa: SLF001 - exact bounded read-model fixture
-    assert connection is not None
-    connection.execute(
-        "UPDATE participants SET summary_json=? WHERE id=?",
-        ('{"summary":"' + "x" * 16_000 + '"}', participants[0]["id"]),
-    )
-    connection.execute(
-        "UPDATE participants SET summary_json=? WHERE id=?",
-        ('{"summary":"next"}', participants[1]["id"]),
-    )
-    first = await store.participant_status(
-        started["swarm_id"], participants[0]["id"], limit=20, include_summaries=True
-    )
-    assert [len(item["summary"] or "") for item in first["roster"]] == [16_000]
-    assert first["has_more"] and first["cursor"]
-    second = await store.participant_status(
-        started["swarm_id"],
-        participants[0]["id"],
-        cursor=first["cursor"],
-        limit=20,
-        include_summaries=True,
-    )
-    assert [item["summary"] for item in second["roster"]] == ["next"]
-    assert "summary" not in first["self"]
-    assert first["roster"][0]["summary_available"]
-
-
-@pytest.mark.asyncio
-async def test_rename_rejects_reserved_collision_inactive_and_foreign(store: SwarmStore) -> None:
-    started = await _swarm(store)
-    first, second = [
-        item["id"] for item in (await store.get_swarm(started["swarm_id"]))["participants"]
-    ]
-    assert (await store.rename_participant(started["swarm_id"], first, "Same"))["name"] == "Same"
-    assert (await store.rename_participant(started["swarm_id"], first, " Same "))["name"] == "Same"
-    for name in ("same", "System", "User"):
-        with pytest.raises(SwarmStoreError, match="name_unavailable"):
-            await store.rename_participant(started["swarm_id"], second, name)
-    with pytest.raises(SwarmStoreError, match="participant_not_found"):
-        await store.rename_participant(started["swarm_id"], "foreign", "Other")
-    await store.set_participant_state(started["swarm_id"], first, "cancelled")
-    with pytest.raises(SwarmStoreError, match="swarm_closed|participant_inactive"):
-        await store.rename_participant(started["swarm_id"], first, "Later")
-
-
-@pytest.mark.asyncio
 async def test_status_cursor_and_board_epoch_inactive_guards(store: SwarmStore) -> None:
     started = await _swarm(store, count=2)
     swarm = await store.get_swarm(started["swarm_id"])
@@ -1511,11 +907,10 @@ async def test_status_cursor_and_board_epoch_inactive_guards(store: SwarmStore) 
     assert page["self"]["id"] == first and page["has_more"] and page["cursor"]
     with pytest.raises(SwarmStoreError, match="invalid_cursor"):
         await store.participant_status(started["swarm_id"], second, cursor=page["cursor"], limit=1)
-    await store.set_participant_state(started["swarm_id"], first, "blocked")
-    with pytest.raises(SwarmStoreError, match="participant_inactive"):
-        await store.create_discussion(
-            started["swarm_id"], first, title="No", text="No", request_id="inactive"
-        )
+    await store.set_participant_state(started["swarm_id"], first, "failed")
+    await store.create_discussion(
+        started["swarm_id"], first, title="Review", text="Question", request_id="inactive"
+    )
     await store.post(
         started["swarm_id"], first, text="human", request_id="human", author_kind="user"
     )
@@ -1566,7 +961,6 @@ async def test_board_epoch_stale_after_resume_and_post_author_is_immutable(
     await store.post(
         started["swarm_id"], first, text="before", request_id="before", expected_epoch=0
     )
-    await store.rename_participant(started["swarm_id"], first, "Renamed")
     assert (await store.read_posts(started["swarm_id"], second)).entries[0]["author"][
         "name"
     ] == "Participant 1"
@@ -1606,10 +1000,10 @@ async def test_participant_lifecycle_aggregates_swarm_state(store: SwarmStore) -
     swarm_id = started["swarm_id"]
     first, second = [item["id"] for item in (await store.get_swarm(swarm_id))["participants"]]
     await store.set_swarm_state(swarm_id, "running")
-    await store.set_participant_state(swarm_id, first, "waiting")
+    await store.set_participant_state(swarm_id, first, "idle")
     await store.set_participant_state(swarm_id, second, "idle")
-    assert (await store.get_swarm(swarm_id))["state"] == "waiting"
-    await store.set_participant_state(swarm_id, second, "blocked")
+    assert (await store.get_swarm(swarm_id))["state"] == "idle"
+    await store.set_participant_state(swarm_id, second, "failed")
     assert (await store.get_swarm(swarm_id))["state"] == "needs_attention"
 
 
@@ -1619,7 +1013,7 @@ async def test_open_epoch_resume_excludes_busy_participant(store: SwarmStore) ->
     swarm_id = started["swarm_id"]
     waiting, busy = [item["id"] for item in (await store.get_swarm(swarm_id))["participants"]]
     await store.set_swarm_state(swarm_id, "running")
-    await store.set_participant_state(swarm_id, waiting, "waiting")
+    await store.set_participant_state(swarm_id, waiting, "idle")
     await store.record_run_started(swarm_id, busy, run_id="busy", expected_epoch=0)
     resumed = await store.begin_resume(swarm_id, request_id="open", actor="test")
     assert resumed["reused_epoch"] and resumed["participant_ids"] == [waiting]
@@ -1642,13 +1036,156 @@ async def test_resume_waits_for_stop_to_finish_before_opening_epoch(store: Swarm
 
 
 @pytest.mark.asyncio
+async def test_board_read_preserves_saved_timestamp(store):
+    started = await _swarm(store)
+    snapshot = await store.get_swarm(started["swarm_id"])
+    await store.set_swarm_state(snapshot["id"], "running")
+    result = await store.post(
+        snapshot["id"],
+        snapshot["participants"][0]["id"],
+        text="timestamp-sentinel",
+        request_id="post-time",
+    )
+    page = await store.read_human_posts(
+        snapshot["id"], discussion_id=snapshot["main_discussion_id"]
+    )
+    post = next(item for item in page.entries if item["id"] == result["post_id"])
+    from datetime import datetime
+
+    assert datetime.fromisoformat(post["created_at"]).utcoffset().total_seconds() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        ("completed", "idle"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("interrupted", "interrupted"),
+    ],
+)
+async def test_participant_state_follows_run_outcome(store, outcome, expected):
+    started = await _swarm(store, count=1)
+    swarm_id = started["swarm_id"]
+    participant = (await store.get_swarm(swarm_id))["participants"][0]["id"]
+    assert (await store.participant_status(swarm_id, participant))["self"]["state"] == "idle"
+    await store.set_swarm_state(swarm_id, "running")
+    await store.record_run_started(swarm_id, participant, run_id="run", expected_epoch=0)
+    assert (await store.participant_status(swarm_id, participant))["self"]["state"] == "running"
+    await store.reconcile_run_finished(
+        swarm_id, participant, run_id="run", expected_epoch=0, outcome=outcome
+    )
+    assert (await store.participant_status(swarm_id, participant))["self"]["state"] == expected
+    assert (await store.get_swarm(swarm_id))["state"] == (
+        "idle" if outcome == "completed" else "needs_attention"
+    )
+    await store.post_human(swarm_id, text="Follow-up", request_id="follow-up")
+    assert (await store.participant_status(swarm_id, participant))["pending_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_resume_keeps_every_participant_and_rejects_stale_callbacks(store):
+    started = await _swarm(store, count=3)
+    swarm_id = started["swarm_id"]
+    participants = [p["id"] for p in (await store.get_swarm(swarm_id))["participants"]]
+    await store.set_swarm_state(swarm_id, "running")
+    for peer, outcome in zip(participants, ["completed", "failed", "cancelled"], strict=True):
+        await store.record_run_started(swarm_id, peer, run_id=peer, expected_epoch=0)
+        await store.reconcile_run_finished(
+            swarm_id, peer, run_id=peer, expected_epoch=0, outcome=outcome
+        )
+    stop = await store.begin_stop(swarm_id, request_id="stop", actor="user")
+    assert (await store.begin_stop(swarm_id, request_id="stop", actor="user"))["replayed"]
+    await store.finish_stop(
+        swarm_id, request_id="stop", actor="user", drain_report={"closed": True, "run_ids": []}
+    )
+    resumed = await store.begin_resume(swarm_id, request_id="resume", actor="user")
+    assert resumed["participant_ids"] == participants and resumed["epoch"] == stop["epoch"] + 1
+    assert (await store.begin_resume(swarm_id, request_id="resume", actor="user"))["replayed"]
+    with pytest.raises(SwarmStoreError, match="stale_epoch"):
+        await store.reconcile_run_finished(
+            swarm_id, participants[0], run_id=participants[0], expected_epoch=0, outcome="completed"
+        )
+    assert {p["state"] for p in (await store.get_swarm(swarm_id))["participants"]} == {"idle"}
+
+
+@pytest.mark.asyncio
+async def test_no_participant_lifecycle_storage_or_summary_contract(store):
+    started = await _swarm(store)
+    participants = (await store.get_swarm(started["swarm_id"]))["participants"]
+    assert all(
+        not ({"wait_reason", "summary", "artifacts", "completion_call_id"} & p.keys())
+        for p in participants
+    )
+    assert "done_count" not in (await store.list_swarms()).entries[0]
+    assert (
+        store._connection.execute(
+            "SELECT name FROM sqlite_master WHERE name='lifecycle_intents'"
+        ).fetchone()
+        is None
+    )
+    columns = {r["name"] for r in store._connection.execute("PRAGMA table_info(participants)")}
+    assert not {"wait_reason", "summary_json", "artifacts_json", "completion_call_id"} & columns
+
+
+@pytest.mark.asyncio
+async def test_late_start_and_wake_ack_cannot_resurrect_finished_run(store):
+    started = await _swarm(store, count=1)
+    sid = started["swarm_id"]
+    pid = (await store.get_swarm(sid))["participants"][0]["id"]
+    await store.set_swarm_state(sid, "running")
+    await store.bind_participant_session(
+        TemporarySessionBinding(SessionAddress(None, "tmp", "ses"), "gen", "swarm", sid, pid, {})
+    )
+    await store.post_human(sid, text="Wake", request_id="wake")
+    await store.prepare_wake(sid, pid, expected_epoch=0)
+    claim = await store.claim_wake(sid, pid, expected_epoch=0)
+    assert claim["pending"]
+    await store.record_run_started(sid, pid, run_id="quick", expected_epoch=0)
+    await store.reconcile_run_finished(
+        sid, pid, run_id="quick", expected_epoch=0, outcome="completed"
+    )
+    assert (await store.record_run_started(sid, pid, run_id="quick", expected_epoch=0))[
+        "state"
+    ] == "idle"
+    await store.mark_wake_admitted(
+        sid, pid, expected_epoch=0, run_id="quick", boundary=claim["boundary"]
+    )
+    assert (await store.participant_status(sid, pid))["self"]["state"] == "idle"
+    assert (
+        await store.mark_wake_admitted(
+            sid, pid, expected_epoch=0, run_id="quick", boundary=claim["boundary"]
+        )
+    )["replayed"]
+
+
+@pytest.mark.asyncio
+async def test_stop_preserves_idle_and_failed_outcomes(store):
+    started = await _swarm(store, count=3)
+    sid = started["swarm_id"]
+    peers = (await store.get_swarm(sid))["participants"]
+    await store.record_run_started(sid, peers[0]["id"], run_id="active", expected_epoch=0)
+    await store.set_participant_state(sid, peers[2]["id"], "failed")
+    await store.begin_stop(sid, request_id="stop", actor="user")
+    await store.finish_stop(
+        sid, request_id="stop", actor="user", drain_report={"closed": True, "run_ids": []}
+    )
+    assert [p["state"] for p in (await store.get_swarm(sid))["participants"]] == [
+        "cancelled",
+        "idle",
+        "failed",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("closed", [False, True])
 async def test_targeted_resume_preserves_other_participants(store, closed):
     started = await _swarm(store, count=3)
     swarm_id = started["swarm_id"]
     await store.set_swarm_state(swarm_id, "running")
     peers = (await store.get_swarm(swarm_id))["participants"]
-    for peer, state in zip(peers, ["failed", "waiting", "running"], strict=True):
+    for peer, state in zip(peers, ["failed", "idle", "running"], strict=True):
         await store.set_participant_state(swarm_id, peer["id"], state)
     if closed:
         await store.begin_stop(swarm_id, request_id="stop", actor="user")
@@ -1684,23 +1221,3 @@ async def test_targeted_resume_rejects_foreign_or_active_participant(store):
             await store.begin_resume(
                 swarm_id, request_id=peer_id, actor="user", participant_id=peer_id
             )
-
-
-@pytest.mark.asyncio
-async def test_board_read_preserves_saved_timestamp(store):
-    started = await _swarm(store)
-    snapshot = await store.get_swarm(started["swarm_id"])
-    await store.set_swarm_state(snapshot["id"], "running")
-    result = await store.post(
-        snapshot["id"],
-        snapshot["participants"][0]["id"],
-        text="timestamp-sentinel",
-        request_id="post-time",
-    )
-    page = await store.read_human_posts(
-        snapshot["id"], discussion_id=snapshot["main_discussion_id"]
-    )
-    post = next(item for item in page.entries if item["id"] == result["post_id"])
-    from datetime import datetime
-
-    assert datetime.fromisoformat(post["created_at"]).utcoffset().total_seconds() == 0

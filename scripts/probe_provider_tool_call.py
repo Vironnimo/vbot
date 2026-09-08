@@ -4803,34 +4803,18 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             if tool_name == "swarm_state":
                 await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
                 status = await store.participant_status(sid, pid, limit=1)
-                summaries = await store.participant_status(
-                    sid, pid, limit=1, include_summaries=True
-                )
                 cases = [
-                    ("status_default", {"action": "status"}, True),
-                    ("status_compact", {"action": "status", "include_summaries": False}, True),
-                    ("status_summaries", {"action": "status", "include_summaries": True}, True),
-                    ("status_one", {"action": "status", "limit": 1}, True),
-                    ("status_max", {"action": "status", "limit": 100}, True),
+                    ("status_default", {}, True),
+                    ("status_one", {"limit": 1}, True),
+                    ("status_max", {"limit": 100}, True),
                     (
                         "status_cursor",
-                        {"action": "status", "cursor": status["cursor"], "limit": 1},
-                        True,
-                    ),
-                    (
-                        "status_summaries_cursor",
-                        {
-                            "action": "status",
-                            "cursor": summaries["cursor"],
-                            "limit": 1,
-                            "include_summaries": True,
-                        },
+                        {"cursor": status["cursor"], "limit": 1},
                         True,
                     ),
                     (
                         "status_cursor_changed_detail",
                         {
-                            "action": "status",
                             "cursor": status["cursor"],
                             "limit": 1,
                             "include_summaries": True,
@@ -4840,76 +4824,30 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     (
                         "status_cursor_changed_limit",
                         {
-                            "action": "status",
                             "cursor": status["cursor"],
                             "limit": 2,
                         },
                         False,
                     ),
-                    ("name_new", {"action": "name", "name": "Analyst"}, True),
-                    ("name_same", {"action": "name", "name": "Analyst"}, True),
-                    ("name_trim", {"action": "name", "name": "  Analyst  "}, True),
-                    (
-                        "name_duplicate",
-                        {
-                            "action": "name",
-                            "name": swarm["participants"][1]["display_name"].upper(),
-                        },
-                        False,
-                    ),
-                    ("name_reserved_user", {"action": "name", "name": "User"}, False),
-                    ("name_reserved_system", {"action": "name", "name": "System"}, False),
-                    ("name_empty", {"action": "name", "name": ""}, False),
-                    ("name_overlong", {"action": "name", "name": "Analyst " * 9}, False),
-                    ("wait_default", {"action": "wait"}, True),
-                    (
-                        "wait_reason",
-                        {"action": "wait", "reason": "Waiting for a peer's findings"},
-                        True,
-                    ),
-                    ("wait_empty_reason", {"action": "wait", "reason": ""}, True),
-                    ("wait_false", {"action": "wait", "needs_user": False}, True),
-                    ("wait_true", {"action": "wait", "needs_user": True}, True),
-                    ("done_pending", {"action": "done", "summary": "Contribution checked"}, False),
-                    (
-                        "done_default",
-                        {
-                            "action": "done",
-                            "summary": "Contribution checked; no outstanding changes",
-                        },
-                        True,
-                    ),
-                    (
-                        "done_empty_artifacts",
-                        {"action": "done", "summary": "Checks complete", "artifacts": []},
-                        True,
-                    ),
-                    (
-                        "done_artifacts",
-                        {
-                            "action": "done",
-                            "summary": "Checks complete",
-                            "artifacts": ["report.md", "https://example.com/report"],
-                        },
-                        True,
-                    ),
+                    ("name_rejected", {"action": "name", "name": "Analyst"}, False),
+                    ("name_field_rejected", {"name": "Analyst"}, False),
                 ]
                 cases.extend(
                     (f"invalid_{index}", value, False)
                     for index, value in enumerate(
                         [
-                            {},
+                            {"action": "status"},
                             {"action": "unsupported"},
-                            {"action": "status", "swarm_id": sid},
-                            {"action": "status", "participant_id": pid},
-                            {"action": "status", "limit": True},
-                            {"action": "status", "limit": "1"},
-                            {"action": "status", "limit": 0},
-                            {"action": "status", "limit": 101},
-                            {"action": "status", "cursor": None},
-                            {"action": "status", "cursor": "foreign"},
-                            {"action": "status", "include_summaries": "true"},
-                            {"action": "status", "include_summaries": None},
+                            {"swarm_id": sid},
+                            {"participant_id": pid},
+                            {"limit": True},
+                            {"limit": "1"},
+                            {"limit": 0},
+                            {"limit": 101},
+                            {"cursor": None},
+                            {"cursor": "foreign"},
+                            {"include_summaries": "true"},
+                            {"include_summaries": None},
                             {"action": "wait", "include_summaries": True},
                             {"action": "name"},
                             {"action": "name", "name": "Another", "limit": 1},
@@ -4948,33 +4886,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     and not name.startswith(args.swarm_case + "_")
                 ):
                     continue
-                if tool_name == "swarm_state" and name == "done_default":
-                    while True:
-                        drained = await store.prepare_inbox_delivery(sid, pid, limit=100)
-                        if not drained.get("receipt_id"):
-                            break
-                        await sessions.append_messages_with_receipts_async(
-                            binding.address,
-                            generation_id=binding.generation_id,
-                            owner_name="swarm",
-                            messages=[
-                                ChatMessage.tool(
-                                    tool_call_id="fixture-drain",
-                                    name="swarm_inbox",
-                                    content=json.dumps(drained),
-                                )
-                            ],
-                            receipts=[
-                                (
-                                    0,
-                                    drained["receipt_id"],
-                                    drained["content_hash"],
-                                    drained["effect_kind"],
-                                    "tool",
-                                )
-                            ],
-                        )
-                        await store.reconcile_delivery(drained["receipt_id"])
                 async with asyncio.timeout(args.total_timeout):
                     raw = await adapter.send(
                         [
@@ -5161,17 +5072,40 @@ async def _probe_swarm_workflow(
             }
         )
         if not calls:
+            if not unassisted and not resumed:
+                await store.post(
+                    sid,
+                    peer,
+                    text="I reviewed the draft: check factual accuracy, clarity, and completeness. "
+                    "The checklist is ready; no further changes are needed.",
+                    request_id="workflow-feedback",
+                )
+                await store.reconcile_run_finished(
+                    sid, pid, run_id=context.run_id, expected_epoch=0, outcome="completed"
+                )
+                context = replace(context, run_id="workflow-resumed")
+                await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
+                reminder = ChatMessage.note(RESUME_REMINDER)
+                await sessions.append_messages_with_receipts_async(
+                    binding.address,
+                    generation_id=binding.generation_id,
+                    owner_name="swarm",
+                    messages=[reminder],
+                    receipts=[],
+                )
+                messages.extend(_notes_to_request_messages([reminder]))
+                resumed = True
+                continue
+            finished = True
             break
         carriers = []
         receipts: list[tuple[int, str, str, str, str]] = []
-        persisted_calls = []
         for index, call in enumerate(calls):
             name, arguments = call["name"], call["arguments"]
             call_context = replace(
                 context, tool_name=name, tool_call_id=call["id"], tool_call_index=index
             )
             result = await registry.dispatch(call_context, arguments, allowed_tools=names)
-            persisted_calls.append(call["id"])
             carriers.append(
                 ChatMessage.tool(tool_call_id=call["id"], name=name, content=json.dumps(result))
             )
@@ -5233,56 +5167,15 @@ async def _probe_swarm_workflow(
                     request_id=f"unassisted-feedback-{index}",
                 )
                 feedback_ids.add(feedback["post_id"])
-        decision = await store.reconcile_tool_batch(
-            sid,
-            pid,
-            run_id=context.run_id,
-            expected_epoch=0,
-            persisted_call_ids=persisted_calls,
-        )
-        if decision.get("end_run"):
-            status = await store.participant_status(sid, pid)
-            participant_state = status["self"]["state"]
-            if participant_state == "finishing":
-                finished = True
-                break
-            if participant_state in {"waiting", "blocked"} and not resumed:
-                await store.post(
-                    sid,
-                    peer,
-                    text="I reviewed the draft: check factual accuracy, clarity, and completeness. "
-                    "The checklist is ready; no further changes are needed.",
-                    request_id="workflow-feedback",
-                )
-                context = replace(context, run_id="workflow-resumed")
-                await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
-                reminder = ChatMessage.note(RESUME_REMINDER)
-                await sessions.append_messages_with_receipts_async(
-                    binding.address,
-                    generation_id=binding.generation_id,
-                    owner_name="swarm",
-                    messages=[reminder],
-                    receipts=[],
-                )
-                messages.extend(_notes_to_request_messages([reminder]))
-                resumed = True
-        elif decision.get("continuation_required"):
-            from resources.extensions.swarm.agent_text import COMPLETION_RACE_REMINDER
-
-            messages.extend(
-                _notes_to_request_messages([ChatMessage.note(COMPLETION_RACE_REMINDER)])
-            )
     required = {
-        ("swarm_state", "status"),
-        ("swarm_state", "wait"),
-        ("swarm_state", "done"),
+        ("swarm_state", ""),
         ("swarm_board", "post"),
         ("swarm_board", "create"),
         ("swarm_board", "join"),
         ("swarm_inbox", ""),
     }
     if unassisted:
-        required = {("swarm_state", "done")}
+        required = set()
     coordinated = feedback_received and published_after_feedback if unassisted else resumed
     strict_count = sum(
         item.get("strict") is True
@@ -5298,7 +5191,7 @@ async def _probe_swarm_workflow(
         "missing_actions": sorted(required - seen),
         "durable_receipts": receipts_verified,
         "resumed": resumed,
-        "finish_requested_and_reserved": finished,
+        "final_response_received": finished,
         "scope": "Model choices, Board effects and canonical carriers; "
         "actual Chat lifecycle is tested separately",
         "passed": required.issubset(seen)

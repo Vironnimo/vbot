@@ -33,7 +33,7 @@ const profile = {
   allowed_skills: ['*'],
   instructions: '',
   prompt_blocks: ['core:tools', 'core:skills'],
-  reminders: { delivery: true, wake: true, resume: true, completion: true },
+  reminders: { delivery: true, resume: true },
   delivery,
 };
 const swarm = {
@@ -58,7 +58,7 @@ const swarm = {
       id: 'prt-b',
       display_name: 'Beta',
       model: 'demo/fallback',
-      state: 'waiting',
+      state: 'idle',
     },
   ],
 };
@@ -94,7 +94,6 @@ function createBridge(initialProfile = profile) {
               delivery: true,
               wake: true,
               resume: true,
-              completion: true,
             },
           },
           prompt_blocks: [
@@ -108,7 +107,6 @@ function createBridge(initialProfile = profile) {
             delivery: 'test-owned delivery guidance',
             wake: 'test-owned wake guidance',
             resume: 'test-owned resume guidance',
-            completion: 'test-owned completion guidance',
           },
           models: [
             {
@@ -146,7 +144,7 @@ function createBridge(initialProfile = profile) {
       });
     if (name === 'swarms.list')
       return Promise.resolve({
-        entries: [{ ...swarm, participant_count: 2, done_count: 0 }],
+        entries: [{ ...swarm, participant_count: 2 }],
         has_more: false,
       });
     if (name === 'swarms.get')
@@ -319,6 +317,7 @@ describe('SwarmPage', () => {
       'swr-a',
     );
     expect(document.querySelector('.swarm-tabs .chip')).not.toBeNull();
+    expect(button('Results')).toBeUndefined();
     expect(document.querySelector('.post-header strong').textContent).toBe(
       'Alpha',
     );
@@ -373,56 +372,64 @@ describe('SwarmPage', () => {
     );
   });
 
-  it('shows canonical context and resumes only the selected inactive participant', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    operation.mockImplementation((name, args) =>
-      name === 'swarms.get'
-        ? Promise.resolve({
-            swarm: {
-              ...structuredClone(swarm),
-              participants: swarm.participants.map((peer) => ({
-                ...peer,
-                state: peer.id === 'prt-a' ? 'running' : 'failed',
-                run_active: peer.id === 'prt-a',
-              })),
-            },
-          })
-        : original(name, args),
-    );
-    bridge.readHistory.mockImplementation((_swarm, participant) =>
-      Promise.resolve({
-        messages: [],
-        context_usage: {
-          tokens: participant === 'prt-a' ? 120 : 850,
-          estimated: participant !== 'prt-a',
-        },
-        session_usage: { input_tokens: 99000 },
-      }),
-    );
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() => expect(button('Beta')).toBeDefined());
-    button('Beta').click();
-    await vi.waitFor(() => expect(button('Resume participant')).toBeDefined());
-    expect(document.querySelector('.context-usage').textContent).toContain(
-      '~850',
-    );
-    button('Resume participant').click();
-    await vi.waitFor(() =>
-      expect(operation).toHaveBeenCalledWith(
-        'swarms.resume',
-        expect.objectContaining({ swarm_id: 'swr-a', participant_id: 'prt-b' }),
-      ),
-    );
-    button('Alpha').click();
-    await vi.waitFor(() =>
+  it.each(['failed', 'cancelled', 'interrupted'])(
+    'shows canonical context and resumes only the selected %s participant',
+    async (state) => {
+      const { bridge, operation } = createBridge();
+      const original = operation.getMockImplementation();
+      operation.mockImplementation((name, args) =>
+        name === 'swarms.get'
+          ? Promise.resolve({
+              swarm: {
+                ...structuredClone(swarm),
+                participants: swarm.participants.map((peer) => ({
+                  ...peer,
+                  state: peer.id === 'prt-a' ? 'running' : state,
+                  run_active: peer.id === 'prt-a',
+                })),
+              },
+            })
+          : original(name, args),
+      );
+      bridge.readHistory.mockImplementation((_swarm, participant) =>
+        Promise.resolve({
+          messages: [],
+          context_usage: {
+            tokens: participant === 'prt-a' ? 120 : 850,
+            estimated: participant !== 'prt-a',
+          },
+          session_usage: { input_tokens: 99000 },
+        }),
+      );
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() => expect(button('Beta')).toBeDefined());
+      button('Beta').click();
+      await vi.waitFor(() =>
+        expect(button('Resume participant')).toBeDefined(),
+      );
       expect(document.querySelector('.context-usage').textContent).toContain(
-        '120 / 128,000',
-      ),
-    );
-    expect(button('Resume participant')).toBeUndefined();
-  });
+        '~850',
+      );
+      button('Resume participant').click();
+      await vi.waitFor(() =>
+        expect(operation).toHaveBeenCalledWith(
+          'swarms.resume',
+          expect.objectContaining({
+            swarm_id: 'swr-a',
+            participant_id: 'prt-b',
+          }),
+        ),
+      );
+      button('Alpha').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.context-usage').textContent).toContain(
+          '120 / 128,000',
+        ),
+      );
+      expect(button('Resume participant')).toBeUndefined();
+    },
+  );
 
   it('shows prompt contributions and persists independent context and reminder switches', async () => {
     const { bridge, operation } = createBridge();
@@ -1265,7 +1272,7 @@ describe('SwarmPage', () => {
     });
   });
 
-  it('offers explicit Resume beside Stop when a participant is waiting', async () => {
+  it('offers Swarm Resume beside Stop when a participant is idle', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     button('Investigate').click();
