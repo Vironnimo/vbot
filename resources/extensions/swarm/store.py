@@ -1589,7 +1589,7 @@ class SwarmStore:
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
-            if row["state"] == "completed":
+            if row["state"] in {"completed", "stopping", "preparing"}:
                 raise SwarmStoreError("swarm_closed")
             epoch = connection.execute(
                 "SELECT epoch,is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
