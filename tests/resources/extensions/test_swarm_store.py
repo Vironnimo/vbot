@@ -325,6 +325,7 @@ async def test_reply_and_participant_scope_are_checked(store: SwarmStore) -> Non
             started["swarm_id"],
             first,
             text="reply",
+            discussion_id=swarm["main_discussion_id"],
             reply_to=created["opening_post_id"],
             request_id="post-1",
         )
@@ -1273,7 +1274,7 @@ async def test_status_rename_and_exact_run_finish(store: SwarmStore) -> None:
         "name"
     ] == "Reviewer"
     status = await store.participant_status(started["swarm_id"], participant, limit=1)
-    assert status["self"]["name"] == "Reviewer"
+    assert status["roster"][0]["name"] == "Reviewer"
     assert "epoch" not in status and "usage" not in status
     await store.record_run_started(started["swarm_id"], participant, run_id="new", expected_epoch=0)
     with pytest.raises(SwarmStoreError, match="stale_run"):
@@ -1466,14 +1467,21 @@ async def test_status_keeps_whole_16k_summaries_and_pages_at_delivery_budget(
         "UPDATE participants SET summary_json=? WHERE id=?",
         ('{"summary":"next"}', participants[1]["id"]),
     )
-    first = await store.participant_status(started["swarm_id"], participants[0]["id"], limit=20)
+    first = await store.participant_status(
+        started["swarm_id"], participants[0]["id"], limit=20, include_summaries=True
+    )
     assert [len(item["summary"] or "") for item in first["roster"]] == [16_000]
     assert first["has_more"] and first["cursor"]
     second = await store.participant_status(
-        started["swarm_id"], participants[0]["id"], cursor=first["cursor"], limit=20
+        started["swarm_id"],
+        participants[0]["id"],
+        cursor=first["cursor"],
+        limit=20,
+        include_summaries=True,
     )
     assert [item["summary"] for item in second["roster"]] == ["next"]
-    assert first["self"]["summary"] is None and first["self"]["summary_available"]
+    assert "summary" not in first["self"]
+    assert first["roster"][0]["summary_available"]
 
 
 @pytest.mark.asyncio

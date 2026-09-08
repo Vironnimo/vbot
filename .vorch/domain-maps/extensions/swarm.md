@@ -59,15 +59,33 @@ Saving without a command shortcut generates a unique name-based shortcut inside
 the profile transaction; omission on an update retains the existing shortcut.
 Explicit shortcuts remain validated and collision-checked (`store.py`).
 
-Board posts are immutable and public within one Swarm. Audience snapshots survive
-later join/leave changes. A public ping takes precedence over discussion/main
+Board posts are immutable and public within one Swarm. `swarm_board` can ping
+participants on a discussion's opening message without joining those recipients;
+creation, opening-message audience and the main-discussion announcement commit
+atomically. Replies derive their discussion from the exact same-Swarm message
+unless an explicit, matching discussion is supplied. Reads start with newest
+posts, chronological within each page, and continuation moves to older posts.
+Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
+
+Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
 routing for that recipient, without creating duplicate deliveries. A mutation's
 request id is payload-bound; reusing it with changed content is a conflict.
 
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Delivery mode and idle wake permission are independent. Read
-pages are bounded and cursor scope includes the query and page size.
+pages are bounded and cursors cannot cross queries.
+
+Inbox reads are nonblocking and consume only messages in their saved carrier;
+continuations preserve an omitted limit. Empty results direct waiting through
+`swarm_state`, without ending the Run themselves (`test_swarm_inbox.py`).
+
+Status defaults to a compact roster; `include_summaries` retrieves complete
+summaries and artifact references, bounded by the existing summary budget.
+Status cursors bind both page size and summary selection. Delivery results expose
+receiving and wake behavior without scheduler configuration. Wait/done Tool
+results expose requested transitions; canonical Run/Call ids remain internal.
+Coverage: `test_swarm_board.py`, `test_swarm_store.py`, and the state probe matrix.
 
 Wait, blocked, failed, cancelled and done are distinct. Done first records an
 intent, then reserves completion under the same transaction boundary as Board
@@ -104,7 +122,11 @@ retain pending delivery and expose needs_attention with ids-only diagnostics.
   `tests/resources/extensions/test_swarm_lifecycle.py`.
 - Production-definition Model probes and independent first-use evaluation:
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
-  under `tests/scripts/test_probe_provider_tool_call.py`.
+  under `tests/scripts/test_probe_provider_tool_call.py`. The `unassisted` case
+  supplies the goal without prescribing Tools; success requires receiving peer
+  feedback, a later public contribution, and a reserved completion. It evaluates
+  coordination effects, not the semantic quality of the generated checklist.
+  The probe purges cached Extension modules before loading its own checkout.
 - Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`;
   generic iframe isolation is tested by ExtensionPage and server asset tests.
 

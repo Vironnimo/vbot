@@ -225,10 +225,23 @@ class SwarmStore:
         )
 
     async def participant_status(
-        self, swarm_id: str, participant_id: str, *, cursor: str | None = None, limit: int = 20
+        self,
+        swarm_id: str,
+        participant_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 20,
+        include_summaries: bool = False,
     ) -> Json:
+        if type(include_summaries) is not bool:
+            raise SwarmStoreError("invalid_arguments", field="include_summaries")
         return await self._run(
-            self._participant_status, swarm_id, participant_id, cursor, _limit(limit)
+            self._participant_status,
+            swarm_id,
+            participant_id,
+            cursor,
+            _limit(limit),
+            include_summaries,
         )
 
     async def record_run_started(
@@ -664,6 +677,7 @@ class SwarmStore:
         title: str,
         text: str,
         request_id: str,
+        recipients: Sequence[str] = (),
         expected_epoch: int | None = None,
     ) -> Json:
         _text(title, "title", 120)
@@ -676,6 +690,7 @@ class SwarmStore:
             title,
             text,
             request_id,
+            _recipient_ids(recipients),
             expected_epoch,
         )
 
@@ -1328,7 +1343,12 @@ class SwarmStore:
         return self._write(operation)
 
     def _participant_status(
-        self, swarm_id: str, participant_id: str, cursor: str | None, limit: int
+        self,
+        swarm_id: str,
+        participant_id: str,
+        cursor: str | None,
+        limit: int,
+        include_summaries: bool,
     ) -> Json:
         connection = self._require_connection()
         self._participant(connection, swarm_id, participant_id)
@@ -1337,29 +1357,31 @@ class SwarmStore:
                 "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
             ).fetchone()[0]
         )
-        offset = (
-            self._cursor(cursor, "status", f"{swarm_id}:{participant_id}", high)[0] if cursor else 0
-        )
+        scope = f"{swarm_id}:{participant_id}:{limit}:{int(include_summaries)}"
+        offset = self._cursor(cursor, "status", scope, high)[0] if cursor else 0
         rows = connection.execute(
-            "SELECT id,display_name,model,state,wait_reason,summary_json,artifacts_json FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+            "SELECT id,display_name,state,wait_reason,summary_json,artifacts_json FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
             (swarm_id, limit + 1, offset),
         ).fetchall()
 
-        def item(row: sqlite3.Row, *, include_summary: bool = True) -> Json:
-            summary = _load(row["summary_json"])["summary"] if row["summary_json"] else None
-            return {
+        def item(row: sqlite3.Row) -> Json:
+            result = {
                 "id": row["id"],
                 "name": row["display_name"],
-                "model": row["model"],
                 "state": row["state"],
-                "wait_reason": row["wait_reason"],
-                "summary": summary if include_summary else None,
-                "summary_available": summary is not None,
-                "artifacts": _load(row["artifacts_json"]) if row["artifacts_json"] else [],
+                "summary_available": row["summary_json"] is not None,
             }
+            if row["wait_reason"]:
+                result["wait_reason"] = row["wait_reason"]
+            if include_summaries:
+                result["summary"] = (
+                    _load(row["summary_json"])["summary"] if row["summary_json"] else None
+                )
+                result["artifacts"] = _load(row["artifacts_json"]) if row["artifacts_json"] else []
+            return result
 
         self_row = connection.execute(
-            "SELECT id,display_name,model,state,wait_reason,summary_json,artifacts_json FROM participants WHERE id=?",
+            "SELECT id,state FROM participants WHERE id=?",
             (participant_id,),
         ).fetchone()
         totals = {
@@ -1370,14 +1392,21 @@ class SwarmStore:
             )
         }
         settings = connection.execute(
-            "SELECT revision,delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
-        budget = int(_load(settings["delivery_json"])["batch_chars"])
+        delivery = _load(settings["delivery_json"])
+        budget = int(delivery["batch_chars"])
+        receive = {
+            label: [
+                route for route in ("main", "discussion", "ping") if delivery[route]["mode"] == mode
+            ]
+            for label, mode in (("automatic", "all"), ("when_idle", "idle"), ("inbox_only", "pull"))
+        }
         roster: list[Json] = []
         summary_chars = 0
         for row in rows[:limit]:
             value = item(row)
-            size = len(value["summary"] or "")
+            size = len(value.get("summary") or "")
             if roster and summary_chars + size > budget:
                 break
             roster.append(value)
@@ -1386,17 +1415,17 @@ class SwarmStore:
         has_more = consumed < len(rows)
         main = self._main(connection, swarm_id)
         return {
-            "self": item(self_row, include_summary=False),
+            "self": {"id": self_row["id"], "state": self_row["state"]},
             "main_discussion_id": main,
-            "delivery": _load(settings["delivery_json"]),
-            "settings_revision": int(settings["revision"]),
+            "delivery": {label: routes for label, routes in receive.items() if routes},
+            "wake_on_messages": [
+                route for route in ("main", "discussion", "ping") if delivery[route]["wake_idle"]
+            ],
             "pending_count": self._pending_count(connection, swarm_id, participant_id),
             "state_totals": totals,
             "roster": roster,
             "has_more": has_more,
-            "cursor": self._make_cursor(
-                "status", f"{swarm_id}:{participant_id}", high, offset + consumed
-            )
+            "cursor": self._make_cursor("status", scope, high, offset + consumed)
             if has_more
             else None,
         }
@@ -2700,7 +2729,17 @@ class SwarmStore:
                 "interrupted",
             }:
                 raise SwarmStoreError("participant_inactive")
-            discussion_id_value = discussion_id or self._main(connection, swarm_id)
+            target = None
+            if reply_to is not None:
+                target = connection.execute(
+                    "SELECT discussion_id FROM posts WHERE id=? AND swarm_id=?",
+                    (reply_to, swarm_id),
+                ).fetchone()
+                if target is None:
+                    raise SwarmStoreError("message_not_found")
+            discussion_id_value = discussion_id or (
+                target["discussion_id"] if target is not None else self._main(connection, swarm_id)
+            )
             self._discussion(connection, swarm_id, discussion_id_value)
             payload = {
                 "discussion_id": discussion_id_value,
@@ -2720,15 +2759,8 @@ class SwarmStore:
                 outcome = _load(replay["outcome"])
                 outcome["replayed"] = True
                 return outcome
-            if reply_to is not None:
-                target = connection.execute(
-                    "SELECT discussion_id FROM posts WHERE id=? AND swarm_id=?",
-                    (reply_to, swarm_id),
-                ).fetchone()
-                if target is None:
-                    raise SwarmStoreError("message_not_found")
-                if target["discussion_id"] != discussion_id_value:
-                    raise SwarmStoreError("reply_discussion_mismatch")
+            if target is not None and target["discussion_id"] != discussion_id_value:
+                raise SwarmStoreError("reply_discussion_mismatch")
             members = connection.execute(
                 "SELECT participant_id FROM memberships WHERE discussion_id=?",
                 (discussion_id_value,),
@@ -2811,6 +2843,7 @@ class SwarmStore:
         title: str,
         text: str,
         request_id: str,
+        recipients: tuple[str, ...],
         expected_epoch: int | None,
     ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
@@ -2820,7 +2853,7 @@ class SwarmStore:
             participant = self._participant(connection, swarm_id, participant_id)
             if participant["state"] in {"done", "blocked", "cancelled", "failed", "interrupted"}:
                 raise SwarmStoreError("participant_inactive")
-            payload = {"title": title, "text": text}
+            payload = {"title": title, "text": text, "recipients": recipients}
             scope = f"create:{swarm_id}:{participant_id}"
             replay = connection.execute(
                 "SELECT payload_hash,outcome FROM requests WHERE scope=? AND request_id=?",
@@ -2838,6 +2871,21 @@ class SwarmStore:
                     (swarm_id,),
                 ).fetchone()[0]
             )
+            for recipient in recipients:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM participants WHERE swarm_id=? AND id=?",
+                        (swarm_id, recipient),
+                    ).fetchone()
+                    is None
+                ):
+                    raise SwarmStoreError("invalid_recipient")
+            inactive = [
+                recipient
+                for recipient in recipients
+                if self._participant(connection, swarm_id, recipient)["state"]
+                in {"done", "cancelled", "finishing"}
+            ]
             discussion_id = new_id("dsc")
             connection.execute(
                 "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,0,?)",
@@ -2854,7 +2902,7 @@ class SwarmStore:
                 discussion_id,
                 text,
                 None,
-                (),
+                recipients,
                 "participant",
                 None,
             )
@@ -2876,6 +2924,7 @@ class SwarmStore:
                 "opening_post_id": opening_id,
                 "main_announcement_id": announcement_id,
                 "joined": True,
+                "inactive_recipients": inactive,
             }
             connection.execute(
                 "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -2920,17 +2969,27 @@ class SwarmStore:
                 _now(),
             ),
         )
-        for row in connection.execute(
-            "SELECT participant_id FROM memberships WHERE discussion_id=?", (discussion_id,)
-        ):
-            if row["participant_id"] != sender_id:
-                route = (
-                    "main" if discussion_id == self._main(connection, swarm_id) else "discussion"
-                )
-                connection.execute(
-                    "INSERT INTO recipients(post_id,participant_id,route_class) VALUES(?,?,?)",
-                    (post_id, row["participant_id"], route),
-                )
+        audience = {
+            row["participant_id"]: (
+                "main" if discussion_id == self._main(connection, swarm_id) else "discussion"
+            )
+            for row in connection.execute(
+                "SELECT participant_id FROM memberships WHERE discussion_id=?", (discussion_id,)
+            )
+        }
+        audience.update(dict.fromkeys(recipients, "ping"))
+        audience.pop(sender_id, None)
+        for recipient, route in audience.items():
+            if self._participant(connection, swarm_id, recipient)["state"] in {
+                "done",
+                "cancelled",
+                "finishing",
+            }:
+                continue
+            connection.execute(
+                "INSERT INTO recipients(post_id,participant_id,route_class) VALUES(?,?,?)",
+                (post_id, recipient, route),
+            )
         return post_id
 
     def _membership(
