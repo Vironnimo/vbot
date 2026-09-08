@@ -3403,7 +3403,11 @@ class ChatLoop:
                                 execution_owner=run.execution_owner,
                             ),
                             tool_dispatch_context.delivery_receipts,
-                            tool_dispatch_context.owned_effect_call_ids,
+                            tuple(
+                                message.tool_call_id
+                                for message in tool_messages
+                                if message.tool_call_id is not None
+                            ),
                             tool_dispatch_context.turn_end_requested,
                         )
                         continuation = decision.continuation
