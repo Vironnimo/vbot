@@ -1639,3 +1639,68 @@ async def test_resume_waits_for_stop_to_finish_before_opening_epoch(store: Swarm
     )
     resumed = await store.begin_resume(swarm_id, request_id="resume", actor="test")
     assert resumed["epoch"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", [False, True])
+async def test_targeted_resume_preserves_other_participants(store, closed):
+    started = await _swarm(store, count=3)
+    swarm_id = started["swarm_id"]
+    await store.set_swarm_state(swarm_id, "running")
+    peers = (await store.get_swarm(swarm_id))["participants"]
+    for peer, state in zip(peers, ["failed", "waiting", "running"], strict=True):
+        await store.set_participant_state(swarm_id, peer["id"], state)
+    if closed:
+        await store.begin_stop(swarm_id, request_id="stop", actor="user")
+        await store.finish_stop(
+            swarm_id, request_id="finish-stop", actor="user", drain_report={"drained": True}
+        )
+    before = (await store.get_swarm(swarm_id))["participants"]
+    result = await store.begin_resume(
+        swarm_id, request_id="target", actor="user", participant_id=peers[0]["id"]
+    )
+    assert result["participant_ids"] == [peers[0]["id"]]
+    after = (await store.get_swarm(swarm_id))["participants"]
+    assert after[1:] == before[1:]
+    assert await store.begin_resume(
+        swarm_id, request_id="target", actor="user", participant_id=peers[0]["id"]
+    ) == {**result, "replayed": True}
+    with pytest.raises(SwarmStoreError) as conflict:
+        await store.begin_resume(
+            swarm_id, request_id="target", actor="user", participant_id=peers[1]["id"]
+        )
+    assert conflict.value.code == "request_conflict"
+
+
+@pytest.mark.asyncio
+async def test_targeted_resume_rejects_foreign_or_active_participant(store):
+    started = await _swarm(store)
+    swarm_id = started["swarm_id"]
+    await store.set_swarm_state(swarm_id, "running")
+    peers = (await store.get_swarm(swarm_id))["participants"]
+    await store.set_participant_state(swarm_id, peers[0]["id"], "running")
+    for peer_id in ["foreign", peers[0]["id"]]:
+        with pytest.raises(SwarmStoreError):
+            await store.begin_resume(
+                swarm_id, request_id=peer_id, actor="user", participant_id=peer_id
+            )
+
+
+@pytest.mark.asyncio
+async def test_board_read_preserves_saved_timestamp(store):
+    started = await _swarm(store)
+    snapshot = await store.get_swarm(started["swarm_id"])
+    await store.set_swarm_state(snapshot["id"], "running")
+    result = await store.post(
+        snapshot["id"],
+        snapshot["participants"][0]["id"],
+        text="timestamp-sentinel",
+        request_id="post-time",
+    )
+    page = await store.read_human_posts(
+        snapshot["id"], discussion_id=snapshot["main_discussion_id"]
+    )
+    post = next(item for item in page.entries if item["id"] == result["post_id"])
+    from datetime import datetime
+
+    assert datetime.fromisoformat(post["created_at"]).utcoffset().total_seconds() == 0

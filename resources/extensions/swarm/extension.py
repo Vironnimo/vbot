@@ -523,9 +523,17 @@ class SwarmExtension:
         )
 
     async def _swarms_resume(self, arguments: Json) -> Json:
-        _exact(arguments, {"swarm_id", "request_id"}, required={"swarm_id", "request_id"})
+        _exact(
+            arguments,
+            {"swarm_id", "request_id", "participant_id"},
+            required={"swarm_id", "request_id"},
+        )
         return await self._resume_swarm(
-            _string(arguments, "swarm_id"), _string(arguments, "request_id")
+            _string(arguments, "swarm_id"),
+            _string(arguments, "request_id"),
+            participant_id=_string(arguments, "participant_id")
+            if "participant_id" in arguments
+            else None,
         )
 
     async def _swarms_usage(self, arguments: Json) -> Json:
@@ -793,11 +801,15 @@ class SwarmExtension:
         self._changed(snapshot["id"], snapshot["settings_revision"])
         return {**swarm, "runs": admissions}
 
-    async def _resume_swarm(self, swarm_id: str, request_id: str) -> Json:
+    async def _resume_swarm(
+        self, swarm_id: str, request_id: str, *, participant_id: str | None = None
+    ) -> Json:
         host = self.host
         if host is None or host.temporary_agents is None:
             raise SwarmStoreError("swarm_closed")
-        resumed = await self._store().begin_resume(swarm_id, request_id=request_id, actor="user")
+        resumed = await self._store().begin_resume(
+            swarm_id, request_id=request_id, actor="user", participant_id=participant_id
+        )
         snapshot = await self._store().get_swarm(swarm_id)
         group = host.temporary_agents
         existing: dict[str, TemporarySessionBinding] = {}
@@ -1442,6 +1454,7 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
         "type": "object",
         "properties": {
             "swarm_id": {"type": "string", "minLength": 1},
+            "participant_id": {"type": "string", "minLength": 1},
             "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
         },
         "required": ["swarm_id", "request_id"],
