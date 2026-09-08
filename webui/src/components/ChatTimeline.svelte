@@ -43,6 +43,7 @@
     backgroundBashProcesses = {},
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
+    onBackgroundToolCall = () => {},
     onCancelSubAgent = () => {},
     messageEditingDisabled = false,
     onEditMessage = async () => false,
@@ -468,6 +469,12 @@
                 onReasoningOpenChange={setReasoningOpen}
                 {onNavigateToSubAgent}
                 {onCancelToolCall}
+                {onBackgroundToolCall}
+                backgroundToolCallIds={sessionState?.currentRun?.runId ===
+                  item.runId && sessionState.currentRun.status === 'running'
+                  ? (sessionState.currentRun.controls
+                      ?.background_tool_call_ids ?? [])
+                  : []}
                 {onCancelSubAgent}
               />
             {:else}

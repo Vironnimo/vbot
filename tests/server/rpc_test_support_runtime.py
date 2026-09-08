@@ -1025,3 +1025,6 @@ class StubDelegateRun:
 
     async def wait(self) -> ChatMessage:
         return self._final_message
+
+    def controls(self) -> dict:
+        return {"compaction": "unavailable", "background_tool_call_ids": []}

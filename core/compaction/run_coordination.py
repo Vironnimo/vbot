@@ -424,13 +424,18 @@ class CompactionRunCoordinator:
             session_id=run.session_id,
             project_id=run.project_id,
         )
-        if not settings.auto:
+        forced = run.compaction_state == "pending"
+        if not settings.auto and not forced:
             return current_state
         if settings.strategy == "continuation" and not allow_continuation:
+            if forced and not continue_same_run:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
             return current_state
 
         context_window = self._host.resolve_context_window(agent, target)
         if context_window is None:
+            if forced:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
             return current_state
 
         current_request_messages = continuation_request_messages or messages
@@ -475,7 +480,7 @@ class CompactionRunCoordinator:
             settings.threshold,
             settings=settings,
         )
-        if not should_compact:
+        if not should_compact and not forced:
             return current_state
         session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
         if settings.strategy == "summary_tail" and has_unconsumed_skill_activation(
@@ -488,6 +493,8 @@ class CompactionRunCoordinator:
             settings,
         )
         if not has_new_context:
+            if forced:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "no_compactable_context"})
             return current_state
 
         token_limit = (

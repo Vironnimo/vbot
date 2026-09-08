@@ -881,6 +881,11 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-08-05T18:00:00+00:00",
                 "iteration_count": 4,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
             },
         )(),
     )
@@ -898,6 +903,11 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "status": RunStatus.COMPLETED,
                 "created_at": "2026-08-05T17:00:00+00:00",
                 "iteration_count": 2,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
             },
         )(),
     )
@@ -918,6 +928,8 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             "status": "running",
             "started_at": "2026-08-05T18:00:00+00:00",
             "iteration_count": 4,
+            "controls": {"compaction": "unavailable", "background_tool_call_ids": []},
+            "controls_sequence": 0,
             "sse_url": "/api/runs/run-running/events",
         }
     ]
@@ -1038,6 +1050,11 @@ def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-08-05T18:00:00+00:00",
                 "iteration_count": 1,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
             },
         )(),
     )
@@ -1065,6 +1082,11 @@ def test_active_runs_snapshot_marks_runs_excluded_from_agent_activity() -> None:
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-08-05T18:00:00+00:00",
                 "iteration_count": 0,
+                "events": [],
+                "controls": lambda self: {
+                    "compaction": "unavailable",
+                    "background_tool_call_ids": [],
+                },
                 "contributes_to_agent_activity": False,
             },
         )(),

@@ -46,6 +46,9 @@
     cancelling = false,
     availableSkills = [],
     contextUsage = null,
+    compactionState = 'unavailable',
+    compactionSubmitting = false,
+    onForceCompaction = () => {},
     contextWindow = null,
     usage = null,
     sessionUsage = null,
@@ -1514,35 +1517,51 @@
       )}
       rows="1"></textarea>
     {#if contextFillRatio !== null}
-      <span
-        class="context-ring"
-        use:tooltip={contextTooltip}
-        aria-label={t('chat.contextRingLabel', 'Context window usage')}
-      >
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <circle
-            class="context-ring__track"
-            cx="8"
-            cy="8"
-            r={CONTEXT_RING_RADIUS}
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-          />
-          <circle
-            class="context-ring__fill"
-            cx="8"
-            cy="8"
-            r={CONTEXT_RING_RADIUS}
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
-            stroke-dashoffset={contextRingOffset}
-            transform="rotate(-90 8 8)"
-          />
-        </svg>
+      <span class="context-ring">
+        <button
+          type="button"
+          class="context-ring-trigger"
+          aria-label={t('chat.contextRingLabel', 'Context window usage')}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <circle
+              class="context-ring__track"
+              cx="8"
+              cy="8"
+              r={CONTEXT_RING_RADIUS}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+            />
+            <circle
+              class="context-ring__fill"
+              cx="8"
+              cy="8"
+              r={CONTEXT_RING_RADIUS}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
+              stroke-dashoffset={contextRingOffset}
+              transform="rotate(-90 8 8)"
+            />
+          </svg>
+        </button>
+        <div class="context-hover-card" use:floatingHoverCard>
+          <div class="context-hover-details">{contextTooltip}</div>
+          <Button
+            variant="secondary"
+            disabled={compactionState !== 'idle' || compactionSubmitting}
+            onClick={onForceCompaction}
+          >
+            {compactionState === 'pending'
+              ? t('chat.compactionPending', 'Compaction requested…')
+              : compactionState === 'running'
+                ? t('chat.compactionRunning', 'Compacting…')
+                : t('chat.forceCompaction', 'Force compaction')}
+          </Button>
+        </div>
       </span>
     {/if}
     <div class="input-btns">
@@ -1707,6 +1726,42 @@
 </form>
 
 <style>
+  .context-ring-trigger {
+    display: flex;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .context-hover-card {
+    position: fixed;
+    z-index: var(--z-floating);
+    max-width: min(520px, calc(100vw - 24px));
+    max-height: 60vh;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-hi);
+    box-shadow: var(--dropdown-elevation);
+    font: 12px var(--font-ui);
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .context-hover-card:global([data-floating-open='true']) {
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .context-hover-details {
+    white-space: pre-wrap;
+    margin-bottom: 12px;
+  }
+
   .input-area {
     position: relative;
     width: 100%;

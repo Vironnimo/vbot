@@ -84,6 +84,79 @@ JsonObject = dict[str, Any]
 _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_user_compaction_waits_for_tool_result_and_continues_run(
+    tmp_path: Path, failure: bool
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["wait_test"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call-one", "name": "wait_test", "arguments": {}}],
+            },
+            {"content": "finished", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+
+    async def handler(_context: Any, _arguments: Any) -> Any:
+        started.set()
+        await release.wait()
+        return tool_success({"done": True})
+
+    tools.register(
+        "wait_test",
+        "Test sentinel",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        handler,
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=StubStorage(
+            {"auto": False, "threshold": 0.99, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier context"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Earlier answer"))
+    service = StubCompactionService(
+        should_auto=False,
+        checkpoint=ChatMessage.compaction_checkpoint(
+            summary="SUMMARY_SENTINEL", projection=[], compacted_token_count=8000
+        ),
+        compact_error=RuntimeError("test failure") if failure else None,
+    )
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    run = await loop.start_run("coder", "Continue", session_id=session.id)
+    await asyncio.wait_for(started.wait(), 10)
+    assert run.request_compaction()
+    assert run.request_compaction()
+    assert run.compaction_state == "pending"
+    assert service.compact_calls == []
+    release.set()
+    result = await asyncio.wait_for(run.wait(), 10)
+    assert result.content == "finished"
+    assert len(service.compact_calls) == 1
+    assert service.compact_calls[0]["message_roles"][-2:] == ["assistant", "tool"]
+    assert service.compact_calls[0]["minimum_reclaim_tokens"] == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
+    assert run.compaction_state == "idle"
+    roles = persisted_roles(session.load())
+    if failure:
+        assert "compaction_checkpoint" not in roles
+        assert any(event.type == COMPACTION_ABORTED_EVENT for event in run.events)
+    else:
+        assert roles.index("compaction_checkpoint") > roles.index("tool")
+        assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+
+
 class _RealCompactionAdapter(StubAdapter):
     """Exercise real Agent and Compaction requests through one recording adapter."""
 

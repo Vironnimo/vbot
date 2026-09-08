@@ -541,6 +541,7 @@ class ToolContext:
     cancellation_hook: ToolCancellationHook | None = None
     cancel_registration_hook: ToolCancelRegistrationHook | None = None
     cancel_check_hook: ToolCancelCheckHook | None = None
+    background_registration_hook: Callable[[Callable[[], bool]], None] | None = None
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     result_persisted_hook: ToolResultPersistedHook | None = None
