@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryRunInput
 from core.chat import CommandFeedback, CommandNavigation, CommandOutcome, ExtensionCommandContext
@@ -28,21 +28,20 @@ from core.utils.ids import new_id
 from .agent_text import (
     BOARD_DESCRIPTION,
     BOARD_PARAMETERS,
-    COMPLETION_RACE_REMINDER,
-    DELIVERY_PREFIX,
+    DEFAULT_INSTRUCTIONS,
+    DEFAULT_PROMPT_BLOCKS,
+    DEFAULT_REMINDERS,
     EMPTY_INBOX,
     ERRORS,
     INBOX_DESCRIPTION,
     INBOX_PARAMETERS,
-    ORIENTATION,
     POST_SAVED,
-    PULL_WAKE_REMINDER,
+    REMINDER_TEXTS,
     REPLAYED,
-    RESUME_REMINDER,
     STATE_DESCRIPTION,
     STATE_PARAMETERS,
 )
-from .store import Page, SwarmStore, SwarmStoreError
+from .store import Page, SwarmStore, SwarmStoreError, _validate_profile
 
 Json = dict[str, Any]
 
@@ -316,6 +315,7 @@ class SwarmExtension:
         try:
             handlers: dict[str, Callable[[Json], Awaitable[Json]]] = {
                 "catalog": self._catalog,
+                "profiles.preview": self._profiles_preview,
                 "profiles.list": self._profiles_list,
                 "profiles.get": self._profiles_get,
                 "profiles.save": self._profiles_save,
@@ -338,9 +338,48 @@ class SwarmExtension:
 
     async def _catalog(self, _arguments: Json) -> Json:
         host = self.host
-        if host is None or host.catalog is None:
-            return {"catalog": {}}
-        return {"catalog": await host.catalog()}
+        catalog = await host.catalog() if host is not None and host.catalog is not None else {}
+        catalog["prompt_defaults"] = {
+            "instructions": DEFAULT_INSTRUCTIONS,
+            "prompt_blocks": DEFAULT_PROMPT_BLOCKS,
+            "reminders": DEFAULT_REMINDERS,
+        }
+        catalog["reminder_texts"] = REMINDER_TEXTS
+        return {"catalog": catalog}
+
+    async def _profiles_preview(self, arguments: Json) -> Json:
+        _exact(arguments, {"profile", "formation_index"}, required={"profile"})
+        value = arguments.get("profile")
+        if not isinstance(value, dict):
+            raise SwarmStoreError("invalid_arguments", field="profile")
+        profile = _validate_profile({**value, "name": value.get("name") or "Preview"})
+        index = arguments.get("formation_index", 0)
+        if type(index) is not int or not 0 <= index < len(profile["participants"]):
+            raise SwarmStoreError("invalid_arguments", field="formation_index")
+        host = self.host
+        if host is None or host.inspect_prompt is None or host.catalog is None:
+            raise SwarmStoreError("swarm_closed")
+        catalog = await host.catalog()
+        _validate_profile_catalog(profile, catalog)
+        directory = profile["working_directory"]
+        project_id = directory.get("project_id")
+        if project_id is not None:
+            project = next((item for item in catalog["projects"] if item["id"] == project_id), None)
+            if project is None:
+                raise SwarmStoreError("invalid_arguments", field="working_directory")
+            cwd = Path(project["cwd"])
+        else:
+            cwd = Path(directory["path"]).expanduser().resolve()
+        participant = {
+            "ordinal": 1 + sum(row["count"] for row in profile["participants"][:index]),
+            "display_name": "Preview",
+            "model": profile["participants"][index]["model"],
+        }
+        return {
+            "preview": await host.inspect_prompt(
+                _participant_config(profile, participant, cwd), project_id
+            )
+        }
 
     async def _profiles_list(self, arguments: Json) -> Json:
         page = await self._store().list_profiles(**_page_arguments(arguments))
@@ -501,23 +540,6 @@ class SwarmExtension:
             ),
         )
 
-    async def orientation(self, binding: TemporarySessionBinding) -> str:
-        swarm = await self._store().get_swarm(binding.group_id)
-        participant = next(
-            (item for item in swarm["participants"] if item["id"] == binding.participant_id), None
-        )
-        if participant is None:
-            return ""
-        data = {
-            "participant_id": participant["id"],
-            "display_name": participant["display_name"],
-            "main_discussion_id": swarm["main_discussion_id"],
-            "participant_count": len(swarm["participants"]),
-            "delivery": swarm["delivery"],
-            "settings_revision": swarm["settings_revision"],
-        }
-        return f"{ORIENTATION}\n\n{json.dumps(data, ensure_ascii=False)}"
-
     async def _profile_id_for_slug(self, slug: str) -> str:
         cursor = None
         while True:
@@ -674,7 +696,7 @@ class SwarmExtension:
                         wake["participant_id"],
                         TemporaryRunInput(
                             "continuation",
-                            PULL_WAKE_REMINDER,
+                            _reminder(swarm, "wake"),
                             f"wake:{swarm['epoch']}:{wake['participant_id']}:{wake['announced_sequence']}",
                         ),
                     )
@@ -802,7 +824,9 @@ class SwarmExtension:
                 input = (
                     TemporaryRunInput("initial", snapshot["prompt"], request_id)
                     if initial is None
-                    else TemporaryRunInput("continuation", RESUME_REMINDER, request_id)
+                    else TemporaryRunInput(
+                        "continuation", _reminder(snapshot, "resume"), request_id
+                    )
                 )
                 admission = await group.start(
                     handle,
@@ -865,7 +889,7 @@ class SwarmExtension:
             return None
         entry = "\n\n".join(
             (
-                DELIVERY_PREFIX,
+                _reminder(swarm, "delivery"),
                 json.dumps(
                     {
                         "entries": prepared["entries"],
@@ -922,7 +946,7 @@ class SwarmExtension:
                 continuation=PreparedSessionDelivery(
                     f"completion:{continuation_id}",
                     continuation_id,
-                    (COMPLETION_RACE_REMINDER,),
+                    (_reminder(await self._store().get_swarm(binding.group_id), "completion"),),
                     "0",
                     "swarm_completion_race",
                 ),
@@ -1109,7 +1133,13 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         thinking_effort=formation.get("thinking_effort"),
         fallback_models=formation.get("fallback_models", []),
         instructions=profile["instructions"],
+        prompt_blocks=["core:agent_body", *profile.get("prompt_blocks", DEFAULT_PROMPT_BLOCKS)],
     )
+
+
+def _reminder(swarm: Json, event: str) -> str:
+    enabled = swarm["profile_snapshot"].get("reminders", DEFAULT_REMINDERS)[event]
+    return REMINDER_TEXTS[event] if enabled else ""
 
 
 def _swarm_command_argument(argument: str) -> tuple[str, str]:
@@ -1242,9 +1272,6 @@ def register(api: ExtensionAPI) -> None:
         acknowledge_delivery=service._acknowledge_delivery,
         reconcile_tool_batch=service._reconcile_tool_batch,
     )
-    api.register_session_prompt_block(
-        "orientation", render=cast(Callable[..., str], service.orientation)
-    )
     api.register_page("swarms", "Swarms", "web/page.html")
     api.register_command(
         "swarm",
@@ -1278,6 +1305,15 @@ _PAGE = {
     "additionalProperties": False,
 }
 _OPERATION_SCHEMAS: dict[str, Json] = {
+    "profiles.preview": {
+        "type": "object",
+        "properties": {
+            "profile": {"type": "object"},
+            "formation_index": {"type": "integer", "minimum": 0},
+        },
+        "required": ["profile"],
+        "additionalProperties": False,
+    },
     "catalog": {"type": "object", "properties": {}, "additionalProperties": False},
     "profiles.list": _PAGE,
     "profiles.get": {

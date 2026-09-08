@@ -2856,6 +2856,33 @@ class ChatLoop:
             definition for definition in tools if definition.get("name") != ANALYZE_IMAGE_TOOL_NAME
         ]
 
+    async def preview_tool_definitions(
+        self, agent: Any, *, session_tool_grants: Sequence[str] = ()
+    ) -> list[JsonObject]:
+        """Apply the production Tool-route rules without starting a Run or calling a Model."""
+        tools = await _run_prompt_method(
+            self._dependencies.get_system_prompts(),
+            "provider_tool_definitions_async",
+            "provider_tool_definitions",
+            agent,
+            session_tool_grants=session_tool_grants,
+        )
+        if not any(tool.get("name") == ANALYZE_IMAGE_TOOL_NAME for tool in tools):
+            return await self._route_tool_definitions(
+                tools, input_modalities=frozenset(), wire_media_types=frozenset()
+            )
+        provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _, model_id = _split_agent_model(agent.model)
+        target = self._create_model_target(provider_id, connection_id, model_id)
+        try:
+            return await self._route_tool_definitions(
+                tools,
+                input_modalities=target.input_modalities,
+                wire_media_types=target.wire_media_types,
+            )
+        finally:
+            await _close_adapter(target.adapter)
+
     async def _send_until_final(
         self,
         context: _RunExecutionContext,

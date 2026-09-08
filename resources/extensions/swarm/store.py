@@ -3121,6 +3121,8 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
         "tools",
         "allowed_skills",
         "instructions",
+        "prompt_blocks",
+        "reminders",
         "delivery",
     }
     if set(profile) - allowed:
@@ -3170,6 +3172,27 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     instructions = profile.get("instructions", "")
     if not isinstance(instructions, str):
         raise SwarmStoreError("invalid_arguments", field="instructions")
+    from .agent_text import DEFAULT_PROMPT_BLOCKS, DEFAULT_REMINDERS
+
+    prompt_blocks = profile.get("prompt_blocks", DEFAULT_PROMPT_BLOCKS)
+    if (
+        not isinstance(prompt_blocks, list)
+        or any(
+            not isinstance(item, str) or ":" not in item or item == "core:agent_body"
+            for item in prompt_blocks
+        )
+        or len(set(prompt_blocks)) != len(prompt_blocks)
+    ):
+        raise SwarmStoreError("invalid_arguments", field="prompt_blocks")
+    reminders = profile.get("reminders", DEFAULT_REMINDERS)
+    if (
+        not isinstance(reminders, dict)
+        or set(reminders) != set(DEFAULT_REMINDERS)
+        or any(type(value) is not bool for value in reminders.values())
+    ):
+        raise SwarmStoreError("invalid_arguments", field="reminders")
+    profile["prompt_blocks"] = list(prompt_blocks)
+    profile["reminders"] = dict(reminders)
     profile["delivery"] = _delivery(profile.get("delivery", {}))
     profile.setdefault("tools", {})
     profile.setdefault("allowed_skills", ["*"])

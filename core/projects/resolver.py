@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from core.agents.agents import Agent, AgentStore
+    from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
     from core.models.models import ModelRegistry
     from core.projects.projects import Project
     from core.projects.store import ProjectStore
@@ -553,6 +554,34 @@ class AgentResolver:
         if agent is None:
             raise AgentResolutionError("temporary Session binding is unavailable")
         project_id = getattr(address, "project_id", None)
+        agent = self._apply_temporary_project(agent, project_id)
+        return self._apply_run_overrides(agent, run_overrides)
+
+    def preview_temporary_agent(
+        self, config: TemporaryAgentConfig, project_id: str | None = None
+    ) -> TemporaryAgent:
+        """Resolve editor configuration through the same ceilings without creating a Session."""
+        from core.agents.temporary import TemporaryAgent
+
+        agent = TemporaryAgent(
+            id="preview",
+            name=config.name,
+            model=config.model,
+            cwd=config.cwd,
+            tool_access=config.tool_access,
+            allowed_skills=config.allowed_skills,
+            tools=config.tools,
+            fallback_models=config.fallback_models or [],
+            instructions=config.instructions,
+            prompt_blocks=config.prompt_blocks,
+            temperature=config.temperature,
+            thinking_effort=config.thinking_effort,
+        )
+        return self._apply_temporary_project(agent, project_id)
+
+    def _apply_temporary_project(
+        self, agent: TemporaryAgent, project_id: str | None
+    ) -> TemporaryAgent:
         if project_id is not None:
             project = self._load_project(project_id)
             tool_access = _temporary_project_tool_access(project, agent.tool_access)
@@ -571,7 +600,7 @@ class AgentResolver:
                 allowed_skills=allowed_skills,
                 tools=tools,
             )
-        return self._apply_run_overrides(agent, run_overrides)
+        return agent
 
     def _apply_run_overrides(
         self,

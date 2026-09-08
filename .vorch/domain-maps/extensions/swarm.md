@@ -21,13 +21,33 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
   the shared Secondary bar, topic tabs, a bounded scrollport, and a fixed save footer.
   Creation saves explicitly; saved profiles autosave and flush before navigation
   through the generic page bridge. Invalidations preserve the mounted draft.
-  The instructions field is the participant's System Prompt contribution;
-  new profiles seed it with editable shared-goal wording in `ProfileEditor.svelte`.
+  The System Prompt tab owns editable instructions, explicit block selection,
+  Model-specific combined previews and event reminder switches. New profiles
+  receive the complete default from `agent_text.py` through the editor catalog;
+  Swarm no longer registers a separately appended orientation block.
   The visible value is saved as-is, including an intentionally empty value;
   existing profiles are not backfilled and runtime adds no fallback.
   Omitted effort uses the Provider default, not shared Agent defaults.
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
   Tests: `SwarmPage.test.js` and `test_swarm_store.py`.
+
+Profiles select every additional System Prompt block explicitly; Tool Call Style
+and Skills start enabled, other blocks (including Runtime and Working Project)
+start disabled, and newly registered blocks stay disabled. This selection controls
+prompt text independently of working directory and Tool/Skill access. It is
+persisted in temporary Agent bindings and each started Swarm's profile snapshot.
+`profiles.preview` accepts an unsaved profile and formation row, using the host's
+read-only prompt inspection with the same Project ceilings and Model Tool routing.
+It returns rendered block details and separately transmitted Tool definitions;
+draft changes invalidate the displayed preview. Evidence: `test_swarm_lifecycle.py`,
+`test_runtime_extensions.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
+
+Delivery, wake, explicit Resume and completion-race guidance are individually
+switchable in the snapshot. Their complete wording is inspectable in the editor.
+Disabling guidance preserves Board payloads and lifecycle behavior; empty
+continuation receipts add no Model-visible reminder. Existing Session history is
+not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
+`test_swarm_lifecycle.py`.
 
 ## Invariants that affect changes
 

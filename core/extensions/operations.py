@@ -31,6 +31,7 @@ class ExtensionHost:
     state_dir: Path | None = None
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None
+    inspect_prompt: Callable[[Any, str | None], Awaitable[dict[str, Any]]] | None = None
 
 
 @dataclass(frozen=True)

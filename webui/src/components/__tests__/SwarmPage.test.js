@@ -32,6 +32,8 @@ const profile = {
   tools: {},
   allowed_skills: ['*'],
   instructions: '',
+  prompt_blocks: ['core:tools', 'core:skills'],
+  reminders: { delivery: true, wake: true, resume: true, completion: true },
   delivery,
 };
 const swarm = {
@@ -85,6 +87,29 @@ function createBridge(initialProfile = profile) {
     if (name === 'catalog')
       return Promise.resolve({
         catalog: {
+          prompt_defaults: {
+            instructions: 'test-owned editable default',
+            prompt_blocks: ['core:tools', 'core:skills'],
+            reminders: {
+              delivery: true,
+              wake: true,
+              resume: true,
+              completion: true,
+            },
+          },
+          prompt_blocks: [
+            { id: 'core:runtime', text: 'test-owned runtime block' },
+            { id: 'core:tools', text: 'test-owned tool style' },
+            { id: 'core:skills', text: 'test-owned skills' },
+            { id: 'core:working_project' },
+            { id: 'extension:new', text: 'test-owned new extension' },
+          ],
+          reminder_texts: {
+            delivery: 'test-owned delivery guidance',
+            wake: 'test-owned wake guidance',
+            resume: 'test-owned resume guidance',
+            completion: 'test-owned completion guidance',
+          },
           models: [
             {
               id: 'demo/model',
@@ -252,6 +277,122 @@ afterEach(async () => {
 });
 
 describe('SwarmPage', () => {
+  it('shows prompt contributions and persists independent context and reminder switches', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    button('System Prompt').click();
+    await tick();
+    const toggle = (name) =>
+      document.querySelector(`[role="switch"][aria-label="${name}"]`);
+    expect(toggle('Tool guidance').getAttribute('aria-checked')).toBe('true');
+    expect(toggle('Available Skills').getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(toggle('Runtime').getAttribute('aria-checked')).toBe('false');
+    expect(toggle('Working Project').getAttribute('aria-checked')).toBe(
+      'false',
+    );
+    expect(toggle('extension:new').getAttribute('aria-checked')).toBe('false');
+    expect(document.body.textContent).toContain('test-owned runtime block');
+    expect(document.body.textContent).toContain('test-owned resume guidance');
+    toggle('Runtime').click();
+    toggle('Working Project').click();
+    toggle('When you resume work').click();
+    await tick();
+    button('Save changes').click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const saved = operation.mock.calls
+      .filter(([name]) => name === 'profiles.save')
+      .at(-1)[1].profile;
+    expect(saved.prompt_blocks).toEqual([
+      'core:tools',
+      'core:skills',
+      'core:runtime',
+      'core:working_project',
+    ]);
+    expect(saved.reminders.resume).toBe(false);
+    expect(saved.working_directory).toEqual(profile.working_directory);
+    await unmount(mounted);
+    mounted = null;
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    expect(toggle('Runtime').getAttribute('aria-checked')).toBe('true');
+    expect(toggle('Working Project').getAttribute('aria-checked')).toBe('true');
+    expect(toggle('When you resume work').getAttribute('aria-checked')).toBe(
+      'false',
+    );
+  });
+
+  it('previews the current unsaved profile and hides stale or late previews', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let complete;
+    operation.mockImplementation((name, args) =>
+      name === 'profiles.preview'
+        ? new Promise((resolve) => (complete = resolve))
+        : original(name, args),
+    );
+    await render(bridge);
+    button('New profile').click();
+    await tick();
+    flushSync();
+    await choose('swarm-model-0', 'demo/model');
+    fill('swarm-directory', 'C:/work');
+    button('System Prompt').click();
+    await tick();
+    fill('swarm-instructions', 'unsaved-sentinel');
+    await tick();
+    button('Generate preview').click();
+    await tick();
+    expect(operation).toHaveBeenCalledWith(
+      'profiles.preview',
+      expect.objectContaining({
+        profile: expect.objectContaining({
+          instructions: 'unsaved-sentinel',
+          prompt_blocks: ['core:tools', 'core:skills'],
+        }),
+        formation_index: 0,
+      }),
+    );
+    complete({
+      preview: {
+        text: 'preview-sentinel',
+        blocks: [],
+        tools: [{ name: 'swarm_state', description: 'definition-sentinel' }],
+      },
+    });
+    await tick();
+    await new Promise((resolve) => setTimeout(resolve));
+    flushSync();
+    expect(
+      document.querySelector('[data-testid="swarm-prompt-preview"]')
+        .textContent,
+    ).toBe('preview-sentinel');
+    expect(document.body.textContent).toContain('definition-sentinel');
+    fill('swarm-instructions', 'changed-sentinel');
+    await tick();
+    expect(
+      document.querySelector('[data-testid="swarm-prompt-preview"]'),
+    ).toBeNull();
+    button('Generate preview').click();
+    await tick();
+    fill('swarm-instructions', 'newer-sentinel');
+    await tick();
+    complete({ preview: { text: 'stale-sentinel', blocks: [], tools: [] } });
+    await tick();
+    expect(
+      document.querySelector('[data-testid="swarm-prompt-preview"]'),
+    ).toBeNull();
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.save'),
+    ).toBe(false);
+  });
+
   it('shows a connection failure if the host never initializes the page', async () => {
     vi.useFakeTimers();
     const { bridge } = createBridge();

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -542,6 +542,7 @@ def assemble_system_prompt(
     override_resolver: OverrideResolver,
     producers: Mapping[str, BlockProducer],
     replacements: Mapping[str, str] = MAPPING_PROXY_EMPTY,
+    block_details: list[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble the final system prompt from blocks (the public entry point).
 
@@ -554,6 +555,20 @@ def assemble_system_prompt(
     resolved = resolve_layout(definitions, layout)
     rendered: list[str] = []
     for block in resolved:
+        active = owner_activity.is_owner_active(block.definition.owner, context.agent)
+        if not active or (not block.enabled and block_details is None):
+            if block_details is not None:
+                block_details.append(
+                    {
+                        "id": block.definition.id,
+                        "owner": block.definition.owner,
+                        "enabled": block.enabled,
+                        "active": active,
+                        "text": "",
+                        "included": False,
+                    }
+                )
+            continue
         text = resolve_block_text(
             block,
             context,
@@ -561,7 +576,19 @@ def assemble_system_prompt(
             producers=producers,
             replacements=replacements,
         )
-        if passes_gates(block, context.agent, owner_activity, text):
+        included = block.enabled and bool(text.strip())
+        if block_details is not None:
+            block_details.append(
+                {
+                    "id": block.definition.id,
+                    "owner": block.definition.owner,
+                    "enabled": block.enabled,
+                    "active": active,
+                    "text": text.strip(),
+                    "included": included,
+                }
+            )
+        if included:
             rendered.append(text)
     return normalize_blocks(rendered)
 

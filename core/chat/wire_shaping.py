@@ -605,6 +605,8 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
         note_run_kind = None
 
     for note in notes:
+        if not note.content:
+            continue
         if is_skill_context_note(note):
             payload = skill_context_note_payload(note)
             if payload is None:

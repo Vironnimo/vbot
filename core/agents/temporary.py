@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 from core.chat.messages import ChatMessage
-from core.memory import MEMORY_PROMPT_MODE_OFF
+from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -47,6 +47,7 @@ class TemporaryAgentConfig:
     thinking_effort: str | None = None
     fallback_models: list[str] | None = None
     instructions: str = ""
+    prompt_blocks: list[str] | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
@@ -60,6 +61,14 @@ class TemporaryAgentConfig:
             raise ValueError("temporary name must be a non-empty string")
         if not isinstance(self.instructions, str):
             raise ValueError("temporary instructions must be a string")
+        if self.prompt_blocks is not None:
+            if (
+                not isinstance(self.prompt_blocks, list)
+                or any(not isinstance(item, str) or ":" not in item for item in self.prompt_blocks)
+                or len(set(self.prompt_blocks)) != len(self.prompt_blocks)
+            ):
+                raise ValueError("temporary prompt_blocks must contain unique block ids")
+            object.__setattr__(self, "prompt_blocks", list(self.prompt_blocks))
         if self.temperature is not None and (
             isinstance(self.temperature, bool)
             or not isinstance(self.temperature, (int, float))
@@ -97,11 +106,12 @@ class TemporaryAgent:
     tools: dict[str, Any]
     fallback_models: list[str]
     instructions: str = ""
+    prompt_blocks: list[str] | None = None
     workspace: str = ""
     root_project_id: str | None = None
     temperature: float | None = None
     thinking_effort: str | None = None
-    memory_prompt_mode: str = MEMORY_PROMPT_MODE_OFF
+    memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_OFF
     custom_system_prompt_enabled: bool = False
     current_session_id: str = ""
     created_at: str = ""
@@ -144,6 +154,7 @@ class TemporaryAgentRegistry:
                 "thinking_effort": config.thinking_effort,
                 "fallback_models": list(config.fallback_models or []),
                 "instructions": config.instructions,
+                "prompt_blocks": deepcopy(config.prompt_blocks),
             },
         )
 
@@ -163,6 +174,7 @@ class TemporaryAgentRegistry:
                 tools=dict(config["tools"]),
                 fallback_models=list(config.get("fallback_models", [])),
                 instructions=str(config.get("instructions", "")),
+                prompt_blocks=deepcopy(config.get("prompt_blocks")),
                 temperature=config.get("temperature"),
                 thinking_effort=config.get("thinking_effort"),
                 current_session_id=address.session_id,
@@ -393,7 +405,7 @@ class TemporaryExecutionGroups:
             not isinstance(input, TemporaryRunInput)
             or input.kind not in {"initial", "continuation"}
             or not isinstance(input.content, str)
-            or not input.content.strip()
+            or (input.kind == "initial" and not input.content.strip())
             or not isinstance(input.request_id, str)
             or not input.request_id
             or len(input.request_id) > 128
