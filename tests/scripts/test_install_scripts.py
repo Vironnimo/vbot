@@ -70,9 +70,11 @@ def _run_linux_webui_unpack(
     home.mkdir()
     destination.mkdir()
     command = (
-        'source "$1"; '
-        'INSTALL_DIR="$2"; '
-        'WEBUI_ASSET_URL="$(python3 -c "$4" "$3")"; '
+        'harness="$1"; destination="$2"; '
+        'asset_url="$(python3 -c "$4" "$3")"; '
+        'set --; source "$harness"; '
+        'INSTALL_DIR="$destination"; '
+        'WEBUI_ASSET_URL="$asset_url"; '
         "fetch_prebuilt_webui"
     )
     uri_script = "import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())"
