@@ -41,6 +41,7 @@ def _write_webui_archive(archive_path: Path, members: dict[str, str]) -> None:
         for directory in sorted(directories):
             info = tarfile.TarInfo(f"{directory}/")
             info.type = tarfile.DIRTYPE
+            info.mode = 0o755
             archive.addfile(info)
         for name, content in members.items():
             payload = content.encode("utf-8")
