@@ -10,6 +10,7 @@ import sys
 import time
 import types
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,71 @@ from core.tools.tools import (
 
 AGENT_ID = "agent-a"
 RUN_ID = "run-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["foreground", "auto"])
+async def test_user_handoff_preserves_process_and_automatic_delivery(
+    manager, tmp_path, monkeypatch, mode
+):
+    from core.runs import Run
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    run = Run(run_id=RUN_ID, agent_id=AGENT_ID, session_id="session-a")
+    run.begin_tool_call("call-a")
+    context = make_context(tmp_path)
+    ready = asyncio.Event()
+    delivered = asyncio.Event()
+    notices = []
+
+    def register(callback):
+        run.register_tool_background("call-a", callback)
+        ready.set()
+
+    class Trigger:
+        def submit_completion(self, *args, **kwargs):
+            notices.append(kwargs)
+            delivered.set()
+            return delivered_future()
+
+    context = replace(context, background_registration_hook=register)
+    task = asyncio.create_task(
+        bash_handler(
+            context,
+            {
+                "command": (
+                    "import sys; print('ready', flush=True); "
+                    "sys.stdin.readline(); print('finished')"
+                ),
+                "mode": mode,
+            },
+            manager,
+            trigger_service=Trigger(),
+        )
+    )
+    await asyncio.wait_for(ready.wait(), 5)
+    assert run.background_tool_call("call-a")
+    result = await asyncio.wait_for(task, 5)
+    assert result["ok"] and result["data"]["delivery"] == "automatic"
+    process_id = result["data"]["process_id"]
+    assert manager.get_process(process_id, AGENT_ID, project_id=None).status == "running"
+    await manager.send_input(
+        process_id, AGENT_ID, "continue", newline=True, eof=False, project_id=None
+    )
+    await asyncio.wait_for(delivered.wait(), 5)
+    assert len(notices) == 1
+    assert "finished" in notices[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_foreground_never_exposes_user_handoff(manager, tmp_path, monkeypatch):
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=1)
+    callbacks = []
+    context = replace(context, background_registration_hook=callbacks.append)
+    result = await bash_handler(context, {"command": "print('inline')"}, manager)
+    assert result["data"]["status"] == "completed"
+    assert callbacks == []
 
 
 @pytest.fixture(autouse=True)

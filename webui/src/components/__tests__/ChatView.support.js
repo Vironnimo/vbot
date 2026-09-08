@@ -398,10 +398,16 @@ export async function hoveredContextRingTooltip(expectedText) {
     100,
   );
   vi.useFakeTimers();
-  return hoveredTooltipText(
-    document.body.querySelector('.context-ring'),
-    expectedText,
-  );
+  const anchor = document.body.querySelector('.context-ring');
+  anchor.dispatchEvent(new Event('pointerenter'));
+  await vi.advanceTimersByTimeAsync(200);
+  flushSync();
+  const card = document.body.querySelector('.context-hover-card');
+  expect(card.dataset.floatingOpen).toBe('true');
+  const text = card.querySelector('.context-hover-details').textContent;
+  expect(text).toBe(expectedText);
+  anchor.dispatchEvent(new Event('pointerleave'));
+  return text;
 }
 
 export async function hoveredTooltipText(element, expectedText) {

@@ -47,10 +47,49 @@ from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
     _chat_queue_update,
+    _control_run_chat,
     _send_chat,
     _stream_chat,
 )
 from server.rpc.errors import RpcError
+
+
+@pytest.mark.asyncio
+async def test_run_controls_validate_full_address_and_return_authoritative_state() -> None:
+    from core.runs import Run
+
+    run = Run(run_id="run-control", agent_id="builder", project_id="vbot", session_id="s1")
+    run.set_compaction_state("idle")
+    state = SimpleNamespace(chat_runs=SimpleNamespace(get=lambda _id: run))
+    params = {"agent_id": "builder@vbot", "session_id": "s1", "run_id": run.id, "action": "compact"}
+    for changed in (
+        {"agent_id": "builder"},
+        {"session_id": "other"},
+        {"action": "unknown"},
+        {"tool_call_id": "unexpected"},
+    ):
+        with pytest.raises(RpcError):
+            await _control_run_chat(state, {**params, **changed})
+    assert run.compaction_state == "idle"
+    response = await _control_run_chat(state, params)
+    assert response["controls"]["compaction"] == "pending"
+    run.begin_tool_call("call-one")
+    handed_off = []
+
+    def background():
+        handed_off.append(True)
+        return True
+
+    run.register_tool_background("call-one", background)
+    background_params = {**params, "action": "background_tool", "tool_call_id": "call-one"}
+    response = await _control_run_chat(state, background_params)
+    assert response["controls"]["background_tool_call_ids"] == []
+    assert handed_off == [True]
+    with pytest.raises(RpcError):
+        await _control_run_chat(state, background_params)
+    run.request_cancel()
+    with pytest.raises(RpcError):
+        await _control_run_chat(state, params)
 
 
 class _FakeRun:
@@ -68,6 +107,9 @@ class _FakeRun:
 
     async def wait(self) -> ChatMessage:
         return ChatMessage.assistant(content="handoff text", model="openai/gpt-5.2")
+
+    def controls(self) -> dict:
+        return {"compaction": "unavailable", "background_tool_call_ids": []}
 
 
 class _RecordingLoop:

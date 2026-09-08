@@ -667,6 +667,8 @@ describe('chat state helpers', () => {
     expect(sessionState.currentRun).toEqual({
       runId: 'run-stale',
       sseUrl: '/api/runs/run-stale/events',
+      controls: {},
+      controlsSequence: 0,
       status: CHAT_STATUS_RUNNING,
       startedAt: null,
       iterationCount: 0,

@@ -850,7 +850,8 @@
   });
 
   $effect(() => {
-    chatController.applyBackgroundBashStatusEvents(backgroundBashStatusEvents);
+    const events = backgroundBashStatusEvents;
+    untrack(() => chatController.applyBackgroundBashStatusEvents(events));
   });
 
   let lastActivityRefreshKey = '';
@@ -2205,6 +2206,12 @@
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={handleNavigateToSubAgentLink}
             onCancelToolCall={handleCancelToolCall}
+            onBackgroundToolCall={(target) =>
+              chatController.controlRun(
+                activeSessionState,
+                'background_tool',
+                target,
+              )}
             onCancelSubAgent={handleCancelSubAgent}
             messageEditingDisabled={chatState.loadingHistory ||
               isRunActive(activeSessionState) ||
@@ -2331,6 +2338,16 @@
                 focusRequest={composerFocusRequest}
                 availableSkills={chatState.availableSkills}
                 contextUsage={activeSessionState?.contextUsage}
+                compactionState={activeSessionState?.currentRun?.status ===
+                'running'
+                  ? (activeSessionState.currentRun.controls?.compaction ??
+                    'unavailable')
+                  : 'unavailable'}
+                compactionSubmitting={Boolean(
+                  activeSessionState?.pendingRunControls?.compact,
+                )}
+                onForceCompaction={() =>
+                  chatController.controlRun(activeSessionState, 'compact')}
                 contextWindow={activeAgent?.context_window}
                 usage={activeSessionState?.usage}
                 sessionUsage={activeSessionState?.sessionUsage}

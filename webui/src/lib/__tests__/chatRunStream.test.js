@@ -66,6 +66,34 @@ function makeStreamHarness({
   };
 }
 
+it('restores Run controls from a reconnect snapshot with an evicted event prefix', () => {
+  const chatState = createChatState();
+  const { stream } = makeStreamHarness({
+    chatState,
+    displayedAgentId: 'alpha',
+    displayedSessionId: 'session',
+  });
+  const controls = {
+    compaction: 'pending',
+    background_tool_call_ids: ['call-one'],
+  };
+  stream.applyConnectionSnapshot({
+    active_runs: [
+      {
+        run_id: 'run-controls',
+        agent_id: 'alpha',
+        session_id: 'session',
+        controls,
+        controls_sequence: 5000,
+      },
+    ],
+  });
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  expect(session.currentRun.controls).toEqual(controls);
+  expect(session.currentRun.controlsSequence).toBe(5000);
+  stream.closeSubscriptions();
+});
+
 describe('createChatRunStream().applyConnectionSnapshot()', () => {
   let chatState;
   const DISPLAYED_AGENT_ID = 'alpha';

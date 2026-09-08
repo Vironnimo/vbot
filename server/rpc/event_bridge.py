@@ -330,6 +330,7 @@ def _server_event_from_run_event(
 
 
 RUN_OUTPUT_EVENT_TYPES = {
+    "run_controls_changed",
     USER_MESSAGE_EVENT,
     REASONING_EVENT,
     TOOL_CALL_STARTED_EVENT,

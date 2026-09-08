@@ -15,6 +15,41 @@ from .runs_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_run_controls_reject_stale_calls_and_coalesce_compaction() -> None:
+    run = Run(run_id="run-controls", agent_id="coder", session_id="session-one")
+    assert not run.request_compaction()
+    run.set_compaction_state("idle")
+    assert run.request_compaction()
+    sequence = run.events[-1].sequence
+    assert run.request_compaction()
+    assert run.events[-1].sequence == sequence
+    run.emit("compaction_started")
+    assert run.request_compaction()
+    assert run.compaction_state == "running"
+    run.emit("compaction_aborted", {"reason": "failed"})
+    assert run.compaction_state == "idle"
+
+    calls = []
+
+    def background():
+        calls.append(True)
+        return True
+
+    run.begin_tool_call("call-one")
+    run.register_tool_background("call-one", background)
+    assert run.controls()["background_tool_call_ids"] == ["call-one"]
+    assert run.background_tool_call("call-one")
+    assert not run.background_tool_call("call-one")
+    assert calls == [True]
+    run.begin_tool_call("call-two")
+    run.register_tool_background("call-two", background)
+    run.clear_tool_cancel("call-two")
+    assert not run.background_tool_call("call-two")
+    run.request_cancel()
+    assert not run.request_compaction()
+    assert run.controls() == {"compaction": "unavailable", "background_tool_call_ids": []}
+
+
 async def test_cancel_tool_call_fires_callback_and_flips_state_without_cancelling_run() -> None:
     """cancel_tool_call must fire the callback, mark cancelled, and leave the run alive."""
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
