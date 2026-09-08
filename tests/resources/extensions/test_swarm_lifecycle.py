@@ -72,6 +72,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
             )
             self.started = asyncio.Event()
             self.release = asyncio.Event()
+            self.continued = asyncio.Event()
 
         async def send(self, messages, *, model_id, **kwargs):
             first = not self.requests
@@ -79,6 +80,8 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
             if first:
                 self.started.set()
                 await self.release.wait()
+            else:
+                self.continued.set()
             return response
 
     adapter = BarrierAdapter()
@@ -97,7 +100,9 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     started = await lifecycle.service.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
-    async with asyncio.timeout(5):
+    # Fifteen durable SQLite writes can exceed five seconds under parallel load.
+    # This test checks delivery ordering and duplicate wakes, not disk latency.
+    async with asyncio.timeout(15):
         await adapter.started.wait()
         await asyncio.gather(
             *(
@@ -114,8 +119,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
         )
         assert len(adapter.requests) == 1
         adapter.release.set()
-        while len(adapter.requests) < 2:
-            await asyncio.sleep(0.01)
+        await adapter.continued.wait()
         snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
         participant = snapshot["participants"][0]
         await lifecycle.runtime.chat_run_manager.get(participant["lifecycle_run_id"]).wait()

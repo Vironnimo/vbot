@@ -4803,14 +4803,48 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             if tool_name == "swarm_state":
                 await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
                 status = await store.participant_status(sid, pid, limit=1)
+                summaries = await store.participant_status(
+                    sid, pid, limit=1, include_summaries=True
+                )
                 cases = [
                     ("status_default", {"action": "status"}, True),
+                    ("status_compact", {"action": "status", "include_summaries": False}, True),
+                    ("status_summaries", {"action": "status", "include_summaries": True}, True),
                     ("status_one", {"action": "status", "limit": 1}, True),
                     ("status_max", {"action": "status", "limit": 100}, True),
                     (
                         "status_cursor",
                         {"action": "status", "cursor": status["cursor"], "limit": 1},
                         True,
+                    ),
+                    (
+                        "status_summaries_cursor",
+                        {
+                            "action": "status",
+                            "cursor": summaries["cursor"],
+                            "limit": 1,
+                            "include_summaries": True,
+                        },
+                        True,
+                    ),
+                    (
+                        "status_cursor_changed_detail",
+                        {
+                            "action": "status",
+                            "cursor": status["cursor"],
+                            "limit": 1,
+                            "include_summaries": True,
+                        },
+                        False,
+                    ),
+                    (
+                        "status_cursor_changed_limit",
+                        {
+                            "action": "status",
+                            "cursor": status["cursor"],
+                            "limit": 2,
+                        },
+                        False,
                     ),
                     ("name_new", {"action": "name", "name": "Analyst"}, True),
                     ("name_same", {"action": "name", "name": "Analyst"}, True),
@@ -4874,6 +4908,9 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             {"action": "status", "limit": 101},
                             {"action": "status", "cursor": None},
                             {"action": "status", "cursor": "foreign"},
+                            {"action": "status", "include_summaries": "true"},
+                            {"action": "status", "include_summaries": None},
+                            {"action": "wait", "include_summaries": True},
                             {"action": "name"},
                             {"action": "name", "name": "Another", "limit": 1},
                             {"action": "wait", "needs_user": "true"},
