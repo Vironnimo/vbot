@@ -5,11 +5,14 @@
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
+  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
+  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import { init, t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
   import { visibleTimelineItemsForRender } from '../../../../webui/src/lib/chatTimeline.js';
   import ProfileEditor from './ProfileEditor.svelte';
@@ -50,7 +53,31 @@
     history = $state(null),
     live = $state([]),
     context = $state({ locale: 'en', timezone: 'UTC', theme: {} });
+  let profileEditor = $state(null);
+  let editorKey = $state(0);
   let currentSubscription = null;
+  let activityRequest = 0;
+  let selectionRequest = 0;
+  function leaveActivity() {
+    activityRequest += 1;
+    currentSubscription?.();
+    currentSubscription = null;
+    history = null;
+    live = [];
+  }
+  function navigate(action) {
+    if (profileEditor) return profileEditor.requestTransition(action);
+    return action();
+  }
+  function newSwarm() {
+    return navigate(() => {
+      selectionRequest += 1;
+      editor = null;
+      selectedSwarm = null;
+      leaveActivity();
+      client.replaceRoute('');
+    });
+  }
   const requestId = () =>
     crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   const page = (value) =>
@@ -171,7 +198,8 @@
       );
   }
   async function refresh({ keepSelection = true } = {}) {
-    loading = true;
+    // Invalidation must not unmount an active form or Run inspection.
+    loading = loading && !editor;
     error = '';
     try {
       const [nextProfiles, nextSwarms] = await Promise.all([
@@ -198,12 +226,28 @@
     }
   }
   async function selectSwarm(id, { silent = false } = {}) {
-    if (!silent) error = '';
+    const request = ++selectionRequest;
+    if (!silent) {
+      error = '';
+      leaveActivity();
+    }
     try {
       const preservedDiscussion =
         selectedSwarm?.id === id ? selectedDiscussion : '';
       const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
+      if (request !== selectionRequest) return;
       selectedSwarm = swarm;
+      if (!silent) editor = null;
+      const inspected = swarm.participants?.find(
+        (item) => item.id === history?.participant.id,
+      );
+      if (
+        silent &&
+        inspected &&
+        inspected.lifecycle_run_id !== history.participant.lifecycle_run_id
+      ) {
+        void inspectParticipant(inspected, { activate: false });
+      }
       await loadDiscussions(swarm);
       const nextDiscussion = discussions.some(
         (item) => item.id === preservedDiscussion,
@@ -216,9 +260,9 @@
         loadEvents(swarm),
         loadUsage(swarm),
       ]);
-      await client.replaceRoute(`/swarms/${id}`);
+      if (!silent) await client.replaceRoute(`/swarms/${id}`);
     } catch (cause) {
-      if (!silent) error = cause.message;
+      error = cause.message;
     }
   }
   async function loadMoreProfiles() {
@@ -308,9 +352,17 @@
       profile,
       expected_revision: profile.revision || null,
     });
-    editor = null;
-    await refresh();
+    if (!profile.id) {
+      profiles = [...profiles, saved.profile];
+      selectedProfile = saved.profile;
+      editor = saved.profile;
+    } else {
+      profiles = profiles.map((item) =>
+        item.id === saved.profile.id ? saved.profile : item,
+      );
+    }
     selectedProfile = saved.profile;
+    return saved.profile;
   }
   async function openProfile(profile = 'new') {
     if (pending === 'profile') return;
@@ -318,6 +370,11 @@
     error = '';
     try {
       catalog = (await call('catalog'))?.catalog ?? {};
+      selectionRequest += 1;
+      leaveActivity();
+      selectedSwarm = null;
+      if (profile !== 'new') selectedProfile = profile;
+      editorKey += 1;
       editor = profile;
     } catch (cause) {
       error = cause.message;
@@ -463,38 +520,76 @@
     );
   }
 
-  async function inspectParticipant(participant) {
-    if (!selectedSwarm) return;
+  async function reconcileActivity(
+    request,
+    swarmId,
+    participant,
+    settled = false,
+  ) {
     try {
-      history = {
-        participant,
-        data: await client.readHistory(selectedSwarm.id, participant.id, {
-          limit: 100,
-        }),
-      };
-      live = [];
-      if (participant.lifecycle_run_id) {
-        currentSubscription?.();
-        const subscription = await client.subscribeRun(
-          selectedSwarm.id,
-          participant.lifecycle_run_id,
-        );
-        const key = subscription.subscription_id;
-        const off = client.onRunEvent((id, event) => {
-          if (id === key) live = [...live, event];
-        });
-        currentSubscription = () => {
-          off();
-          if (key) client.unsubscribeRun(key);
-        };
+      const data = await client.readHistory(swarmId, participant.id, {
+        limit: 100,
+      });
+      if (request === activityRequest) {
+        history = { participant, data };
+        if (settled) live = [];
       }
     } catch (cause) {
-      error = cause.message;
+      if (request === activityRequest) error = cause.message;
+    }
+  }
+  async function inspectParticipant(participant, { activate = true } = {}) {
+    if (!selectedSwarm) return;
+    if (activate) activeTab = 'participants';
+    leaveActivity();
+    const request = activityRequest;
+    const swarmId = selectedSwarm.id;
+    await reconcileActivity(request, swarmId, participant);
+    if (
+      request !== activityRequest ||
+      !history ||
+      !participant.lifecycle_run_id
+    )
+      return;
+    let key = null;
+    const buffered = [];
+    const receive = (id, event) => {
+      if (request !== activityRequest || id !== key) return;
+      live = [...live, event];
+      if (
+        ['run_completed', 'run_cancelled', 'run_failed'].includes(event.type)
+      ) {
+        void reconcileActivity(request, swarmId, participant, true);
+      }
+    };
+    const off = client.onRunEvent((id, event) => {
+      if (key === null) buffered.push([id, event]);
+      else receive(id, event);
+    });
+    currentSubscription = () => {
+      off();
+      if (key) client.unsubscribeRun(key);
+    };
+    try {
+      const subscription = await client.subscribeRun(
+        swarmId,
+        participant.lifecycle_run_id,
+      );
+      key = subscription.subscription_id;
+      if (request !== activityRequest) {
+        off();
+        client.unsubscribeRun(key);
+        return;
+      }
+      for (const [id, event] of buffered) receive(id, event);
+    } catch (cause) {
+      off();
+      if (request === activityRequest) error = cause.message;
     }
   }
   function routeSelection(route) {
     const match = /^\/swarms\/([^/]+)$/.exec(route ?? '');
-    if (match) selectSwarm(match[1]);
+    if (match && selectedSwarm?.id !== match[1]) selectSwarm(match[1]);
   }
   onMount(() => {
     client ??= bridgeClient ?? createExtensionPageClient();
@@ -528,111 +623,164 @@
 </script>
 
 <svelte:head><title>{t('swarm.title', 'Swarms')}</title></svelte:head>
-<main class="view-frame swarm-page">
-  <header class="view-header">
-    <div>
-      <p class="eyebrow">{t('swarm.extension', 'Extension')}</p>
-      <h1>{t('swarm.title', 'Swarms')}</h1>
-      <p class="lede">
-        {t(
-          'swarm.lede',
-          'Independent Sessions coordinating around one shared goal.',
-        )}
-      </p>
+{#snippet actionIcon(kind)}
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    {#if kind === 'plus'}<path d="M12 5v14M5 12h14" />
+    {:else if kind === 'close'}<path d="m6 6 12 12M18 6 6 18" />
+    {:else if kind === 'refresh'}<path
+        d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-2l2 3M4 16l2 3a7 7 0 0 0 12-2"
+      />
+    {:else if kind === 'play'}<path d="m8 5 11 7-11 7Z" />
+    {:else if kind === 'stop'}<rect x="6" y="6" width="12" height="12" rx="1" />
+    {:else if kind === 'edit'}<path
+        d="m14 5 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"
+      />
+    {:else if kind === 'trash'}<path
+        d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"
+      />
+    {:else if kind === 'settings'}<path d="M4 7h16M4 17h16" /><circle
+        cx="9"
+        cy="7"
+        r="3"
+        fill="var(--bg)"
+      /><circle cx="15" cy="17" r="3" fill="var(--bg)" />
+    {:else}<path d="M6 3h9l4 4v14H6ZM14 3v5h5M9 12h7M9 16h7" />{/if}
+  </svg>
+{/snippet}
+<main class="swarm-page">
+  <aside class="secondary-pane">
+    <div class="secondary-pane__header">
+      <span class="secondary-pane__title"
+        >{t('swarm.profiles', 'Profiles')}</span
+      >
+      <Button
+        variant="tertiary"
+        icon
+        ariaLabel={t('swarm.newProfile', 'New profile')}
+        tooltip={t('swarm.newProfile', 'New profile')}
+        loading={pending === 'profile'}
+        onClick={() => navigate(() => openProfile())}
+        >{@render actionIcon('plus')}</Button
+      >
     </div>
-    <Button variant="tertiary" disabled={loading} onClick={() => refresh()}
-      >{t('common.refresh', 'Refresh')}</Button
-    >
-  </header>
-  {#if error}<Banner variant="error" role="alert"
-      >{error}<Button variant="tertiary" onClick={() => (error = '')}
-        >{t('common.dismiss', 'Dismiss')}</Button
-      ></Banner
-    >{/if}
-  {#if loading}<Banner variant="info" role="status"
-      >{t('swarm.loading', 'Loading Swarms…')}</Banner
-    >{:else if editor}<ProfileEditor
-      profile={editor === 'new' ? null : editor}
-      {catalog}
-      onSave={saveProfile}
-      onCancel={() => (editor = null)}
-    />{:else}
-    <div class="layout">
-      <aside>
-        <div class="list-head">
-          <div>
-            <p class="eyebrow">{t('swarm.profiles', 'Profiles')}</p>
-            <strong
-              >{t('swarm.profileCount', '{count} saved', {
-                count: profiles.length,
-              })}</strong
-            >
-          </div>
-          <Button
-            variant="primary"
-            loading={pending === 'profile'}
-            onClick={() => openProfile()}
-            >{t('swarm.newProfile', 'New profile')}</Button
+    <div class="secondary-pane__scroll">
+      <nav class="secondary-list" aria-label={t('swarm.profiles', 'Profiles')}>
+        {#each profiles as profile (profile.id)}
+          <button
+            class="secondary-list__item"
+            class:active={editor?.id === profile.id}
+            aria-current={editor?.id === profile.id ? 'page' : undefined}
+            onclick={() => navigate(() => openProfile(profile))}
           >
-        </div>
-        {#if profiles.length === 0}<EmptyState
+            <strong>{profile.name}</strong><span
+              >{t('swarm.profile.participantSummary', '{count} participants', {
+                count: (profile.participants ?? []).reduce(
+                  (sum, row) => sum + row.count,
+                  0,
+                ),
+              })}</span
+            >
+          </button>
+        {:else}<EmptyState
             density="compact"
             title={t('swarm.noProfiles', 'No profiles yet.')}
             description={t(
               'swarm.noProfilesHelp',
               'Create a profile to start a Swarm.',
             )}
-          />{:else}<div class="profile-list">
-            {#each profiles as profile (profile.id)}<Button
-                variant="tertiary"
-                class={selectedProfile?.id === profile.id ? 'chosen' : ''}
-                onClick={() => (selectedProfile = profile)}
-                ><strong>{profile.name}</strong><span
-                  >{profile.slug} / / r{profile.revision}</span
-                ></Button
-              >{/each}
-          </div>{/if}{#if profilesCursor}<Button
+          />{/each}
+        {#if profilesCursor}<Button
             variant="tertiary"
             onClick={loadMoreProfiles}
             >{t('swarm.profiles.more', 'Load more profiles')}</Button
-          >{/if}{#if selectedProfile}<div class="profile-actions">
-            <Button
-              variant="tertiary"
-              disabled={pending === 'profile'}
-              onClick={() => openProfile(selectedProfile)}
-              >{t('common.edit', 'Edit')}</Button
-            ><Button
-              variant="danger"
-              onClick={() => (deleteCandidate = selectedProfile)}
-              >{t('common.delete', 'Delete')}</Button
-            >
-          </div>{/if}
-        <div class="list-head swarms-head">
-          <div>
-            <p class="eyebrow">{t('swarm.retained', 'Retained Swarms')}</p>
+          >{/if}
+      </nav>
+      <div class="secondary-pane__header swarms-head">
+        <span class="secondary-pane__title"
+          >{t('swarm.retained', 'Retained Swarms')}</span
+        >
+        <Button
+          variant="tertiary"
+          icon
+          ariaLabel={t('swarm.newSwarm', 'New Swarm')}
+          tooltip={t('swarm.newSwarm', 'New Swarm')}
+          onClick={newSwarm}>{@render actionIcon('plus')}</Button
+        >
+      </div>
+      <nav
+        class="secondary-list"
+        aria-label={t('swarm.retained', 'Retained Swarms')}
+      >
+        {#each swarms as swarm (swarm.id)}
+          <button
+            class="secondary-list__item"
+            class:active={!editor && selectedSwarm?.id === swarm.id}
+            use:tooltip={swarm.title || swarm.id}
+            onclick={() => navigate(() => selectSwarm(swarm.id))}
+          >
             <strong
-              >{t('swarm.total', '{count} total', {
-                count: swarms.length,
-              })}</strong
+              >{swarm.title ||
+                swarm.prompt?.split(/\r?\n/)[0] ||
+                swarm.id}</strong
             >
-          </div>
-        </div>
-        <div class="profile-list">
-          {#each swarms as swarm (swarm.id)}<Button
-              variant="tertiary"
-              class={selectedSwarm?.id === swarm.id ? 'chosen' : ''}
-              onClick={() => selectSwarm(swarm.id)}
-              ><strong>{swarm.title ?? swarm.id}</strong><span
-                >{swarm.state} / / {swarm.done_count}/{swarm.participant_count}
-                {t('swarm.done', 'done')}</span
-              ></Button
-            >{/each}
-        </div>
+            <span
+              ><i class="dot" class:running={swarm.state === 'running'}></i>{t(
+                `swarm.state.${swarm.state}`,
+                swarm.state,
+              )} · {swarm.done_count}/{swarm.participant_count}</span
+            >
+          </button>
+        {/each}
         {#if swarmsCursor}<Button variant="tertiary" onClick={loadMoreSwarms}
             >{t('swarm.swarms.more', 'Load more Swarms')}</Button
           >{/if}
-      </aside>
+      </nav>
+    </div>
+    <div class="sidebar-footer">
+      <Button variant="secondary" onClick={newSwarm}
+        >{@render actionIcon('play')}{t('swarm.newSwarm', 'New Swarm')}</Button
+      >
+    </div>
+  </aside>
+  <div class="workspace">
+    {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
+    {#if loading}<Banner variant="info" role="status"
+        >{t('swarm.loading', 'Loading Swarms…')}</Banner
+      >{/if}
+    {#if editor}
+      {#key editorKey}
+        <ProfileEditor
+          bind:this={profileEditor}
+          profile={editor === 'new' ? null : editor}
+          {catalog}
+          bridgeClient={client}
+          onSave={saveProfile}
+          onCancel={newSwarm}
+        />
+      {/key}
+    {:else}
       <section class="content">
+        <div class="workspace-toolbar">
+          <span class="eyebrow">{t('swarm.title', 'Swarms')}</span>
+          <Button
+            variant="tertiary"
+            icon
+            ariaLabel={t('common.refresh', 'Refresh')}
+            tooltip={t('common.refresh', 'Refresh')}
+            disabled={loading}
+            onClick={() => refresh()}>{@render actionIcon('refresh')}</Button
+          >
+        </div>
         {#if selectedSwarm}<div class="swarm-head">
             <div>
               <StatusChip
@@ -652,7 +800,7 @@
                   variant="danger"
                   loading={pending === 'stop'}
                   onClick={() => lifecycle('stop')}
-                  >{pending === 'stop'
+                  >{@render actionIcon('stop')}{pending === 'stop'
                     ? t('swarm.stopping', 'Stopping...')
                     : t('swarm.stop', 'Stop')}</Button
                 >{/if}{#if canResume}<Button
@@ -660,21 +808,31 @@
                   loading={pending === 'resume'}
                   disabled={pending === 'stop'}
                   onClick={() => lifecycle('resume')}
-                  >{pending === 'resume'
+                  >{@render actionIcon('play')}{pending === 'resume'
                     ? t('swarm.resuming', 'Resuming...')
                     : t('swarm.resume', 'Resume')}</Button
                 >{/if}<Button
-                variant="tertiary"
+                variant="secondary"
                 onClick={() => (profileSnapshotOpen = true)}
-                >{t(
+                icon
+                ariaLabel={t(
                   'swarm.profileSnapshot',
                   'Inspect profile snapshot',
-                )}</Button
-              ><Button variant="tertiary" onClick={openDelivery}
-                >{t(
+                )}
+                tooltip={t('swarm.profileSnapshot', 'Inspect profile snapshot')}
+                >{@render actionIcon('document')}</Button
+              ><Button
+                variant="tertiary"
+                icon
+                onClick={openDelivery}
+                ariaLabel={t(
                   'swarm.changeCommunication',
                   'Change communication settings',
-                )}</Button
+                )}
+                tooltip={t(
+                  'swarm.changeCommunication',
+                  'Change communication settings',
+                )}>{@render actionIcon('settings')}</Button
               >
             </div>
           </div>
@@ -705,7 +863,7 @@
                   ></FormField
                 >
                 {#if discussionCursor}<Button
-                    variant="tertiary"
+                    variant="secondary"
                     onClick={() =>
                       loadDiscussions(selectedSwarm, discussionCursor)}
                     >{t(
@@ -739,7 +897,7 @@
                     </li>{/each}
                 </ol>
                 {#if boardCursor}<Button
-                    variant="tertiary"
+                    variant="secondary"
                     onClick={() =>
                       loadBoard(selectedSwarm, selectedDiscussion, boardCursor)}
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
@@ -747,7 +905,7 @@
               <div class="board-bottom">
                 <div class="post-composer">
                   <Button
-                    variant="tertiary"
+                    variant="secondary"
                     onClick={() => (composeOpen = !composeOpen)}
                     >{composeOpen
                       ? t('swarm.board.closeComposer', 'Close composer')
@@ -809,7 +967,7 @@
                     {t('swarm.participants', 'Participants')}
                   </p>
                   {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                      variant="tertiary"
+                      variant="secondary"
                       onClick={() => inspectParticipant(participant)}
                       ><span
                         ><strong>{participant.display_name}</strong><small
@@ -831,14 +989,15 @@
               <h3>{t('swarm.participants', 'Participants')}</h3>
               <div class="participants">
                 {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                    variant="tertiary"
+                    variant="secondary"
+                    aria-pressed={history?.participant.id === participant.id}
                     onClick={() => inspectParticipant(participant)}
                     ><span
                       class:running={participant.state === 'running'}
                       class="dot"
                     ></span><span
                       ><strong>{participant.display_name}</strong><small
-                        >{participant.model} / / {participant.state} / / {participant.pending_count ??
+                        >{participant.model} · {participant.state} · {participant.pending_count ??
                           0}
                         {t('swarm.pending', 'pending')}</small
                       ></span
@@ -851,8 +1010,13 @@
                       {history.participant.display_name}
                       {t('swarm.activity', 'activity')}
                     </h3>
-                    <Button variant="tertiary" onClick={() => (history = null)}
-                      >{t('common.close', 'Close')}</Button
+                    <Button
+                      variant="tertiary"
+                      icon
+                      ariaLabel={t('common.close', 'Close')}
+                      tooltip={t('common.close', 'Close')}
+                      onClick={leaveActivity}
+                      >{@render actionIcon('close')}</Button
                     >
                   </div>
                   {#each activityTimeline as item (item.id)}
@@ -997,7 +1161,7 @@
                   </li>{/each}
               </ol>
               {#if eventsCursor}<Button
-                  variant="tertiary"
+                  variant="secondary"
                   onClick={loadMoreEvents}
                   >{t('swarm.audit.more', 'Load more events')}</Button
                 >{/if}
@@ -1011,28 +1175,68 @@
                 'Every participant starts with this same goal and the selected profile snapshot.',
               )}
             </p>
-            <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}
-              ><textarea
-                class="text-area text-area--default"
+            <div class="start-profile">
+              <FormField
+                controlId="swarm-start-profile"
+                label={t('swarm.profile', 'Profile')}
+              >
+                <Dropdown
+                  id="swarm-start-profile"
+                  ariaLabel={t('swarm.profile', 'Profile')}
+                  value={selectedProfile?.id ?? ''}
+                  options={profiles.map((profile) => ({
+                    value: profile.id,
+                    label: profile.name,
+                  }))}
+                  onValueChange={(id) =>
+                    (selectedProfile = profiles.find(
+                      (profile) => profile.id === id,
+                    ))}
+                />
+              </FormField>
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={t('common.edit', 'Edit')}
+                tooltip={t('swarm.editProfile', 'Edit profile')}
+                disabled={!selectedProfile}
+                onClick={() => openProfile(selectedProfile)}
+                >{@render actionIcon('edit')}</Button
+              >
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={t('common.delete', 'Delete')}
+                tooltip={t('swarm.delete.title', 'Delete profile')}
+                disabled={!selectedProfile}
+                onClick={() => (deleteCandidate = selectedProfile)}
+                >{@render actionIcon('trash')}</Button
+              >
+            </div>
+            <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}>
+              <TextArea
                 id="swarm-goal"
-                bind:value={goal}
+                value={goal}
+                onInput={(value) => (goal = value)}
                 rows="6"
                 placeholder={t(
                   'swarm.goalPlaceholder',
                   'Describe the work the group should do',
-                )}></textarea></FormField
-            ><Button
+                )}
+              />
+            </FormField><Button
               variant="primary"
               loading={pending === 'start'}
               disabled={!selectedProfile}
               onClick={startSwarm}
-              >{pending === 'start'
+              >{@render actionIcon('play')}{pending === 'start'
                 ? t('swarm.starting', 'Starting…')
                 : t('swarm.startButton', 'Start Swarm')}</Button
             >
           </section>{/if}
       </section>
-    </div>{/if}
+    {/if}
+  </div>
 </main>
 
 {#if deleteCandidate}<Modal
@@ -1047,7 +1251,7 @@
           )}
         </p>
       </div>{/snippet}{#snippet footer()}<Button
-        variant="tertiary"
+        variant="secondary"
         onClick={() => (deleteCandidate = null)}
         >{t('common.cancel', 'Cancel')}</Button
       ><Button variant="danger" onClick={deleteProfile}
@@ -1152,7 +1356,7 @@
           {#if settingChanges.length}<ul>
               {#each settingChanges as change (`${change.route}-${change.field}`)}<li
                 >
-                  {change.route} / / {change.field}: <s>{change.before}</s> → {change.after}
+                  {change.route} · {change.field}: <s>{change.before}</s> → {change.after}
                 </li>{/each}
             </ul>{:else}<p>
               {t('swarm.communication.noChanges', 'No changes to apply.')}
@@ -1165,7 +1369,7 @@
           </p>
         </section>
       </div>{/snippet}{#snippet footer()}<Button
-        variant="tertiary"
+        variant="secondary"
         disabled={pending === 'settings'}
         onClick={() => (settingsOpen = false)}
         >{t('common.cancel', 'Cancel')}</Button
@@ -1203,96 +1407,145 @@
     font-family: var(--font-ui);
   }
   .swarm-page {
-    max-width: 1500px;
-    margin: auto;
-    padding: 24px;
-    min-height: 100vh;
-  }
-  .view-header,
-  .swarm-head,
-  .list-head,
-  .section-head {
     display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .secondary-pane {
+    flex-shrink: 0;
+  }
+  .secondary-pane__header {
+    align-items: center;
+  }
+  .secondary-pane__title {
+    color: var(--text-med);
+  }
+  .secondary-list__item {
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    color: var(--text-hi);
+    display: grid;
+    gap: 6px;
+  }
+  .secondary-list__item.active {
+    color: var(--accent);
+  }
+  .secondary-list__item strong {
+    font-weight: 500;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+  }
+  .secondary-list__item span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
+  .swarms-head {
+    margin-top: 16px;
+  }
+  .sidebar-footer {
+    padding: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .sidebar-footer :global(button) {
+    width: 100%;
+  }
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+  .workspace > :global(.banner) {
+    margin: 14px 28px 0;
+  }
+  .workspace-toolbar {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+  .content {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    padding: 20px 28px;
   }
   .eyebrow {
     margin: 0;
-    color: var(--accent);
+    color: var(--text-med);
     font: var(--fs-mono-xs) var(--font-mono);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
   }
-  .lede,
+  .swarm-head,
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+  .swarm-head {
+    margin-bottom: 20px;
+  }
+  .swarm-head h2 {
+    font-size: var(--fs-heading-lg);
+    margin: 8px 0;
+  }
   .goal,
   .muted,
   .section-head p {
     color: var(--text-med);
-    margin-top: 5px;
+    margin: 4px 0;
+    overflow-wrap: anywhere;
   }
-  .layout {
-    display: grid;
-    grid-template-columns: 290px minmax(0, 1fr);
-    gap: 22px;
-    margin-top: 24px;
-  }
-  aside,
-  .content,
-  .panel,
-  .start {
-    border: 1px solid var(--border-2);
-    background: var(--surface);
-    border-radius: 8px;
-  }
-  .content {
-    min-height: 600px;
-    padding: 22px;
-  }
-  .list-head {
-    padding: 15px;
-    border-bottom: 1px solid var(--border-2);
-  }
-  .swarms-head {
-    margin-top: 13px;
-  }
-  .profile-list {
-    display: grid;
-    padding: 8px;
-  }
-  .profile-list :global(button) {
-    display: grid;
-    text-align: left;
-    justify-items: start;
-  }
-  .profile-list :global(.chosen) {
-    background: var(--surface-3);
-  }
-  .profile-list span,
-  .participants small,
-  .audit span {
-    font: var(--fs-mono-xs) var(--font-mono);
-    color: var(--text-med);
-  }
-  .profile-actions,
   .actions {
     display: flex;
+    align-items: center;
     gap: 8px;
-    padding: 8px 15px;
-  }
-  .actions {
-    padding: 0;
     flex-wrap: wrap;
   }
-  .swarm-head h2 {
-    margin: 8px 0 0;
-  }
-  .panel,
-  .start {
-    padding: 16px;
+  .panel {
     display: grid;
-    gap: 14px;
-    margin-top: 18px;
+    gap: 16px;
+    padding-block: 20px;
+  }
+  .panel h3 {
+    margin: 0;
+    font-size: var(--fs-heading-sm);
+  }
+  .start {
+    display: grid;
+    gap: 20px;
+    max-width: 760px;
+    margin-inline: auto;
+    padding-block: 20px;
+  }
+  .start h2 {
+    font-size: var(--fs-display);
+    margin: 0;
+  }
+  .start > p {
+    margin: 0;
+    color: var(--text-med);
+  }
+  .start > :global(button) {
+    justify-self: start;
+  }
+  .start-profile {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 8px;
   }
   .board,
   .audit {
@@ -1362,11 +1615,17 @@
     font: var(--fs-mono-xs) var(--font-mono);
   }
   .run-indicator {
-    color: var(--warning);
+    color: var(--amber);
   }
   .post-composer {
+    align-content: start;
+    justify-items: start;
     display: grid;
     gap: 8px;
+  }
+  .post-composer > :global(textarea),
+  .post-composer > .post-options {
+    width: 100%;
   }
   .post-options {
     display: grid;
@@ -1377,6 +1636,25 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 8px;
+  }
+  .participants strong,
+  .participants small {
+    display: block;
+  }
+  .participants strong {
+    margin-bottom: 5px;
+  }
+  .participants :global(button[aria-pressed='true']) {
+    border-color: var(--accent-40);
+    background: var(--accent-06);
+  }
+  .history {
+    margin-top: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .history > .section-head {
+    margin-bottom: 16px;
   }
   .participants :global(button) {
     display: flex;
@@ -1409,10 +1687,6 @@
     gap: 10px;
     padding: 8px;
     border-bottom: 1px solid var(--border-2);
-  }
-  .start {
-    max-width: 760px;
-    padding: 28px;
   }
   .modal-copy,
   .communication {
@@ -1487,11 +1761,36 @@
     align-items: center;
     color: var(--text-med);
   }
-  @media (max-width: 760px) {
+  @media (max-width: 960px) {
     .swarm-page {
-      padding: 12px;
+      flex-direction: column;
     }
-    .layout,
+    .secondary-pane {
+      width: 100%;
+      max-height: 220px;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .secondary-pane__scroll {
+      display: flex;
+      align-items: start;
+    }
+    .secondary-list {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+    }
+    .secondary-list__item {
+      min-width: 160px;
+    }
+    .swarms-head {
+      display: none;
+    }
+    .content {
+      padding: 16px;
+    }
+  }
+  @media (max-width: 640px) {
     .post-options {
       grid-template-columns: 1fr;
     }

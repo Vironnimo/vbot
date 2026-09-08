@@ -48,6 +48,7 @@ All reload methods keep registry/service identity stable so already-wired consum
 - `reload_environment_credentials()` refreshes the `.env` fallback inside the same resolver instance so every startup-injected consumer sees key/secret/token writes immediately.
 - `reload_extensions()` and `apply_extension_disabled_change(...)` delegate the serialized rebuild/deactivation sequence to `core/extensions/runtime.py::ExtensionRuntime`. Runtime supplies the stable Tool/Command registries plus Recall, Skill, and Prompt refresh callbacks; the Extension owner holds the mutation lock, module purge, registry swap, lifecycle ordering, and last-write-wins behavior. Session-owning Extensions quiesce their exact owned work before capability removal; retired registration callbacks fail closed. Ordinary hooks retain their existing failure isolation.
 - Owner-bound Extension hosts receive temporary execution groups, safe editor catalogs and existing Statistics projections through injection. Whole-roster preflight uses ordinary Model, Tool/settings and Project-ceiling validators off the Event Loop, then rechecks the loaded registration before admission. Source/tests: `runtime.py`, `tests/core/runtime/test_runtime_extensions.py`.
+- Editor catalogs project Model reasoning capabilities and context size, plus Tool family/activation metadata, from their existing registry owners so isolated editors can use the shared selectors without inventing capability defaults (`test_runtime_extensions.py`).
 
 ### Provider operations
 

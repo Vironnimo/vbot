@@ -92,6 +92,33 @@ describe('AppShell Desktop context menu', () => {
     expect(toggle.getAttribute('aria-label')).toBe('Expand sidebar');
   });
 
+  it('renders a visible symbol for Extension pages in expanded and collapsed navigation', () => {
+    const onSelectView = vi.fn();
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        items: [
+          {
+            id: 'extension:swarm:swarms',
+            labelKey: '',
+            labelFallback: 'Swarms',
+            section: 'work',
+          },
+        ],
+        onSelectView,
+      },
+    });
+    flushSync();
+    const item = document.querySelector('.app-shell__nav-item');
+    expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
+    document.querySelector('.app-shell__sidebar-toggle').click();
+    flushSync();
+    expect(item.getAttribute('aria-label')).toBe('Swarms');
+    expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
+    item.click();
+    expect(onSelectView).toHaveBeenCalledWith('extension:swarm:swarms');
+  });
+
   it('restores the saved collapsed navigation on mount', () => {
     localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
     mountedComponent = mount(AppShell, {
