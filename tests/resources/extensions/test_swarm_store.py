@@ -382,8 +382,15 @@ async def test_scoped_cursors_are_frozen_and_reject_tampering(store: SwarmStore)
     older = await store.read_posts(started["swarm_id"], first, cursor=first_page.cursor)
     assert [item["text"] for item in first_page.entries] == ["1", "2"]
     assert [item["text"] for item in older.entries] == ["0"]
-    with pytest.raises(SwarmStoreError, match="invalid_cursor"):
-        await store.read_posts(started["swarm_id"], first, cursor=first_page.cursor + "x")
+    encoded_data, encoded_mac = first_page.cursor.split(".")
+    for tampered in (
+        first_page.cursor + "x",
+        first_page.cursor + "=",
+        f"{encoded_data}!.{encoded_mac}",
+        f"{encoded_data}.{encoded_mac[:-1]}B=",
+    ):
+        with pytest.raises(SwarmStoreError, match="invalid_cursor"):
+            await store.read_posts(started["swarm_id"], first, cursor=tampered)
     with pytest.raises(SwarmStoreError, match="invalid_cursor"):
         await store.read_posts(started["swarm_id"], second, cursor=first_page.cursor)
     with pytest.raises(SwarmStoreError, match="invalid_cursor"):

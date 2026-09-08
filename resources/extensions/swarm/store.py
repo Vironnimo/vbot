@@ -2605,6 +2605,11 @@ class SwarmStore:
             encoded_data, encoded_mac = cursor.split(".", 1)
             data = base64.urlsafe_b64decode(encoded_data.encode())
             mac = base64.urlsafe_b64decode(encoded_mac.encode())
+            if (
+                base64.urlsafe_b64encode(data).decode() != encoded_data
+                or base64.urlsafe_b64encode(mac).decode() != encoded_mac
+            ):
+                raise ValueError
             key = (
                 self._require_connection()
                 .execute("SELECT value FROM swarm_meta WHERE key='cursor_key'")
