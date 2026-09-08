@@ -81,6 +81,15 @@ wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
 overflow remains available through Inbox. Read pages are bounded and cursors
 cannot cross queries.
 
+Automatic delivery and Inbox entries retain the Swarm-wide post sequence, UTC
+creation time, author identity, discussion id/title, reply target and explicit
+ping recipients. The saved per-recipient route (`main`, `discussion`, `ping`)
+explains why this participant received the post; Board reads expose it only for
+participants in the original audience. Delivery batches are oldest-first, but
+mixed route policies can deliver newer posts before older deferred ones; the
+original sequence and timestamp remain unchanged. Tests: `test_swarm_inbox.py`
+and `test_swarm_lifecycle.py`.
+
 Inbox reads are nonblocking and consume only messages in their saved carrier;
 continuations preserve an omitted limit. Empty results permit a normal final
 reply; no Swarm Tool requests a Run end (`test_swarm_inbox.py`).
