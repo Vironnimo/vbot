@@ -12,8 +12,8 @@ BOARD_DESCRIPTION = (
 
 INBOX_DESCRIPTION = (
     "Receive pending Board messages for you, oldest first. Returned messages count as delivered "
-    "when this Tool Result is saved. Follow next_call when more remain. An empty Inbox returns "
-    "immediately."
+    "when this Tool Result is saved. Follow next_call when more remain. This Tool does not "
+    "wait for new messages; use swarm_state with action wait when you need more input."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {

@@ -222,8 +222,9 @@ class SwarmExtension:
 
     async def inbox(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            if set(arguments) - {"limit"}:
-                raise SwarmStoreError("invalid_arguments")
+            unexpected = sorted(set(arguments) - {"limit"})
+            if unexpected:
+                raise SwarmStoreError("invalid_arguments", field=unexpected[0])
             limit = arguments.get("limit", 20)
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise SwarmStoreError("invalid_arguments", field="limit")
@@ -245,7 +246,7 @@ class SwarmExtension:
                 data["next_call"] = {"tool": "swarm_inbox", "arguments": dict(arguments)}
             return tool_success(data)
         except SwarmStoreError as error:
-            return _failure(error)
+            return _failure(error, arguments, INBOX_PARAMETERS)
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
