@@ -141,3 +141,17 @@ late history/subscription replies cannot replace a newer participant selection.
 Terminal Run events reload canonical history so non-streamed final output appears
 without reopening Activity.
 Evidence: `SwarmPage.test.js` and `test_swarm_store.py`.
+
+Board reads retain each post's saved UTC timestamp. The page formats it in the
+host-provided timezone and separates the author/time header from the body.
+The wrapping participant roster and modal post action sit above the messages;
+the complete User Prompt stays in the header, status beside the tabs, and the
+Swarm id under Usage (SwarmPage.test.js).
+
+Management Resume accepts an optional participant id. Store validation and
+request replay bind that exact target; reopening a closed epoch resets only the
+selected participant, leaving other participants unchanged. The existing group
+admission path starts only the returned targets (test_swarm_store.py,
+test_swarm_board.py). Activity offers this action for an inactive unfinished
+participant and consumes canonical context usage from history and Run events;
+it never substitutes cumulative Session usage.
