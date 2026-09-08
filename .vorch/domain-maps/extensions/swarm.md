@@ -75,6 +75,10 @@ acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Delivery mode and idle wake permission are independent. Read
 pages are bounded and cursor scope includes the query and page size.
 
+Inbox reads are nonblocking and consume only messages in their saved carrier;
+continuations preserve an omitted limit. Empty results direct waiting through
+`swarm_state`, without ending the Run themselves (`test_swarm_inbox.py`).
+
 Wait, blocked, failed, cancelled and done are distinct. Done first records an
 intent, then reserves completion under the same transaction boundary as Board
 posts. Unread messages and owned work prevent completion. Only exact canonical

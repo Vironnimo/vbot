@@ -59,3 +59,33 @@ async def test_inbox_rejects_invalid_arguments_without_a_receipt(board, argument
     result = await board.tools.get("swarm_inbox").handler(context, arguments)
     assert not result["ok"]
     assert context._delivery_receipts == []
+
+
+@pytest.mark.asyncio
+async def test_inbox_continuation_preserves_default_and_empty_does_not_end_run(board):
+    peer = board.bindings[1].participant_id
+    for index in range(21):
+        await board.store.post(board.swarm["id"], peer, text=str(index), request_id=f"bulk-{index}")
+    ended = []
+    context = replace(
+        board.contexts[0],
+        tool_name="swarm_inbox",
+        session_tool_grants=("swarm_inbox",),
+        request_turn_end_hook=lambda: ended.append(True),
+    )
+    result = await board.tools.dispatch(context, {}, allowed_tools=["swarm_inbox"])
+    assert len(result["data"]["entries"]) == 20
+    assert result["data"]["next_call"]["arguments"] == {}
+    assert not ended
+    empty_context = replace(
+        board.contexts[1],
+        tool_name="swarm_inbox",
+        session_tool_grants=("swarm_inbox",),
+        request_turn_end_hook=lambda: ended.append(True),
+    )
+    empty = await board.tools.dispatch(empty_context, {}, allowed_tools=["swarm_inbox"])
+    assert empty["data"]["entries"] == []
+    assert empty["data"]["pending_remaining"] == 0
+    assert "next_call" not in empty["data"]
+    assert empty_context._delivery_receipts == []
+    assert not ended
