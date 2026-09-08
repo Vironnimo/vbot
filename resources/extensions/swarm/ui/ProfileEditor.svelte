@@ -41,8 +41,7 @@
     tool_access: { mode: 'selected', allowed: [] },
     tools: {},
     allowed_skills: ['*'],
-    instructions:
-      'You are one of several Agents. Every Agent receives the same initial user prompt, which describes your shared goal. How you organize yourselves and pursue that goal is up to you collectively.',
+    ...untrack(() => catalog.prompt_defaults),
     delivery: {
       main: { mode: 'all', wake_idle: true },
       discussion: { mode: 'all', wake_idle: true },
@@ -53,7 +52,7 @@
     },
   };
   let draft = $state(
-    untrack(() => JSON.parse(JSON.stringify(profile ?? defaults))),
+    untrack(() => JSON.parse(JSON.stringify({ ...defaults, ...profile }))),
   );
   const copy = (value) => JSON.parse(JSON.stringify(value));
   const snapshot = (value = draft) => {
@@ -118,6 +117,65 @@
   let tab = $state('overview');
   let showAllModels = $state(false);
   let scrollport;
+  let preview = $state(null);
+  let previewSnapshot = $state('');
+  let previewBusy = $state(false);
+  let previewError = $state('');
+  let previewFormation = $state(0);
+  let previewRequest = 0;
+  const previewCurrent = $derived(
+    preview && previewSnapshot === `${previewFormation}:${snapshot()}`,
+  );
+  const promptBlocks = $derived(
+    (catalog.prompt_blocks ?? []).filter(
+      (block) => block.id !== 'core:agent_body',
+    ),
+  );
+  const blockTitle = (id) =>
+    t(
+      `systemPrompt.blockTitle.${id}`,
+      {
+        'tool:project': 'Project Tool guidance',
+        'tool:subagent': 'Subagent Tool guidance',
+        'tool:bash': 'Bash environment',
+      }[id] || id,
+    );
+  const reminderTitles = $derived({
+    delivery: t(
+      'swarm.profile.reminderDelivery',
+      'When Board messages are delivered',
+    ),
+    wake: t('swarm.profile.reminderWake', 'When new messages wake an Agent'),
+    resume: t('swarm.profile.reminderResume', 'When you resume work'),
+    completion: t(
+      'swarm.profile.reminderCompletion',
+      'When messages arrive during completion',
+    ),
+  });
+  function setPromptBlock(id, enabled) {
+    draft.prompt_blocks = enabled
+      ? [...new Set([...draft.prompt_blocks, id])]
+      : draft.prompt_blocks.filter((item) => item !== id);
+  }
+  async function inspectPrompt() {
+    const request = ++previewRequest;
+    const submitted = `${previewFormation}:${snapshot()}`;
+    previewBusy = true;
+    previewError = '';
+    try {
+      const result = await bridgeClient.operation('profiles.preview', {
+        profile: copy(draft),
+        formation_index: Number(previewFormation),
+      });
+      if (request !== previewRequest) return;
+      preview = result.preview;
+      previewSnapshot = submitted;
+    } catch (cause) {
+      if (request === previewRequest) previewError = cause.message;
+    } finally {
+      if (request === previewRequest) previewBusy = false;
+    }
+  }
   const models = $derived(catalog.models ?? []);
   const projects = $derived(catalog.projects ?? []);
   const tools = $derived(
@@ -128,6 +186,7 @@
   const skills = $derived(catalog.skills ?? []);
   const tabs = $derived([
     { id: 'overview', label: t('swarm.profile.overview', 'Overview') },
+    { id: 'prompt', label: t('swarm.profile.systemPrompt', 'System Prompt') },
     { id: 'access', label: t('swarm.profile.access', 'Tools & Skills') },
     {
       id: 'communication',
@@ -573,23 +632,6 @@
             {/if}
           </div>
         </section>
-        <FormField controlId="swarm-instructions">
-          {#snippet labelContent()}{t(
-              'swarm.profile.systemPrompt',
-              'System Prompt',
-            )}<InfoHint
-              text={t(
-                'swarm.profile.systemPromptHelp',
-                'Your instructions are added to every participant’s System Prompt, alongside the shared vBot and Swarm instructions. Enter the goal for each Swarm when starting it.',
-              )}
-            />{/snippet}
-          <TextArea
-            id="swarm-instructions"
-            rows="6"
-            value={draft.instructions}
-            onInput={(value) => (draft.instructions = value)}
-          />
-        </FormField>
         <details class="advanced">
           <summary
             >{t(
@@ -619,6 +661,166 @@
           </FormField>
           {#if draft.slug}<code>/swarm {draft.slug}</code>{/if}
         </details>
+      </div>
+      <div
+        class="topic"
+        hidden={tab !== 'prompt'}
+        role="tabpanel"
+        tabindex="0"
+        id="swarm-profile-panel-prompt"
+        aria-labelledby="swarm-profile-tab-prompt"
+      >
+        <FormField
+          controlId="swarm-instructions"
+          label={t('swarm.profile.instructions', 'Your instructions')}
+        >
+          <TextArea
+            id="swarm-instructions"
+            rows="14"
+            value={draft.instructions}
+            onInput={(value) => (draft.instructions = value)}
+          />
+        </FormField>
+        <section class="form-section">
+          <h3>
+            {t(
+              'swarm.profile.promptContributions',
+              'Additional System Prompt content',
+            )}
+          </h3>
+          <p class="hint">
+            {t(
+              'swarm.profile.promptSelectionHelp',
+              'Only selected blocks are included. New blocks stay off until you enable them. Project context is independent of the working directory and Tool access.',
+            )}
+          </p>
+          {#each promptBlocks as block (block.id)}
+            {@const detail = previewCurrent
+              ? preview.blocks.find((item) => item.id === block.id)
+              : null}
+            <div class="prompt-block">
+              <div class="prompt-block-head">
+                <span>{blockTitle(block.id)}</span>
+                <Toggle
+                  checked={draft.prompt_blocks.includes(block.id)}
+                  ariaLabel={blockTitle(block.id)}
+                  onChange={(enabled) => setPromptBlock(block.id, enabled)}
+                />
+              </div>
+              <details>
+                <summary
+                  >{t('swarm.profile.inspectContent', 'Show content')}</summary
+                >
+                {#if detail}
+                  {#if !detail.active}<p class="hint">
+                      {t(
+                        'swarm.profile.blockInactive',
+                        'Unavailable for this configuration; not included.',
+                      )}
+                    </p>{/if}
+                  <pre>{detail.text}</pre>
+                {:else if block.text !== undefined}<pre>{block.text}</pre>
+                {:else}<p class="hint">
+                    {t(
+                      'swarm.profile.dynamicPreview',
+                      'Generate the preview to inspect this content for the selected Model and Project.',
+                    )}
+                  </p>{/if}
+              </details>
+            </div>
+          {/each}
+          {#each draft.prompt_blocks.filter((id) => !promptBlocks.some((block) => block.id === id)) as id (id)}
+            <div class="prompt-block-head">
+              <span
+                >{blockTitle(id)} — {t(
+                  'swarm.profile.blockUnavailable',
+                  'Currently unavailable',
+                )}</span
+              >
+              <Toggle
+                checked={true}
+                ariaLabel={blockTitle(id)}
+                onChange={(enabled) => setPromptBlock(id, enabled)}
+              />
+            </div>
+          {/each}
+        </section>
+        <section class="form-section">
+          <h3>{t('swarm.profile.promptPreview', 'Combined System Prompt')}</h3>
+          <div class="prompt-block-head">
+            <Dropdown
+              id="swarm-preview-model"
+              value={previewFormation}
+              options={draft.participants.map((row, index) => ({
+                value: index,
+                label: `${index + 1}: ${row.model || t('swarm.profile.selectModel', 'Select a model')}`,
+              }))}
+              ariaLabel={t('swarm.profile.previewModel', 'Preview Model')}
+              onValueChange={(value) => (previewFormation = value)}
+            />
+            <Button
+              variant="secondary"
+              disabled={previewBusy}
+              onClick={inspectPrompt}
+              >{t('swarm.profile.generatePreview', 'Generate preview')}</Button
+            >
+          </div>
+          {#if previewError}<Banner variant="error" role="alert"
+              >{previewError}</Banner
+            >{/if}
+          {#if preview && !previewCurrent}<Banner
+              >{t(
+                'swarm.profile.previewStale',
+                'Configuration changed. Generate a new preview to see the current prompt.',
+              )}</Banner
+            >{/if}
+          {#if previewCurrent}
+            <pre
+              class="prompt-preview"
+              data-testid="swarm-prompt-preview">{preview.text}</pre>
+            <details>
+              <summary
+                >{t(
+                  'swarm.profile.nativeTools',
+                  'Tool definitions sent separately',
+                )}</summary
+              >
+              {#each preview.tools as tool (tool.name)}
+                <details>
+                  <summary>{tool.name}</summary>
+                  <pre>{JSON.stringify(tool, null, 2)}</pre>
+                </details>
+              {/each}
+            </details>
+          {/if}
+        </section>
+        <section class="form-section">
+          <h3>{t('swarm.profile.reminders', 'Swarm reminders during work')}</h3>
+          <p class="hint">
+            {t(
+              'swarm.profile.reminderHelp',
+              'These event-triggered instructions are separate from the System Prompt. Turning one off removes its guidance; Board messages and lifecycle actions still work. Previously delivered text remains in an existing Session.',
+            )}
+          </p>
+          {#each Object.entries(catalog.reminder_texts ?? {}) as [event, text] (event)}
+            <div class="prompt-block">
+              <div class="prompt-block-head">
+                <span>{reminderTitles[event]}</span>
+                <Toggle
+                  checked={draft.reminders[event]}
+                  ariaLabel={reminderTitles[event]}
+                  onChange={(value) => (draft.reminders[event] = value)}
+                />
+              </div>
+              <details>
+                <summary
+                  >{t('swarm.profile.inspectContent', 'Show content')}</summary
+                >
+                <pre>{text}</pre>
+              </details>
+            </div>
+          {/each}
+        </section>
       </div>
       <div
         class="topic"
@@ -949,6 +1151,33 @@
   .advanced {
     border-top: 1px solid var(--border);
     padding-top: 14px;
+  }
+  .prompt-block {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 0;
+  }
+  .prompt-block-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+  }
+  .prompt-block details {
+    margin-top: 8px;
+  }
+  .topic pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 480px;
+    overflow: auto;
+    color: var(--text-hi);
+    font: inherit;
+  }
+  .prompt-preview {
+    background: var(--surface);
+    padding: 14px;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
   }
   .advanced summary {
     cursor: pointer;

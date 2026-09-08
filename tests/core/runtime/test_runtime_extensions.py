@@ -1056,6 +1056,43 @@ def _catalog_runtime(
     return runtime, identity
 
 
+def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_path, monkeypatch):
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        identity = runtime.extensions.registration_identity("swarm")
+        assert identity is not None
+        config = TemporaryAgentConfig(
+            model="fixture/model",
+            cwd=tmp_path,
+            name="Preview",
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            instructions="preview-body-sentinel",
+            prompt_blocks=["core:agent_body"],
+        )
+
+        def no_session(*_args, **_kwargs):
+            raise AssertionError("Preview must not create a Session")
+
+        monkeypatch.setattr(runtime.chat_sessions, "create_bound_temporary_session", no_session)
+        preview = asyncio.run(runtime._inspect_extension_prompt(identity, config, None))
+        assert preview["text"] == "preview-body-sentinel"
+        assert {tool["name"] for tool in preview["tools"]} == {
+            "swarm_board",
+            "swarm_inbox",
+            "swarm_state",
+        }
+        blocks = {block["id"]: block for block in preview["blocks"]}
+        assert blocks["core:runtime"]["enabled"] is False
+        assert blocks["core:runtime"]["text"]
+        assert blocks["core:agent_body"]["included"] is True
+        assert not any(key.startswith("extension_session:") for key in blocks)
+    finally:
+        runtime.stop()
+
+
 def test_extension_catalog_projects_tools_settings_and_models_are_safe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1075,6 +1112,7 @@ def test_extension_catalog_projects_tools_settings_and_models_are_safe(
         }
     ]
     assert catalog["skills"] == [{"name": "global-skill", "description": "global sentinel"}]
+    assert "core:runtime" in {block["id"] for block in catalog["prompt_blocks"]}
     assert [tool["name"] for tool in catalog["tools"]] == ["read"]
     assert catalog["tools"][0]["family"] == "files"
     assert catalog["tools"][0]["activation"] == "configurable"

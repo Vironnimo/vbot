@@ -49,6 +49,14 @@ Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle
 
 API 6 adds owner-bound temporary execution groups, hidden Session Tools and prompt blocks, receipt-bearing request callbacks, and isolated page declarations. `core/agents/temporary.py` owns creation/admission/drain and exact receipt/history/usage reads; it never creates Identity workspaces. Private Tools form an all-or-nothing current-registration grant set. Their input types are validated without representation coercion, and public catalogs exclude them while collision detection and teardown retain them. Quiesce drains owned work before declarations are removed. Evidence: `tests/core/agents/test_temporary.py`, `tests/core/extensions/test_deactivate.py`, and `tests/core/chat/test_live_extension_tools.py`.
 
+The optional host `inspect_prompt(config, project_id)` capability previews a
+temporary configuration with the owner's private Tools, ordinary Project ceilings
+and Model-specific Tool routing. It returns combined text, rendered block details
+and Tool definitions without creating a Session or Run. `catalog()` includes
+public System Prompt block metadata. The bundled Swarm uses these capabilities
+for explicit prompt composition; see `extensions/swarm.md` and
+`tests/core/runtime/test_runtime_extensions.py`.
+
 ## Ownership and source routing
 
 - Public declarations, records, loader, capability application, hooks, and lifecycle: `core/extensions/extensions.py`

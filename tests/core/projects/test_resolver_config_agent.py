@@ -142,6 +142,24 @@ def test_temporary_profile_is_narrowed_by_the_selected_project_ceiling(
     assert resolved.workspace == ""
     assert resolved.root_project_id is None
     assert resolved.custom_system_prompt_enabled is False
+    from core.agents.temporary import TemporaryAgentConfig
+
+    preview = resolver.preview_temporary_agent(
+        TemporaryAgentConfig(
+            model=temporary.model,
+            cwd=repo,
+            tool_access=temporary.tool_access,
+            allowed_skills=temporary.allowed_skills,
+            tools=temporary.tools,
+            name=temporary.name,
+            prompt_blocks=["core:working_project"],
+        ),
+        project.project_id,
+    )
+    assert preview.tool_access == resolved.tool_access
+    assert preview.allowed_skills == resolved.allowed_skills
+    assert preview.tools == resolved.tools
+    assert preview.prompt_blocks == ["core:working_project"]
 
 
 def test_temporary_selected_empty_policy_stays_empty_inside_a_project(

@@ -31,6 +31,53 @@ async def store(tmp_path):
     await value.close()
 
 
+@pytest.mark.asyncio
+async def test_prompt_selection_and_reminders_are_snapshotted(store):
+    from resources.extensions.swarm.agent_text import DEFAULT_REMINDERS
+
+    saved = await store.save_profile(
+        {
+            **_profile(),
+            "instructions": "editable-sentinel",
+            "prompt_blocks": ["core:tools", "core:working_project"],
+            "reminders": dict.fromkeys(DEFAULT_REMINDERS, False),
+        },
+        expected_revision=None,
+    )
+    started = await store.create_swarm(
+        saved["id"],
+        "goal",
+        {"cwd": "C:/work"},
+        request_id="start",
+        expected_profile_revision=saved["revision"],
+    )
+    await store.save_profile(
+        {**saved, "prompt_blocks": [], "instructions": "changed"},
+        expected_revision=saved["revision"],
+    )
+    snapshot = (await store.get_swarm(started["swarm_id"]))["profile_snapshot"]
+    assert snapshot["prompt_blocks"] == ["core:tools", "core:working_project"]
+    assert snapshot["instructions"] == "editable-sentinel"
+    assert not any(snapshot["reminders"].values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"prompt_blocks": "core:runtime"},
+        {"prompt_blocks": ["core:runtime", "core:runtime"]},
+        {"prompt_blocks": [2]},
+        {"prompt_blocks": ["core:agent_body"]},
+        {"reminders": {"resume": False}},
+        {"reminders": {"delivery": True, "wake": True, "resume": 1, "completion": True}},
+    ],
+)
+async def test_prompt_controls_reject_invalid_values(store, fields):
+    with pytest.raises(SwarmStoreError):
+        await store.save_profile({**_profile(), **fields}, expected_revision=None)
+
+
 async def _swarm(store: SwarmStore, *, count: int = 2) -> dict[str, object]:
     profile = await store.save_profile(_profile(count=count), expected_revision=None)
     return await store.create_swarm(

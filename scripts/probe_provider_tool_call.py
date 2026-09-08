@@ -4482,6 +4482,8 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
     from core.tools.availability import ToolAccess
 
     tool_name = args.swarm_tool
+    from resources.extensions.swarm.agent_text import DEFAULT_INSTRUCTIONS
+
     with TemporaryDirectory(prefix="vbot-swarm-probe-") as directory:
         root = Path(directory)
         write_bootstrap_marker(root)
@@ -4530,6 +4532,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 {
                     "schema_version": 1,
                     "slug": "probe",
+                    "instructions": DEFAULT_INSTRUCTIONS,
                     "name": "Probe",
                     "participants": [{"model": "probe/model", "count": 3}],
                     "working_directory": {"kind": "directory", "path": directory},
@@ -5009,26 +5012,19 @@ async def _probe_swarm_workflow(
     """
     from core.chat import ChatMessage
     from core.chat.wire_shaping import _notes_to_request_messages
-    from core.extensions.extensions import invoke_extension_handler
     from resources.extensions.swarm.agent_text import RESUME_REMINDER
 
     names = ("swarm_board", "swarm_inbox", "swarm_state")
     definitions = registry.provider_definitions(names, session_grants=names)
     if {tool["name"] for tool in definitions} != set(names):
         raise RuntimeError("Fresh-participant evaluation requires the complete production Tool set")
-    record = next(item for item in extensions.records() if item.name == "swarm")
-    orientation = [
-        await invoke_extension_handler(block.render, binding)
-        for block in record.declarations.session_prompt_blocks
-    ]
-    if not orientation:
-        raise RuntimeError("Production participant orientation is unavailable")
     store = service.store
     sid, pid = binding.group_id, binding.participant_id
+    profile = (await store.get_swarm(sid))["profile_snapshot"]
     context = replace(context, session_tool_grants=names)
     await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": "\n\n".join(orientation)},
+        {"role": "system", "content": profile["instructions"]},
         {
             "role": "user",
             "content": "Prepare a three-step checklist for reviewing a short text report with "
