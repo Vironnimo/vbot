@@ -205,13 +205,28 @@
       contextWindow,
     ),
   );
+  function tokensUsed(counts) {
+    return usageCount(
+      counts?.measured_input_tokens +
+        counts?.measured_output_tokens +
+        counts?.estimated_input_tokens +
+        counts?.estimated_output_tokens,
+    );
+  }
   const usageRows = $derived(
-    participantUsage.flatMap(({ participant, report }) =>
-      (report?.usage?.usage?.models ?? []).map((model) => ({
+    participantUsage.flatMap(({ participant, report }) => {
+      const models = report?.usage?.usage?.models ?? [];
+      return (models.length ? models : [null]).map((model, index) => ({
+        id: `${participant.id}:${index}`,
         participant: participant.display_name,
         model,
-      })),
-    ),
+        modelName: model
+          ? `${model.provider}/${model.model}`
+          : participant.model,
+        participantRows: index === 0 ? Math.max(models.length, 1) : 0,
+        toolCalls: report?.usage?.tools?.total_calls,
+      }));
+    }),
   );
 
   function applyContext(next) {
@@ -1145,29 +1160,9 @@
               {#if usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
-                      {t('swarm.usage.measuredTokens', 'Measured tokens')}
+                      {t('swarm.usage.tokensUsed', 'Tokens used')}
                     </dt>
-                    <dd>
-                      {usage.usage.usage?.totals
-                        ? usageCount(
-                            usage.usage.usage.totals.measured_input_tokens +
-                              usage.usage.usage.totals.measured_output_tokens,
-                          )
-                        : t('swarm.usage.unavailable', 'Unavailable')}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>
-                      {t('swarm.usage.estimatedTokens', 'Estimated tokens')}
-                    </dt>
-                    <dd>
-                      {usage.usage.usage?.totals
-                        ? usageCount(
-                            usage.usage.usage.totals.estimated_input_tokens +
-                              usage.usage.usage.totals.estimated_output_tokens,
-                          )
-                        : t('swarm.usage.unavailable', 'Unavailable')}
-                    </dd>
+                    <dd>{tokensUsed(usage.usage.usage?.totals)}</dd>
                   </div>
                   <div>
                     <dt>{t('swarm.usage.toolCalls', 'Tool Calls')}</dt>
@@ -1178,39 +1173,34 @@
                 </dl>
                 {#if usageRows.length}<div class="table-wrap">
                     <table>
-                      <thead
-                        ><tr
-                          ><th>{t('swarm.usage.participant', 'Participant')}</th
-                          ><th>{t('swarm.usage.model', 'Model')}</th><th
-                            >{t(
-                              'swarm.usage.measuredTokens',
-                              'Measured tokens',
-                            )}</th
-                          ><th
-                            >{t(
-                              'swarm.usage.estimatedTokens',
-                              'Estimated tokens',
-                            )}</th
-                          ><th>{t('swarm.usage.runs', 'Runs')}</th></tr
-                        ></thead
-                      >
-                      <tbody
-                        >{#each usageRows as row (`${row.participant}:${row.model.provider}:${row.model.model}`)}<tr
-                            ><td>{row.participant}</td><td
-                              >{row.model.provider}/{row.model.model}</td
-                            ><td
-                              >{usageCount(
-                                row.model.measured_input_tokens +
-                                  row.model.measured_output_tokens,
-                              )}</td
-                            ><td
-                              >{usageCount(
-                                row.model.estimated_input_tokens +
-                                  row.model.estimated_output_tokens,
-                              )}</td
-                            ><td>{usageCount(row.model.runs)}</td></tr
-                          >{/each}</tbody
-                      >
+                      <thead>
+                        <tr>
+                          <th>{t('swarm.usage.participant', 'Participant')}</th>
+                          <th>{t('swarm.usage.model', 'Model')}</th>
+                          <th>{t('swarm.usage.tokensUsed', 'Tokens used')}</th>
+                          <th>{t('swarm.usage.toolCalls', 'Tool Calls')}</th>
+                          <th>{t('swarm.usage.runs', 'Runs')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each usageRows as row (row.id)}
+                          <tr>
+                            {#if row.participantRows}
+                              <td rowspan={row.participantRows}
+                                >{row.participant}</td
+                              >
+                            {/if}
+                            <td>{row.modelName}</td>
+                            <td>{tokensUsed(row.model)}</td>
+                            {#if row.participantRows}
+                              <td rowspan={row.participantRows}
+                                >{usageCount(row.toolCalls)}</td
+                              >
+                            {/if}
+                            <td>{usageCount(row.model?.runs)}</td>
+                          </tr>
+                        {/each}
+                      </tbody>
                     </table>
                   </div>{/if}{:else}<EmptyState
                   density="compact"

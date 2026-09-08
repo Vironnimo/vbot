@@ -166,6 +166,11 @@ the complete User Prompt stays in the header, status beside the tabs, and the
 Swarm id under Usage (SwarmPage.test.js).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
 and at most one locale-formatted decimal (SwarmPage.test.js).
+The Usage page combines measured and estimated input/output counts as "Tokens used"
+at total and Model-row scope. Tool Calls come from each participant's canonical
+report and span its Model rows once, including participants without Model usage.
+This is a Swarm presentation choice; canonical usage remains separated
+(`SwarmPage.svelte`, `SwarmPage.test.js`).
 
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
