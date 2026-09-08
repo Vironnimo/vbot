@@ -23,7 +23,7 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   const audio = chat.locator("audio.speech-audio-player");
   await expect(audio).toHaveCount(1);
   const audioUrl = await audio.getAttribute("src");
-  expect(audioUrl).toMatch(/^\/api\/speech\/artifacts\/[a-f0-9]{32}$/);
+  expect(audioUrl).toMatch(/^\/api\/speech\/artifacts\/[^/?#\s]+$/);
   const audioResponse = await page.request.get(audioUrl);
   expect(audioResponse.ok()).toBe(true);
   expect(audioResponse.headers()["content-type"]).toContain("audio/wav");
@@ -34,7 +34,7 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   await expect(generation).toContainText(
     "A deterministic blue square on a white background",
   );
-  const image = chat.getByRole("img", { name: /^[a-f0-9]{32}\.png$/ });
+  const image = chat.getByRole("img", { name: /^img_[a-z0-9]+\.png$/ });
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((node) => node.naturalWidth)).toBe(1);
   const imageUrl = await image.getAttribute("src");

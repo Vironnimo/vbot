@@ -8,6 +8,9 @@ test("a custom System Prompt block persists, reaches the Provider, and can be re
   await page.goto("/#system-prompt");
 
   const systemPrompt = page.getByRole("region", { name: "System Prompt" });
+  await systemPrompt
+    .getByRole("tab", { name: "Edit blocks", exact: true })
+    .click();
   page.once("dialog", (dialog) => dialog.accept("e2e_notes"));
   await systemPrompt.getByRole("button", { name: "New block" }).click();
 
@@ -22,10 +25,14 @@ test("a custom System Prompt block persists, reaches the Provider, and can be re
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
   await page.reload();
+  await systemPrompt
+    .getByRole("tab", { name: "Edit blocks", exact: true })
+    .click();
   customBlock = page
     .getByRole("region", { name: "System Prompt" })
     .getByRole("listitem")
     .filter({ hasText: "user:e2e_notes" });
+  await customBlock.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(customBlock.getByRole("textbox")).toHaveValue(
     "E2E custom provider context 5821",
   );
@@ -39,6 +46,9 @@ test("a custom System Prompt block persists, reaches the Provider, and can be re
   ).toBeVisible();
 
   await page.goto("/#system-prompt");
+  await systemPrompt
+    .getByRole("tab", { name: "Edit blocks", exact: true })
+    .click();
   customBlock = page
     .getByRole("region", { name: "System Prompt" })
     .getByRole("listitem")

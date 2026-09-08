@@ -73,8 +73,15 @@ async function openProviders(page) {
   await page.goto("/#settings");
   const settings = page.getByRole("region", { name: "Settings" });
   await settings
-    .getByRole("button", { exact: true, name: "Providers" })
+    .getByRole("button", { exact: true, name: "Connections" })
     .click();
+  const providersToggle = settings.getByRole("button", {
+    exact: true,
+    name: "Providers",
+  });
+  if ((await providersToggle.getAttribute("aria-expanded")) !== "true") {
+    await providersToggle.click();
+  }
   return settings.getByRole("region", { name: "Providers" });
 }
 
@@ -172,9 +179,15 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
 
     let providerCard = customProviderCard(providers, PROVIDER_NAME);
     await expect(providerCard).toBeVisible();
-    await providerCard
-      .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
-      .click();
+    if (
+      (await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .getAttribute("aria-expanded")) !== "true"
+    ) {
+      await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .click();
+    }
     await expect(
       providerCard.getByRole("button", {
         name: `Disable connection ${PROVIDER_ID}:default`,
@@ -235,9 +248,15 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
 
     providers = await openProviders(page);
     providerCard = customProviderCard(providers, PROVIDER_NAME);
-    await providerCard
-      .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
-      .click();
+    if (
+      (await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .getAttribute("aria-expanded")) !== "true"
+    ) {
+      await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .click();
+    }
     await providerCard
       .getByRole("button", { exact: true, name: "Edit" })
       .click();
@@ -280,9 +299,15 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
 
     providers = await openProviders(page);
     providerCard = customProviderCard(providers, UPDATED_PROVIDER_NAME);
-    await providerCard
-      .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
-      .click();
+    if (
+      (await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .getAttribute("aria-expanded")) !== "true"
+    ) {
+      await providerCard
+        .getByRole("button", { name: `Details for ${PROVIDER_ID}` })
+        .click();
+    }
     await providerCard
       .getByRole("button", { exact: true, name: "Delete" })
       .click();

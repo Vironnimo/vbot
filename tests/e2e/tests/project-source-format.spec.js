@@ -27,6 +27,7 @@ async function removeProject(page) {
     .getByRole("button", { name: new RegExp(`^${PROJECT_NAME}(?:\\s|$)`) });
   await expect(projectButton).toBeVisible();
   await projectButton.click();
+  await projects.getByRole("tab", { name: "Overview", exact: true }).click();
   await projects.getByRole("button", { exact: true, name: "Remove" }).click();
   await page
     .getByRole("dialog")
@@ -52,7 +53,9 @@ async function startProjectChat(page, agentName) {
   await page.goto("/#chat");
   const chat = page.getByRole("region", { name: "Chat" });
   const projectPicker = chat.getByRole("button", { name: "Select project" });
-  if (await projectPicker.getByText(PROJECT_NAME, { exact: true }).isVisible()) {
+  if (
+    await projectPicker.getByText(PROJECT_NAME, { exact: true }).isVisible()
+  ) {
     await selectProjectOption(page, projectPicker, "No project selected");
   }
   await selectProjectOption(page, projectPicker, PROJECT_NAME);
@@ -106,12 +109,16 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       projects.getByText("Project added.", { exact: true }),
     ).toBeVisible();
     projectCreated = true;
+    await projects.getByRole("tab", { name: "Team", exact: true }).click();
     await expect(
       projects.getByTestId("project-team-member-open-e2e-worker"),
     ).toBeVisible();
     await expect(
       projects.getByTestId("project-team-member-claude-e2e-reviewer"),
     ).toHaveCount(0);
+    await projects
+      .getByRole("tab", { name: "Tools & Skills", exact: true })
+      .click();
     await expect(
       projects.getByText("open-e2e-skill", { exact: true }),
     ).toBeVisible();
@@ -131,6 +138,7 @@ test("a Project keeps Source Formats isolated from scan through Provider context
     ).toBeVisible();
 
     await page.goto("/#projects");
+    await projects.getByRole("tab", { name: "Overview", exact: true }).click();
     const sourceFormat = projects.getByRole("button", {
       exact: true,
       name: "Source format",
@@ -144,12 +152,16 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       page.getByText("Project updated.", { exact: true }),
     ).toBeVisible();
 
+    await projects.getByRole("tab", { name: "Team", exact: true }).click();
     await expect(
       projects.getByTestId("project-team-member-claude-e2e-reviewer"),
     ).toBeVisible();
     await expect(
       projects.getByTestId("project-team-member-open-e2e-worker"),
     ).toHaveCount(0);
+    await projects
+      .getByRole("tab", { name: "Tools & Skills", exact: true })
+      .click();
     await expect(
       projects.getByText("claude-e2e-skill", { exact: true }),
     ).toBeVisible();

@@ -5,6 +5,8 @@ test("Connected clients update when another browser tab opens and closes", async
   page,
 }) => {
   await page.goto("/#settings");
+  await page.getByRole("button", { exact: true, name: "System" }).click();
+  await page.getByRole("button", { exact: true, name: "Server info" }).click();
   const serverInfo = page.getByRole("region", { name: "Server info" });
   const clientRows = serverInfo.locator(".s-client-row");
 
@@ -15,6 +17,10 @@ test("Connected clients update when another browser tab opens and closes", async
 
   const secondPage = await context.newPage();
   await secondPage.goto("/#settings");
+  await secondPage.getByRole("button", { exact: true, name: "System" }).click();
+  await secondPage
+    .getByRole("button", { exact: true, name: "Server info" })
+    .click();
   const secondServerInfo = secondPage.getByRole("region", {
     name: "Server info",
   });
