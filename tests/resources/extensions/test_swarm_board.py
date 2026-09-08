@@ -121,6 +121,7 @@ async def board(tmp_path):
     ]
     fixture = SimpleNamespace(
         service=service,
+        operations=api.operations,
         store=store,
         swarm=swarm,
         contexts=contexts,
@@ -636,3 +637,25 @@ async def test_done_result_exposes_request_state_and_not_internal_handles(board)
     assert context._turn_end_requested and not ended
     context._commit_owned_effects()
     assert ended == [True]
+
+
+@pytest.mark.asyncio
+async def test_resume_admits_only_selected_failed_participant(board, monkeypatch):
+    swarm_id = board.swarm["id"]
+    peers = board.bindings
+    await board.service.store.set_swarm_state(swarm_id, "running")
+    for peer in peers:
+        await board.service.store.set_participant_state(swarm_id, peer.participant_id, "failed")
+    admitted = []
+
+    async def start(handle, participant_id, input):
+        admitted.append(participant_id)
+        return SimpleNamespace(run_id=f"resumed-{participant_id}")
+
+    monkeypatch.setattr(board.groups, "start", start)
+    result = await board.operations.invoke(
+        "swarms.resume",
+        {"swarm_id": swarm_id, "participant_id": peers[1].participant_id, "request_id": "one"},
+    )
+    assert admitted == [peers[1].participant_id]
+    assert len(result["runs"]) == 1

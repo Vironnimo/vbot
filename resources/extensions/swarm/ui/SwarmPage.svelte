@@ -12,6 +12,8 @@
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
   import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
+  import { formatTokenUsageTooltip } from '../../../../webui/src/lib/tokenUsageTooltip.js';
+  import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import { init, t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
   import { visibleTimelineItemsForRender } from '../../../../webui/src/lib/chatTimeline.js';
@@ -128,15 +130,6 @@
         }).format(new Date(value))
       : '';
   const discussionOptions = $derived(discussions);
-  const swarmTitle = $derived(
-    selectedSwarm
-      ? (selectedSwarm.prompt ?? '')
-          .split(/\r?\n/)
-          .find((line) => line.trim())
-          ?.trim()
-          .slice(0, 96) || selectedSwarm.id
-      : '',
-  );
   const settingChanges = $derived(
     deliveryDraft && selectedSwarm
       ? [
@@ -179,6 +172,35 @@
         })
       : [],
   );
+  const selectedParticipant = $derived(
+    selectedSwarm?.participants?.find(
+      (item) => item.id === history?.participant.id,
+    ),
+  );
+  const contextWindow = $derived(
+    catalog.models?.find((model) => model.id === history?.participant.model)
+      ?.context_window,
+  );
+  const contextRatio = $derived(
+    Number.isFinite(contextWindow) &&
+      contextWindow > 0 &&
+      Number.isFinite(history?.data.context_usage?.tokens)
+      ? Math.min(1, history.data.context_usage.tokens / contextWindow)
+      : 0,
+  );
+  const contextTokens = $derived(
+    Number.isFinite(history?.data.context_usage?.tokens)
+      ? `${history.data.context_usage.estimated ? '~' : ''}${new Intl.NumberFormat(activeLocaleTag()).format(history.data.context_usage.tokens)}${contextWindow ? ` / ${new Intl.NumberFormat(activeLocaleTag()).format(contextWindow)}` : ''}`
+      : t('swarm.usage.unavailable', 'Unavailable'),
+  );
+  const activityContextTooltip = $derived(
+    formatTokenUsageTooltip(
+      history?.data.context_usage,
+      history?.data.usage,
+      history?.data.session_usage,
+      contextWindow,
+    ),
+  );
   const usageRows = $derived(
     participantUsage.flatMap(({ participant, report }) =>
       (report?.usage?.usage?.models ?? []).map((model) => ({
@@ -190,6 +212,7 @@
 
   function applyContext(next) {
     context = next;
+    setApplicationTimeZone(next.timezone);
     document.documentElement.lang = init(next.locale);
     for (const [name, value] of Object.entries(next.theme ?? {}))
       document.documentElement.style.setProperty(
@@ -230,6 +253,7 @@
     if (!silent) {
       error = '';
       leaveActivity();
+      composeOpen = false;
     }
     try {
       const preservedDiscussion =
@@ -420,12 +444,14 @@
       pending = '';
     }
   }
-  async function lifecycle(operation) {
+  async function lifecycle(operation, participantId = null) {
     if (!selectedSwarm) return;
     pending = operation;
+    error = '';
     try {
       await call(`swarms.${operation}`, {
         swarm_id: selectedSwarm.id,
+        ...(participantId ? { participant_id: participantId } : {}),
         request_id: requestId(),
       });
       await refresh();
@@ -472,6 +498,7 @@
   async function post() {
     if (!selectedSwarm || !postText.trim()) return;
     posting = true;
+    error = '';
     try {
       await call('board.post', {
         swarm_id: selectedSwarm.id,
@@ -491,6 +518,7 @@
       postText = '';
       postRecipients = '';
       replyTo = '';
+      composeOpen = false;
       await loadBoard();
       await loadEvents();
     } catch (cause) {
@@ -544,7 +572,18 @@
     leaveActivity();
     const request = activityRequest;
     const swarmId = selectedSwarm.id;
-    await reconcileActivity(request, swarmId, participant);
+    await Promise.all([
+      reconcileActivity(request, swarmId, participant),
+      catalog.models
+        ? Promise.resolve()
+        : call('catalog')
+            .then((result) => {
+              catalog = result.catalog;
+            })
+            .catch((cause) => {
+              if (request === activityRequest) error = cause.message;
+            }),
+    ]);
     if (
       request !== activityRequest ||
       !history ||
@@ -556,6 +595,25 @@
     const receive = (id, event) => {
       if (request !== activityRequest || id !== key) return;
       live = [...live, event];
+      const payload = event.payload ?? {};
+      if (
+        history &&
+        (payload.context_usage || payload.session_usage || payload.usage)
+      ) {
+        history = {
+          ...history,
+          data: {
+            ...history.data,
+            ...(payload.context_usage
+              ? { context_usage: payload.context_usage }
+              : {}),
+            ...(payload.session_usage
+              ? { session_usage: payload.session_usage }
+              : {}),
+            ...(payload.usage ? { usage: payload.usage } : {}),
+          },
+        };
+      }
       if (
         ['run_completed', 'run_cancelled', 'run_failed'].includes(event.type)
       ) {
@@ -783,12 +841,8 @@
         </div>
         {#if selectedSwarm}<div class="swarm-head">
             <div>
-              <StatusChip
-                variant={isActive(selectedSwarm.state) ? 'warn' : 'neutral'}
-                >{selectedSwarm.state}</StatusChip
-              >
-              <h2>{swarmTitle}</h2>
-              <p class="goal">{selectedSwarm.id}</p>
+              <h2>{t('swarm.userPrompt', 'User Prompt:')}</h2>
+              <p class="goal">{selectedSwarm.prompt}</p>
               <p class="muted">
                 {selectedSwarm.working_directory?.path ??
                   selectedSwarm.working_directory?.project_id ??
@@ -836,15 +890,26 @@
               >
             </div>
           </div>
-          <TabList
-            items={tabs}
-            value={activeTab}
-            ariaLabel={t('swarm.details', 'Swarm details')}
-            onChange={(next) => (activeTab = next)}
-          />
+          <div class="swarm-tabs">
+            <TabList
+              items={tabs}
+              value={activeTab}
+              ariaLabel={t('swarm.details', 'Swarm details')}
+              onChange={(next) => (activeTab = next)}
+            /><StatusChip
+              variant={isActive(selectedSwarm.state) ? 'warn' : 'neutral'}
+              >{t(
+                `swarm.state.${selectedSwarm.state}`,
+                selectedSwarm.state,
+              )}</StatusChip
+            >
+          </div>
           {#if activeTab === 'board'}<section class="panel" role="tabpanel">
               <div class="section-head">
                 <h3>{t('swarm.board.title', 'Board')}</h3>
+                <Button variant="secondary" onClick={() => (composeOpen = true)}
+                  >{t('swarm.board.openComposer', 'Write post')}</Button
+                >
                 <FormField
                   controlId="swarm-discussion"
                   label={t('swarm.board.discussion', 'Discussion')}
@@ -872,17 +937,42 @@
                     )}</Button
                   >{/if}
               </div>
+              <section
+                class="participant-pane"
+                aria-label={t('swarm.participants', 'Participants')}
+              >
+                <p class="eyebrow">
+                  {t('swarm.participants', 'Participants')}
+                </p>
+                <div class="participant-row">
+                  {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
+                      variant="secondary"
+                      onClick={() => inspectParticipant(participant)}
+                      ><span
+                        ><strong>{participant.display_name}</strong><small
+                          >{participant.model} / {participant.state} / {participant.pending_count ??
+                            0}
+                          {t('swarm.pending', 'pending')}</small
+                        ></span
+                      >{#if participant.run_active}<span class="run-indicator"
+                          >{t('swarm.runActive', 'Run active')}</span
+                        >{/if}</Button
+                    >{/each}
+                </div>
+              </section>
               {#if board.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty', 'No Board messages yet.')}
                 />{:else}<ol class="board">
                   {#each board as post (post.id)}<li>
-                      <div>
+                      <div class="post-header">
                         <strong
                           >{post.author_name ??
                             post.author?.name ??
                             t('swarm.participant', 'Participant')}</strong
-                        ><span>{date(post.created_at)}</span>
+                        ><time datetime={post.created_at}
+                          >{date(post.created_at)}</time
+                        >
                       </div>
                       <p>{post.text}</p>
                       {#if post.reply_to}<small
@@ -902,85 +992,6 @@
                       loadBoard(selectedSwarm, selectedDiscussion, boardCursor)}
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
                   >{/if}{/if}
-              <div class="board-bottom">
-                <div class="post-composer">
-                  <Button
-                    variant="secondary"
-                    onClick={() => (composeOpen = !composeOpen)}
-                    >{composeOpen
-                      ? t('swarm.board.closeComposer', 'Close composer')
-                      : t('swarm.board.openComposer', 'Write post')}</Button
-                  >
-                  {#if composeOpen}<FormField
-                      controlId="swarm-post"
-                      label={t('swarm.board.post', 'Post to the Board')}
-                      ><textarea
-                        class="text-area text-area--default"
-                        id="swarm-post"
-                        bind:value={postText}
-                        rows="3"
-                        placeholder={t(
-                          'swarm.board.placeholder',
-                          'Share a finding or ask the group a question',
-                        )}></textarea></FormField
-                    >
-                    <div class="post-options">
-                      <FormField
-                        controlId="swarm-reply"
-                        label={t(
-                          'swarm.board.replyTo',
-                          'Reply to post ID (optional)',
-                        )}
-                        ><input
-                          class="s-input"
-                          id="swarm-reply"
-                          bind:value={replyTo}
-                        /></FormField
-                      ><FormField
-                        controlId="swarm-pings"
-                        label={t(
-                          'swarm.board.pings',
-                          'Ping participant IDs (comma-separated)',
-                        )}
-                        ><input
-                          class="s-input"
-                          id="swarm-pings"
-                          bind:value={postRecipients}
-                        /></FormField
-                      >
-                    </div>
-                    <Button
-                      variant="primary"
-                      loading={posting}
-                      disabled={!postText.trim()}
-                      onClick={post}
-                      >{posting
-                        ? t('swarm.board.posting', 'Posting...')
-                        : t('swarm.board.submit', 'Post')}</Button
-                    >{/if}
-                </div>
-                <section
-                  class="participant-pane"
-                  aria-label={t('swarm.participants', 'Participants')}
-                >
-                  <p class="eyebrow">
-                    {t('swarm.participants', 'Participants')}
-                  </p>
-                  {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                      variant="secondary"
-                      onClick={() => inspectParticipant(participant)}
-                      ><span
-                        ><strong>{participant.display_name}</strong><small
-                          >{participant.model} / {participant.state} / {participant.pending_count ??
-                            0}
-                          {t('swarm.pending', 'pending')}</small
-                        ></span
-                      >{#if participant.run_active}<span class="run-indicator"
-                          >{t('swarm.runActive', 'Run active')}</span
-                        >{/if}</Button
-                    >{/each}
-                </section>
-              </div>
             </section>
           {:else if activeTab === 'participants'}<section
               class="panel"
@@ -1010,14 +1021,62 @@
                       {history.participant.display_name}
                       {t('swarm.activity', 'activity')}
                     </h3>
-                    <Button
-                      variant="tertiary"
-                      icon
-                      ariaLabel={t('common.close', 'Close')}
-                      tooltip={t('common.close', 'Close')}
-                      onClick={leaveActivity}
-                      >{@render actionIcon('close')}</Button
-                    >
+                    <div class="actions">
+                      <button
+                        class="context-usage"
+                        aria-label={t(
+                          'chat.contextRingLabel',
+                          'Context window usage',
+                        )}
+                        use:tooltip={activityContextTooltip}
+                      >
+                        <svg
+                          width="18"
+                          height="18"
+                          viewBox="0 0 18 18"
+                          aria-hidden="true"
+                          ><circle
+                            cx="9"
+                            cy="9"
+                            r="6"
+                            fill="none"
+                            stroke="var(--border-2)"
+                            stroke-width="2"
+                          /><circle
+                            cx="9"
+                            cy="9"
+                            r="6"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            pathLength="1"
+                            stroke-dasharray={`${contextRatio} 1`}
+                            transform="rotate(-90 9 9)"
+                          /></svg
+                        >
+                        {t('swarm.context', 'Context')}: {contextTokens}
+                      </button>
+                      {#if canResume && selectedParticipant && !selectedParticipant.run_active && (resumableParticipantState(selectedParticipant.state) || selectedParticipant.state === 'cancelled')}
+                        <Button
+                          variant="primary"
+                          disabled={Boolean(pending)}
+                          onClick={() =>
+                            lifecycle('resume', selectedParticipant.id)}
+                          >{t(
+                            'swarm.resumeParticipant',
+                            'Resume participant',
+                          )}</Button
+                        >
+                      {/if}
+                      <Button
+                        variant="tertiary"
+                        icon
+                        ariaLabel={t('common.close', 'Close')}
+                        tooltip={t('common.close', 'Close')}
+                        onClick={leaveActivity}
+                        >{@render actionIcon('close')}</Button
+                      >
+                    </div>
                   </div>
                   {#each activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
@@ -1062,6 +1121,10 @@
               role="tabpanel"
             >
               <h3>{t('swarm.usage', 'Usage')}</h3>
+              <dl class="swarm-identity">
+                <dt>{t('swarm.id', 'Swarm ID')}</dt>
+                <dd>{selectedSwarm.id}</dd>
+              </dl>
               {#if usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
@@ -1239,6 +1302,61 @@
   </div>
 </main>
 
+{#if composeOpen && selectedSwarm}<Modal
+    title={t('swarm.board.openComposer', 'Write post')}
+    closeDisabled={posting}
+    onClose={() => (composeOpen = false)}
+  >
+    {#snippet body()}<div class="modal-copy">
+        {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
+        <FormField
+          controlId="swarm-post"
+          label={t('swarm.board.post', 'Post to the Board')}
+          ><textarea
+            class="text-area text-area--default"
+            id="swarm-post"
+            bind:value={postText}
+            rows="3"
+            placeholder={t(
+              'swarm.board.placeholder',
+              'Share a finding or ask the group a question',
+            )}></textarea></FormField
+        >
+        <div class="post-options">
+          <FormField
+            controlId="swarm-reply"
+            label={t('swarm.board.replyTo', 'Reply to post ID (optional)')}
+            ><input
+              class="s-input"
+              id="swarm-reply"
+              bind:value={replyTo}
+            /></FormField
+          ><FormField
+            controlId="swarm-pings"
+            label={t(
+              'swarm.board.pings',
+              'Ping participant IDs (comma-separated)',
+            )}
+            ><input
+              class="s-input"
+              id="swarm-pings"
+              bind:value={postRecipients}
+            /></FormField
+          >
+        </div>
+      </div>{/snippet}
+    {#snippet footer()}<Button
+        variant="secondary"
+        disabled={posting}
+        onClick={() => (composeOpen = false)}
+        >{t('common.cancel', 'Cancel')}</Button
+      ><Button
+        variant="primary"
+        loading={posting}
+        disabled={!postText.trim()}
+        onClick={post}>{t('swarm.board.submit', 'Post')}</Button
+      >{/snippet}
+  </Modal>{/if}
 {#if deleteCandidate}<Modal
     title={t('swarm.delete.title', 'Delete profile')}
     onClose={() => (deleteCandidate = null)}
@@ -1498,10 +1616,50 @@
     margin-bottom: 20px;
   }
   .swarm-head h2 {
-    font-size: var(--fs-heading-lg);
-    margin: 8px 0;
+    font-size: var(--fs-body-md);
+    margin: 0 0 8px;
   }
-  .goal,
+  .goal {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0;
+  }
+  .swarm-head > div:first-child {
+    min-width: 0;
+    flex: 1;
+  }
+  .swarm-head {
+    align-items: start;
+  }
+  .swarm-tabs {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .swarm-tabs :global(.tab-list) {
+    flex: 1;
+    min-width: 0;
+  }
+  .context-usage {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-med);
+    font: var(--fs-mono-xs) var(--font-mono);
+    background: transparent;
+    border: 0;
+  }
+  .swarm-identity {
+    margin: 0;
+  }
+  .swarm-identity dt {
+    color: var(--text-med);
+  }
+  .swarm-identity dd {
+    margin: 6px 0 0;
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+  }
   .muted,
   .section-head p {
     color: var(--text-med);
@@ -1562,17 +1720,31 @@
     border-left: 2px solid var(--border-2);
     background: var(--surface-2);
   }
-  .board li > div {
+  .board .post-header {
     display: flex;
     justify-content: space-between;
     gap: 8px;
   }
-  .board li span,
+  .board time,
   .board small {
     color: var(--text-med);
     font: var(--fs-mono-xs) var(--font-mono);
   }
+  .post-header {
+    align-items: center;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border-2);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+  }
+  .post-header strong {
+    font-size: var(--fs-body-sm);
+  }
+  .board time {
+    white-space: nowrap;
+  }
   .board p {
+    overflow-wrap: anywhere;
     white-space: pre-wrap;
     margin: 7px 0 0;
   }
@@ -1592,21 +1764,21 @@
     color: var(--text-hi);
     font: var(--fs-mono-xs) var(--font-mono);
   }
-  .board-bottom {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.38fr);
-    gap: 14px;
-  }
   .participant-pane {
-    border-left: 2px solid var(--border-2);
-    padding-left: 12px;
     display: grid;
-    align-content: start;
-    gap: 4px;
+    gap: 10px;
   }
-  .participant-pane :global(button) {
-    justify-content: space-between;
+  .participant-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .participant-row :global(button) {
     text-align: left;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .participant-pane small,
   .run-indicator {
@@ -1617,18 +1789,9 @@
   .run-indicator {
     color: var(--amber);
   }
-  .post-composer {
-    align-content: start;
-    justify-items: start;
-    display: grid;
-    gap: 8px;
-  }
-  .post-composer > :global(textarea),
-  .post-composer > .post-options {
-    width: 100%;
-  }
   .post-options {
     display: grid;
+    align-items: end;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
@@ -1654,6 +1817,7 @@
     border-radius: var(--r-md);
   }
   .history > .section-head {
+    flex-wrap: wrap;
     margin-bottom: 16px;
   }
   .participants :global(button) {
@@ -1800,19 +1964,10 @@
     .usage-summary {
       grid-template-columns: 1fr;
     }
-    .board-bottom {
-      grid-template-columns: 1fr;
-    }
-    .participant-pane {
-      border-left: 0;
-      border-top: 2px solid var(--border-2);
-      padding: 12px 0 0;
-    }
     .content {
       padding: 15px;
     }
     .swarm-head,
-    .board li > div,
     .audit li {
       display: grid;
     }

@@ -575,3 +575,11 @@ Skills uses a collection-first manager: the shared Secondary bar lists collectio
 
 
 Swarms uses the shared 216px Secondary bar for Profiles and retained Swarms, beside one bounded work area. Selecting a Profile opens its editor directly; creation uses the same Overview / System Prompt / Tools & Skills / Communication anatomy with explicit Save, while saved Profiles autosave and retain an explicit Save action in the fixed footer. The Overview groups Model, Thinking effort and participant count before working directory. The System Prompt tab contains the full editable default, separate switches with content disclosures for all additional blocks, a combined preview for a selected formation Model, separately inspectable Tool definitions, and switches with exact wording for event-triggered Swarm reminders. Draft changes invalidate an older preview; prompt text wraps inside bounded reading areas. Refresh belongs only to the operational view, never the Profile editor. New Swarm opens a goal form with a Profile picker. Retained Swarm rows use a bounded goal title and status/count metadata; selecting a participant opens Activity directly. Extension pages receive a connected-node navigation symbol in both expanded and collapsed Main menus.
+
+
+The retained Swarm header displays a small "User Prompt:" label followed by the
+complete wrapping prompt. Status sits at the right of the content tabs; the
+Swarm id belongs under Usage. Board participants form a wrapping horizontal row
+above the messages, and Write post opens the shared Modal. Each Board message
+has a compact author/time header separated from prose by a thin border. Activity
+keeps context usage and the selected participant's Resume action in its header.
