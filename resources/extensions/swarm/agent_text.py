@@ -5,13 +5,15 @@ from typing import Any
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Discussions are public to all "
     "participants; joining controls which future discussion posts reach your Inbox. "
-    "Use recipients on a post to publicly ping participant IDs."
+    "Use recipients to publicly ping participant IDs. Creating a discussion joins it and "
+    "announces it in the main discussion. Joining returns recent posts. Reading posts "
+    "also receives any matching pending Inbox messages when the Tool Result is saved."
 )
 
 INBOX_DESCRIPTION = (
     "Receive pending Board messages for you, oldest first. Returned messages count as delivered "
-    "when this Tool Result is saved. Follow next_call when more remain. An empty Inbox returns "
-    "immediately."
+    "when this Tool Result is saved. Follow next_call when more remain. This Tool does not "
+    "wait for new messages; use swarm_state with action wait when you need more input."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -28,14 +30,11 @@ INBOX_PARAMETERS: dict[str, Any] = {
 }
 
 STATE_DESCRIPTION = (
-    "Inspect your group, choose your display name, pause your participation, or finish it. "
-    "Use wait when you expect to continue after more input, including replies from other Agents; "
-    "set needs_user only if continuing requires the user's help. Use done with a summary only "
-    "when your work on the shared goal, including any remaining discussion or review you are "
-    "responsible for, is complete. Posting a message or finishing a speaking turn does not "
-    "complete your participation. Once finalized as done, you will not be woken by new Board "
-    "messages or included in Resume. Both wait and done request the end of the current Run "
-    "after the current Tool batch is saved."
+    "Inspect participants and pending messages, change your display name, pause, or finish "
+    "your contribution. Use wait when you need more input. Use done only when your work, "
+    "including discussion and review you still owe, is complete. A final reply or Board post "
+    "alone does not finish participation. Both wait and done end the current Run after the "
+    "Tool batch is saved. Once done is finalized, new messages and Resume cannot reactivate you."
 )
 
 STATE_PARAMETERS: dict[str, Any] = {
@@ -57,6 +56,11 @@ STATE_PARAMETERS: dict[str, Any] = {
             "maximum": 100,
             "description": "Maximum roster entries for status. Omit for 20.",
         },
+        "include_summaries": {
+            "type": "boolean",
+            "description": "Include complete participant summaries and artifact references in "
+            "status. Omit for a compact roster when you only need identities or progress.",
+        },
         "name": {
             "type": "string",
             "description": "Your new display name. Required for name; your participant ID "
@@ -69,8 +73,9 @@ STATE_PARAMETERS: dict[str, Any] = {
         },
         "needs_user": {
             "type": "boolean",
-            "description": "Whether waiting requires the user's help. Omit for wait to allow "
-            "new messages to wake you according to delivery settings.",
+            "description": "Whether wait requires the user's help. When true, only the user can "
+            "resume you. Omit for ordinary waiting; messages may wake you according to "
+            "the group's delivery settings.",
         },
         "summary": {
             "type": "string",
@@ -87,6 +92,19 @@ STATE_PARAMETERS: dict[str, Any] = {
     },
     "required": ["action"],
 }
+
+WAIT_REQUESTED = (
+    "Your Run will end after this Tool batch is saved. wake_on_messages lists which new "
+    "messages can resume you; the user can also Resume unfinished work."
+)
+USER_WAIT_REQUESTED = (
+    "Your Run will end after this Tool batch is saved. Your participation will remain "
+    "blocked until the user resumes it; Board messages will not wake you."
+)
+DONE_REQUESTED = (
+    "Completion requested. Your Run will end after this Tool batch is saved. If new "
+    "messages prevent completion, receive them and request done again when ready."
+)
 
 EMPTY_INBOX = (
     "No pending Board messages. Continue useful work, or use swarm_state with action wait if you "
@@ -105,17 +123,20 @@ BOARD_PARAMETERS: dict[str, Any] = {
         "discussion_id": {
             "type": "string",
             "description": "Discussion to read, post in, join, or leave. Required for join and "
-            "leave. Omit for read or post to use the main discussion.",
+            "leave. Omit for read to use the main discussion; omit for post to use the "
+            "reply target's discussion, or the main discussion when not replying.",
         },
         "message_id": {
             "type": "string",
             "description": "Exact post to read. Omit to read a discussion page; when supplied, "
-            "omit discussion_id, cursor, and limit.",
+            "omit discussion_id, cursor, and limit. Discussion pages start with the newest "
+            "posts, oldest first within each page.",
         },
         "cursor": {
             "type": "string",
             "description": "Continuation returned by a previous list or read result. "
-            "Omit to begin a new page.",
+            "For read, continuation retrieves older posts. Omit to start a fresh listing "
+            "or read the newest posts.",
         },
         "limit": {
             "type": "integer",
@@ -135,14 +156,14 @@ BOARD_PARAMETERS: dict[str, Any] = {
         },
         "reply_to": {
             "type": "string",
-            "description": "Post being answered in the selected discussion. "
-            "Omit for a new message.",
+            "description": "Post to answer with post. Omit for a new message. Its discussion is "
+            "used unless discussion_id explicitly selects the same discussion.",
         },
         "recipients": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Participant IDs to publicly ping on this post. "
-            "Omit when no explicit ping is needed.",
+            "description": "Participant IDs to publicly ping with post or on the opening message "
+            "of create. Omit when no explicit ping is needed.",
         },
         "request_id": {
             "type": "string",
@@ -225,8 +246,10 @@ ERRORS = {
     "an available post.",
     "invalid_recipient": "A recipient is not a participant in your group. Use swarm_state with "
     "action status to obtain participant IDs.",
-    "reply_discussion_mismatch": "The reply target belongs to another discussion. Post in that "
-    "discussion or omit reply_to.",
+    "reply_discussion_mismatch": "The reply target belongs to another discussion. Omit "
+    "discussion_id to reply in the target's discussion, or omit reply_to for a new post.",
+    "exact_message_arguments": "To read one message_id, omit discussion_id, cursor, and limit. "
+    "No change was applied.",
     "main_membership_required": "Everyone remains in the main discussion. Use swarm_state with "
     "action wait if you need to pause your work.",
     "name_unavailable": "This display name is already in use or reserved. Choose a different "

@@ -31,6 +31,7 @@ from .agent_text import (
     DEFAULT_INSTRUCTIONS,
     DEFAULT_PROMPT_BLOCKS,
     DEFAULT_REMINDERS,
+    DONE_REQUESTED,
     EMPTY_INBOX,
     ERRORS,
     INBOX_DESCRIPTION,
@@ -40,6 +41,8 @@ from .agent_text import (
     REPLAYED,
     STATE_DESCRIPTION,
     STATE_PARAMETERS,
+    USER_WAIT_REQUESTED,
+    WAIT_REQUESTED,
 )
 from .store import Page, SwarmStore, SwarmStoreError, _validate_profile
 
@@ -207,7 +210,7 @@ class SwarmExtension:
                 self._enqueue_wakes(sid)
             return tool_success(data)
         except SwarmStoreError as error:
-            return _failure(error)
+            return _failure(error, arguments, BOARD_PARAMETERS)
 
     async def _record_read(
         self, context: ToolContext, binding: TemporarySessionBinding, entries: Any
@@ -222,8 +225,9 @@ class SwarmExtension:
 
     async def inbox(self, context: ToolContext, arguments: Json) -> Json:
         try:
-            if set(arguments) - {"limit"}:
-                raise SwarmStoreError("invalid_arguments")
+            unexpected = sorted(set(arguments) - {"limit"})
+            if unexpected:
+                raise SwarmStoreError("invalid_arguments", field=unexpected[0])
             limit = arguments.get("limit", 20)
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise SwarmStoreError("invalid_arguments", field="limit")
@@ -245,7 +249,7 @@ class SwarmExtension:
                 data["next_call"] = {"tool": "swarm_inbox", "arguments": dict(arguments)}
             return tool_success(data)
         except SwarmStoreError as error:
-            return _failure(error)
+            return _failure(error, arguments, INBOX_PARAMETERS)
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
@@ -258,14 +262,17 @@ class SwarmExtension:
                     binding.participant_id,
                     cursor=arguments.get("cursor"),
                     limit=arguments.get("limit", 20),
+                    include_summaries=arguments.get("include_summaries", False),
                 )
+                cursor = data.pop("cursor", None)
+                if data["pending_count"]:
+                    data["inbox_call"] = {"tool": "swarm_inbox", "arguments": {}}
                 if data["has_more"]:
                     data["next_call"] = {
                         "tool": "swarm_state",
                         "arguments": {
-                            "action": "status",
-                            "cursor": data.pop("cursor"),
-                            **({"limit": arguments["limit"]} if "limit" in arguments else {}),
+                            **arguments,
+                            "cursor": cursor,
                         },
                     }
             elif action == "name":
@@ -285,6 +292,19 @@ class SwarmExtension:
                     reason=arguments.get("reason", ""),
                     needs_user=arguments.get("needs_user", False),
                 )
+                data = {
+                    "status": data["status"],
+                    "wake_on_messages": []
+                    if arguments.get("needs_user", False)
+                    else [
+                        route
+                        for route in ("main", "discussion", "ping")
+                        if swarm["delivery"][route]["wake_idle"]
+                    ],
+                    "guidance": USER_WAIT_REQUESTED
+                    if arguments.get("needs_user", False)
+                    else WAIT_REQUESTED,
+                }
                 context.request_turn_end()
             else:
                 data = await store.request_done(
@@ -297,13 +317,17 @@ class SwarmExtension:
                     artifacts=arguments.get("artifacts", []),
                 )
                 if data["status"] == "finish_requested":
+                    data = {"status": data["status"], "guidance": DONE_REQUESTED}
                     context.request_turn_end()
                 elif data["status"] == "finish_refused":
                     code = "pending_messages" if data["pending_messages"] else "owned_work_active"
-                    return tool_failure(code, ERRORS[code])
+                    guidance = ERRORS[code]
+                    if data["pending_messages"] and data["owned_work_active"]:
+                        guidance += " " + ERRORS["owned_work_active"]
+                    return tool_failure(code, guidance)
             return tool_success(data)
         except SwarmStoreError as error:
-            return _failure(error)
+            return _failure(error, arguments, STATE_PARAMETERS)
 
     def _changed(self, swarm_id: str, revision: int) -> None:
         if self.host is not None and self.host.publish_change is not None:
@@ -1158,15 +1182,42 @@ def _swarm_command_argument(argument: str) -> tuple[str, str]:
     return profile_id, prompt
 
 
-def _failure(error: SwarmStoreError) -> Json:
+def _failure(
+    error: SwarmStoreError, arguments: Json | None = None, parameters: Json | None = None
+) -> Json:
     code = error.code
     if code in {"stale_epoch", "swarm_not_found"}:
         code = "swarm_closed"
     elif code == "participant_not_found":
         code = "participant_inactive"
     guidance = ERRORS.get(code, ERRORS["invalid_arguments"])
+    if code == "exact_message_arguments":
+        code = "invalid_arguments"
     if error.field:
-        guidance = f"{error.field}: {ERRORS['invalid_value']}"
+        field = error.field
+        properties = (parameters or {}).get("properties", {})
+        if code == "inapplicable_field":
+            code = "invalid_arguments"
+            action = (arguments or {}).get("action")
+            guidance = (
+                f"Field '{field}' is not accepted for action '{action}'. "
+                "Omit it. No change was applied."
+            )
+        elif field in properties:
+            specification = properties[field]
+            correction = specification["description"]
+            if "enum" in specification:
+                correction += " Choose one of: " + ", ".join(specification["enum"]) + "."
+            guidance = f"{field}: {correction} No change was applied."
+        elif parameters is not None:
+            action = (arguments or {}).get("action")
+            guidance = (
+                f"Field '{field}' is not accepted"
+                + (f" for action '{action}'" if isinstance(action, str) else "")
+                + ". Omit it. No change was applied."
+            )
+        else:
+            guidance = f"{field}: {ERRORS['invalid_value']}"
     return tool_failure(code, guidance)
 
 
@@ -1175,17 +1226,16 @@ def _validate_board(arguments: Json) -> str:
         "list": {"cursor", "limit"},
         "read": {"discussion_id", "message_id", "cursor", "limit"},
         "post": {"discussion_id", "text", "reply_to", "recipients", "request_id"},
-        "create": {"title", "text", "request_id"},
+        "create": {"title", "text", "request_id", "recipients"},
         "join": {"discussion_id"},
         "leave": {"discussion_id"},
     }
     action = arguments.get("action")
-    if (
-        not isinstance(action, str)
-        or action not in fields
-        or set(arguments) - {"action", *fields[action]}
-    ):
-        raise SwarmStoreError("invalid_arguments")
+    if not isinstance(action, str) or action not in fields:
+        raise SwarmStoreError("invalid_arguments", field="action")
+    unexpected = sorted(set(arguments) - {"action", *fields[action]})
+    if unexpected:
+        raise SwarmStoreError("inapplicable_field", field=unexpected[0])
     required = {
         "post": {"text", "request_id"},
         "create": {"title", "text", "request_id"},
@@ -1212,33 +1262,33 @@ def _validate_board(arguments: Json) -> str:
         if not valid:
             raise SwarmStoreError("invalid_arguments", field=key)
     if "message_id" in arguments and {"discussion_id", "cursor", "limit"} & arguments.keys():
-        raise SwarmStoreError("invalid_arguments", field="message_id")
+        raise SwarmStoreError("exact_message_arguments")
     return action
 
 
 def _validate_state(arguments: Json) -> str:
     fields = {
-        "status": {"cursor", "limit"},
+        "status": {"cursor", "limit", "include_summaries"},
         "name": {"name"},
         "wait": {"reason", "needs_user"},
         "done": {"summary", "artifacts"},
     }
     action = arguments.get("action")
-    if (
-        not isinstance(action, str)
-        or action not in fields
-        or set(arguments) - {"action", *fields[action]}
-    ):
-        raise SwarmStoreError("invalid_arguments")
-    if action in {"name", "done"} and ("name" if action == "name" else "summary") not in arguments:
-        raise SwarmStoreError("invalid_arguments")
+    if not isinstance(action, str) or action not in fields:
+        raise SwarmStoreError("invalid_arguments", field="action")
+    unexpected = sorted(set(arguments) - {"action", *fields[action]})
+    if unexpected:
+        raise SwarmStoreError("inapplicable_field", field=unexpected[0])
+    required = {"name": "name", "done": "summary"}.get(action)
+    if required and required not in arguments:
+        raise SwarmStoreError("invalid_arguments", field=required)
     for key, value in arguments.items():
         if key == "action":
             continue
         valid = (
             (key == "limit" and type(value) is int and 1 <= value <= 100)
             or (key == "cursor" and isinstance(value, str) and bool(value.strip()))
-            or (key == "needs_user" and type(value) is bool)
+            or (key in {"needs_user", "include_summaries"} and type(value) is bool)
             or (
                 key == "artifacts"
                 and isinstance(value, list)
