@@ -22,7 +22,10 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
   Creation saves explicitly; saved profiles autosave and flush before navigation
   through the generic page bridge. Invalidations preserve the mounted draft.
   The instructions field is the participant's System Prompt contribution;
-  omitted effort uses the Provider default, not shared Agent defaults.
+  new profiles seed it with editable shared-goal wording in `ProfileEditor.svelte`.
+  The visible value is saved as-is, including an intentionally empty value;
+  existing profiles are not backfilled and runtime adds no fallback.
+  Omitted effort uses the Provider default, not shared Agent defaults.
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
   Tests: `SwarmPage.test.js` and `test_swarm_store.py`.
 
