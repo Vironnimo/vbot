@@ -179,7 +179,7 @@ function createBridge(initialProfile = profile) {
               },
             ],
           },
-          tools: { total_calls: 4 },
+          tools: { total_calls: args.participant_id === 'prt-b' ? 0 : 4 },
         },
       });
     return Promise.resolve({ profile: structuredClone(profile) });
@@ -1130,7 +1130,19 @@ describe('SwarmPage', () => {
     await tick();
     button('Usage').click();
     await tick();
-    expect(document.body.textContent).toContain('Measured tokens');
+    expect(
+      [...document.querySelectorAll('.usage-summary dd')].map((el) =>
+        el.textContent.trim(),
+      ),
+    ).toEqual(['65', '4']);
+    expect(
+      [...document.querySelectorAll('.table-wrap tbody tr')].map((row) =>
+        [...row.querySelectorAll('td')].map((el) => el.textContent.trim()),
+      ),
+    ).toEqual([
+      ['Alpha', 'demo/model', '65', '4', '1'],
+      ['Beta', 'demo/fallback', '65', '0', '1'],
+    ]);
     expect(document.body.textContent).toContain('Tool Calls');
     expect(document.body.textContent).toContain('Alpha');
     expect(document.body.textContent).toContain('demo/model');
@@ -1138,6 +1150,40 @@ describe('SwarmPage', () => {
       swarm_id: 'swr-a',
       participant_id: 'prt-a',
     });
+  });
+
+  it('shows participant tool calls once across Models and without token usage', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    operation.mockImplementation(async (name, args) => {
+      const result = await original(name, args);
+      if (name === 'swarms.usage' && args.participant_id === 'prt-a') {
+        result.usage.usage.models.push({
+          ...result.usage.usage.models[0],
+          model: 'second',
+        });
+      }
+      if (name === 'swarms.usage' && args.participant_id === 'prt-b') {
+        result.usage.usage = null;
+        result.usage.tools.total_calls = 7;
+      }
+      return result;
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await new Promise((resolve) => setTimeout(resolve));
+    button('Usage').click();
+    await tick();
+    const rows = [...document.querySelectorAll('.table-wrap tbody tr')];
+    expect(
+      rows.map((row) => [...row.cells].map((cell) => cell.textContent.trim())),
+    ).toEqual([
+      ['Alpha', 'demo/model', '65', '4', '1'],
+      ['demo/second', '65', '1'],
+      ['Beta', 'demo/fallback', 'Unavailable', '7', 'Unavailable'],
+    ]);
+    expect(rows[0].cells[0].rowSpan).toBe(2);
+    expect(rows[0].cells[3].rowSpan).toBe(2);
   });
 
   it('shows newest Board posts first and appends earlier pages below them', async () => {
@@ -1206,10 +1252,10 @@ describe('SwarmPage', () => {
       const result = await original(name, args);
       if (name === 'swarms.usage') {
         const counts = {
-          measured_input_tokens: value,
+          measured_input_tokens: value / 2,
           measured_output_tokens: 0,
           estimated_input_tokens: 0,
-          estimated_output_tokens: value,
+          estimated_output_tokens: value / 2,
         };
         Object.assign(result.usage.usage.totals, counts);
         Object.assign(result.usage.usage.models[0], counts, { runs: value });
@@ -1226,7 +1272,7 @@ describe('SwarmPage', () => {
       [...document.querySelectorAll('.usage-summary dd')].map((el) =>
         el.textContent.trim(),
       ),
-    ).toEqual([expected, expected, expected]);
+    ).toEqual([expected, expected]);
     for (const row of document.querySelectorAll('.table-wrap tbody tr')) {
       expect(
         [...row.querySelectorAll('td')]
@@ -1236,22 +1282,32 @@ describe('SwarmPage', () => {
     }
   });
 
-  it('renders canonical UsageSection totals and participant Model rows', async () => {
+  it('preserves unavailable totals and tool counts', async () => {
     const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    operation.mockImplementation(async (name, args) => {
+      const result = await original(name, args);
+      if (name === 'swarms.usage') {
+        result.usage.usage = null;
+        result.usage.tools = null;
+      }
+      return result;
+    });
     await render(bridge);
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Usage').click();
     await tick();
-    expect(document.body.textContent).toContain('50');
-    expect(document.body.textContent).toContain('15');
-    expect(document.body.textContent).toContain('4');
-    expect(document.body.textContent).toContain('Alpha');
-    expect(document.body.textContent).toContain('demo/model');
-    expect(operation).toHaveBeenCalledWith('swarms.usage', {
-      swarm_id: 'swr-a',
-      participant_id: 'prt-a',
-    });
+    expect(
+      [...document.querySelectorAll('.usage-summary dd')].map((el) =>
+        el.textContent.trim(),
+      ),
+    ).toEqual(['Unavailable', 'Unavailable']);
+    for (const row of document.querySelectorAll('.table-wrap tbody tr')) {
+      expect(
+        [...row.cells].slice(2).map((cell) => cell.textContent.trim()),
+      ).toEqual(['Unavailable', 'Unavailable', 'Unavailable']);
+    }
   });
 
   it('opens Activity links through the extension bridge', async () => {
