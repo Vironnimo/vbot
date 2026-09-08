@@ -145,6 +145,41 @@ async def call(board, arguments, peer=0):
 
 
 @pytest.mark.asyncio
+async def test_editor_catalog_delivers_default_without_replacing_saved_instructions(board):
+    from resources.extensions.swarm.agent_text import DEFAULT_INSTRUCTIONS
+
+    profile = await board.store.get_profile(board.swarm["profile_snapshot"]["id"])
+    saved = await board.store.save_profile(
+        {**profile, "instructions": "saved-instructions-sentinel"},
+        expected_revision=profile["revision"],
+    )
+    catalog = (await board.service.operation("catalog", {}))["catalog"]
+    assert catalog["prompt_defaults"]["instructions"] == DEFAULT_INSTRUCTIONS
+    assert (await board.store.get_profile(saved["id"]))[
+        "instructions"
+    ] == "saved-instructions-sentinel"
+    assert (await board.store.get_swarm(board.swarm["id"]))["profile_snapshot"][
+        "instructions"
+    ] == ""
+
+
+@pytest.mark.asyncio
+async def test_state_guidance_reaches_native_model_definition(board):
+    from resources.extensions.swarm.agent_text import STATE_DESCRIPTION
+
+    names = ("swarm_board", "swarm_inbox", "swarm_state")
+    definitions = board.tools.provider_definitions(names, session_grants=names)
+    state = next(tool for tool in definitions if tool["name"] == "swarm_state")
+    assert state["description"] == STATE_DESCRIPTION
+    assert set(state["parameters"]["properties"]["action"]["enum"]) == {
+        "status",
+        "name",
+        "wait",
+        "done",
+    }
+
+
+@pytest.mark.asyncio
 async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
     participant = board.swarm["participants"][0]
 

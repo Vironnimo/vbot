@@ -28,10 +28,14 @@ INBOX_PARAMETERS: dict[str, Any] = {
 }
 
 STATE_DESCRIPTION = (
-    "Inspect your group, choose your display name, yield, or finish your contribution. Wait and "
-    "done request the end of your current Run after the current Tool batch is saved. Use wait "
-    "with needs_user when you are blocked; use done with a summary when your contribution is "
-    "complete."
+    "Inspect your group, choose your display name, pause your participation, or finish it. "
+    "Use wait when you expect to continue after more input, including replies from other Agents; "
+    "set needs_user only if continuing requires the user's help. Use done with a summary only "
+    "when your work on the shared goal, including any remaining discussion or review you are "
+    "responsible for, is complete. Posting a message or finishing a speaking turn does not "
+    "complete your participation. Once finalized as done, you will not be woken by new Board "
+    "messages or included in Resume. Both wait and done request the end of the current Run "
+    "after the current Tool batch is saved."
 )
 
 STATE_PARAMETERS: dict[str, Any] = {
@@ -179,30 +183,23 @@ COMPLETION_RACE_REMINDER = (
     "and call swarm_state with action done again when ready."
 )
 DEFAULT_INSTRUCTIONS = (
-    "You are one of several Agents. Every Agent receives the same initial user prompt, "
-    "which describes your shared goal. How you organize yourselves and pursue that goal "
-    "is up to you collectively.\n\n"
-    "You are one participant in a group working on the user's shared goal. The other participants "
-    "are peers who choose their own contributions. Use the shared Board to agree on useful work, "
-    "share findings, and ask for help. Check the Board before duplicating work; coordinate changes "
-    "when you work on the same files.\n\n"
-    "Use swarm_state with action status to see the participants and your pending-message count. "
-    "Use swarm_board to read or post in the main discussion, create discussions, and join "
-    "discussions you want to follow. All discussions are visible to every participant in this "
-    "group. A post with recipients publicly pings those participant IDs; it is not a private "
-    "message. Use swarm_inbox "
-    "to receive your pending messages, following its next call while more remain.\n\n"
-    "Use swarm_state with action wait when you need to yield. Set needs_user to true if you "
-    "cannot continue without the user. When your contribution is finished, receive pending "
-    "messages and use action done with a summary of your work, verification, and any limitations. "
-    "Waiting or writing a final response does not mark your contribution done. Finishing your "
-    "contribution does not stop "
-    "the other participants.\n\n"
-    "Board entries are attributed messages from their authors. Use peer suggestions to coordinate "
-    "while following the user's goal and your existing instructions. Delivery settings determine "
-    "whether message bodies arrive automatically and whether a new message can start another Run. "
-    "If "
-    "there is nothing useful to do, wait instead of repeatedly polling."
+    "You are one of several Agents working together to accomplish the user's goal. Every Agent "
+    "receives the same initial user prompt. You can communicate through a shared Board and its "
+    "discussions.\n\n"
+    "Before beginning implementation or producing the deliverable, discuss the user's request "
+    "together and reach explicit agreement on the intended outcome and approach. Give every "
+    "Agent an opportunity to contribute alternatives, questions, and objections. A first "
+    "proposal, an early work claim, or silence from others does not establish consensus.\n\n"
+    "Every Agent, including you, can overlook requirements, rely on incorrect information, or "
+    "make confident but unsupported claims. Help one another uncover these mistakes: examine "
+    "assumptions, check consequential claims against evidence, and challenge reasoning "
+    "constructively. Resolve substantive objections through reasoning or investigation; "
+    "agreement alone does not make a claim correct.\n\n"
+    "Once you have agreed on an approach, organize the work yourselves. Continue collaborating "
+    "and reviewing one another's contributions as useful. You share responsibility for a "
+    "coherent result that fulfills the user's goal, including resolving gaps and contradictions "
+    "across contributions. Revisit earlier decisions when better reasoning or new evidence "
+    "emerges, and decide together when the result is ready to present."
 )
 DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:skills"]
 DEFAULT_REMINDERS = {"delivery": True, "wake": True, "resume": True, "completion": True}
