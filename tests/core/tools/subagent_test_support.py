@@ -159,6 +159,7 @@ def make_context(
 class RecordingTriggerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None, bool]] = []
+        self.execution_owners: list[Any | None] = []
         self.error: BaseException | None = None
         self.defer_input_persisted = False
         self.deliveries: dict[str, asyncio.Future[None]] = {}
@@ -175,6 +176,7 @@ class RecordingTriggerService:
         body: str,
         project_id: str | None = None,
         on_persisted: Any | None = None,
+        execution_owner: Any | None = None,
     ) -> asyncio.Future[None]:
         del project_id
         delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -184,6 +186,7 @@ class RecordingTriggerService:
             return delivery
         assert origin_run_id
         self.calls.append((agent_id, body, session_id, True))
+        self.execution_owners.append(execution_owner)
         if callable(on_persisted):
 
             def persist() -> None:

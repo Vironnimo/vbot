@@ -87,6 +87,18 @@ CANONICAL_REGISTERED_TOOLS = sorted(
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
+def _declared_hidden_session_tools(runtime: Runtime) -> set[str]:
+    registry = runtime.extensions
+    assert registry is not None
+    return {
+        declaration.name
+        for record in registry.records()
+        if record.status == "loaded"
+        for declaration in record.declarations.tools
+        if declaration.session_scoped
+    }
+
+
 def _clear_provider_credential_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     resources_path = Path(__file__).resolve().parents[3] / "resources"
     provider_registry = ProviderRegistry.load(resources_path)
@@ -442,10 +454,17 @@ def test_start_registers_builtin_tools_once(config: Config):
 
     runtime.start()
 
-    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == CANONICAL_REGISTERED_TOOLS
+    hidden_session_tools = _declared_hidden_session_tools(runtime)
+    tool_names = {tool.name for tool in runtime.tools.list_tools()}
+    assert sorted(tool_names - hidden_session_tools) == CANONICAL_REGISTERED_TOOLS
+    assert hidden_session_tools <= tool_names
+    assert not hidden_session_tools & {
+        tool.name for tool in runtime.tools.list_tools(include_catalog_hidden=False)
+    }
     assert runtime.tools.get("history").session_scoped is True
     for tool in runtime.tools.list_tools():
+        if tool.name in hidden_session_tools:
+            continue
         assert tool.result_schema is not None
         assert len(tool.contract.schema_fingerprint) == 64
 
@@ -552,8 +571,10 @@ def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
 
     runtime.start()
 
-    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == CANONICAL_REGISTERED_TOOLS
+    hidden_session_tools = _declared_hidden_session_tools(runtime)
+    tool_names = {tool.name for tool in runtime.tools.list_tools()}
+    assert sorted(tool_names - hidden_session_tools) == CANONICAL_REGISTERED_TOOLS
+    assert hidden_session_tools <= tool_names
 
 
 def test_phase_two_services_inaccessible_before_start(config: Config):
@@ -1855,8 +1876,9 @@ class _StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_names: object = None,
         session_tool_grants: object = (),
+        request_block_definitions: object = (),
     ) -> str:
-        del agent_project_id
+        del agent_project_id, request_block_definitions
         return "System prompt"
 
     def render_soul(self, _agent: object, *, on_read: object = None) -> str:

@@ -392,6 +392,7 @@ async def _handle_start(
         cwd=workdir,
         env=None,
         origin_run_id=context.run_id,
+        execution_owner=context.execution_owner,
         name=name,
         initial_text=text if isinstance(text, str) else None,
         group_id=group_id,
@@ -438,6 +439,7 @@ def _handle_attach(
         terminal_id,
         owner,
         origin_run_id=context.run_id,
+        execution_owner=context.execution_owner,
     )
     data = _terminal_summary(session, current_attachment=owner)
     data.update({"attached": True, "changed": changed, "delivery": "automatic_terminal_activity"})
@@ -569,6 +571,7 @@ async def _handle_input(
         key=key,
         expected_screen_revision=expected_revision,
         origin_run_id=context.run_id,
+        execution_owner=context.execution_owner,
     )
     if data["characters_sent"]:
         if prior_attention_revision is not None:

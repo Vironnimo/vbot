@@ -9,7 +9,7 @@ import inspect
 import os
 import sqlite3
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
@@ -18,7 +18,12 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from core.agents.agents import AgentStore
+from core.agents.agents import AgentStore, _normalize_agent_tools
+from core.agents.temporary import (
+    TemporaryAgentConfig,
+    TemporaryAgentRegistry,
+    TemporaryExecutionGroups,
+)
 from core.attachments import AttachmentStore
 from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
 from core.calendar import CalendarService
@@ -43,11 +48,13 @@ from core.model_tasks import (
     VideoService,
 )
 from core.models.models import Model, ModelRegistry
+from core.models.query import ModelQuery
 from core.projects import (
     AgentResolver,
     ProjectStore,
     build_agent_resolver,
 )
+from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import (
     AGENT_SCOPE_KEY_PREFIX,
     DEFAULT_SCOPE_KEY,
@@ -94,6 +101,7 @@ from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.skills.skills import SkillMetadata, SkillRegistry
+from core.statistics import StatisticsService
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -121,6 +129,14 @@ from core.tools import (
     register_web_fetch_tool,
     register_web_search_tool,
     register_write_tool,
+    resolve_tool_access,
+    tool_is_ready,
+)
+from core.tools.availability import (
+    BASH_ALLOWED_ENV_KEY,
+    BASH_TOOL_SETTINGS_KEY,
+    SUBAGENT_ALLOWED_AGENTS_KEY,
+    SUBAGENT_TOOL_SETTINGS_KEY,
 )
 from core.tools.calendar import register_calendar_tool
 from core.tools.cron import register_cron_tool
@@ -132,6 +148,7 @@ from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.config import VBOT_ROOT
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import LogManager
+from core.utils.workers import BoundedWorkerPool
 
 # ---------------------------------------------------------------------------
 # Project root / default resources directory
@@ -142,6 +159,7 @@ _DEFAULT_RESOURCES_DIR = _VBOT_ROOT / "resources"
 _PACKAGE_NAME = "vbot"
 _UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
+_RUNTIME_WORKERS = BoundedWorkerPool(name="runtime", max_workers=2)
 
 
 def _detect_vbot_version() -> str:
@@ -277,6 +295,63 @@ class _StorageManagerBlockStore:
         return scope_key
 
 
+def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
+    """Decode one retained temporary descriptor through its canonical DTO."""
+
+    raw = getattr(binding, "config", None)
+    if not isinstance(raw, Mapping):
+        raise RuntimeError("temporary execution configuration is invalid")
+    try:
+        return TemporaryAgentConfig(
+            model=raw["model"],
+            cwd=Path(raw["cwd"]),
+            tool_access=raw["tool_access"],
+            allowed_skills=raw["allowed_skills"],
+            tools=raw["tools"],
+            name=raw["name"],
+            temperature=raw.get("temperature"),
+            thinking_effort=raw.get("thinking_effort"),
+            fallback_models=raw.get("fallback_models"),
+            instructions=raw.get("instructions", ""),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("temporary execution configuration is invalid") from error
+
+
+def _validate_temporary_tool_configuration(
+    config: TemporaryAgentConfig,
+    ordinary_tools: Mapping[str, Any],
+) -> None:
+    """Apply the shared Identity-Agent settings grammar to temporary profiles."""
+
+    try:
+        _normalize_agent_tools(config.tools)
+    except ValueError as error:
+        raise RuntimeError("temporary Tool settings are invalid") from error
+
+    requested = set(config.tool_access.denied) | set(config.tool_access.granted)
+    if config.tool_access.mode == "selected":
+        requested.update(config.tool_access.allowed)
+    requested.update(config.tools)
+    unknown = requested - set(ordinary_tools)
+    if unknown:
+        raise RuntimeError("temporary Tool configuration refers to an unavailable Tool")
+
+
+def _validate_temporary_project_ceiling(
+    config: TemporaryAgentConfig,
+    allowed_tools: set[str],
+) -> None:
+    """Reject explicit temporary Tool choices outside their selected Project."""
+
+    requested = set(config.tool_access.denied) | set(config.tool_access.granted)
+    if config.tool_access.mode == "selected":
+        requested.update(config.tool_access.allowed)
+    requested.update(config.tools)
+    if not requested <= allowed_tools:
+        raise RuntimeError("temporary Tool configuration is outside its Project ceiling")
+
+
 class Runtime:
     """Bootstraps and manages the vBot application lifecycle.
 
@@ -348,6 +423,12 @@ class Runtime:
         self._chat_sessions: ChatSessionManager | None = None
         self._projects: ProjectStore | None = None
         self._agent_resolver: AgentResolver | None = None
+        self._temporary_agents: TemporaryAgentRegistry | None = None
+        self._temporary_groups: list[TemporaryExecutionGroups] = []
+        self._statistics_service: StatisticsService | None = None
+        self._extension_change_publisher: Callable[[str, str, Sequence[str], int], None] | None = (
+            None
+        )
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
         self._chat_run_manager: ChatRunManager | None = None
@@ -613,6 +694,7 @@ class Runtime:
                 self._file_state,
                 self._tool_prompt_blocks,
             )
+            self._temporary_agents = TemporaryAgentRegistry(self._chat_sessions)
             self._agent_resolver = build_agent_resolver(
                 self._agents,
                 self._projects,
@@ -621,6 +703,7 @@ class Runtime:
                 self._provider_credentials,
                 self._global_agent_defaults,
                 project_skill_names=self.project_skill_names,
+                temporary_agents=self._temporary_agents,
             )
             self._ensure_bootstrap_agent()
             recall_registry = self._build_recall_backend_registry()
@@ -631,7 +714,9 @@ class Runtime:
                 self._recall_backend,
                 self._chat_sessions,
             )
-            self._chat_run_manager = ChatRunManager()
+            self._chat_run_manager = ChatRunManager(
+                admission_validator=self._validate_temporary_admission
+            )
             self.chat_runs = self._chat_run_manager
             if self._attachment_store is None:
                 raise RuntimeError("Attachment store not available")
@@ -703,6 +788,7 @@ class Runtime:
                 trigger_chat_loop=self._streaming_chat_loop,
                 sessions=self._chat_sessions,
             )
+            self._trigger_service.set_owned_completion_starter(self._start_owned_completion)
             self._terminal_manager = TerminalManager(
                 self._trigger_service,
                 temporary_files=self._storage.temporary_files,
@@ -849,7 +935,283 @@ class Runtime:
             resolve_credential=self.resolve_environment_credential,
             set_credential=self._set_extension_credential,
             resolve_cwd=self._extension_cwd,
+            for_owner=self._extension_owner_host,
         )
+
+    def _extension_owner_host(self, identity: Any) -> ExtensionHost:
+        if self._temporary_agents is None or self._chat_loop is None:
+            raise RuntimeError("temporary execution is unavailable")
+        groups = TemporaryExecutionGroups(
+            self._temporary_agents,
+            self._chat_loop,
+            lambda candidate: (
+                self._extensions is not None and self._extensions.is_registration_current(candidate)
+            ),
+            identity,
+            run_manager=self.chat_run_manager,
+            resources=tuple(
+                resource
+                for resource in (
+                    self._process_manager,
+                    self._terminal_manager,
+                    self._trigger_service,
+                )
+                if resource is not None
+            ),
+            validate_binding=self._validate_extension_session_binding,
+            usage=lambda group_id, query: self._extension_group_usage(
+                identity.name, group_id, query
+            ),
+        )
+        self._temporary_groups.append(groups)
+        state_dir = self.storage.data_dir / "extension-data" / identity.name
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return ExtensionHost(
+            data_dir=self.storage.data_dir,
+            sample=self._sample_extension,
+            resolve_agent=self.agent_resolver.resolve_agent,
+            store_attachment=self.attachment_store.store,
+            resolve_credential=self.resolve_environment_credential,
+            set_credential=self._set_extension_credential,
+            resolve_cwd=self._extension_cwd,
+            for_owner=lambda _identity: self._extension_owner_host(identity),
+            temporary_agents=groups,
+            state_dir=state_dir,
+            catalog=lambda: self._extension_catalog(identity),
+            publish_change=lambda resource, ids, revision: self._publish_extension_change(
+                identity, resource, ids, revision
+            ),
+        )
+
+    def _validate_temporary_admission(self, address: Any, admission: Any) -> None:
+        if admission.owner is None:
+            return
+        matching = [groups for groups in self._temporary_groups if groups.owns(admission.owner)]
+        if len(matching) != 1:
+            from core.runs import RunAdmissionBlockedError
+
+            raise RunAdmissionBlockedError(
+                "This Session is no longer available. Check its state through its Extension."
+            )
+        matching[0].validate(address, admission)
+
+    async def _validate_extension_session_binding(self, binding: Any) -> None:
+        registry = self._extensions
+        if registry is None:
+            raise RuntimeError("temporary execution is unavailable")
+        capability = registry.session_capability(binding, self.tools)
+        if capability is None:
+            raise RuntimeError("temporary execution is unavailable")
+        try:
+            await _RUNTIME_WORKERS.run(
+                self._validate_extension_session_binding_blocking,
+                binding,
+                capability.tool_names,
+            )
+        except Exception as error:
+            if self.logger is not None:
+                self.logger.warning(
+                    "Temporary Session preflight failed owner=%s group=%s participant=%s: %s",
+                    getattr(binding, "owner_name", ""),
+                    getattr(binding, "group_id", ""),
+                    getattr(binding, "participant_id", ""),
+                    error,
+                )
+            raise RuntimeError("temporary execution is unavailable") from error
+        if (
+            self._extensions is not registry
+            or not registry.is_registration_current(capability.identity)
+            or registry.session_capability(binding, self.tools) is None
+        ):
+            raise RuntimeError("temporary execution is unavailable")
+
+    def _validate_extension_session_binding_blocking(
+        self,
+        binding: Any,
+        session_tool_grants: Sequence[str],
+    ) -> None:
+        config = _temporary_config_from_binding(binding)
+        if not config.cwd.is_dir():
+            raise RuntimeError("temporary working directory is unavailable")
+        self.agent_resolver.require_model_configured(config.model)
+        for fallback in config.fallback_models or ():
+            self.agent_resolver.require_model_configured(fallback)
+
+        ordinary_tools = {
+            tool.name: tool
+            for tool in self.tools.list_tools(include_internal=False)
+            if not tool.session_scoped
+        }
+        _validate_temporary_tool_configuration(config, ordinary_tools)
+        project_id = getattr(binding.address, "project_id", None)
+        if project_id is not None:
+            project = self.projects.get(project_id)
+            if config.cwd.resolve() != Path(project.cwd).resolve():
+                raise RuntimeError("temporary working directory is outside its Project")
+            _validate_temporary_project_ceiling(config, set(project.allowed_tools))
+
+        resolved = self.agent_resolver.resolve_temporary_agent(
+            binding.address,
+            generation_id=binding.generation_id,
+        )
+        available = self.tools.list_tools(include_internal=False)
+        effective = resolve_tool_access(
+            resolved.tool_access,
+            available,
+            resolved.memory_prompt_mode,
+            workspace=resolved.workspace,
+            session_tool_grants=session_tool_grants,
+        )
+        effective_by_name = {tool.name: tool for tool in available}
+        if any(
+            not tool_is_ready(effective_by_name[name]) for name in effective.allowed_tools
+        ) or set(effective.session_tool_grants) != set(session_tool_grants):
+            raise RuntimeError("temporary execution is unavailable")
+
+    async def _extension_group_usage(
+        self,
+        owner_name: str,
+        group_id: str,
+        query: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self._statistics_service is None:
+            self._statistics_service = StatisticsService(
+                self.chat_sessions,
+                cast(Any, self.agents),
+                cast(Any, self.projects),
+            )
+        return await self._statistics_service.group_usage(
+            owner_name=owner_name,
+            group_id=group_id,
+            query=query,
+        )
+
+    def set_extension_change_publisher(
+        self,
+        publisher: Callable[[str, str, Sequence[str], int], None] | None,
+    ) -> None:
+        """Install the server-owned generic resource invalidation publisher."""
+        self._extension_change_publisher = publisher
+
+    def _publish_extension_change(
+        self,
+        identity: Any,
+        resource: str,
+        ids: Sequence[str],
+        revision: int,
+    ) -> None:
+        if (
+            self._extensions is None
+            or not self._extensions.is_registration_current(identity)
+            or not isinstance(resource, str)
+            or not resource
+            or not isinstance(revision, int)
+            or revision < 0
+            or not all(isinstance(item, str) and item for item in ids)
+        ):
+            raise ValueError("extension change is unavailable")
+        if self._extension_change_publisher is not None:
+            self._extension_change_publisher(identity.name, resource, tuple(ids), revision)
+
+    async def _extension_catalog(self, identity: Any) -> dict[str, Any]:
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        catalog = await _RUNTIME_WORKERS.run(self._extension_catalog_projection)
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        return catalog
+
+    def _extension_catalog_projection(self) -> dict[str, Any]:
+        projects = self.projects.list()
+        skill_choices = [
+            {"name": skill.name, "description": skill.description}
+            for skill in self.skills.list_all()
+        ]
+        return {
+            "projects": [
+                {
+                    "id": project.project_id,
+                    "name": project.display_name,
+                    "cwd": project.cwd,
+                    "allowed_tools": list(project.allowed_tools),
+                    "allowed_skills": effective_project_allowed_skills(
+                        project, self.project_skill_names(project.project_id)
+                    ),
+                }
+                for project in projects
+            ],
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    "constraints": list(tool.constraints),
+                    "requires_opt_in": tool.requires_opt_in,
+                }
+                for tool in self.tools.list_tools()
+                if tool.catalog_visible and not tool.session_scoped
+            ],
+            "skills": skill_choices,
+            "tool_settings": {
+                BASH_TOOL_SETTINGS_KEY: {
+                    "type": "object",
+                    "properties": {
+                        BASH_ALLOWED_ENV_KEY: {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "uniqueItems": True,
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+                SUBAGENT_TOOL_SETTINGS_KEY: {
+                    "type": "object",
+                    "properties": {
+                        SUBAGENT_ALLOWED_AGENTS_KEY: {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "uniqueItems": True,
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "models": self._extension_catalog_models(),
+        }
+
+    def _extension_catalog_models(self) -> list[dict[str, Any]]:
+        models: list[dict[str, Any]] = []
+        for provider_id, model in self.models.query(ModelQuery()):
+            connections = [
+                connection_id
+                for connection_id in model.connections
+                if self.provider_credentials.is_usable(
+                    provider_id, f"{provider_id}:{connection_id}"
+                )
+            ]
+            if connections:
+                models.append(
+                    {
+                        "id": f"{provider_id}/{model.model_id}",
+                        "name": model.name,
+                        "connections": connections,
+                    }
+                )
+        return models
+
+    async def _start_owned_completion(
+        self,
+        address: Any,
+        owner: Any,
+        content: str,
+        notice_ids: tuple[str, ...],
+        on_persisted: Any,
+    ) -> Any:
+        from core.runs import RunAdmission
+
+        self._validate_temporary_admission(address, RunAdmission(owner=owner))
+        groups = next(groups for groups in self._temporary_groups if groups.owns(owner))
+        return await groups.continue_completion(address, owner, content, notice_ids, on_persisted)
 
     def _extension_cwd(self, project_id: str | None, agent_id: str) -> Path:
         from core.projects.resolver import resolve_working_project_id
@@ -1039,6 +1401,7 @@ class Runtime:
         self._chat_sessions = None
         self._projects = None
         self._agent_resolver = None
+        self._temporary_agents = None
         self._recall_backend_registry = None
         self._recall_backend = None
         self._channel_service = None

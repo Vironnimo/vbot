@@ -289,8 +289,9 @@ class IntegrationPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_names: object = None,
         session_tool_grants: object = (),
+        request_block_definitions: object = (),
     ) -> str:
-        del agent_project_id
+        del agent_project_id, request_block_definitions
         return f"System prompt for {agent.id}"
 
     def render_soul(self, _agent: IntegrationAgent, *, on_read: object = None) -> str:

@@ -1561,7 +1561,18 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     # The Home Assistant tools ship as a bundled extension; they are always
     # registered (readiness only hides them from model-facing surfaces until a
     # token is set), so they appear in the registered inventory here.
-    assert [tool.name for tool in runtime.tools.list_tools()] == [
+    registry = runtime.extensions
+    assert registry is not None
+    hidden_session_tools = {
+        declaration.name
+        for record in registry.records()
+        if record.status == "loaded"
+        for declaration in record.declarations.tools
+        if declaration.session_scoped
+    }
+    assert [
+        tool.name for tool in runtime.tools.list_tools() if tool.name not in hidden_session_tools
+    ] == [
         "analyze_image",
         "bash",
         "browser",
@@ -1595,6 +1606,10 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "web_search",
         "write",
     ]
+    assert hidden_session_tools <= {tool.name for tool in runtime.tools.list_tools()}
+    assert not hidden_session_tools & {
+        tool.name for tool in runtime.tools.list_tools(include_catalog_hidden=False)
+    }
     assert [skill.name for skill in runtime.skills.list_all()] == [
         "browser-use",
         "coding-agents",

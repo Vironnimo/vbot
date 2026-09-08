@@ -155,6 +155,17 @@ class WaitingWorkAdmission:
 
 
 @dataclass(frozen=True, slots=True)
+class RunExecutionOwner:
+    """Immutable Extension-owned execution identity carried by a Run."""
+
+    extension: str
+    group_id: str
+    participant_id: str
+    generation_id: str
+    epoch: str
+
+
+@dataclass(frozen=True, slots=True)
 class RunAdmission:
     """Immutable admission decisions carried with one inbound Run request.
 
@@ -168,6 +179,8 @@ class RunAdmission:
     run_kind: RunKind = RunKind.USER
     contributes_to_agent_activity: bool = True
     work_id: str | None = None
+    owner: RunExecutionOwner | None = None
+    input_id: str | None = None
 
 
 # Module-level singleton so ``admission`` can default without a call at the
@@ -265,6 +278,8 @@ class Run:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         work_id: str | None = None,
+        execution_owner: RunExecutionOwner | None = None,
+        execution_input_id: str | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -275,6 +290,8 @@ class Run:
         # run). Carried solely so the executor's session I/O finds the
         # project-scoped transcript path — it is not part of the run/queue key.
         self.project_id = project_id
+        self.execution_owner = execution_owner
+        self.execution_input_id = execution_input_id
         # Internal working context. This never participates in Session identity,
         # public addressing, events, or queue keys.
         self.working_project_id = working_project_id
@@ -598,6 +615,7 @@ class ChatRunManager:
         completed_run_retention_limit: int = DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
         run_event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         waiting_work_limit: int = DEFAULT_WAITING_WORK_LIMIT,
+        admission_validator: Callable[[SessionAddress, RunAdmission], None] | None = None,
     ) -> None:
         if completed_run_retention_limit < 1:
             raise ValueError("completed_run_retention_limit must be positive")
@@ -618,6 +636,7 @@ class ChatRunManager:
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
         self._closed = False
+        self._admission_validator = admission_validator
 
     def reserve_waiting_work(
         self,
@@ -784,7 +803,7 @@ class ChatRunManager:
         async with self._lock:
             if self._closed:
                 raise RunAdmissionBlockedError("run manager is shutting down")
-            self._ensure_run_admission_allowed_locked(address, admission.working_project_id)
+            self._ensure_run_admission_allowed_locked(address, admission)
             active_run = self._active_by_session.get(address)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
                 raise ActiveRunError(f"session already has an active run: {address.session_id}")
@@ -836,7 +855,7 @@ class ChatRunManager:
                 item.future.cancel()
                 raise RunAdmissionBlockedError("run manager is shutting down")
             try:
-                self._ensure_run_admission_allowed_locked(address, admission.working_project_id)
+                self._ensure_run_admission_allowed_locked(address, admission)
             except RunAdmissionBlockedError:
                 item.future.cancel()
                 raise
@@ -1053,12 +1072,14 @@ class ChatRunManager:
         return self._has_activity_for_session_locked(address)
 
     def _ensure_run_admission_allowed_locked(
-        self, address: SessionAddress, working_project_id: str | None
+        self, address: SessionAddress, admission: RunAdmission
     ) -> None:
-        if self._run_admission_is_guarded_locked(address, working_project_id):
+        if self._run_admission_is_guarded_locked(address, admission.working_project_id):
             raise RunAdmissionBlockedError(
                 "run admission is blocked while its Session, Agent, or Project is transitioning"
             )
+        if self._admission_validator is not None:
+            self._admission_validator(address, admission)
 
     def _run_admission_is_guarded_locked(
         self, address: SessionAddress, working_project_id: str | None
@@ -1232,6 +1253,12 @@ class ChatRunManager:
                 if not queue:
                     self._queues.pop(address, None)
 
+                try:
+                    self._ensure_run_admission_allowed_locked(address, item.admission)
+                except RunAdmissionBlockedError as error:
+                    item.future.set_exception(error)
+                    continue
+
                 run = self._start_run_locked(
                     address=address,
                     executor=item.executor,
@@ -1263,6 +1290,8 @@ class ChatRunManager:
             run_kind=admission.run_kind,
             contributes_to_agent_activity=admission.contributes_to_agent_activity,
             work_id=admission.work_id,
+            execution_owner=admission.owner,
+            execution_input_id=admission.input_id,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

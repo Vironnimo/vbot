@@ -13,7 +13,12 @@ from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.sessions import SessionAddress
 from server.app import create_app
-from server.file_delivery import FILE_SNIFF_BYTES, FILE_URL_PREFIX, FileDelivery
+from server.file_delivery import (
+    EXTENSION_ASSET_URL_PREFIX,
+    FILE_SNIFF_BYTES,
+    FILE_URL_PREFIX,
+    FileDelivery,
+)
 from server.rpc.payloads import _visible_message
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
@@ -535,3 +540,59 @@ def test_tool_image_projection_rejects_non_absolute_paths(tmp_path: Path) -> Non
         }
     )
     assert projected == {"images": []}
+
+
+def test_extension_page_capability_is_epoch_bound_and_scopes_assets(tmp_path: Path) -> None:
+    root = tmp_path / "web"
+    root.mkdir()
+    (root / "index.html").write_text("<script src='app.js'></script>", encoding="utf-8")
+    (root / "app.js").write_text("export {};", encoding="utf-8")
+    delivery = FileDelivery(secret=b"page-secret")
+
+    page = delivery.open_extension_page(
+        extension="fixture", page="main", epoch="epoch-1", entry=root / "index.html"
+    )
+    assert page["url"].startswith(EXTENSION_ASSET_URL_PREFIX)
+    token = page["token"]
+    claims, asset = delivery.extension_page_asset(token, "app.js")
+    assert claims["extension"] == "fixture"
+    assert claims["epoch"] == "epoch-1"
+    assert asset.path == root / "app.js"
+    with pytest.raises(ValueError):
+        delivery.extension_page_asset(token, "../private.py")
+    with pytest.raises(ValueError):
+        delivery.extension_page_asset(token, "app.py")
+    policy = delivery.extension_page_headers("http://localhost:8420/", token)[
+        "Content-Security-Policy"
+    ]
+    assert "connect-src 'none'" in policy
+    assert "https:" not in policy
+
+
+def test_extension_run_capability_is_short_lived_and_identity_bound(monkeypatch) -> None:
+    delivery = FileDelivery(secret=b"x" * 32)
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1000)
+
+    capability = delivery.open_extension_run(
+        extension="swarm",
+        page="overview",
+        epoch="epoch-a",
+        group_id="group-a",
+        run_id="run-a",
+        after_sequence=4,
+    )
+    token = capability["url"].split("/")[3]
+
+    assert capability["url"].endswith("/events")
+    assert delivery.extension_run_claims(token) == {
+        "extension": "swarm",
+        "page": "overview",
+        "epoch": "epoch-a",
+        "group_id": "group-a",
+        "run_id": "run-a",
+        "after_sequence": 4,
+        "expires_at": 1120,
+    }
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1121)
+    with pytest.raises(ValueError, match="unavailable"):
+        delivery.extension_run_claims(token)

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from core.chat.errors import ChatSessionError
-from core.runs import RunKind
+from core.runs import RunExecutionOwner, RunKind
 from core.sessions.errors import FtsHealth, SessionPageCursorError
 from core.sessions.store import SessionStore
 from core.settings import is_valid_agent_id, is_valid_project_id
@@ -81,6 +81,49 @@ class SessionAddress:
 class SessionIdentityReferenceUpdate:
     address: SessionAddress
     previous_metadata: JsonObject
+
+
+@dataclass(frozen=True)
+class TemporarySessionBinding:
+    address: SessionAddress
+    generation_id: str
+    owner_name: str
+    group_id: str
+    participant_id: str
+    config: JsonObject
+
+
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    receipt_id: str
+    content_hash: str
+    effect_kind: str
+    carrier_location: JsonObject
+
+
+@dataclass(frozen=True)
+class OwnedRunRecord:
+    """Canonical execution attribution; never part of copied Message context."""
+
+    record_key: int
+    address: SessionAddress
+    generation_id: str
+    run_id: str
+    owner: RunExecutionOwner
+    start_sequence: int
+    terminal_status: str | None
+    terminal_sequence: int | None
+    input_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunStartBoundary:
+    """One canonical owner-backed Run start for exact derived projections."""
+
+    address: SessionAddress
+    generation_id: str
+    run_id: str
+    start_sequence: int
 
 
 @dataclass(frozen=True)
@@ -1482,6 +1525,247 @@ class ChatSessionManager:
         state = self._store.state(address)
         return str(state["generation_id"]), int(state["history_revision"])
 
+    def create_bound_temporary_session(
+        self,
+        address: SessionAddress,
+        *,
+        owner_name: str,
+        group_id: str,
+        participant_id: str,
+        config: JsonObject,
+    ) -> TemporarySessionBinding:
+        generation_id = self._store.create_bound_temporary_session(
+            address,
+            owner_name=owner_name,
+            group_id=group_id,
+            participant_id=participant_id,
+            config=config,
+        )
+        binding = self.temporary_binding_by_participant(
+            owner_name=owner_name, group_id=group_id, participant_id=participant_id
+        )
+        if binding is None or binding.generation_id != generation_id:
+            raise ChatSessionError("temporary Session binding was not retained")
+        return binding
+
+    async def create_bound_temporary_session_async(
+        self, *args: Any, **kwargs: Any
+    ) -> TemporarySessionBinding:
+        return await _run_session_io(self.create_bound_temporary_session, *args, **kwargs)
+
+    def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
+        row = self._store.temporary_binding(address)
+        if row is None:
+            return None
+        return TemporarySessionBinding(
+            address,
+            str(row["generation_id"]),
+            str(row["owner_name"]),
+            str(row["group_id"]),
+            str(row["participant_id"]),
+            _decode_state_object(str(row["config_json"]), "temporary Session config"),
+        )
+
+    def temporary_binding_by_participant(
+        self, *, owner_name: str, group_id: str, participant_id: str
+    ) -> TemporarySessionBinding | None:
+        result = self._store.temporary_binding_by_participant(
+            owner_name=owner_name, group_id=group_id, participant_id=participant_id
+        )
+        if result is None:
+            return None
+        address, row = result
+        return TemporarySessionBinding(
+            address,
+            str(row["generation_id"]),
+            str(row["owner_name"]),
+            str(row["group_id"]),
+            str(row["participant_id"]),
+            _decode_state_object(str(row["config_json"]), "temporary Session config"),
+        )
+
+    async def temporary_bindings_async(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        after: str = "",
+        limit: int = 100,
+    ) -> builtins.list[TemporarySessionBinding]:
+        rows = await _run_session_io(
+            lambda: self._store.temporary_bindings(
+                owner_name=owner_name,
+                group_id=group_id,
+                after=after,
+                limit=limit,
+            )
+        )
+        return [
+            TemporarySessionBinding(
+                address,
+                str(row["generation_id"]),
+                str(row["owner_name"]),
+                str(row["group_id"]),
+                str(row["participant_id"]),
+                _decode_state_object(str(row["config_json"]), "temporary Session config"),
+            )
+            for address, row in rows
+        ]
+
+    async def append_messages_with_receipts_async(
+        self,
+        address: SessionAddress,
+        *,
+        generation_id: str,
+        owner_name: str,
+        messages: Sequence[ChatMessage],
+        receipts: Sequence[tuple[int, str, str, str, str]],
+        deduplicate_carrier: bool = False,
+    ) -> None:
+        await _run_session_io(
+            lambda: self.append_messages_with_receipts(
+                address,
+                generation_id=generation_id,
+                owner_name=owner_name,
+                messages=messages,
+                receipts=receipts,
+                deduplicate_carrier=deduplicate_carrier,
+            )
+        )
+
+    def append_messages_with_receipts(
+        self,
+        address: SessionAddress,
+        *,
+        generation_id: str,
+        owner_name: str,
+        messages: Sequence[ChatMessage],
+        receipts: Sequence[tuple[int, str, str, str, str]],
+        deduplicate_carrier: bool = False,
+    ) -> None:
+        self._store.append_messages_with_receipts(
+            address,
+            generation_id=generation_id,
+            owner_name=owner_name,
+            messages=messages,
+            receipts=receipts,
+            deduplicate_carrier=deduplicate_carrier,
+        )
+
+    async def lookup_delivery_receipt(
+        self,
+        address: SessionAddress,
+        generation_id: str,
+        owner_name: str,
+        receipt_id: str,
+    ) -> DeliveryReceipt | None:
+        row = await _run_session_io(
+            lambda: self._store.delivery_receipt(
+                address,
+                generation_id=generation_id,
+                owner_name=owner_name,
+                receipt_id=receipt_id,
+            )
+        )
+        if row is None:
+            return None
+        return DeliveryReceipt(
+            str(row["receipt_id"]),
+            str(row["content_hash"]),
+            str(row["effect_kind"]),
+            {"kind": str(row["carrier_kind"]), "sequence": int(row["carrier_sequence"])},
+        )
+
+    async def record_run_owner_async(
+        self,
+        address: SessionAddress,
+        *,
+        run_id: str,
+        owner: RunExecutionOwner,
+        input_id: str | None = None,
+    ) -> None:
+        await _run_session_io(
+            lambda: self._store.record_run_owner(
+                address, run_id=run_id, owner=owner, input_id=input_id
+            )
+        )
+
+    async def record_run_start_async(self, address: SessionAddress, *, run_id: str) -> None:
+        """Persist one normal Run admission boundary before it appends output."""
+        await _run_session_io(lambda: self._store.record_run_start(address, run_id=run_id))
+
+    def owned_runs(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        participant_id: str | None = None,
+        after: int = 0,
+        limit: int = 100,
+    ) -> builtins.list[OwnedRunRecord]:
+        rows = self._store.owned_runs(
+            owner_name=owner_name,
+            group_id=group_id,
+            participant_id=participant_id,
+            after=after,
+            limit=limit,
+        )
+        return [
+            OwnedRunRecord(
+                record_key=int(row["record_key"]),
+                address=SessionAddress(
+                    row["project_id"] or None, row["agent_id"], row["session_id"]
+                ),
+                generation_id=str(row["generation_id"]),
+                run_id=str(row["run_id"]),
+                owner=RunExecutionOwner(
+                    str(row["owner_name"]),
+                    str(row["group_id"]),
+                    str(row["participant_id"]),
+                    str(row["participant_generation_id"]),
+                    str(row["epoch"]),
+                ),
+                start_sequence=int(row["start_sequence"]),
+                terminal_status=row["terminal_status"],
+                terminal_sequence=row["terminal_sequence"],
+                input_id=row["input_id"],
+            )
+            for row in rows
+        ]
+
+    async def owned_runs_async(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        participant_id: str | None = None,
+        after: int = 0,
+        limit: int = 100,
+    ) -> builtins.list[OwnedRunRecord]:
+        return await _run_session_io(
+            lambda: self.owned_runs(
+                owner_name=owner_name,
+                group_id=group_id,
+                participant_id=participant_id,
+                after=after,
+                limit=limit,
+            )
+        )
+
+    def run_start_boundaries(
+        self, addresses: Sequence[SessionAddress]
+    ) -> builtins.list[RunStartBoundary]:
+        rows = self._store.run_start_boundaries(addresses)
+        return [
+            RunStartBoundary(
+                SessionAddress(row["project_id"] or None, row["agent_id"], row["session_id"]),
+                str(row["generation_id"]),
+                str(row["run_id"]),
+                int(row["start_sequence"]),
+            )
+            for row in rows
+        ]
+
     def history_revision(self, address: SessionAddress) -> int:
         return int(self._store.state(address)["history_revision"])
 
@@ -1555,6 +1839,7 @@ class ChatSessionManager:
                 target_agent_id or source.agent_id,
                 target_project_id,
                 strip_meta_keys,
+                target_agent_id is not None,
             )
 
     def _fork(
@@ -1563,6 +1848,7 @@ class ChatSessionManager:
         target_agent_id: str,
         target_project_id: str | None,
         strip_meta_keys: frozenset[str],
+        target_explicit: bool,
     ) -> ChatSession:
         _validate_agent_id(target_agent_id)
         same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
@@ -1592,7 +1878,13 @@ class ChatSessionManager:
                 "message_count": message_count,
             }
 
-        target = self._store.fork(source, target, prepare_metadata, generate_id=True)
+        target = self._store.fork(
+            source,
+            target,
+            prepare_metadata,
+            generate_id=True,
+            allow_owner_managed_source=target_explicit and not same_scope,
+        )
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:

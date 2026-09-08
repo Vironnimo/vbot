@@ -196,8 +196,9 @@ class StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_names: Any = None,
         session_tool_grants: Any = (),
+        request_block_definitions: Any = (),
     ) -> str:
-        del agent_project_id
+        del agent_project_id, request_block_definitions
         return f"System for {agent.id}"
 
     def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:

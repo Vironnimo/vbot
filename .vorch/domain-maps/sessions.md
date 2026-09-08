@@ -22,6 +22,18 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 **Definition:** An opaque per-Session lineage value Chat passes separately from Session identity; Provider adapters decide whether their wire can use it.
 **Not:** A Session id or generation id. Compaction rotates it to break prior prompt prefixes.
 
+## Extension-owned execution
+
+Temporary Session bindings, delivery receipts, Run ownership and Run starts live in
+normalized relations outside open metadata and copied Messages. Exact address plus
+Session generation and registered owner establish authority; forked history does
+not copy these capabilities. Carrier Messages and delivery receipts commit together.
+Canonical Run starts delimit owned usage even when a later ordinary Run reuses the
+Session. These additions reconcile at schema generation 1 without rewriting prior
+Session rows (`schema.py`, `store.py`, `sessions.py`; `test_schema_reconcile.py`,
+`test_run_ownership.py`). The owner-bound creation/admission facade is
+`core/agents/temporary.py`; domain state belongs to the Extension.
+
 ## Storage Contract
 
 Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation and forking allocate inside the SQLite write transaction, checking live and archived addresses in the destination scope; caller-chosen ids remain exact opaque values. The public facade returns the committed address (`store.py`, `tests/core/sessions/test_sessions.py`).

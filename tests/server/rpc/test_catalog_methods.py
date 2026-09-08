@@ -335,6 +335,33 @@ def test_tool_list_includes_session_scoped_tools_with_activation_metadata() -> N
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
+def test_tool_list_hides_tools_excluded_from_public_catalog() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="private_session_tool",
+        description="Private Session capability",
+        parameters={"type": "object"},
+        handler=lambda _context, _arguments: tool_success({}),
+        session_scoped=True,
+        activation="session_grant",
+        catalog_visible=False,
+    )
+    registry.register(
+        name="read",
+        description="Read a file",
+        parameters={"type": "object"},
+        handler=lambda _context, _arguments: tool_success({}),
+    )
+
+    result = _list_tools(SimpleNamespace(runtime=SimpleNamespace(tools=registry)), {})
+
+    assert [tool["name"] for tool in result["tools"]] == ["read"]
+    assert [tool.name for tool in registry.list_tools(include_internal=True)] == [
+        "private_session_tool",
+        "read",
+    ]
+
+
 def test_tool_list_returns_not_ready_tools_with_ready_false() -> None:
     # tool.list now RETURNS the not-ready tool (no more hiding) — the picker styles
     # it from ``ready: false`` while the ready tools report ``ready: true``.
