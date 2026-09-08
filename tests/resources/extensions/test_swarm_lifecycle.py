@@ -259,8 +259,10 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(120)
 async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycle, tmp_path: Path):
     """Ordinary final replies leave all Sessions reachable without closing the group."""
+    # Forty real Runs include durable Session writes on slower Windows CI disks.
 
     profile = await lifecycle.service.store.save_profile(
         {
