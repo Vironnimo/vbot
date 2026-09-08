@@ -637,6 +637,8 @@ def test_shell_command_renders_exact_typed_shell_input() -> None:
     assert shlex.split(rendered) == ["/path with spaces/tool", *arguments]
 
 
+# Real shell startup can exceed 10 seconds on shared Windows CI runners.
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe", "sh", "bash"])
 def test_manual_launch_preserves_arguments_through_real_shell(shell: str) -> None:
     executable = shutil.which(shell)
@@ -672,19 +674,21 @@ def test_manual_launch_preserves_arguments_through_real_shell(shell: str) -> Non
             env=environment,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=60,
         )
         output = next(row for row in result.stdout.splitlines() if row.startswith("["))
     else:
         flags = ["-NoProfile", "-NonInteractive", "-Command"] if shell.endswith(".exe") else ["-c"]
         result = subprocess.run(
-            [executable, *flags, line], env=environment, capture_output=True, text=True, timeout=10
+            [executable, *flags, line], env=environment, capture_output=True, text=True, timeout=60
         )
         output = result.stdout.strip()
     assert result.returncode == 0, result.stderr
     assert ast.literal_eval(output) == arguments
 
 
+# Real shell startup can exceed 10 seconds on shared Windows CI runners.
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe"])
 def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
     shell_path = shutil.which(shell)
@@ -699,14 +703,14 @@ def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
             input=line + "\nexit\n",
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=60,
         )
     else:
         result = subprocess.run(
             [shell_path, "-NoProfile", "-NonInteractive", "-Command", line],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=60,
         )
     assert result.returncode == 0, result.stderr
     assert any(row.startswith("PowerShell ") for row in result.stdout.splitlines())
