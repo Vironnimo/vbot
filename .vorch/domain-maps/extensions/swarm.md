@@ -65,6 +65,8 @@ creation, opening-message audience and the main-discussion announcement commit
 atomically. Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page, and continuation moves to older posts.
+The Board UI reverses each page for newest-first display and appends older pages
+below it; this presentation does not change the Store or Tool read order.
 Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
 
 Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
@@ -147,6 +149,8 @@ host-provided timezone and separates the author/time header from the body.
 The wrapping participant roster and modal post action sit above the messages;
 the complete User Prompt stays in the header, status beside the tabs, and the
 Swarm id under Usage (SwarmPage.test.js).
+Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
+and at most one locale-formatted decimal (SwarmPage.test.js).
 
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
