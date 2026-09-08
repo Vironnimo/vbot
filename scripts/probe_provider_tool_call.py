@@ -4474,6 +4474,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
     )
     from core.chat import ChatMessage
     from core.extensions import ExtensionRegistry
+    from core.extensions.extensions import purge_extension_modules
     from core.extensions.operations import ExtensionHost
     from core.runs import ChatRunManager, RunExecutionOwner
     from core.sessions import ChatSessionManager
@@ -4498,6 +4499,9 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             run_manager=manager,
         )
         extension_root = Path(__file__).resolve().parents[1] / "resources" / "extensions"
+        # Runtime may have imported a different checkout's bundled package already.
+        # Reload the isolated fixture from this script's own source tree.
+        purge_extension_modules()
         extensions = ExtensionRegistry.load(
             root / "extensions",
             bundled_dir=extension_root,
@@ -4651,7 +4655,37 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     True,
                 ),
                 ("post_unicode", {**post, "text": "Grüße 日本語", "request_id": "unicode"}, True),
+                (
+                    "reply_inferred",
+                    {**post, "reply_to": topic["opening_post_id"], "request_id": "inferred"},
+                    True,
+                ),
                 ("create", create, True),
+                (
+                    "create_empty_pings",
+                    {**create, "recipients": [], "request_id": "create-empty"},
+                    True,
+                ),
+                (
+                    "create_ping",
+                    {**create, "recipients": [peer, peer], "request_id": "create-ping"},
+                    True,
+                ),
+                (
+                    "create_ping_replay",
+                    {**create, "recipients": [peer, peer], "request_id": "create-ping"},
+                    True,
+                ),
+                (
+                    "create_ping_conflict",
+                    {**create, "recipients": [], "request_id": "create-ping"},
+                    False,
+                ),
+                (
+                    "create_foreign_ping",
+                    {**create, "recipients": ["foreign"], "request_id": "create-foreign"},
+                    False,
+                ),
                 ("create_replay", create, True),
                 ("join", {"action": "join", "discussion_id": disc}, True),
                 ("join_replay", {"action": "join", "discussion_id": disc}, True),
@@ -4676,7 +4710,12 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 ("invalid_cursor", {"action": "list", "cursor": "invalid"}, False),
                 (
                     "reply_mismatch",
-                    {**post, "reply_to": topic["opening_post_id"], "request_id": "mismatch"},
+                    {
+                        **post,
+                        "discussion_id": main,
+                        "reply_to": topic["opening_post_id"],
+                        "request_id": "mismatch",
+                    },
                     False,
                 ),
             ]
@@ -4850,7 +4889,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                         ]
                     )
                 )
-            if args.swarm_case == "workflow":
+            if args.swarm_case in {"workflow", "unassisted"}:
                 return await _probe_swarm_workflow(
                     adapter, args, extensions, registry, service, sessions, context, binding, peer
                 )
@@ -5023,11 +5062,28 @@ async def _probe_swarm_workflow(
     profile = (await store.get_swarm(sid))["profile_snapshot"]
     context = replace(context, session_tool_grants=names)
     await store.record_run_started(sid, pid, run_id=context.run_id, expected_epoch=0)
+    unassisted = args.swarm_case == "unassisted"
+    peers = [row["id"] for row in (await store.get_swarm(sid))["participants"] if row["id"] != pid]
+    if unassisted:
+        for index, participant_id in enumerate(peers):
+            await store.post(
+                sid,
+                participant_id,
+                text="I suggest a short checklist covering factual accuracy, clarity, and "
+                "completeness. I agree to that approach and can review your contribution.",
+                request_id=f"unassisted-proposal-{index}",
+            )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": profile["instructions"]},
         {
             "role": "user",
-            "content": "Prepare a three-step checklist for reviewing a short text report with "
+            "content": (
+                "Work with your peers to agree on a three-step checklist for reviewing a "
+                "short text report. Incorporate their feedback and finish your contribution. "
+                "Keep the checklist in this conversation; no files are needed."
+            )
+            if unassisted
+            else "Prepare a three-step checklist for reviewing a short text report with "
             "your peers. Inspect the group and existing Board, introduce your approach, and "
             "join the existing Topic discussion. Create a review discussion containing your "
             "draft checklist and publicly ping a peer for feedback. Receive incoming messages "
@@ -5041,6 +5097,11 @@ async def _probe_swarm_workflow(
     receipts_verified = 0
     resumed = False
     finished = False
+    feedback_ids: set[str] = set()
+    published_ids: set[str] = set()
+    feedback_received = False
+    received_ids: set[str] = set()
+    published_after_feedback = False
     for step in range(32):
         async with asyncio.timeout(args.total_timeout):
             raw = await adapter.send(
@@ -5078,6 +5139,17 @@ async def _probe_swarm_workflow(
                 ChatMessage.tool(tool_call_id=call["id"], name=name, content=json.dumps(result))
             )
             if result["ok"]:
+                data = result["data"]
+                received = {entry["id"] for entry in data.get("entries", [])}
+                received.update(entry["id"] for entry in data.get("recent", {}).get("entries", []))
+                received_ids.update(received)
+                if feedback_ids and feedback_ids.issubset(received_ids):
+                    feedback_received = True
+                if name == "swarm_board" and arguments.get("action") in {"post", "create"}:
+                    post_id = data.get("post_id", data.get("opening_post_id"))
+                    if post_id and post_id not in published_ids:
+                        published_ids.add(post_id)
+                        published_after_feedback |= feedback_received
                 seen.add((name, arguments.get("action", "")))
                 receipts.extend(
                     (index, *receipt, "tool") for receipt in call_context._delivery_receipts
@@ -5112,6 +5184,18 @@ async def _probe_swarm_workflow(
                     "Workflow delivery did not reconcile against its canonical carrier"
                 )
             receipts_verified += 1
+        if unassisted and published_ids and not feedback_ids:
+            for index, participant_id in enumerate(peers):
+                feedback = await store.post(
+                    sid,
+                    participant_id,
+                    text="I reviewed your contribution. Please make the checklist actionable: "
+                    "verify consequential claims against sources, check whether the intended "
+                    "reader can follow it, and check the report against the requested scope. "
+                    "I agree to conclude once those checks appear in the final checklist.",
+                    request_id=f"unassisted-feedback-{index}",
+                )
+                feedback_ids.add(feedback["post_id"])
         decision = await store.reconcile_tool_batch(
             sid,
             pid,
@@ -5160,12 +5244,17 @@ async def _probe_swarm_workflow(
         ("swarm_board", "join"),
         ("swarm_inbox", ""),
     }
+    if unassisted:
+        required = {("swarm_state", "done")}
+    coordinated = feedback_received and published_after_feedback if unassisted else resumed
     strict_count = sum(
         item.get("strict") is True
         for item in render_tool_definitions(definitions, profile=_expected_profile(args))
     )
     return {
-        "scenario": "swarm_workflow",
+        "scenario": "swarm_unassisted" if unassisted else "swarm_workflow",
+        "feedback_received": feedback_received,
+        "published_after_feedback": published_after_feedback,
         "model": args.model,
         "strict_true_tool_count": strict_count,
         "calls": rows,
@@ -5176,7 +5265,7 @@ async def _probe_swarm_workflow(
         "scope": "Model choices, Board effects and canonical carriers; "
         "actual Chat lifecycle is tested separately",
         "passed": required.issubset(seen)
-        and resumed
+        and coordinated
         and finished
         and receipts_verified > 0
         and strict_count == 0,

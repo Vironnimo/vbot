@@ -664,6 +664,7 @@ class SwarmStore:
         title: str,
         text: str,
         request_id: str,
+        recipients: Sequence[str] = (),
         expected_epoch: int | None = None,
     ) -> Json:
         _text(title, "title", 120)
@@ -676,6 +677,7 @@ class SwarmStore:
             title,
             text,
             request_id,
+            _recipient_ids(recipients),
             expected_epoch,
         )
 
@@ -2700,7 +2702,17 @@ class SwarmStore:
                 "interrupted",
             }:
                 raise SwarmStoreError("participant_inactive")
-            discussion_id_value = discussion_id or self._main(connection, swarm_id)
+            target = None
+            if reply_to is not None:
+                target = connection.execute(
+                    "SELECT discussion_id FROM posts WHERE id=? AND swarm_id=?",
+                    (reply_to, swarm_id),
+                ).fetchone()
+                if target is None:
+                    raise SwarmStoreError("message_not_found")
+            discussion_id_value = discussion_id or (
+                target["discussion_id"] if target is not None else self._main(connection, swarm_id)
+            )
             self._discussion(connection, swarm_id, discussion_id_value)
             payload = {
                 "discussion_id": discussion_id_value,
@@ -2720,15 +2732,8 @@ class SwarmStore:
                 outcome = _load(replay["outcome"])
                 outcome["replayed"] = True
                 return outcome
-            if reply_to is not None:
-                target = connection.execute(
-                    "SELECT discussion_id FROM posts WHERE id=? AND swarm_id=?",
-                    (reply_to, swarm_id),
-                ).fetchone()
-                if target is None:
-                    raise SwarmStoreError("message_not_found")
-                if target["discussion_id"] != discussion_id_value:
-                    raise SwarmStoreError("reply_discussion_mismatch")
+            if target is not None and target["discussion_id"] != discussion_id_value:
+                raise SwarmStoreError("reply_discussion_mismatch")
             members = connection.execute(
                 "SELECT participant_id FROM memberships WHERE discussion_id=?",
                 (discussion_id_value,),
@@ -2811,6 +2816,7 @@ class SwarmStore:
         title: str,
         text: str,
         request_id: str,
+        recipients: tuple[str, ...],
         expected_epoch: int | None,
     ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
@@ -2820,7 +2826,7 @@ class SwarmStore:
             participant = self._participant(connection, swarm_id, participant_id)
             if participant["state"] in {"done", "blocked", "cancelled", "failed", "interrupted"}:
                 raise SwarmStoreError("participant_inactive")
-            payload = {"title": title, "text": text}
+            payload = {"title": title, "text": text, "recipients": recipients}
             scope = f"create:{swarm_id}:{participant_id}"
             replay = connection.execute(
                 "SELECT payload_hash,outcome FROM requests WHERE scope=? AND request_id=?",
@@ -2838,6 +2844,21 @@ class SwarmStore:
                     (swarm_id,),
                 ).fetchone()[0]
             )
+            for recipient in recipients:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM participants WHERE swarm_id=? AND id=?",
+                        (swarm_id, recipient),
+                    ).fetchone()
+                    is None
+                ):
+                    raise SwarmStoreError("invalid_recipient")
+            inactive = [
+                recipient
+                for recipient in recipients
+                if self._participant(connection, swarm_id, recipient)["state"]
+                in {"done", "cancelled", "finishing"}
+            ]
             discussion_id = new_id("dsc")
             connection.execute(
                 "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,0,?)",
@@ -2854,7 +2875,7 @@ class SwarmStore:
                 discussion_id,
                 text,
                 None,
-                (),
+                recipients,
                 "participant",
                 None,
             )
@@ -2876,6 +2897,7 @@ class SwarmStore:
                 "opening_post_id": opening_id,
                 "main_announcement_id": announcement_id,
                 "joined": True,
+                "inactive_recipients": inactive,
             }
             connection.execute(
                 "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -2920,17 +2942,27 @@ class SwarmStore:
                 _now(),
             ),
         )
-        for row in connection.execute(
-            "SELECT participant_id FROM memberships WHERE discussion_id=?", (discussion_id,)
-        ):
-            if row["participant_id"] != sender_id:
-                route = (
-                    "main" if discussion_id == self._main(connection, swarm_id) else "discussion"
-                )
-                connection.execute(
-                    "INSERT INTO recipients(post_id,participant_id,route_class) VALUES(?,?,?)",
-                    (post_id, row["participant_id"], route),
-                )
+        audience = {
+            row["participant_id"]: (
+                "main" if discussion_id == self._main(connection, swarm_id) else "discussion"
+            )
+            for row in connection.execute(
+                "SELECT participant_id FROM memberships WHERE discussion_id=?", (discussion_id,)
+            )
+        }
+        audience.update(dict.fromkeys(recipients, "ping"))
+        audience.pop(sender_id, None)
+        for recipient, route in audience.items():
+            if self._participant(connection, swarm_id, recipient)["state"] in {
+                "done",
+                "cancelled",
+                "finishing",
+            }:
+                continue
+            connection.execute(
+                "INSERT INTO recipients(post_id,participant_id,route_class) VALUES(?,?,?)",
+                (post_id, recipient, route),
+            )
         return post_id
 
     def _membership(

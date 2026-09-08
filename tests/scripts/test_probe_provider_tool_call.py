@@ -55,12 +55,12 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
         async def send(self, messages, **_kwargs):
             results = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
             roster = next(
-                (item["data"] for item in results if item.get("data", {}).get("self")), {}
+                (item["data"] for item in results if (item.get("data") or {}).get("self")), {}
             )
             peer = next(
                 (
                     row["id"]
-                    for row in roster.get("participants", [])
+                    for row in roster.get("roster", [])
                     if row["id"] != roster.get("self", {}).get("id")
                 ),
                 "",
@@ -1541,3 +1541,52 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
             assert case.startswith("invalid_")
         else:
             assert not case.startswith("invalid_")
+
+
+def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
+    class Adapter:
+        def __init__(self, revise):
+            self.step = 0
+            self.revise = revise
+
+        async def send(self, messages, **_kwargs):
+            prompt = next(row["content"] for row in messages if row["role"] == "user")
+            assert "swarm_board" not in prompt and "swarm_state" not in prompt
+            calls = [
+                ("swarm_inbox", {}),
+                ("swarm_board", {"action": "post", "text": "Draft", "request_id": "draft"}),
+                ("swarm_inbox", {}),
+            ]
+            if self.revise:
+                calls.append(
+                    (
+                        "swarm_board",
+                        {"action": "post", "text": "Revised checklist", "request_id": "revision"},
+                    )
+                )
+            calls.append(("swarm_state", {"action": "done", "summary": "Checklist reviewed"}))
+            if self.step >= len(calls):
+                return {"content": "Finished"}
+            name, arguments = calls[self.step]
+            self.step += 1
+            return {"tool_calls": [{"id": str(self.step), "name": name, "arguments": arguments}]}
+
+        def normalize_response(self, raw, **_kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(
+        [
+            "--scenario",
+            "swarm_tool",
+            "--swarm-case",
+            "unassisted",
+            "--profile",
+            "explicit_non_strict",
+        ]
+    )
+    incomplete = asyncio.run(PROBE._probe_swarm_tool(Adapter(False), args))
+    assert incomplete["feedback_received"]
+    assert not incomplete["passed"]
+    complete = asyncio.run(PROBE._probe_swarm_tool(Adapter(True), args))
+    assert complete["passed"]
+    assert complete["published_after_feedback"]

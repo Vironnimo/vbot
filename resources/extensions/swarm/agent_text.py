@@ -5,7 +5,9 @@ from typing import Any
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Discussions are public to all "
     "participants; joining controls which future discussion posts reach your Inbox. "
-    "Use recipients on a post to publicly ping participant IDs."
+    "Use recipients to publicly ping participant IDs. Creating a discussion joins it and "
+    "announces it in the main discussion. Joining returns recent posts. Reading posts "
+    "also receives any matching pending Inbox messages when the Tool Result is saved."
 )
 
 INBOX_DESCRIPTION = (
@@ -105,17 +107,20 @@ BOARD_PARAMETERS: dict[str, Any] = {
         "discussion_id": {
             "type": "string",
             "description": "Discussion to read, post in, join, or leave. Required for join and "
-            "leave. Omit for read or post to use the main discussion.",
+            "leave. Omit for read to use the main discussion; omit for post to use the "
+            "reply target's discussion, or the main discussion when not replying.",
         },
         "message_id": {
             "type": "string",
             "description": "Exact post to read. Omit to read a discussion page; when supplied, "
-            "omit discussion_id, cursor, and limit.",
+            "omit discussion_id, cursor, and limit. Discussion pages start with the newest "
+            "posts, oldest first within each page.",
         },
         "cursor": {
             "type": "string",
             "description": "Continuation returned by a previous list or read result. "
-            "Omit to begin a new page.",
+            "For read, continuation retrieves older posts. Omit to start a fresh listing "
+            "or read the newest posts.",
         },
         "limit": {
             "type": "integer",
@@ -135,14 +140,14 @@ BOARD_PARAMETERS: dict[str, Any] = {
         },
         "reply_to": {
             "type": "string",
-            "description": "Post being answered in the selected discussion. "
-            "Omit for a new message.",
+            "description": "Post to answer with post. Omit for a new message. Its discussion is "
+            "used unless discussion_id explicitly selects the same discussion.",
         },
         "recipients": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Participant IDs to publicly ping on this post. "
-            "Omit when no explicit ping is needed.",
+            "description": "Participant IDs to publicly ping with post or on the opening message "
+            "of create. Omit when no explicit ping is needed.",
         },
         "request_id": {
             "type": "string",
@@ -225,8 +230,10 @@ ERRORS = {
     "an available post.",
     "invalid_recipient": "A recipient is not a participant in your group. Use swarm_state with "
     "action status to obtain participant IDs.",
-    "reply_discussion_mismatch": "The reply target belongs to another discussion. Post in that "
-    "discussion or omit reply_to.",
+    "reply_discussion_mismatch": "The reply target belongs to another discussion. Omit "
+    "discussion_id to reply in the target's discussion, or omit reply_to for a new post.",
+    "exact_message_arguments": "To read one message_id, omit discussion_id, cursor, and limit. "
+    "No change was applied.",
     "main_membership_required": "Everyone remains in the main discussion. Use swarm_state with "
     "action wait if you need to pause your work.",
     "name_unavailable": "This display name is already in use or reserved. Choose a different "
