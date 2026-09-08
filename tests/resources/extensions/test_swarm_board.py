@@ -376,3 +376,122 @@ async def test_resume_recovers_after_missing_binding_creation_failure(board, mon
     assert len(resumed["runs"]) == len(board.bindings)
     assert all("run_id" in admission and "error" not in admission for admission in resumed["runs"])
     assert await board.groups.list(swarm_id) == await original_list(swarm_id)
+
+
+@pytest.mark.asyncio
+async def test_create_pings_opening_atomically_without_joining_recipients(board):
+    peer = board.bindings[1].participant_id
+    arguments = {
+        "action": "create",
+        "title": "Review",
+        "text": "Please review this draft",
+        "recipients": [peer, peer],
+        "request_id": "create-ping",
+    }
+    created, _ = await call(board, arguments)
+    assert created["ok"]
+    data = created["data"]
+    inbox = await board.store.prepare_inbox_delivery(board.swarm["id"], peer)
+    assert [entry["id"] for entry in inbox["entries"]] == [
+        data["opening_post_id"],
+        data["main_announcement_id"],
+    ]
+    discussions = await board.store.list_discussions(board.swarm["id"], peer)
+    assert not next(row for row in discussions.entries if row["id"] == data["discussion_id"])[
+        "joined"
+    ]
+    replay, _ = await call(board, arguments)
+    assert replay["data"]["replayed"]
+    conflict, _ = await call(board, {**arguments, "recipients": []})
+    assert conflict["error"]["code"] == "request_conflict"
+    invalid, _ = await call(
+        board, {**arguments, "recipients": [peer, "foreign"], "request_id": "bad"}
+    )
+    assert invalid["error"]["code"] == "invalid_recipient"
+    assert (
+        await board.store.list_discussions(board.swarm["id"], peer)
+    ).entries == discussions.entries
+    assert (await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"] == inbox[
+        "entries"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(board):
+    created, _ = await call(
+        board, {"action": "create", "title": "Topic", "text": "Opening", "request_id": "topic"}
+    )
+    topic = created["data"]
+    arguments = {
+        "action": "post",
+        "text": "Answer",
+        "reply_to": topic["opening_post_id"],
+        "request_id": "answer",
+    }
+    reply, _ = await call(board, arguments, peer=1)
+    assert reply["data"]["discussion_id"] == topic["discussion_id"]
+    replay, _ = await call(board, {**arguments, "discussion_id": topic["discussion_id"]}, peer=1)
+    assert replay["data"]["replayed"]
+    mismatch, _ = await call(
+        board,
+        {**arguments, "discussion_id": board.swarm["main_discussion_id"], "request_id": "mismatch"},
+        peer=1,
+    )
+    assert mismatch["error"]["code"] == "reply_discussion_mismatch"
+    missing, _ = await call(
+        board, {**arguments, "reply_to": "foreign", "request_id": "foreign"}, peer=1
+    )
+    assert missing["error"]["code"] == "message_not_found"
+    assert (
+        len(
+            (
+                await board.store.read_posts(
+                    board.swarm["id"],
+                    board.bindings[0].participant_id,
+                    discussion_id=topic["discussion_id"],
+                )
+            ).entries
+        )
+        == 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_board_validation_identifies_the_field_before_any_effect(board):
+    from resources.extensions.swarm.extension import _validate_board
+    from resources.extensions.swarm.store import SwarmStoreError
+
+    for arguments, field in [
+        ({"action": "post", "text": "missing request"}, "request_id"),
+        ({"action": "list", "text": "inapplicable"}, "text"),
+        ({"action": "join"}, "discussion_id"),
+        ({"action": "list", "limti": 1}, "limti"),
+    ]:
+        with pytest.raises(SwarmStoreError) as error:
+            _validate_board(arguments)
+        assert error.value.field == field
+        context = replace(board.contexts[0], session_tool_grants=("swarm_board",))
+        result = await board.tools.dispatch(context, arguments, allowed_tools=["swarm_board"])
+        assert result["error"]["code"] == "invalid_arguments"
+        assert context._delivery_receipts == []
+    assert not (
+        await board.store.read_posts(board.swarm["id"], board.bindings[0].participant_id)
+    ).entries
+
+
+@pytest.mark.asyncio
+async def test_create_keeps_finished_peers_out_of_opening_and_announcement_delivery(board):
+    peer = board.bindings[1].participant_id
+    await board.store.set_participant_state(board.swarm["id"], peer, "cancelled")
+    created, _ = await call(
+        board,
+        {
+            "action": "create",
+            "title": "Review",
+            "text": "Opening",
+            "recipients": [peer],
+            "request_id": "inactive-create",
+        },
+    )
+    assert created["data"]["inactive_recipients"] == [peer]
+    assert not (await board.store.prepare_inbox_delivery(board.swarm["id"], peer))["entries"]

@@ -325,6 +325,7 @@ async def test_reply_and_participant_scope_are_checked(store: SwarmStore) -> Non
             started["swarm_id"],
             first,
             text="reply",
+            discussion_id=swarm["main_discussion_id"],
             reply_to=created["opening_post_id"],
             request_id="post-1",
         )
