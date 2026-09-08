@@ -514,7 +514,9 @@ async def test_human_post_wakes_waiting_participant_with_delivery_policy(
         {"swarm_id": started["swarm_id"], "text": "wake message", "request_id": "post"},
     )
     if wake:
-        async with asyncio.timeout(5):
+        # This guards a stuck wake, not a latency SLA. Parallel canonical SQLite
+        # fixtures may briefly occupy the worker pool on Windows.
+        async with asyncio.timeout(15):
             while len(lifecycle.runtime.adapter.requests) < 2:
                 await asyncio.sleep(0.01)
     else:

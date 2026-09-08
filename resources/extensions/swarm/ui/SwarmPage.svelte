@@ -61,15 +61,29 @@
     ['preparing', 'running', 'waiting', 'needs_attention', 'stopping'].includes(
       state,
     );
+  const resumableParticipantState = (state) =>
+    [
+      'prepared',
+      'idle',
+      'waiting',
+      'blocked',
+      'failed',
+      'interrupted',
+    ].includes(state);
+  const unfinishedParticipantState = (state) =>
+    !['completed', 'done', 'finishing'].includes(state);
   const canResume = $derived(
     selectedSwarm &&
-      selectedSwarm.state !== 'completed' &&
-      selectedSwarm.state !== 'stopping' &&
-      (selectedSwarm.participants ?? []).some((participant) =>
-        ['idle', 'waiting', 'blocked', 'failed', 'needs_attention'].includes(
-          participant.state,
-        ),
-      ),
+      (['cancelled', 'interrupted'].includes(selectedSwarm.state)
+        ? (selectedSwarm.participants ?? []).some((participant) =>
+            unfinishedParticipantState(participant.state),
+          )
+        : selectedSwarm.state !== 'completed' &&
+          selectedSwarm.state !== 'stopping' &&
+          selectedSwarm.state !== 'preparing' &&
+          (selectedSwarm.participants ?? []).some((participant) =>
+            resumableParticipantState(participant.state),
+          )),
   );
   const tabs = $derived([
     { id: 'board', label: t('swarm.tabs.board', 'Board') },

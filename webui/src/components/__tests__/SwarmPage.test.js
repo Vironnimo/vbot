@@ -340,6 +340,44 @@ describe('SwarmPage', () => {
     );
   });
 
+  it.each([
+    ['cancelled', 'cancelled'],
+    ['interrupted', 'interrupted'],
+  ])(
+    'offers Resume for an unfinished %s Swarm participant',
+    async (swarmState, participantState) => {
+      const { bridge, operation } = createBridge();
+      const originalGet = operation.getMockImplementation();
+      operation.mockImplementation((name, arguments_) => {
+        if (name === 'swarms.get') {
+          return Promise.resolve({
+            swarm: {
+              ...structuredClone(swarm),
+              state: swarmState,
+              participants: [
+                {
+                  ...structuredClone(swarm.participants[0]),
+                  state: participantState,
+                },
+              ],
+            },
+          });
+        }
+        return originalGet(name, arguments_);
+      });
+      await render(bridge);
+      button('swr-a').click();
+      await new Promise((resolve) => setTimeout(resolve));
+      expect(button('Resume')).toBeDefined();
+      button('Resume').click();
+      await tick();
+      expect(operation).toHaveBeenCalledWith(
+        'swarms.resume',
+        expect.objectContaining({ swarm_id: 'swr-a' }),
+      );
+    },
+  );
+
   it('does not autosave delivery changes and stops only on an explicit click', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);

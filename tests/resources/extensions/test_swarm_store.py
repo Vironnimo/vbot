@@ -1544,8 +1544,24 @@ async def test_open_epoch_resume_excludes_busy_participant(store: SwarmStore) ->
     started = await _swarm(store, count=2)
     swarm_id = started["swarm_id"]
     waiting, busy = [item["id"] for item in (await store.get_swarm(swarm_id))["participants"]]
+    await store.set_swarm_state(swarm_id, "running")
     await store.set_participant_state(swarm_id, waiting, "waiting")
     await store.record_run_started(swarm_id, busy, run_id="busy", expected_epoch=0)
     resumed = await store.begin_resume(swarm_id, request_id="open", actor="test")
     assert resumed["reused_epoch"] and resumed["participant_ids"] == [waiting]
     assert (await store.get_swarm(swarm_id))["participants"][1]["lifecycle_run_id"] == "busy"
+
+
+@pytest.mark.asyncio
+async def test_resume_waits_for_stop_to_finish_before_opening_epoch(store: SwarmStore) -> None:
+    started = await _swarm(store)
+    swarm_id = started["swarm_id"]
+    await store.begin_stop(swarm_id, request_id="stop", actor="test")
+    with pytest.raises(SwarmStoreError, match="swarm_closed"):
+        await store.begin_resume(swarm_id, request_id="too-early", actor="test")
+    assert (await store.get_swarm(swarm_id))["epoch"] == 0
+    await store.finish_stop(
+        swarm_id, request_id="stop", actor="test", drain_report={"closed": True, "run_ids": []}
+    )
+    resumed = await store.begin_resume(swarm_id, request_id="resume", actor="test")
+    assert resumed["epoch"] == 1
