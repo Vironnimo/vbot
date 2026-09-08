@@ -79,6 +79,7 @@
   import { onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
+  import ExtensionPage from './components/ExtensionPage.svelte';
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
@@ -88,7 +89,10 @@
   import LogsView from './components/LogsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
-  import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
+  import {
+    dateTimePrefs,
+    setApplicationTimeZone,
+  } from '$lib/dateTimePrefs.svelte.js';
   import SkillsView from './components/skills/SkillsView.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
@@ -112,6 +116,7 @@
     acknowledgeSessionStoreIncident,
     getSettings,
     getSessionStoreStatus,
+    listExtensionPages,
     listAgents,
     listProjects,
   } from '$lib/api.js';
@@ -139,10 +144,78 @@
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
+  const EXTENSION_THEME_TOKENS = Object.freeze({
+    background: '--bg',
+    surface: '--surface',
+    elevatedSurface: '--surface-2',
+    border: '--border',
+    text: '--text-hi',
+    mutedText: '--text-med',
+    accent: '--accent',
+  });
+  let extensionPages = $state([]);
+  let extensionPagesLoadInFlight = null;
+  let extensionPagesRefreshQueued = false;
+  let extensionPageInvalidationRevision = $state(0);
+  let extensionPageRoute = $state('');
+  let extensionPageRouteView = $state('');
+  let extensionPageTheme = $state({});
+
+  const refreshExtensionPageTheme = () => {
+    const styles = getComputedStyle(document.documentElement);
+    Object.assign(extensionPageTheme, {
+      mode: styles.colorScheme === 'light' ? 'light' : 'dark',
+      ...Object.fromEntries(
+        Object.entries(EXTENSION_THEME_TOKENS).map(([name, token]) => [
+          name,
+          styles.getPropertyValue(token).trim(),
+        ]),
+      ),
+    });
+  };
+  const allNavigationItems = $derived([
+    ...navigationItems,
+    ...extensionPages.map((page) => ({
+      id: page.route,
+      labelKey: '',
+      labelFallback: page.title,
+      section: 'work',
+    })),
+  ]);
+
+  // Page descriptors may change after an Extension reload or reconnect. At
+  // most one request runs at once, with one follow-up request coalescing any
+  // burst. This fetches descriptors only; it never repeats page mutations.
+  const loadExtensionPages = async () => {
+    if (extensionPagesLoadInFlight) {
+      extensionPagesRefreshQueued = true;
+      return extensionPagesLoadInFlight;
+    }
+    const load = async () => {
+      let updated = false;
+      do {
+        extensionPagesRefreshQueued = false;
+        try {
+          const result = await listExtensionPages();
+          extensionPages = Array.isArray(result?.pages) ? result.pages : [];
+          extensionPageInvalidationRevision += 1;
+          updated = true;
+        } catch {
+          // Keep the last valid descriptors while a transient RPC error clears.
+        }
+      } while (extensionPagesRefreshQueued);
+      return updated;
+    };
+    extensionPagesLoadInFlight = load().finally(() => {
+      extensionPagesLoadInFlight = null;
+    });
+    return extensionPagesLoadInFlight;
+  };
+
   const visibleNavigationItems = $derived(
     debugEnabled
-      ? navigationItems
-      : navigationItems.filter((item) => item.id !== 'debug'),
+      ? allNavigationItems
+      : allNavigationItems.filter((item) => item.id !== 'debug'),
   );
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
@@ -235,12 +308,12 @@
     }
   };
 
-  const knownViewIds = navigationItems.map((item) => item.id);
+  const knownViewIds = () => allNavigationItems.map((item) => item.id);
 
   const initialViewId = () => {
     try {
       return (
-        viewIdFromLocationHash(window.location.hash, knownViewIds) ||
+        viewIdFromLocationHash(window.location.hash, knownViewIds()) ||
         navigationItems[0].id
       );
     } catch {
@@ -252,6 +325,13 @@
   const autosaveCoordinator = createAutosaveCoordinator();
   let appController;
   let activeViewId = $derived(appControllerState.activeViewId);
+  $effect.pre(() => {
+    const nextView = activeViewId.startsWith('extension:') ? activeViewId : '';
+    if (nextView !== extensionPageRouteView) {
+      extensionPageRoute = '';
+    }
+    extensionPageRouteView = nextView;
+  });
   let autosaveTransitionSaving = $state(false);
   let autosaveFailureOpen = $state(false);
   let pendingAutosaveTransition = null;
@@ -975,6 +1055,7 @@
     onLoadProjects: loadProjects,
     onAgentIdChanged: remapIdentityAgentId,
     onReloadAgents: reloadAgentsFromServer,
+    onReloadExtensionPages: loadExtensionPages,
     onLoadSessionStoreStatus: loadSessionStoreStatus,
     onSetOnboardingAside: () => {
       onboardingActive = false;
@@ -1022,6 +1103,28 @@
   }
 
   onMount(() => {
+    refreshExtensionPageTheme();
+    const themeObserver = new MutationObserver(refreshExtensionPageTheme);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+    });
+    void loadExtensionPages();
+    const onExtensionPage = (event) => {
+      const target = event.detail;
+      if (
+        target?.kind === 'open_extension_page' &&
+        extensionPages.some(
+          (page) =>
+            page.extension === target.extension &&
+            page.page === target.page &&
+            page.route === target.route,
+        )
+      ) {
+        selectView(target.route);
+      }
+    };
+    window.addEventListener('vbot-extension-page', onExtensionPage);
     let cancelled = false;
     let desktopCapabilityRetryTimer = null;
 
@@ -1115,6 +1218,8 @@
         cleanupWakewordPoll();
         cleanupWakewordPoll = null;
       }
+      themeObserver.disconnect();
+      window.removeEventListener('vbot-extension-page', onExtensionPage);
     };
   });
 </script>
@@ -1218,7 +1323,29 @@
         onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}
       />
-      {#if activeViewId === 'agents'}
+      {#if activeViewId.startsWith('extension:')}
+        {@const page = extensionPages.find(
+          (item) => item.route === activeViewId,
+        )}
+        <ExtensionPage
+          descriptor={page}
+          route={extensionPageRoute}
+          theme={{ ...extensionPageTheme }}
+          locale={settings?.appearance?.language ?? 'en'}
+          timezone={dateTimePrefs.timeZone}
+          invalidation={page
+            ? {
+                owner: page.extension,
+                page: page.page,
+                revision: extensionPageInvalidationRevision,
+              }
+            : null}
+          onRouteChange={(route) => {
+            extensionPageRoute = route;
+          }}
+          onToast={(message, variant) => showToast({ title: message, variant })}
+        />
+      {:else if activeViewId === 'agents'}
         <AgentsView
           sharedSelectedAgentId={selectedAgentId}
           targetDefaultsPanel={pendingAgentDefaultsPanel}

@@ -169,6 +169,66 @@ export function getSettings(options = {}) {
   return rpc('settings.get', {}, options);
 }
 
+export function listExtensionPages(options = {}) {
+  return rpc('extensions.pages', {}, options);
+}
+
+export function invokeExtensionPageOperation(
+  name,
+  operation,
+  arguments_,
+  page,
+  options = {},
+) {
+  return rpc(
+    'extensions.operation',
+    { name, operation, arguments: arguments_, page },
+    options,
+  );
+}
+
+export function openExtensionPageRun(
+  name,
+  page,
+  groupId,
+  runId,
+  afterSequence = 0,
+  options = {},
+) {
+  return rpc(
+    'extensions.page_run',
+    {
+      name,
+      page,
+      group_id: groupId,
+      run_id: runId,
+      after_sequence: afterSequence,
+    },
+    options,
+  );
+}
+
+export function readExtensionPageHistory(
+  name,
+  page,
+  groupId,
+  participantId,
+  query = {},
+  options = {},
+) {
+  return rpc(
+    'extensions.page_history',
+    {
+      name,
+      page,
+      group_id: groupId,
+      participant_id: participantId,
+      query,
+    },
+    options,
+  );
+}
+
 export function getSessionStoreStatus(options = {}) {
   return rpc('session_store.status', {}, options);
 }

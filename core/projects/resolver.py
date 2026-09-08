@@ -497,6 +497,7 @@ class AgentResolver:
         *,
         detector_registry: list[DetectorRegistration] | None = None,
         project_skill_names: ProjectSkillNamesProvider | None = None,
+        temporary_agents: Any | None = None,
     ) -> None:
         self._agents = agents
         self._projects = projects
@@ -509,6 +510,7 @@ class AgentResolver:
         # project skills" so a resolver built without it degrades to bundled-only
         # rather than failing (the runtime always wires the real probe).
         self._project_skill_names = project_skill_names or _no_project_skills
+        self._temporary_agents = temporary_agents
         # Team-scan cache keyed by project id. A run reads from here; an explicit
         # re-scan / project-open repopulates it via ``rescan_project``.
         self._team_cache: dict[str, ScanResult] = {}
@@ -537,6 +539,40 @@ class AgentResolver:
             agent = self._resolve_config_agent(project_id, agent_id)
         return self._apply_run_overrides(agent, run_overrides)
 
+    def resolve_temporary_agent(
+        self,
+        address: Any,
+        *,
+        generation_id: str,
+        run_overrides: AgentRunOverrides | None = None,
+    ) -> RuntimeAgent:
+        """Resolve only an exact canonical temporary Session generation."""
+        if self._temporary_agents is None:
+            raise AgentResolutionError("temporary Session is unavailable")
+        agent = self._temporary_agents.resolve(address, generation_id=generation_id)
+        if agent is None:
+            raise AgentResolutionError("temporary Session binding is unavailable")
+        project_id = getattr(address, "project_id", None)
+        if project_id is not None:
+            project = self._load_project(project_id)
+            tool_access = _temporary_project_tool_access(project, agent.tool_access)
+            allowed_skills = _temporary_project_allowed_skills(
+                agent.allowed_skills,
+                effective_project_allowed_skills(project, self._project_skill_names(project_id)),
+            )
+            tools = {
+                name: settings
+                for name, settings in agent.tools.items()
+                if name in tool_access.allowed and name not in tool_access.denied
+            }
+            agent = replace(
+                agent,
+                tool_access=tool_access,
+                allowed_skills=allowed_skills,
+                tools=tools,
+            )
+        return self._apply_run_overrides(agent, run_overrides)
+
     def _apply_run_overrides(
         self,
         agent: RuntimeAgent,
@@ -554,10 +590,12 @@ class AgentResolver:
             changes["thinking_effort"] = run_overrides.thinking_effort
         if isinstance(agent, ConfigAgent):
             return replace(agent, **changes)
-
         from core.agents.agents import Agent
+        from core.agents.temporary import TemporaryAgent
 
         if isinstance(agent, Agent):
+            return replace(agent, **changes)
+        if isinstance(agent, TemporaryAgent):
             return replace(agent, **changes)
         raise TypeError(f"unsupported RuntimeAgent implementation: {type(agent).__name__}")
 
@@ -892,7 +930,12 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     ``ConfigAgent`` or probing types — the chat loop calls this on the agent it
     already resolved and hands the result over as an explicit argument.
     """
-    return agent.body if isinstance(agent, ConfigAgent) else ""
+    if isinstance(agent, ConfigAgent):
+        return agent.body
+    # Owner-managed temporary Agents carry their reviewed profile instructions
+    # in the protected Session binding rather than an Identity workspace.
+    instructions = getattr(agent, "instructions", "")
+    return instructions if isinstance(instructions, str) else ""
 
 
 def resolve_working_project_id(project_id: str | None, agent: RuntimeAgent) -> str | None:
@@ -984,6 +1027,42 @@ def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolA
         allowed=allowed,
         denied=denied,
     )
+
+
+def _temporary_project_tool_access(project: Project, access: ToolAccess) -> ToolAccess:
+    """Materialize a temporary profile inside an explicit Project Tool ceiling."""
+
+    from core.tools.availability import ToolAccess
+
+    if access.mode == "none":
+        return access
+    ceiling = tuple(project.allowed_tools)
+    allowed = (
+        ceiling if access.mode == "all" else [name for name in access.allowed if name in ceiling]
+    )
+    return ToolAccess(
+        mode="selected",
+        allowed=tuple(allowed),
+        denied=access.denied,
+        granted=tuple(name for name in access.granted if name in ceiling),
+    )
+
+
+def _temporary_project_allowed_skills(
+    profile_allowed: list[str],
+    project_allowed: list[str],
+) -> list[str]:
+    """Intersect a temporary profile's Skill selection with the Project ceiling."""
+
+    if not profile_allowed:
+        return []
+    if WILDCARD_ALLOWLIST in profile_allowed:
+        return project_allowed
+    return [
+        name
+        for name in project_allowed
+        if any(fnmatchcase(name, pattern) for pattern in profile_allowed)
+    ]
 
 
 def effective_project_allowed_skills(
@@ -1267,6 +1346,7 @@ def build_agent_resolver(
     *,
     detector_registry: list[DetectorRegistration] | None = None,
     project_skill_names: ProjectSkillNamesProvider | None = None,
+    temporary_agents: Any | None = None,
 ) -> AgentResolver:
     """Assemble an :class:`AgentResolver` from the runtime services.
 
@@ -1285,4 +1365,5 @@ def build_agent_resolver(
         global_agent_defaults,
         detector_registry=detector_registry,
         project_skill_names=project_skill_names,
+        temporary_agents=temporary_agents,
     )

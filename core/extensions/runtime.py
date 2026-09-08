@@ -66,6 +66,7 @@ class ExtensionRuntime:
 
             old_registry = self._get_registry()
             if old_registry is not None:
+                await old_registry.quiesce_all()
                 old_registry.remove_applied_tools(self._tools)
                 if dispatcher is not None:
                     old_registry.remove_applied_commands(dispatcher)

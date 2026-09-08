@@ -84,7 +84,7 @@ jobs:
       - name: Package release candidate WebUI
         run: |
           test -s webui/dist/index.html
-          tar -czf webui-dist.tar.gz -C webui dist
+          tar -czf webui-dist.tar.gz -C . webui/dist resources/extensions
       - name: Upload release candidate WebUI
         uses: actions/upload-artifact@v7
         with:
@@ -121,7 +121,7 @@ jobs:
       - name: Prepare release candidate WebUI
         run: |
           tar -tzf .tmp/release-candidate/webui-dist.tar.gz >/dev/null
-          tar -xzf .tmp/release-candidate/webui-dist.tar.gz -C webui
+          tar -xzf .tmp/release-candidate/webui-dist.tar.gz
           test -s webui/dist/index.html
       - name: Install release candidate into an isolated environment
         run: |
@@ -181,7 +181,7 @@ jobs:
         shell: pwsh
         run: |
           tar.exe -tf .tmp/release-candidate/webui-dist.tar.gz | Out-Null
-          tar.exe -xzf .tmp/release-candidate/webui-dist.tar.gz -C webui
+          tar.exe -xzf .tmp/release-candidate/webui-dist.tar.gz
           if (-not (Test-Path -LiteralPath webui/dist/index.html -PathType Leaf)) {
             throw "Release candidate WebUI is missing index.html"
           }

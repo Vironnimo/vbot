@@ -13,10 +13,12 @@ import asyncio
 import importlib.util
 import inspect
 import json
+import re
 import sys
 import threading
 import time
 import types
+import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -54,7 +56,7 @@ _EXTENSION_WORKERS = BoundedWorkerPool(
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 5
+API_VERSION = 6
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -70,6 +72,14 @@ ExtensionStatus = Literal["loaded", "failed", "disabled", "overridden"]
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
 _HANDLER_FAILED = object()
+
+
+def _is_page_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 64
+        and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is not None
+    )
 
 
 async def invoke_extension_handler(
@@ -201,6 +211,7 @@ class ToolDeclaration:
     parameters: dict[str, Any]
     handler: Callable[..., Any]
     internal: bool = False
+    catalog_visible: bool = True
     requires_opt_in: bool = False
     display: Any = None
     ready: Callable[[], bool] | None = None
@@ -210,6 +221,9 @@ class ToolDeclaration:
     result_schema: dict[str, Any] | None = None
     parallel_safe: bool = True
     open_input_schema: bool = False
+    coerce_arguments: bool = True
+    session_scoped: bool = False
+    activation: str = "configurable"
     # Local family id declared through ``register_tool_family``. The apply phase
     # namespaces it by Extension identity before it reaches ToolRegistry.
     family: str | None = None
@@ -221,6 +235,83 @@ class ToolFamilyDeclaration:
 
     id: str
     label: str
+
+
+@dataclass(frozen=True)
+class SessionPromptBlockDeclaration:
+    slug: str
+    render: Callable[..., str]
+
+
+@dataclass(frozen=True)
+class SessionRuntimeDeclaration:
+    before_request: Callable[..., Any]
+    run_finished: Callable[..., Any]
+    quiesce: Callable[..., Any]
+    acknowledge_delivery: Callable[..., Any] | None = None
+    reconcile_tool_batch: Callable[..., Any] | None = None
+
+
+@dataclass(frozen=True)
+class SessionCapability:
+    """The effective private capability set for one bound temporary Session."""
+
+    tool_names: tuple[str, ...]
+    prompt_blocks: tuple[SessionPromptBlockDeclaration, ...]
+    runtime: SessionRuntimeDeclaration | None
+    identity: ExtensionRegistrationIdentity
+
+
+class SessionCapabilityExpiredError(RuntimeError):
+    """A bound Session callback outlived its Extension registration."""
+
+
+@dataclass(frozen=True)
+class SessionRequestContext:
+    """Narrow identity supplied to an owner at a safe Session request boundary."""
+
+    binding: Any
+    run_id: str
+    agent_id: str
+    session_id: str
+    execution_owner: Any | None = None
+
+
+@dataclass(frozen=True)
+class PreparedSessionDelivery:
+    """One owner-prepared note batch whose receipt is committed by Chat."""
+
+    delivery_id: str
+    content_hash: str
+    entries: tuple[str, ...]
+    settings_revision: str
+    effect_kind: str = "before_request"
+
+
+@dataclass(frozen=True)
+class ToolBatchDecision:
+    """Owner reconciliation after every sibling Tool Result is durable."""
+
+    end: bool
+    continuation: PreparedSessionDelivery | None = None
+
+
+@dataclass(frozen=True)
+class PageDeclaration:
+    """One Extension-owned page asset contributed to the application shell."""
+
+    page_id: str
+    title: str
+    entry: str
+    icon: str = "network"
+
+
+@dataclass(frozen=True)
+class ExtensionRegistrationIdentity:
+    """Opaque identity for declarations belonging to one loaded registry epoch."""
+
+    name: str
+    epoch: str
 
 
 @dataclass(frozen=True)
@@ -288,8 +379,11 @@ class ExtensionDeclarations:
     tools: list[ToolDeclaration] = field(default_factory=list)
     tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
     commands: list[CommandDeclaration] = field(default_factory=list)
+    pages: list[PageDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
+    session_prompt_blocks: list[SessionPromptBlockDeclaration] = field(default_factory=list)
+    session_runtime: SessionRuntimeDeclaration | None = None
     interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
     settings_schema: list[SettingsFieldDeclaration] | None = None
     operations: ExtensionOperations | None = None
@@ -413,6 +507,7 @@ class ExtensionAPI:
         handler: Callable[..., Any],
         *,
         internal: bool = False,
+        catalog_visible: bool = True,
         requires_opt_in: bool = False,
         display: Any = None,
         ready: Callable[[], bool] | None = None,
@@ -446,6 +541,7 @@ class ExtensionAPI:
                 parameters=parameters,
                 handler=handler,
                 internal=internal,
+                catalog_visible=catalog_visible,
                 requires_opt_in=requires_opt_in,
                 display=display,
                 ready=ready,
@@ -455,6 +551,86 @@ class ExtensionAPI:
                 open_input_schema=open_input_schema,
                 family=family,
             )
+        )
+
+    def register_page(
+        self,
+        page_id: str,
+        title: str,
+        entry: str,
+        *,
+        icon: str = "network",
+    ) -> None:
+        """Declare one page whose asset remains under this Extension's root."""
+        if not _is_page_id(page_id):
+            raise ValueError("page_id must use lowercase letters, digits, hyphens, or underscores")
+        if not isinstance(title, str) or not title.strip() or len(title) > 120:
+            raise ValueError("page title must be a non-empty string up to 120 characters")
+        entry_path = Path(entry) if isinstance(entry, str) else None
+        if (
+            entry_path is None
+            or not entry.strip()
+            or "\x00" in entry
+            or entry.startswith(("/", "\\"))
+            or ":" in entry
+            or entry_path.is_absolute()
+            or ".." in entry.replace("\\", "/").split("/")
+            or entry_path.suffix.lower() != ".html"
+        ):
+            raise ValueError("page entry must be a relative HTML asset path")
+        if not isinstance(icon, str) or icon not in {"network", "panel", "grid", "sparkles"}:
+            raise ValueError("page icon is not supported")
+        if any(item.page_id == page_id for item in self._declarations.pages):
+            raise ValueError(f"page already declared: {page_id}")
+        self._declarations.pages.append(PageDeclaration(page_id, title.strip(), entry, icon))
+
+    def register_session_tool(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        handler: Callable[..., Any],
+        **kwargs: Any,
+    ) -> None:
+        """Declare a hidden Tool available only through an exact Session grant."""
+        self._declarations.tools.append(
+            ToolDeclaration(
+                name=name,
+                description=description,
+                parameters=parameters,
+                handler=handler,
+                catalog_visible=False,
+                open_input_schema=True,
+                coerce_arguments=False,
+                session_scoped=True,
+                activation="session_grant",
+                **kwargs,
+            )
+        )
+
+    def register_session_prompt_block(self, slug: str, *, render: Callable[..., str]) -> None:
+        if not isinstance(slug, str) or not slug or not callable(render):
+            raise ValueError("invalid session prompt block declaration")
+        self._declarations.session_prompt_blocks.append(SessionPromptBlockDeclaration(slug, render))
+
+    def register_session_runtime(
+        self,
+        *,
+        before_request: Callable[..., Any],
+        run_finished: Callable[..., Any],
+        quiesce: Callable[..., Any],
+        acknowledge_delivery: Callable[..., Any] | None = None,
+        reconcile_tool_batch: Callable[..., Any] | None = None,
+    ) -> None:
+        if self._declarations.session_runtime is not None:
+            raise ValueError("session runtime already declared")
+        if not all(callable(item) for item in (before_request, run_finished, quiesce)) or any(
+            item is not None and not callable(item)
+            for item in (acknowledge_delivery, reconcile_tool_batch)
+        ):
+            raise ValueError("session runtime handlers must be callable")
+        self._declarations.session_runtime = SessionRuntimeDeclaration(
+            before_request, run_finished, quiesce, acknowledge_delivery, reconcile_tool_batch
         )
 
     def register_tool_family(self, family_id: str, label: str) -> None:
@@ -572,6 +748,58 @@ class ExtensionRegistry:
         self._interaction_handlers: dict[str, RegisteredHandler] = {}
         self._records: list[ExtensionRecord] = []
         self._host: ExtensionHost | None = None
+        self._owner_hosts: dict[ExtensionRegistrationIdentity, ExtensionHost] = {}
+        self._quiesced: set[str] = set()
+        self._epoch = uuid.uuid4().hex
+        self._registration_retired = False
+
+    def registration_identity(self, name: str) -> ExtensionRegistrationIdentity:
+        """Return the current loaded identity for an Extension declaration owner."""
+        if not self.is_registration_current(ExtensionRegistrationIdentity(name, self._epoch)):
+            raise ValueError(f"Extension is not available: {name}")
+        return ExtensionRegistrationIdentity(name, self._epoch)
+
+    def is_registration_current(self, identity: ExtensionRegistrationIdentity) -> bool:
+        """Whether an owner identity belongs to this live registry epoch."""
+        return (
+            isinstance(identity, ExtensionRegistrationIdentity)
+            and identity.epoch == self._epoch
+            and not self._registration_retired
+            and any(
+                record.name == identity.name and record.status == "loaded"
+                for record in self._records
+            )
+        )
+
+    def page_declarations(
+        self,
+    ) -> list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]]:
+        """Return loaded page declarations with their checked Extension roots."""
+        pages: list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]] = []
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            identity = ExtensionRegistrationIdentity(record.name, self._epoch)
+            for declaration in record.declarations.pages:
+                entry = (record.root_path / declaration.entry).resolve()
+                try:
+                    entry.relative_to(record.root_path.resolve())
+                except ValueError:
+                    self._diagnose_capability(
+                        record, f"page {declaration.page_id!r} skipped: entry escapes root"
+                    )
+                    continue
+                if not entry.is_file():
+                    self._diagnose_capability(
+                        record, f"page {declaration.page_id!r} skipped: entry is missing"
+                    )
+                    continue
+                pages.append((identity, declaration, entry))
+        return pages
+
+    def retire_registration(self) -> None:
+        """Invalidate owner capabilities before their declarations are removed."""
+        self._registration_retired = True
 
     @classmethod
     def load(
@@ -768,6 +996,22 @@ class ExtensionRegistry:
 
     def bind_host(self, host: ExtensionHost) -> None:
         self._host = host
+        self._owner_hosts.clear()
+
+    def host_for(self, identity: ExtensionRegistrationIdentity) -> ExtensionHost:
+        """Return the cached host for one current loaded registration."""
+        if not self.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+        cached = self._owner_hosts.get(identity)
+        if cached is not None:
+            return cached
+        if self._host is None:
+            raise RuntimeError("Extension host is not bound")
+        owner_host = (
+            self._host.for_owner(identity) if self._host.for_owner is not None else self._host
+        )
+        self._owner_hosts[identity] = owner_host
+        return owner_host
 
     def management(self, name: str) -> ExtensionOperations:
         record = next((item for item in self._records if item.name == name), None)
@@ -809,6 +1053,159 @@ class ExtensionRegistry:
                     applied,
                     applied_families.get(record.name, {}),
                 )
+
+    def session_capability(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+    ) -> SessionCapability | None:
+        """Return an all-or-nothing private capability set for *binding*.
+
+        A declaration only becomes a grant after its exact Tool handler survived
+        collision handling in the live registry.  Bindings identify their owner by
+        name, so a Session can never borrow similarly named declarations from a
+        different Extension or a retired registry epoch.
+        """
+        if self._registration_retired:
+            return None
+        owner_name = getattr(binding, "owner_name", None)
+        if not isinstance(owner_name, str):
+            return None
+        record = next(
+            (item for item in self._records if item.name == owner_name and item.status == "loaded"),
+            None,
+        )
+        if record is None:
+            return None
+        declarations = [
+            declaration for declaration in record.declarations.tools if declaration.session_scoped
+        ]
+        if not declarations:
+            return None
+        for declaration in declarations:
+            try:
+                registered = tool_registry.get(declaration.name)
+            except Exception:
+                return None
+            if (
+                registered.handler is not declaration.handler
+                or not registered.session_scoped
+                or registered.catalog_visible
+            ):
+                return None
+        return SessionCapability(
+            tool_names=tuple(declaration.name for declaration in declarations),
+            prompt_blocks=tuple(record.declarations.session_prompt_blocks),
+            runtime=record.declarations.session_runtime,
+            identity=ExtensionRegistrationIdentity(owner_name, self._epoch),
+        )
+
+    def _session_capability_current(
+        self, binding: Any, capability: SessionCapability, tool_registry: ToolRegistry
+    ) -> bool:
+        """Re-resolve a callback owner after awaits cannot retain stale work."""
+        if not self.is_registration_current(capability.identity):
+            return False
+        return (
+            any(
+                record.name == capability.identity.name
+                and record.status == "loaded"
+                and record.declarations.session_runtime is capability.runtime
+                for record in self._records
+            )
+            and self.session_capability(binding, tool_registry) is not None
+        )
+
+    async def dispatch_session_before_request(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+        context: SessionRequestContext,
+    ) -> PreparedSessionDelivery | None:
+        """Ask the current owner for one durable pre-request delivery batch."""
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        if capability.runtime is None:
+            return None
+        result = await invoke_extension_handler(capability.runtime.before_request, context)
+        if not self._session_capability_current(binding, capability, tool_registry):
+            raise SessionCapabilityExpiredError("session capability expired")
+        if result is None:
+            return None
+        if not isinstance(result, PreparedSessionDelivery):
+            raise TypeError("Session before_request must return PreparedSessionDelivery or None")
+        if (
+            not result.delivery_id
+            or not result.content_hash
+            or not result.settings_revision
+            or not result.entries
+            or not all(isinstance(entry, str) and entry for entry in result.entries)
+        ):
+            raise ValueError("Session delivery batch is invalid")
+        return result
+
+    async def acknowledge_session_delivery(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+        context: SessionRequestContext,
+        delivery: PreparedSessionDelivery,
+    ) -> None:
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        runtime = capability.runtime
+        if runtime is not None and runtime.acknowledge_delivery is not None:
+            assert capability is not None
+            await invoke_extension_handler(runtime.acknowledge_delivery, context, delivery)
+            if not self._session_capability_current(binding, capability, tool_registry):
+                raise SessionCapabilityExpiredError("session capability expired")
+
+    async def reconcile_session_tool_batch(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+        context: SessionRequestContext,
+        receipts: tuple[tuple[str, str, str, str], ...],
+        persisted_call_ids: tuple[str, ...],
+        turn_end_requested: bool,
+    ) -> ToolBatchDecision:
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        runtime = capability.runtime
+        if runtime is None or runtime.reconcile_tool_batch is None:
+            return ToolBatchDecision(end=turn_end_requested)
+        assert capability is not None
+        result = await invoke_extension_handler(
+            runtime.reconcile_tool_batch,
+            context,
+            receipts=receipts,
+            persisted_call_ids=persisted_call_ids,
+            turn_end_requested=turn_end_requested,
+        )
+        if not self._session_capability_current(binding, capability, tool_registry):
+            raise SessionCapabilityExpiredError("session capability expired")
+        if not isinstance(result, ToolBatchDecision):
+            raise TypeError("Session tool-batch reconciliation must return ToolBatchDecision")
+        return result
+
+    async def dispatch_session_run_finished(
+        self,
+        binding: Any,
+        tool_registry: ToolRegistry,
+        context: SessionRequestContext,
+        outcome: str,
+    ) -> None:
+        capability = self.session_capability(binding, tool_registry)
+        if capability is None:
+            raise SessionCapabilityExpiredError("session capability expired")
+        if capability.runtime is None:
+            return
+        await invoke_extension_handler(capability.runtime.run_finished, context, outcome=outcome)
+        if not self._session_capability_current(binding, capability, tool_registry):
+            raise SessionCapabilityExpiredError("session capability expired")
 
     def _apply_tool_families(
         self,
@@ -908,6 +1305,7 @@ class ExtensionRegistry:
                         execution_mode=declaration.execution_mode,
                         argument_execution_mode=declaration.argument_execution_mode,
                         unavailable_surfaces=declaration.unavailable_surfaces,
+                        page_ids=frozenset(page.page_id for page in record.declarations.pages),
                     )
                 except ValueError as exc:
                     self._diagnose_capability(record, f"command {name!r} skipped: {exc}")
@@ -954,6 +1352,7 @@ class ExtensionRegistry:
                 declaration.parameters,
                 declaration.handler,
                 internal=declaration.internal,
+                catalog_visible=declaration.catalog_visible,
                 requires_opt_in=declaration.requires_opt_in,
                 display=declaration.display,
                 ready=declaration.ready,
@@ -963,6 +1362,9 @@ class ExtensionRegistry:
                 result_schema=declaration.result_schema,
                 parallel_safe=declaration.parallel_safe,
                 open_input_schema=declaration.open_input_schema,
+                coerce_arguments=declaration.coerce_arguments,
+                session_scoped=declaration.session_scoped,
+                activation=declaration.activation,
             )
         except Exception as exc:
             self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
@@ -1130,6 +1532,7 @@ class ExtensionRegistry:
         if record is None or record.status != "loaded":
             return False
 
+        await self.quiesce(name)
         declarations = record.declarations
         if declarations.operations is not None:
             declarations.operations.retire()
@@ -1147,8 +1550,34 @@ class ExtensionRegistry:
 
         record.status = "disabled"
         record.declarations = ExtensionDeclarations()
+        self._retire_owner_host(name)
         _LOGGER.info("Extension %r deactivated live (no restart)", name)
         return True
+
+    async def quiesce(self, name: str) -> bool:
+        """Drain one current owner before removing any of its capabilities."""
+        record = next((item for item in self._records if item.name == name), None)
+        if record is None or record.status != "loaded":
+            return False
+        if name in self._quiesced:
+            return True
+        runtime = record.declarations.session_runtime
+        if runtime is not None:
+            await invoke_extension_handler(runtime.quiesce)
+        self._quiesced.add(name)
+        return True
+
+    async def quiesce_all(self) -> None:
+        """Drain every loaded owner before this registry is replaced."""
+        for record in self._records:
+            if record.status == "loaded":
+                await self.quiesce(record.name)
+
+    def _retire_owner_host(self, name: str) -> None:
+        """Forget cached owner hosts once their registration cannot be used."""
+        self._owner_hosts = {
+            identity: host for identity, host in self._owner_hosts.items() if identity.name != name
+        }
 
     def remove_applied_tools(self, tool_registry: ToolRegistry) -> None:
         """Unregister every loaded extension's applied tools from *tool_registry*.
@@ -1170,6 +1599,7 @@ class ExtensionRegistry:
             self._unregister_extension_tool_families(
                 tool_registry, record.name, record.declarations.tool_families
             )
+            self._retire_owner_host(record.name)
 
     def remove_applied_commands(self, command_dispatcher: CommandDispatcher) -> None:
         """Remove every loaded Extension's commands from the live dispatcher."""
@@ -1246,8 +1676,10 @@ class ExtensionRegistry:
             if operations is not None and operations.startup:
                 if self._host is None:
                     raise RuntimeError("Managed Extension requires a bound host")
+                identity = self.registration_identity(record.name)
+                owner_host = self.host_for(identity)
                 for start in operations.startup:
-                    await self._invoke_lifecycle("startup", record.name, partial(start, self._host))
+                    await self._invoke_lifecycle("startup", record.name, partial(start, owner_host))
             for handler in record.declarations.startup:
                 await self._invoke_lifecycle("startup", record.name, handler)
 
@@ -1256,8 +1688,10 @@ class ExtensionRegistry:
         for record in self._records:
             if record.status != "loaded":
                 continue
+            await self.quiesce(record.name)
             if record.declarations.operations is not None:
                 record.declarations.operations.retire()
+            self._retire_owner_host(record.name)
             for handler in record.declarations.shutdown:
                 await self._invoke_lifecycle("shutdown", record.name, handler)
 
@@ -1868,6 +2302,7 @@ def _import_extension_module(name: str, entry_path: Path) -> types.ModuleType:
 __all__ = [
     "API_VERSION",
     "CommandDeclaration",
+    "ExtensionRegistrationIdentity",
     "Deny",
     "ExtensionAPI",
     "ExtensionManifest",
@@ -1876,6 +2311,7 @@ __all__ = [
     "HookContext",
     "Modify",
     "PromptBlockDeclaration",
+    "PageDeclaration",
     "Replace",
     "ToolCallDecision",
     "ToolFamilyDeclaration",

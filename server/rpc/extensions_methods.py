@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from core.extensions import ExtensionRecord, SettingsFieldDeclaration
+from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, SettingsFieldDeclaration
 from core.utils.logging import get_logger
-from server.events import RESOURCE_KIND_COMMANDS
+from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
+from server.rpc.payloads import remove_opaque_provider_metadata
 from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.extensions")
+_FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 
 def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
@@ -52,6 +56,7 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+    publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
     return payload
 
 
@@ -145,9 +150,13 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
     it is not offered anywhere, which is exactly what an unready tool means here.
     """
     declarations = record.declarations
-    tool_names = [declaration.name for declaration in declarations.tools]
+    tool_names = [
+        declaration.name
+        for declaration in declarations.tools
+        if getattr(declaration, "catalog_visible", True)
+    ]
     if declarations.operations is not None:
-        tool_names.extend(declarations.operations.tool_names)
+        tool_names.extend(declarations.operations.catalog_visible_tool_names)
     return {
         "hooks": {
             event: len(handlers) for event, handlers in declarations.hooks.items() if handlers
@@ -298,7 +307,7 @@ def _required_str(params: JsonObject, key: str) -> str:
 
 
 async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"name", "operation", "arguments"}, "extensions.operation")
+    _reject_unsupported(params, {"name", "operation", "arguments", "page"}, "extensions.operation")
     name = _required_str(params, "name")
     operation = _required_str(params, "operation")
     arguments = params.get("arguments", {})
@@ -308,12 +317,213 @@ async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extensions are unavailable")
     try:
+        page = params.get("page")
+        if page is not None:
+            await _validate_page_context(state.runtime, registry, name, page)
         management = registry.management(name)
         if operation == "describe":
             return {"operations": management.describe()}
-        return dict(await management.invoke(operation, arguments))
+        result = dict(await management.invoke(operation, arguments))
+        if page is not None:
+            await _validate_page_context(state.runtime, registry, name, page)
+        return result
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+async def _extension_pages(state: Any, params: JsonObject) -> JsonObject:
+    """Project current Extension pages without disclosing local asset paths."""
+    _reject_unsupported(params, set(), "extensions.pages")
+    registry = state.runtime.extensions
+    if registry is None:
+        return {"pages": []}
+    try:
+        pages = await FILE_PREVIEW_WORKERS.run(_page_projection, registry, state.file_delivery)
+        return {"pages": pages}
+    except (OSError, ValueError) as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
+    """Open a parent-owned SSE capability for one live, owner-scoped Run."""
+    _reject_unsupported(
+        params,
+        {"name", "page", "group_id", "run_id", "after_sequence"},
+        "extensions.page_run",
+    )
+    name = _required_str(params, "name")
+    group_id = _required_str(params, "group_id")
+    run_id = _required_str(params, "run_id")
+    after_sequence = params.get("after_sequence", 0)
+    if (
+        not isinstance(after_sequence, int)
+        or isinstance(after_sequence, bool)
+        or after_sequence < 0
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "extensions.page_run after_sequence must be a non-negative integer",
+        )
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
+    try:
+        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        page = params["page"]
+        identity = ExtensionRegistrationIdentity(name, page["epoch"])
+        host = registry.host_for(identity)
+        temporary_agents = host.temporary_agents
+        if temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        inspection = await temporary_agents.owned_run(group_id, run_id)
+        if inspection.run is None:
+            return {"stream": None}
+        if state.runtime.extensions is not registry or not registry.is_registration_current(
+            identity
+        ):
+            raise ValueError("Extension page is unavailable; refresh the page")
+        await _validate_page_context(state.runtime, registry, name, page)
+        verified_host = registry.host_for(identity)
+        verified_temporary_agents = verified_host.temporary_agents
+        if verified_temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        verified = await verified_temporary_agents.owned_run(group_id, run_id)
+        if verified.run is None:
+            return {"stream": None}
+        return {
+            "stream": state.file_delivery.open_extension_run(
+                extension=name,
+                page=page["id"],
+                epoch=page["epoch"],
+                group_id=group_id,
+                run_id=run_id,
+                after_sequence=after_sequence,
+            )
+        }
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
+    """Project one owner-bound temporary Session history for a registered page."""
+    _reject_unsupported(
+        params,
+        {"name", "page", "group_id", "participant_id", "query"},
+        "extensions.page_history",
+    )
+    name = _required_str(params, "name")
+    group_id = _required_str(params, "group_id")
+    participant_id = _required_str(params, "participant_id")
+    query = params.get("query", {})
+    if not isinstance(query, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.page_history query must be an object")
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
+    try:
+        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        page = params["page"]
+        identity = ExtensionRegistrationIdentity(name, page["epoch"])
+        host = registry.host_for(identity)
+        temporary_agents = host.temporary_agents
+        if temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        snapshot = await temporary_agents.inspect(group_id, participant_id, query)
+        if state.runtime.extensions is not registry or not registry.is_registration_current(
+            identity
+        ):
+            raise ValueError("Extension page is unavailable; refresh the page")
+        await _validate_page_context(state.runtime, registry, name, page)
+        return _temporary_history_projection(snapshot, state.file_delivery)
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
+    """Use the ordinary client projection while withholding internal Session records."""
+    messages = [
+        remove_opaque_provider_metadata(message.to_dict(), file_delivery=delivery)
+        for message in snapshot.page.messages
+        if getattr(message, "role", None) not in {"note", "history_edit"}
+    ]
+    response: JsonObject = {
+        "messages": messages,
+        "has_more": snapshot.page.has_more,
+        "session_usage": snapshot.session_usage,
+        "file_urls": _projected_file_urls(messages, delivery),
+    }
+    if snapshot.page.before_cursor is not None:
+        response["next_before"] = snapshot.page.before_cursor
+    return response
+
+
+def _projected_file_urls(value: Any, delivery: Any) -> list[str]:
+    """List only file capabilities that survived the ordinary visible projection."""
+    if delivery is None:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+        elif isinstance(item, str):
+            for url in _FILE_URL_PATTERN.findall(item):
+                token = url.removeprefix("/api/files/")
+                if url not in seen and delivery.resolve_token(token) is not None:
+                    seen.add(url)
+                    urls.append(url)
+
+    visit(value)
+    return urls
+
+
+async def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) -> None:
+    if not isinstance(page, dict):
+        raise ValueError("page must be an object")
+    page_id = page.get("id")
+    epoch = page.get("epoch")
+    if not isinstance(page_id, str) or not isinstance(epoch, str):
+        raise ValueError("page requires id and epoch strings")
+    identity = ExtensionRegistrationIdentity(name, epoch)
+    if runtime.extensions is not registry or not registry.is_registration_current(identity):
+        raise ValueError("Extension page is unavailable; refresh the page")
+    declarations = await FILE_PREVIEW_WORKERS.run(registry.page_declarations)
+    if not registry.is_registration_current(identity):
+        raise ValueError("Extension page is unavailable; refresh the page")
+    if not any(
+        candidate == identity and declaration.page_id == page_id
+        for candidate, declaration, _entry in declarations
+    ):
+        raise ValueError("Extension page is unavailable; refresh the page")
+
+
+def _page_projection(registry: Any, delivery: Any) -> list[JsonObject]:
+    """Read local page assets and mint capability URLs off the Event Loop."""
+    pages = []
+    for identity, declaration, entry in registry.page_declarations():
+        page = delivery.open_extension_page(
+            extension=identity.name,
+            page=declaration.page_id,
+            epoch=identity.epoch,
+            entry=entry,
+        )
+        pages.append(
+            {
+                "extension": identity.name,
+                "page": declaration.page_id,
+                "title": declaration.title,
+                "icon": declaration.icon,
+                "route": f"extension:{identity.name}:{declaration.page_id}",
+                "entry_url": page["url"],
+                "epoch": identity.epoch,
+            }
+        )
+    return pages
 
 
 def _extension_requests(state: Any, params: JsonObject) -> JsonObject:
@@ -342,6 +552,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "extensions.list": _list_extensions,
         "extensions.operation": _extension_operation,
+        "extensions.page_history": _extension_page_history,
+        "extensions.page_run": _extension_page_run,
+        "extensions.pages": _extension_pages,
         "extensions.requests": _extension_requests,
         "extensions.reload": _reload_extensions,
         "extensions.set_secret": _set_extension_secret,

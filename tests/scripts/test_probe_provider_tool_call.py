@@ -26,6 +26,148 @@ def _load_module() -> ModuleType:
 PROBE = _load_module()
 
 
+def test_swarm_workflow_rejects_a_claim_without_coordination():
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            assert {item["name"] for item in kwargs["tools"]} == {
+                "swarm_board",
+                "swarm_inbox",
+                "swarm_state",
+            }
+            return {"content": "Everything is complete."}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(
+        ["--scenario", "swarm_tool", "--swarm-case", "workflow", "--profile", "explicit_non_strict"]
+    )
+    result = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert result["passed"] is False
+    assert result["missing_actions"]
+    assert result["finish_requested_and_reserved"] is False
+
+
+def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
+    class Adapter:
+        step = 0
+
+        async def send(self, messages, **_kwargs):
+            results = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
+            roster = next(
+                (item["data"] for item in results if item.get("data", {}).get("self")), {}
+            )
+            peer = next(
+                (
+                    row["id"]
+                    for row in roster.get("participants", [])
+                    if row["id"] != roster.get("self", {}).get("id")
+                ),
+                "",
+            )
+            topic = next(
+                (
+                    row["id"]
+                    for item in results
+                    for row in (item.get("data") or {}).get("entries", [])
+                    if row.get("title") == "Topic"
+                ),
+                "",
+            )
+            sequence = [
+                ("swarm_state", {"action": "status"}),
+                ("swarm_board", {"action": "list"}),
+                (
+                    "swarm_board",
+                    {"action": "create", "title": "invalid", "text": "draft", "extra": True},
+                ),
+                (
+                    "swarm_board",
+                    {"action": "post", "text": "I will review clarity", "request_id": "intro"},
+                ),
+                (
+                    "swarm_board",
+                    {"action": "post", "text": "I will review clarity", "request_id": "intro"},
+                ),
+                ("swarm_board", {"action": "join", "discussion_id": topic}),
+                (
+                    "swarm_board",
+                    {
+                        "action": "create",
+                        "title": "Review",
+                        "text": "Check facts, clarity, completeness",
+                        "request_id": "review",
+                    },
+                ),
+                (
+                    "swarm_board",
+                    {
+                        "action": "post",
+                        "text": "Please review",
+                        "recipients": [peer],
+                        "request_id": "ping",
+                    },
+                ),
+                ("swarm_inbox", {}),
+                ("swarm_state", {"action": "wait"}),
+                ("swarm_inbox", {}),
+                ("swarm_state", {"action": "done", "summary": "Checklist reviewed"}),
+            ]
+            if self.step >= len(sequence):
+                return {"content": "complete"}
+            name, arguments = sequence[self.step]
+            self.step += 1
+            return {
+                "tool_calls": [{"id": f"call-{self.step}", "name": name, "arguments": arguments}]
+            }
+
+        def normalize_response(self, raw, **_kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(
+        ["--scenario", "swarm_tool", "--swarm-case", "workflow", "--profile", "explicit_non_strict"]
+    )
+    result = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert result["passed"]
+    assert any(not call["ok"] for call in result["calls"])
+    assert result["durable_receipts"] > 0
+
+
+def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            tool_name = messages[-1]["content"].split()[1]
+            assert tool_name in {tool["name"] for tool in kwargs["tools"]}
+            arguments = json.loads(messages[-1]["content"].split(": ", 1)[1])
+            return {
+                "tool_calls": [{"id": "fixture-call", "name": tool_name, "arguments": arguments}]
+            }
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args(
+        ["--scenario", "swarm_tool", "--profile", "explicit_non_strict"]
+    )
+    result = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert result["passed"]
+    assert len(result["cases"]) >= 50
+    assert result["strict_true_tool_count"] == 0
+    args.swarm_case = "bounds"
+    bounds = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert bounds["passed"]
+    assert len(bounds["cases"]) == 8
+    args.swarm_case = "all"
+    args.swarm_tool = "swarm_inbox"
+    inbox = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert inbox["passed"]
+    assert len(inbox["cases"]) == 15
+    args.swarm_tool = "swarm_state"
+    state = asyncio.run(PROBE._probe_swarm_tool(Adapter(), args))
+    assert state["passed"]
+    assert len(state["cases"]) >= 40
+
+
 def test_browser_workflow_probe_rejects_a_claim_without_submission_or_download():
     class Adapter:
         async def send(self, *args, **kwargs):

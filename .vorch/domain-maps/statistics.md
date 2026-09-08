@@ -30,6 +30,18 @@ Both report RPCs reconcile through the dedicated two-worker Statistics pool with
 - CLI `vbot statistics compactions` formats the same section without rescanning.
 - **Limits crosses two owners:** while visible, the view polls Providers-domain `provider.usage` immediately then every 10 s; `LimitHistory` separately refreshes Provider-owned history every 60 s. Selecting an interval requests the Statistics-owned Run projection. Statistics performs no network access and writes only its disposable index.
 
+## Extension group projection
+
+`group_usage` uses canonical Sessions Run-owner records and every Run-start boundary
+to restrict the existing index and aggregators to one owner/group, optionally one
+participant. An unfinished Run's slice ends before a later owned or ordinary Run;
+unrelated earlier history in a reused Session is excluded. Explicit owner scope
+reconciliation does not prune normal Statistics scopes. The bounded worker facade
+returns the existing usage, Tools, Compaction and Run projections without costs,
+account data or separate counters. Generation checks and fork-prefix exclusion
+remain in force (`statistics.py`, `index.py`; `test_statistics.py`,
+`tests/core/sessions/test_run_ownership.py`).
+
 ## Conventions
 
 - **Run-summary segmentation:** messages between consecutive `run_summary` records form run groups; run counts/status/durations come straight from summaries - exact, not estimated.

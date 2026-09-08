@@ -9,6 +9,7 @@ durable parent→child link records the project id. An identity parent run
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,7 @@ from core.runs import (
     ActiveRunError,
     Run,
     RunAdmission,
+    RunExecutionOwner,
     RunNotFoundError,
 )
 from core.sessions import ChatSession, SessionAddress
@@ -305,6 +307,7 @@ class RecordingTriggerService:
         body: str,
         project_id: str | None = None,
         on_persisted: Any | None = None,
+        execution_owner: object | None = None,
     ) -> asyncio.Future[None]:
         del agent_id, session_id, origin_run_id, body, project_id, on_persisted
         delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -415,6 +418,7 @@ class FakeRunManager:
                 "working_project_id": admission.working_project_id,
                 "run_kind": admission.run_kind,
                 "work_id": admission.work_id,
+                "execution_owner": admission.owner,
                 "run": run,
             }
         )
@@ -470,6 +474,25 @@ def make_runtime(
         storage=FakeStorage(tmp_path),
         streaming_chat_loop=child_loop,
     )
+
+
+async def test_descendant_admission_inherits_execution_owner_without_session_grants(tmp_path):
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
+    context = replace(make_context(), execution_owner=execution, session_tool_grants=("hidden",))
+    result = await _handle_subagent(
+        context,
+        {"content": "work", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    assert result["ok"] is True
+    assert manager.started[0]["execution_owner"] == execution
+    address = SessionAddress(context.project_id, "worker", result["data"]["session_id"])
+    assert runtime.chat_sessions.temporary_binding(address) is None
+    manager.started[0]["run"].mark_completed({})
 
 
 async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(

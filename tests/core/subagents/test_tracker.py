@@ -21,6 +21,7 @@ class RecordingTriggerService:
         self.defer_input_persisted = False
         self.input_persisted_hooks: list[object] = []
         self.deliveries: dict[str, asyncio.Future[None]] = {}
+        self.execution_owners: list[object | None] = []
 
     def submit_completion(
         self,
@@ -32,6 +33,7 @@ class RecordingTriggerService:
         body: str,
         project_id: str | None = None,
         on_persisted: object | None = None,
+        execution_owner: object | None = None,
     ) -> asyncio.Future[None]:
         delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.deliveries[notice_id] = delivery
@@ -39,6 +41,7 @@ class RecordingTriggerService:
             delivery.set_exception(self.error)
             return delivery
         self.calls.append((agent_id, body, session_id, True, project_id))
+        self.execution_owners.append(execution_owner)
         assert origin_run_id
         if callable(on_persisted):
 
@@ -167,6 +170,20 @@ async def test_batch_completion_message_marks_user_cancelled_entry_in_note() -> 
     message = trigger_service.calls[0][1]
     assert "### Sub-Agent worker (id run-one, session session-one) — cancelled by user" in message
     assert "Cancelled by the user" in message
+
+
+async def test_reserved_batch_completion_keeps_exact_execution_owner() -> None:
+    from core.runs import RunExecutionOwner
+
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    parent = ("parent", "parent-session", "parent-run")
+    owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    assert tracker.reserve_slot(parent, 4, execution_owner=owner)
+    tracker.register_reserved(parent, "worker", "reused-session", "child-run")
+    tracker.on_sub_agent_complete(parent, "child-run", {"status": "completed", "result": "fixture"})
+    await asyncio.sleep(0)
+    assert trigger.execution_owners == [owner]
 
 
 async def test_batch_completion_message_includes_activity_file_when_available() -> None:

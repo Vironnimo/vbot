@@ -601,7 +601,10 @@ def _registered_project_tool_names(state: Any) -> frozenset[str]:
     including not-ready Tools, with declarative activation and constraints deciding
     whether a Project Agent may configure each entry.
     """
-    registered = state.runtime.tools.list_tools(include_session_scoped=False)
+    registered = state.runtime.tools.list_tools(
+        include_session_scoped=False,
+        include_catalog_hidden=False,
+    )
     return frozenset(
         tool.name
         for tool in registered

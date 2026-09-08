@@ -114,8 +114,13 @@ class _FakeTools:
     def __init__(self, names: set[str]) -> None:
         self.names = names
 
-    def list_tools(self, *, include_session_scoped: bool = True) -> list[SimpleNamespace]:
-        del include_session_scoped
+    def list_tools(
+        self,
+        *,
+        include_session_scoped: bool = True,
+        include_catalog_hidden: bool = True,
+    ) -> list[SimpleNamespace]:
+        del include_session_scoped, include_catalog_hidden
         return [
             SimpleNamespace(
                 name=name,

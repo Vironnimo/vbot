@@ -74,6 +74,38 @@ def _config_marker_source(marker: Path) -> str:
     )
 
 
+def test_page_declaration_is_scoped_to_the_live_registry_epoch(tmp_path: Path) -> None:
+    package = _write_package(
+        tmp_path / "extensions",
+        "page_owner",
+        "def register(api):\n    api.register_page('board', 'Board', 'ui/index.html')\n",
+    )
+    entry = package / "ui" / "index.html"
+    entry.parent.mkdir()
+    entry.write_text("<!doctype html>", encoding="utf-8")
+
+    registry = ExtensionRegistry.load(tmp_path / "extensions")
+
+    identity, page, path = registry.page_declarations()[0]
+    assert identity.name == "page_owner"
+    assert page.page_id == "board"
+    assert path == entry.resolve()
+    assert registry.is_registration_current(identity)
+    assert registry.registration_identity("page_owner") == identity
+
+    replacement = ExtensionRegistry.load(tmp_path / "extensions")
+    assert not replacement.is_registration_current(identity)
+
+
+@pytest.mark.parametrize("entry", ["../index.html", "/index.html", "index.js"])
+def test_page_declaration_rejects_unsafe_entry(entry: str) -> None:
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("example", declarations, config={}, logger=None)
+
+    with pytest.raises(ValueError):
+        api.register_page("board", "Board", entry)
+
+
 def _lifecycle_source(name: str, marker: Path, *, startup_boom: bool = False) -> str:
     boom = "        raise RuntimeError('startup boom')\n" if startup_boom else ""
     return (

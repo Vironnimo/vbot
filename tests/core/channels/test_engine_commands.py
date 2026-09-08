@@ -102,6 +102,40 @@ async def test_extension_command_declared_unavailable_on_channels(
 
 
 @pytest.mark.asyncio
+async def test_extension_page_navigation_preserves_channel_anchor(tmp_path: Path) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Open the workflow.",
+        page_ids=frozenset({"overview"}),
+        execution_mode="immediate",
+        handler=lambda _context, _argument: CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(kind="notice", text="Workflow is ready."),
+            navigation=CommandNavigation(
+                kind="open_extension_page", extension="workflow_ext", page="overview"
+            ),
+        ),
+    )
+    trigger = AsyncMock(return_value=make_completed_run(output_text="source reply"))
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger,
+        command_dispatcher=dispatcher,
+    )
+    await engine.handle_inbound_text(make_conversation(), "/workflow")
+    await engine.handle_inbound_text(make_conversation(), "later message")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["Workflow is ready.", "source reply"]
+    assert trigger.await_args is not None
+    assert trigger.await_args.args[:3] == ("assistant", "later message", SESSION_ID)
+    assert engine._config.agent_id == "assistant"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_extension_command_relays_follow_up_run(tmp_path: Path) -> None:
     follow_up = make_completed_run(output_text="Workflow result.")
     dispatcher = CommandDispatcher(ChatRunManager())

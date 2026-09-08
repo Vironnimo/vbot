@@ -6,10 +6,20 @@ export default [
   js.configs.recommended,
   ...svelte.configs.recommended,
   {
-    files: ['src/**/*.svelte', 'src/**/*.js'],
+    files: [
+      'src/**/*.svelte',
+      'src/**/*.js',
+      'scripts/**/*.{js,mjs}',
+      'resources/extensions/*/ui/**/*.{js,svelte}',
+      'tests/fixtures/extension-pages/*/ui/**/*.js',
+      'webui/src/**/*.svelte',
+      'webui/src/**/*.js',
+      'webui/scripts/**/*.{js,mjs}',
+    ],
     languageOptions: {
       globals: {
         ...globals.browser,
+        ...globals.node,
       },
     },
     rules: {

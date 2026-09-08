@@ -98,6 +98,7 @@ export function createAppController({
   onLoadProjects,
   onAgentIdChanged = () => {},
   onReloadAgents,
+  onReloadExtensionPages = async () => {},
   onLoadSessionStoreStatus = async () => {},
   onSetOnboardingAside,
   browserHistory = globalThis.history,
@@ -110,6 +111,8 @@ export function createAppController({
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
   const identityAgentRedirects = new Map();
+  const currentKnownViewIds = () =>
+    typeof knownViewIds === 'function' ? knownViewIds() : knownViewIds;
 
   function resolvedIdentityAgentId(agentId) {
     let resolved = agentId;
@@ -218,7 +221,7 @@ export function createAppController({
 
   function applyNavigationState(navState) {
     navState = remapNavigationState(navState);
-    let viewId = knownViewIds.includes(navState.view)
+    let viewId = currentKnownViewIds().includes(navState.view)
       ? navState.view
       : defaultViewId;
     if (viewId === 'debug' && !isDebugEnabled()) {
@@ -257,7 +260,7 @@ export function createAppController({
     const viewId =
       viewIdFromLocationHash(
         browserWindow?.location?.hash ?? '',
-        knownViewIds,
+        currentKnownViewIds(),
       ) || defaultViewId;
     applyNavigationState(createNavigationHistoryState(viewId, null));
   }
@@ -407,6 +410,7 @@ export function createAppController({
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
       await onLoadSessionStoreStatus();
+      await onReloadExtensionPages();
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
@@ -445,6 +449,9 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    if (kind === 'extensions') {
+      await onReloadExtensionPages();
+    }
     if (kind === RESOURCE_KIND_SESSION_STORE) {
       await onLoadSessionStoreStatus();
     }

@@ -169,6 +169,7 @@ class StubAgentResolver:
         self._project_agents = dict(project_agents or {})
         self._unresolvable = set(unresolvable or set())
         self.calls: list[tuple[str | None, str]] = []
+        self.temporary_agents: Any | None = None
 
     def resolve_agent(
         self,
@@ -194,6 +195,16 @@ class StubAgentResolver:
         if run_overrides.thinking_effort is not None:
             changes["thinking_effort"] = run_overrides.thinking_effort
         return replace(agent, **changes)
+
+    def resolve_temporary_agent(
+        self, address: SessionAddress, *, generation_id: str, run_overrides: Any | None = None
+    ) -> Any:
+        if self.temporary_agents is None:
+            raise AgentResolutionError("temporary Session is unavailable")
+        agent = self.temporary_agents.resolve(address, generation_id=generation_id)
+        if agent is None:
+            raise AgentResolutionError("temporary Session binding is unavailable")
+        return agent
 
 
 class StubProviders:
@@ -253,6 +264,7 @@ class StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_names: Any = None,
         session_tool_grants: Any = (),
+        request_block_definitions: Any = (),
     ) -> str:
         del agent_project_id
         self.effective_tool_name_calls.append(
@@ -281,6 +293,11 @@ class StubPrompts:
             agent_body,
             f"System for {agent.id}",
             rendered_project,
+            *[
+                definition.default_text
+                for definition in request_block_definitions
+                if isinstance(getattr(definition, "default_text", None), str)
+            ],
         ]
         return "\n".join(part for part in parts if part)
 

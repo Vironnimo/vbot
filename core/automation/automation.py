@@ -14,6 +14,7 @@ from core.runs import (
     ActiveRunError,
     ChatRunManager,
     Run,
+    RunExecutionOwner,
     RunKind,
     RunNotFoundError,
     RunStatus,
@@ -48,6 +49,7 @@ class _CompletionNotice:
     boundary_run: Run | None
     on_persisted: Callable[[], None] | None = None
     suppress_run: bool = False
+    execution_owner: RunExecutionOwner | None = None
 
 
 @dataclass
@@ -72,6 +74,8 @@ class _CompletionDeliveryCoordinator:
         self._suppressed_origins: dict[SessionAddress, list[str]] = {}
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
         self._closed = False
+        self._closed_execution_groups: set[tuple[str, str, str]] = set()
+        self._owned_run_starter: Callable[..., Awaitable[Run]] | None = None
 
     def set_run_relay(
         self,
@@ -90,9 +94,19 @@ class _CompletionDeliveryCoordinator:
         origin_run_id: str,
         body: str,
         on_persisted: Callable[[], None] | None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
-        if self._closed:
+        if (
+            self._closed
+            or execution_owner is not None
+            and (
+                execution_owner.extension,
+                execution_owner.group_id,
+                execution_owner.epoch,
+            )
+            in self._closed_execution_groups
+        ):
             delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             delivered.cancel()
             return delivered
@@ -117,6 +131,7 @@ class _CompletionDeliveryCoordinator:
             boundary_run=boundary_run,
             on_persisted=on_persisted,
             suppress_run=suppress_run,
+            execution_owner=execution_owner,
         )
         bucket.notices[notice_id] = notice
         if bucket.delivery_task is None or bucket.delivery_task.done():
@@ -161,7 +176,9 @@ class _CompletionDeliveryCoordinator:
         pending = [
             notice
             for notice in bucket.notices.values()
-            if notice.boundary_run is run and not notice.suppress_run
+            if notice.boundary_run is run
+            and not notice.suppress_run
+            and notice.execution_owner == run.execution_owner
         ]
         if not pending:
             return False
@@ -240,18 +257,34 @@ class _CompletionDeliveryCoordinator:
                     else None
                 )
                 try:
-                    run = await self._chat_loop.start_run(
-                        address.agent_id,
-                        message,
-                        session_id=address.session_id,
-                        internal=True,
-                        reply_surface=reply_surface,
-                        project_id=address.project_id,
-                        input_persisted_hook=self._acknowledgement_callback(
-                            address, bucket, pending
-                        ),
-                        run_kind=RunKind.SYSTEM,
-                    )
+                    owner = pending[0].execution_owner
+                    pending = [notice for notice in pending if notice.execution_owner == owner]
+                    message = _completion_message(pending)
+                    if owner is not None:
+                        # Each origin keeps its exact lifetime owner even if a target
+                        # Session is later reused by unrelated work.
+                        if self._owned_run_starter is None:
+                            raise RuntimeError("owned completion starter is unavailable")
+                        run = await self._owned_run_starter(
+                            address,
+                            owner,
+                            message,
+                            tuple(notice.id for notice in pending),
+                            self._acknowledgement_callback(address, bucket, pending),
+                        )
+                    else:
+                        run = await self._chat_loop.start_run(
+                            address.agent_id,
+                            message,
+                            session_id=address.session_id,
+                            internal=True,
+                            reply_surface=reply_surface,
+                            project_id=address.project_id,
+                            input_persisted_hook=self._acknowledgement_callback(
+                                address, bucket, pending
+                            ),
+                            run_kind=RunKind.SYSTEM,
+                        )
                 except ActiveRunError:
                     # Another ingress won the idle-session race. Keep the exact
                     # notices pending and collect everything that finishes while
@@ -263,7 +296,15 @@ class _CompletionDeliveryCoordinator:
                     else:
                         await asyncio.sleep(0)
                     continue
-                except Exception:
+                except Exception as error:
+                    if owner is not None:
+                        # An owned delivery must never bypass closed admission by
+                        # falling back to an arbitrary Session write.
+                        for notice in self._still_pending(bucket, pending):
+                            bucket.notices.pop(notice.id, None)
+                            if not notice.delivered.done():
+                                notice.delivered.set_exception(error)
+                        continue
                     # Starting a follow-up Run is only the wake-up mechanism.
                     # The durable delivery boundary is the Session note, so a
                     # start failure degrades to a non-waking System Reminder.
@@ -402,6 +443,17 @@ class _CompletionDeliveryCoordinator:
                 retry_delay * 2,
                 _COMPLETION_PERSIST_RETRY_MAX_SECONDS,
             )
+
+    async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        key = (extension, group_id, epoch)
+        self._closed_execution_groups.add(key)
+        for bucket in self._buckets.values():
+            for notice in list(bucket.notices.values()):
+                owner = notice.execution_owner
+                if owner is not None and (owner.extension, owner.group_id, owner.epoch) == key:
+                    bucket.notices.pop(notice.id, None)
+                    if not notice.delivered.done():
+                        notice.delivered.cancel()
 
     @staticmethod
     def _still_pending(
@@ -573,6 +625,7 @@ class TriggerService:
         body: str,
         project_id: str | None = None,
         on_persisted: Callable[[], None] | None = None,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> asyncio.Future[None]:
         """Coalesce one background result at the target Session's next Run boundary."""
         return self._completion_delivery.submit(
@@ -583,6 +636,20 @@ class TriggerService:
             origin_run_id=origin_run_id,
             body=body,
             on_persisted=on_persisted,
+            execution_owner=execution_owner,
+        )
+
+    def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:
+        self._completion_delivery._owned_run_starter = starter
+
+    async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        await self._completion_delivery.close_execution_group(extension, group_id, epoch)
+
+    def has_execution_work(self, owner: RunExecutionOwner) -> bool:
+        return any(
+            notice.execution_owner == owner
+            for bucket in self._completion_delivery._buckets.values()
+            for notice in bucket.notices.values()
         )
 
     def cancel_completion(

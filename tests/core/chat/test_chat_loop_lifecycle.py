@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.chat.continuation import ContinuationTracker
-from core.runs import RunAdmission, RunStatus
+from core.runs import RunAdmission, RunExecutionOwner, RunStatus
 from core.sessions import ChatSession
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
@@ -69,6 +69,45 @@ async def test_run_end_notifies_reflection_with_internal_flag(tmp_path: Path) ->
     # The loop reports the flag verbatim; the service is the one that gates it.
     assert len(reflection.calls) == 1
     assert reflection.calls[0]["internal"] is True
+
+
+@pytest.mark.asyncio
+async def test_owned_descendant_skips_titles_and_reflection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openrouter/anthropic/claude-sonnet-4",
+        allowed_tools=["*"],
+        workspace=tmp_path / "workspace-coder",
+    )
+    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    async def record_owned_run(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(runtime.chat_sessions, "record_run_owner_async", record_owned_run)
+    reflection = RecordingReflection()
+
+    class Titles:
+        calls: list[dict[str, Any]] = []
+
+        def notify_user_message(self, **kwargs: Any) -> None:
+            self.calls.append(kwargs)
+
+    loop = build_chat_loop(runtime, reflection_service=reflection, session_title_service=Titles())
+    owner = RunExecutionOwner("swarm", "group", "participant", "generation", "epoch")
+    run = await runtime.chat_run_manager.start(
+        session_address("coder", "session-one"),
+        loop.run_executor("Continue the assigned task"),
+        admission=RunAdmission(owner=owner),
+    )
+    await run.wait()
+
+    assert reflection.calls == []
+    assert Titles.calls == []
 
 
 @pytest.mark.asyncio

@@ -343,11 +343,17 @@ async def test_windows_background_process_accepts_raw_stdin_via_process_tool(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("owned", [False, True])
 async def test_background_trigger_fires_when_trigger_service_provided(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    owned: bool,
 ) -> None:
+    from dataclasses import replace
+
+    from core.runs import RunExecutionOwner
+
     calls: list[dict[str, Any]] = []
     trigger_called = asyncio.Event()
 
@@ -361,6 +367,7 @@ async def test_background_trigger_fires_when_trigger_service_provided(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             calls.append(
                 {
@@ -369,6 +376,7 @@ async def test_background_trigger_fires_when_trigger_service_provided(
                     "notice_id": notice_id,
                     "origin_run_id": origin_run_id,
                     "body": body,
+                    "execution_owner": execution_owner,
                 }
             )
             trigger_called.set()
@@ -376,6 +384,8 @@ async def test_background_trigger_fires_when_trigger_service_provided(
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
+    owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch") if owned else None
+    context = replace(context, execution_owner=owner)
 
     result = await bash_handler(
         context,
@@ -392,6 +402,7 @@ async def test_background_trigger_fires_when_trigger_service_provided(
     assert calls[0]["agent_id"] == AGENT_ID
     assert calls[0]["session_id"] == context.session_id
     assert calls[0]["origin_run_id"] == context.run_id
+    assert calls[0]["execution_owner"] == owner
 
 
 @pytest.mark.asyncio
@@ -443,6 +454,7 @@ async def test_background_after_expiry_triggers_background_completion_when_trigg
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             calls.append(
                 {
@@ -500,6 +512,7 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             messages.append(body)
             assert session_id
@@ -549,6 +562,7 @@ async def test_background_trigger_message_carries_failure_hint(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             messages.append(body)
             assert session_id
@@ -597,6 +611,7 @@ async def test_background_completion_trigger_carries_project_id(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert session_id
             assert notice_id.startswith("bash:")
@@ -640,6 +655,7 @@ async def test_background_watcher_does_not_consume_process_poll_output(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert session_id
             assert notice_id.startswith("bash:")
@@ -698,6 +714,7 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert agent_id == AGENT_ID
             assert session_id == "session-a"
@@ -1088,6 +1105,7 @@ async def test_background_at_top_level_is_not_blocked(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert session_id
             assert notice_id.startswith("bash:")
@@ -2322,6 +2340,7 @@ async def test_background_watcher_reports_aborted_by_user_when_process_is_user_c
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert session_id
             assert notice_id.startswith("bash:")
@@ -2379,6 +2398,7 @@ async def test_background_watcher_reports_natural_completion_status(
             origin_run_id: str,
             body: str,
             project_id: str | None = None,
+            execution_owner: object | None = None,
         ) -> asyncio.Future[None]:
             assert session_id
             assert notice_id.startswith("bash:")

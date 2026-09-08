@@ -860,6 +860,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
 
     source_agent_id, source_project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    target_explicit = "target_agent_id" in params
     target_agent_id, target_project_id = _optional_fork_target(
         params, source_agent_id, source_project_id
     )
@@ -880,8 +881,8 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
         await _SESSION_RPC_WORKERS.run(resolve_endpoints)
         fork = await state.runtime.chat_sessions.fork(
             _session_address(source_agent_id, session_id, source_project_id),
-            target_agent_id=target_agent_id,
-            target_project_id=target_project_id,
+            target_agent_id=target_agent_id if target_explicit else None,
+            target_project_id=target_project_id if target_explicit else None,
             strip_meta_keys=strip_meta_keys,
         )
         fork_metadata = await _session_io(

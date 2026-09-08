@@ -29,7 +29,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, TemporarySessionBinding
 from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents.activity import SubAgentActivity
 from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
@@ -374,11 +374,31 @@ async def _handle_subagent(
             "cannot target the calling agent's own active session",
         )
 
+    temporary_parent = None
+    if (
+        context.execution_owner is not None
+        and target_agent_id == context.agent_id
+        and target_project_id == context.project_id
+    ):
+        owner = context.execution_owner
+        temporary_parent = await asyncio.to_thread(
+            runtime.chat_sessions.temporary_binding_by_participant,
+            owner_name=owner.extension,
+            group_id=owner.group_id,
+            participant_id=owner.participant_id,
+        )
+        if temporary_parent is not None and (
+            temporary_parent.generation_id != owner.generation_id
+            or temporary_parent.address.agent_id != target_agent_id
+            or temporary_parent.address.project_id != target_project_id
+        ):
+            temporary_parent = None
     validation_error = _validate_target_agent(
         runtime,
         target_agent_id,
         target_project_id,
         run_overrides=run_overrides,
+        temporary_parent_binding=temporary_parent,
     )
     if validation_error is not None:
         return validation_error
@@ -391,7 +411,10 @@ async def _handle_subagent(
             f"Sub-agent nesting depth limit exceeded: {settings['max_subagent_depth']}",
         )
     if not batch_tracker.reserve_slot(
-        parent_key, settings["max_subagents_per_turn"], context.project_id
+        parent_key,
+        settings["max_subagents_per_turn"],
+        context.project_id,
+        execution_owner=context.execution_owner,
     ):
         return tool_failure(
             "subagent_limit_exceeded",
@@ -463,6 +486,7 @@ async def _handle_subagent(
                 context,
                 run_overrides,
                 work_id,
+                temporary_parent_binding=temporary_parent,
             )
         except ActiveRunError:
             if session_id is None:
@@ -476,8 +500,17 @@ async def _handle_subagent(
                 content,
                 context,
                 run_overrides,
+                temporary_parent_binding=temporary_parent,
             )
-            target_agent = runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+            target_agent = (
+                runtime.agent_resolver.resolve_temporary_agent(
+                    temporary_parent.address,
+                    generation_id=temporary_parent.generation_id,
+                    run_overrides=run_overrides,
+                )
+                if temporary_parent is not None
+                else runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+            )
             item = await runtime.chat_run_manager.enqueue(
                 SessionAddress(
                     project_id=target_project_id,
@@ -490,6 +523,8 @@ async def _handle_subagent(
                     working_project_id=resolve_working_project_id(target_project_id, target_agent),
                     run_kind=RunKind.SUBAGENT,
                     work_id=work_id,
+                    owner=context.execution_owner,
+                    contributes_to_agent_activity=context.execution_owner is None,
                 ),
             )
             if activity is not None:
@@ -1011,14 +1046,25 @@ async def _start_subagent_run(
     context: ToolContext,
     run_overrides: AgentRunOverrides | None,
     work_id: str,
+    *,
+    temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> Run:
     _, executor = _make_subagent_executor(
         runtime,
         content,
         context,
         run_overrides,
+        temporary_parent_binding=temporary_parent_binding,
     )
-    target_agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
+    target_agent = (
+        runtime.agent_resolver.resolve_temporary_agent(
+            temporary_parent_binding.address,
+            generation_id=temporary_parent_binding.generation_id,
+            run_overrides=run_overrides,
+        )
+        if temporary_parent_binding is not None
+        else runtime.agent_resolver.resolve_agent(project_id, agent_id)
+    )
     return await runtime.chat_run_manager.start(
         SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
         executor,
@@ -1026,6 +1072,8 @@ async def _start_subagent_run(
             working_project_id=resolve_working_project_id(project_id, target_agent),
             run_kind=RunKind.SUBAGENT,
             work_id=work_id,
+            owner=context.execution_owner,
+            contributes_to_agent_activity=context.execution_owner is None,
         ),
     )
 
@@ -1035,6 +1083,8 @@ def _make_subagent_executor(
     content: str,
     context: ToolContext,
     run_overrides: AgentRunOverrides | None = None,
+    *,
+    temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> tuple[ChatLoop, RunExecutor]:
     # Child Runs must match normal live Runs: the parent streaming loop
     # carries its attachment resolver and compaction service into the
@@ -1045,6 +1095,12 @@ def _make_subagent_executor(
     sub_loop = runtime.streaming_chat_loop.child_loop(
         nesting_depth=context.nesting_depth + 1,
     )
+    if temporary_parent_binding is not None:
+        return sub_loop, sub_loop.run_executor(
+            content,
+            agent_overrides=run_overrides,
+            temporary_parent_binding=temporary_parent_binding,
+        )
     return sub_loop, sub_loop.run_executor(
         content,
         agent_overrides=run_overrides,
@@ -1397,6 +1453,7 @@ def _validate_target_agent(
     project_id: str | None,
     *,
     run_overrides: AgentRunOverrides | None = None,
+    temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> JsonObject | None:
     """Validate the spawn target resolves under its addressed project.
 
@@ -1408,7 +1465,13 @@ def _validate_target_agent(
     letting the error escape the tool boundary.
     """
     try:
-        if run_overrides is None:
+        if temporary_parent_binding is not None:
+            runtime.agent_resolver.resolve_temporary_agent(
+                temporary_parent_binding.address,
+                generation_id=temporary_parent_binding.generation_id,
+                run_overrides=run_overrides,
+            )
+        elif run_overrides is None:
             runtime.agent_resolver.resolve_agent(project_id, target_agent_id)
         else:
             runtime.agent_resolver.resolve_agent(
