@@ -1,6 +1,6 @@
 # Release Workflow
 
-How to cut a tagged GitHub release of vBot. Releases are how end users install: the public `install.sh`/`install.ps1` entrypoints and `vbot update` consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly â€” the notes format and the attached asset are not optional.
+How to cut a tagged GitHub release of vBot. Releases are how end users install: the public `install.sh`/`install.ps1` entrypoints and `vbot update` consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly — the notes format and the attached asset are not optional.
 
 ## Steps
 
@@ -14,13 +14,13 @@ git describe --tags --abbrev=0 origin/main
 gh release view --json tagName,publishedAt,url
 ```
 
-The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` â†’ `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
+The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` → `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
 
 Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
 ### 2. Bump the version
 
-The version lives in exactly **one** place: `pyproject.toml` â†’ `version`. Bump it (semver):
+The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump it (semver):
 
 ```toml
 version = "X.Y.Z"
@@ -56,7 +56,7 @@ To re-run only the public-distribution smoke test without creating or changing a
 gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 ```
 
-The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` â†’ `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
+The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
 `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
 ### 6. Verify the workflow ran and the asset attached
@@ -84,7 +84,7 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 ## Gotchas
 
 - **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
-- **Notes**: only the auto-generated Full Changelog line â€” no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
+- **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
 - **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
 - **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and asset cannot be acquired before publication. Candidate behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
