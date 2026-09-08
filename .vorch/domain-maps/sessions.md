@@ -29,8 +29,10 @@ normalized relations outside open metadata and copied Messages. Exact address pl
 Session generation and registered owner establish authority; forked history does
 not copy these capabilities. Carrier Messages and delivery receipts commit together.
 Canonical Run starts delimit owned usage even when a later ordinary Run reuses the
-Session. These additions reconcile at schema generation 1 without rewriting prior
-Session rows (`schema.py`, `store.py`, `sessions.py`; `test_schema_reconcile.py`,
+Session. Deletion of a drained temporary group uses `delete_temporary_group`: one
+transaction removes only Session generations bound to the exact owner/group;
+normal Session deletion still rejects owner-managed history. These additions
+reconcile at schema generation 1 without rewriting prior Session rows (`schema.py`, `store.py`, `sessions.py`; `test_schema_reconcile.py`,
 `test_run_ownership.py`). The owner-bound creation/admission facade is
 `core/agents/temporary.py`; domain state belongs to the Extension.
 

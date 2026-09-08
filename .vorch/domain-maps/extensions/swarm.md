@@ -178,3 +178,10 @@ it never substitutes cumulative Session usage.
 The Store creates the complete current schema directly. It has no schema
 upgrades or converter. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
+
+The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
+Swarm `deleting`, removes its bound participant Sessions through the host, then
+transactionally removes its Board, participants, events and request receipts.
+The profile and other Swarms remain. Stop/Resume/Delete are serialized; the durable
+deletion marker blocks Resume, including request replay, and survives restart so
+a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.

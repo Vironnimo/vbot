@@ -45,6 +45,7 @@ _SWARM_STATES = frozenset(
         "needs_attention",
         "stopping",
         "stopped",
+        "deleting",
         "cancelled",
         "interrupted",
     }
@@ -139,6 +140,12 @@ class SwarmStore:
             request_id,
             expected_profile_revision,
         )
+
+    async def begin_delete(self, swarm_id: str) -> bool:
+        return await self._run(self._begin_delete, swarm_id)
+
+    async def delete_swarm(self, swarm_id: str) -> None:
+        await self._run(self._delete_swarm, swarm_id)
 
     async def get_swarm(self, swarm_id: str) -> Json:
         return await self._run(self._get_swarm, swarm_id)
@@ -773,6 +780,76 @@ class SwarmStore:
 
         return self._write(operation)
 
+    def _begin_delete(self, swarm_id: str) -> bool:
+        def operation(connection: sqlite3.Connection) -> bool:
+            row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+            if row is None:
+                return False
+            epoch = connection.execute(
+                "SELECT is_open FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
+            ).fetchone()
+            if (
+                row["state"] not in {"stopped", "cancelled", "interrupted", "deleting"}
+                or epoch["is_open"]
+            ):
+                raise SwarmStoreError("swarm_not_stopped")
+            if connection.execute(
+                "SELECT 1 FROM participants WHERE swarm_id=? AND state='running'", (swarm_id,)
+            ).fetchone():
+                raise SwarmStoreError("swarm_not_stopped")
+            connection.execute("UPDATE swarms SET state='deleting' WHERE id=?", (swarm_id,))
+            return True
+
+        return self._write(operation)
+
+    def _delete_swarm(self, swarm_id: str) -> None:
+        def operation(connection: sqlite3.Connection) -> None:
+            row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+            if row is None:
+                return
+            if row["state"] != "deleting":
+                raise SwarmStoreError("invalid_lifecycle_state")
+            for table in (
+                "delivery_batch_entries",
+                "delivery_batches",
+                "recipients",
+                "memberships",
+                "participant_sessions",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE participant_id IN (SELECT id FROM participants WHERE swarm_id=?)",
+                    (swarm_id,),
+                )
+            for table in (
+                "posts",
+                "discussions",
+                "participants",
+                "swarm_settings",
+                "swarm_execution_epochs",
+                "swarm_epochs",
+                "swarm_events",
+            ):
+                connection.execute(f"DELETE FROM {table} WHERE swarm_id=?", (swarm_id,))
+            connection.execute(
+                "DELETE FROM requests WHERE scope IN (?,?,?,?) "
+                "OR substr(scope,1,?)=? OR substr(scope,1,?)=? "
+                "OR (scope='start' AND json_extract(outcome,'$.swarm_id')=?)",
+                (
+                    f"settings:{swarm_id}",
+                    f"stop:{swarm_id}",
+                    f"stop-finish:{swarm_id}",
+                    f"resume:{swarm_id}",
+                    len(f"post:{swarm_id}:"),
+                    f"post:{swarm_id}:",
+                    len(f"create:{swarm_id}:"),
+                    f"create:{swarm_id}:",
+                    swarm_id,
+                ),
+            )
+            connection.execute("DELETE FROM swarms WHERE id=?", (swarm_id,))
+
+        self._write(operation)
+
     def _get_swarm(self, swarm_id: str) -> Json:
         connection = self._require_connection()
         row = connection.execute("SELECT * FROM swarms WHERE id=?", (swarm_id,)).fetchone()
@@ -1218,11 +1295,13 @@ class SwarmStore:
             scope = f"stop:{swarm_id}"
             payload_hash = _hash({"action": "begin"})
             replay = self._request_replay(connection, scope, request_id, payload_hash)
-            if replay is not None:
-                return replay
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
+            if row["state"] == "deleting":
+                raise SwarmStoreError("swarm_closed")
+            if replay is not None:
+                return replay
             epoch = connection.execute(
                 "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
             ).fetchone()
@@ -1302,11 +1381,13 @@ class SwarmStore:
             scope = f"resume:{swarm_id}"
             payload_hash = _hash({"action": "begin", "participant_id": participant_id})
             replay = self._request_replay(connection, scope, request_id, payload_hash)
-            if replay is not None:
-                return replay
             row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
             if row is None:
                 raise SwarmStoreError("swarm_not_found")
+            if row["state"] == "deleting":
+                raise SwarmStoreError("swarm_closed")
+            if replay is not None:
+                return replay
             if row["state"] in {"stopping", "preparing"}:
                 raise SwarmStoreError("swarm_closed")
             epoch = connection.execute(
