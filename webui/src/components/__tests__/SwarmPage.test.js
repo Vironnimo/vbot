@@ -67,8 +67,8 @@ function button(text) {
   );
 }
 
-function createBridge() {
-  let storedProfile = structuredClone(profile);
+function createBridge(initialProfile = profile) {
+  let storedProfile = structuredClone(initialProfile);
   let autosaveParticipant;
   let invalidate;
   let runListener;
@@ -339,6 +339,63 @@ describe('SwarmPage', () => {
       }),
     );
   });
+
+  it.each([null, '', 'test-owned replacement instructions'])(
+    'persists the visible new-profile prompt after editing it to %s',
+    async (replacement) => {
+      const { bridge, operation } = createBridge();
+      await render(bridge);
+      button('New profile').click();
+      await tick();
+      flushSync();
+      const input = document.getElementById('swarm-instructions');
+      const initial = input.value;
+      expect(initial.trim().length).toBeGreaterThan(0);
+      expect(input.disabled).toBe(false);
+      expect(input.readOnly).toBe(false);
+      if (replacement !== null) fill('swarm-instructions', replacement);
+      const expected = replacement ?? initial;
+      fill('swarm-profile-name', 'Prompt profile');
+      await choose('swarm-model-0', 'demo/model');
+      fill('swarm-directory', 'C:/work');
+      await tick();
+      button('Save profile').click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await tick();
+      expect(operation).toHaveBeenCalledWith(
+        'profiles.save',
+        expect.objectContaining({
+          profile: expect.objectContaining({ instructions: expected }),
+        }),
+      );
+      await unmount(mounted);
+      mounted = null;
+      await render(bridge);
+      button('Edit').click();
+      await tick();
+      flushSync();
+      expect(document.getElementById('swarm-instructions').value).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each(['', 'test-owned existing instructions'])(
+    'preserves an existing profile prompt of %s',
+    async (instructions) => {
+      const { bridge, operation } = createBridge({ ...profile, instructions });
+      await render(bridge);
+      button('Edit').click();
+      await tick();
+      flushSync();
+      expect(document.getElementById('swarm-instructions').value).toBe(
+        instructions,
+      );
+      expect(
+        operation.mock.calls.some(([name]) => name === 'profiles.save'),
+      ).toBe(false);
+    },
+  );
 
   it('filters Models and resets incompatible reasoning when the Model changes', async () => {
     const { bridge } = createBridge();

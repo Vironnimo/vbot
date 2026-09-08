@@ -41,7 +41,8 @@
     tool_access: { mode: 'selected', allowed: [] },
     tools: {},
     allowed_skills: ['*'],
-    instructions: '',
+    instructions:
+      'You are one of several Agents. Every Agent receives the same initial user prompt, which describes your shared goal. How you organize yourselves and pursue that goal is up to you collectively.',
     delivery: {
       main: { mode: 'all', wake_idle: true },
       discussion: { mode: 'all', wake_idle: true },
