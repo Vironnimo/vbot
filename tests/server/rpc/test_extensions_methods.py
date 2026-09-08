@@ -22,6 +22,7 @@ from core.extensions.extensions import (
     ExtensionDeclarations,
     ExtensionManifest,
     ExtensionRecord,
+    ExtensionRegistrationIdentity,
     RecallBackendDeclaration,
     ToolDeclaration,
 )
@@ -324,6 +325,198 @@ async def test_extensions_list_rejects_params() -> None:
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_extension_page_run_rejects_unscoped_or_invalid_cursor_requests() -> None:
+    state = _state_with_records([])
+
+    missing_scope = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_run",
+            "params": {"name": "alpha", "group_id": "group", "run_id": "run"},
+        },
+    )
+    invalid_cursor = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_run",
+            "params": {
+                "name": "alpha",
+                "page": {"id": "overview", "epoch": "epoch"},
+                "group_id": "group",
+                "run_id": "run",
+                "after_sequence": -1,
+            },
+        },
+    )
+
+    assert missing_scope["ok"] is False
+    assert invalid_cursor["ok"] is False
+    assert invalid_cursor["error"]["code"] == "invalid_request"
+
+
+class _PageRegistry:
+    def __init__(self, host: Any) -> None:
+        self.identity = ExtensionRegistrationIdentity("alpha", "epoch-a")
+        self._host = host
+        self.current = True
+
+    def is_registration_current(self, identity: Any) -> bool:
+        return self.current and identity == self.identity
+
+    def page_declarations(self) -> list[tuple[Any, Any, Path]]:
+        return [(self.identity, SimpleNamespace(page_id="main"), Path("/page/index.html"))]
+
+    def host_for(self, identity: Any) -> Any:
+        if not self.is_registration_current(identity):
+            raise ValueError("stale owner")
+        return self._host
+
+
+class _ProjectedMessage:
+    def __init__(self, role: str, payload: JsonObject) -> None:
+        self.role = role
+        self._payload = payload
+
+    def to_dict(self) -> JsonObject:
+        return dict(self._payload)
+
+
+class _HistoryDelivery:
+    def project_message(self, message: JsonObject) -> JsonObject:
+        if message.get("role") != "assistant":
+            return dict(message)
+        return {
+            **message,
+            "content": "[report](/api/files/capability.signature)",
+        }
+
+    def resolve_token(self, token: str) -> object | None:
+        return object() if token == "capability.signature" else None
+
+
+@pytest.mark.asyncio
+async def test_extension_page_history_projects_only_bound_visible_history() -> None:
+    snapshot = SimpleNamespace(
+        page=SimpleNamespace(
+            messages=(
+                _ProjectedMessage(
+                    "assistant",
+                    {
+                        "role": "assistant",
+                        "content": "raw",
+                        "output_files": [{"path": "/private/report.txt"}],
+                        "reasoning_meta": {"secret": True},
+                    },
+                ),
+                _ProjectedMessage("note", {"role": "note", "content": "private"}),
+            ),
+            has_more=False,
+            before_cursor=None,
+        ),
+        session_usage={"input_tokens": 2},
+    )
+
+    class Groups:
+        async def inspect(self, group_id: str, participant_id: str, query: JsonObject) -> Any:
+            assert (group_id, participant_id, query) == ("group-a", "participant-a", {"limit": 1})
+            return snapshot
+
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
+    state = _state_with_records([])
+    state.runtime.extensions = registry
+    state.file_delivery = _HistoryDelivery()
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_history",
+            "params": {
+                "name": "alpha",
+                "page": {"id": "main", "epoch": "epoch-a"},
+                "group_id": "group-a",
+                "participant_id": "participant-a",
+                "query": {"limit": 1},
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["result"] == {
+        "messages": [{"role": "assistant", "content": "[report](/api/files/capability.signature)"}],
+        "has_more": False,
+        "session_usage": {"input_tokens": 2},
+        "file_urls": ["/api/files/capability.signature"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_extension_page_history_rejects_stale_page_and_foreign_participant() -> None:
+    class Groups:
+        async def inspect(self, group_id: str, participant_id: str, query: JsonObject) -> Any:
+            if participant_id != "participant-a":
+                raise ValueError("participant is not owned")
+            return SimpleNamespace(
+                page=SimpleNamespace(messages=(), has_more=False, before_cursor=None),
+                session_usage={},
+            )
+
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
+    state = _state_with_records([])
+    state.runtime.extensions = registry
+    state.file_delivery = _HistoryDelivery()
+    params: JsonObject = {
+        "name": "alpha",
+        "page": {"id": "main", "epoch": "epoch-a"},
+        "group_id": "group-a",
+        "participant_id": "foreign",
+        "query": {},
+    }
+
+    foreign = await dispatch_rpc(state, {"method": "extensions.page_history", "params": params})
+    registry.current = False
+    stale = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_history",
+            "params": {**params, "participant_id": "participant-a"},
+        },
+    )
+
+    assert foreign["ok"] is False
+    assert stale["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_extension_page_operation_rechecks_registration_after_await() -> None:
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=None))
+
+    class Management:
+        async def invoke(self, operation: str, arguments: JsonObject) -> JsonObject:
+            assert (operation, arguments) == ("refresh", {})
+            registry.current = False
+            return {"stale": True}
+
+    registry.management = lambda name: Management()  # type: ignore[attr-defined]
+    state = _state_with_records([])
+    state.runtime.extensions = registry
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.operation",
+            "params": {
+                "name": "alpha",
+                "operation": "refresh",
+                "arguments": {},
+                "page": {"id": "main", "epoch": "epoch-a"},
+            },
+        },
+    )
+
+    assert result["ok"] is False
 
 
 def _schemed_record(name: str = "homeassistant") -> ExtensionRecord:
@@ -635,6 +828,9 @@ async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path:
 
     assert result["ok"] is True
     assert state.runtime.extension_reload_count == 1
-    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
+    assert [event["payload"] for event in state.event_bus.events[-2:]] == [
+        {"kind": "commands"},
+        {"kind": "extensions"},
+    ]
     names = [extension["name"] for extension in result["result"]["extensions"]]
     assert names == ["guard_bash"]

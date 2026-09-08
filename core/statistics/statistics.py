@@ -39,6 +39,8 @@ from core.chat.model_resolution import parse_bare_model
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
+    OwnedRunRecord,
+    RunStartBoundary,
     SessionAddress,
     SessionNotFoundError,
     skill_context_note_name,
@@ -62,9 +64,11 @@ from core.statistics.skills import (
 from core.statistics.timestamps import parse_timestamp
 from core.tools import is_tool_result_envelope
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("statistics")
+_GROUP_USAGE_WORKERS = BoundedWorkerPool(name="statistics-group-usage", max_workers=2)
 
 # Visible conversation roles stay separate from the full persisted Session
 # record vocabulary. User records always count; Assistant records count only
@@ -176,6 +180,20 @@ class SessionSource(Protocol):
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]: ...
+
+    def owned_runs(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        participant_id: str | None = None,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[OwnedRunRecord]: ...
+
+    def run_start_boundaries(
+        self, addresses: Sequence[SessionAddress]
+    ) -> Sequence[RunStartBoundary]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -1694,6 +1712,105 @@ class StatisticsService:
             runs=runs[:MAX_RUN_ACTIVITY],
         )
 
+    async def group_usage(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        query: JsonObject | None = None,
+    ) -> JsonObject:
+        """Return a bounded, owner-exact usage projection for an Extension group."""
+        return await _GROUP_USAGE_WORKERS.run(
+            self._group_usage, owner_name, group_id, dict(query or {})
+        )
+
+    def _group_usage(self, owner_name: str, group_id: str, query: JsonObject) -> JsonObject:
+        if set(query) - {"participant_id"}:
+            raise ValueError("invalid group usage query")
+        if (
+            not isinstance(owner_name, str)
+            or not owner_name
+            or not isinstance(group_id, str)
+            or not group_id
+        ):
+            raise ValueError("owner_name and group_id are required")
+        participant_id = query.get("participant_id")
+        if participant_id is not None and (
+            not isinstance(participant_id, str) or not participant_id
+        ):
+            raise ValueError("participant_id must be a non-empty string")
+        records = self._owned_run_page(owner_name, group_id, participant_id)
+        report = self._group_report(records)
+        participants = {record.owner.participant_id for record in records}
+        return {
+            "group_id": group_id,
+            "participant_id": participant_id,
+            "participant_count": len(participants),
+            "owned_run_count": len(records),
+            "usage": asdict(report.usage),
+            "tools": asdict(report.tools),
+            "compactions": asdict(report.compactions),
+            "runs": asdict(report.runs),
+        }
+
+    def _owned_run_page(
+        self, owner_name: str, group_id: str, participant_id: str | None
+    ) -> list[OwnedRunRecord]:
+        result: list[OwnedRunRecord] = []
+        after = 0
+        while True:
+            page = self._sessions.owned_runs(
+                owner_name=owner_name,
+                group_id=group_id,
+                participant_id=participant_id,
+                after=after,
+                limit=1000,
+            )
+            result.extend(page)
+            if len(page) < 1000:
+                return result
+            after = page[-1].record_key
+
+    def _group_report(self, records: list[OwnedRunRecord]) -> StatisticsReport:
+        scopes = _owner_scopes(records)
+        snapshot = self._index.snapshot(self._sessions, scopes, prune=False)
+        by_address: dict[SessionAddress, list[OwnedRunRecord]] = {}
+        for record in records:
+            by_address.setdefault(record.address, []).append(record)
+        aggregator = _Aggregator(since=None, until=None)
+        addresses = tuple(by_address)
+        boundaries = [
+            boundary
+            for offset in range(0, len(addresses), 100)
+            for boundary in self._sessions.run_start_boundaries(addresses[offset : offset + 100])
+        ]
+        for address, address_records in by_address.items():
+            key = statistics_session_key(address.project_id, address.agent_id, address.session_id)
+            indexed = snapshot.get(key)
+            if indexed is None:
+                continue
+            messages = list(indexed.messages)
+            address_boundaries = [
+                boundary
+                for boundary in boundaries
+                if boundary.address.project_id == address.project_id
+                and boundary.address.agent_id == address.agent_id
+                and boundary.address.session_id == address.session_id
+            ]
+            for record in address_records:
+                if indexed.generation_id != record.generation_id:
+                    continue
+                sliced = _owned_run_messages(messages, record, address_boundaries)
+                if not sliced:
+                    continue
+                display_key = record.owner.participant_id
+                aggregator.register_agent(display_key, [{"id": address.session_id}])
+                aggregator.register_scope(agent_id=address.agent_id, project_id=address.project_id)
+                aggregator.process_session(
+                    display_key, address.session_id, sliced, {"id": address.session_id}
+                )
+        return aggregator.build(None)
+
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""
         if self._projects is None:
@@ -2019,6 +2136,71 @@ def _session_activity_messages(
     ):
         return messages
     return messages[copied_message_count:]
+
+
+def _owner_scopes(records: Sequence[OwnedRunRecord]) -> tuple[StatisticsScope, ...]:
+    grouped: dict[tuple[str | None, str], list[JsonObject]] = {}
+    seen: set[SessionAddress] = set()
+    for record in records:
+        if record.address in seen:
+            continue
+        seen.add(record.address)
+        grouped.setdefault((record.address.project_id, record.address.agent_id), []).append(
+            {"id": record.address.session_id}
+        )
+    return tuple(
+        StatisticsScope(
+            project_id=project_id,
+            agent_id=agent_id,
+            display_key=agent_id,
+            summaries=tuple(summaries),
+        )
+        for (project_id, agent_id), summaries in grouped.items()
+    )
+
+
+def _owned_run_messages(
+    messages: Sequence[ChatMessage], record: OwnedRunRecord, boundaries: Sequence[RunStartBoundary]
+) -> list[ChatMessage]:
+    """Select one owner Run without treating a reused Session as wholly owned."""
+    start = record.start_sequence
+    end = record.terminal_sequence
+    if end is None:
+        generation_starts = [
+            boundary for boundary in boundaries if boundary.generation_id == record.generation_id
+        ]
+        current = next(
+            (
+                index
+                for index, boundary in enumerate(generation_starts)
+                if boundary.run_id == record.run_id
+            ),
+            None,
+        )
+        if current is None:
+            return []
+        # A Run with no output can share its sequence with its successor.
+        # Canonical admission order, not a strict sequence comparison, separates them.
+        if current + 1 < len(generation_starts):
+            end = generation_starts[current + 1].start_sequence - 1
+    selected: list[ChatMessage] = []
+    for message in messages:
+        ordinal = _statistics_message_ordinal(message)
+        if ordinal is None or ordinal < start or (end is not None and ordinal > end):
+            continue
+        selected.append(message)
+    return selected
+
+
+def _statistics_message_ordinal(message: ChatMessage) -> int | None:
+    prefix = "statistics-"
+    if not message.id.startswith(prefix):
+        return None
+    try:
+        value = int(message.id.removeprefix(prefix))
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 def _distinct_run_models(group: list[ChatMessage]) -> set[str]:

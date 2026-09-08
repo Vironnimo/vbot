@@ -1,5 +1,10 @@
 """Config-Agent Tool and Skill resolution tests."""
 
+from types import SimpleNamespace
+
+from core.agents.temporary import TemporaryAgent
+from core.projects.resolver import AgentResolver
+from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 
 from .resolver_test_support import (
@@ -83,6 +88,120 @@ def test_config_agent_run_overrides_change_only_the_runtime_view(
     assert configured.thinking_effort == "low"
     assert overridden.tool_access == configured.tool_access
     assert overridden.body == configured.body
+
+
+def test_temporary_profile_is_narrowed_by_the_selected_project_ceiling(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    project = _project(projects, repo)
+    project = projects.update(
+        project.project_id,
+        allowed_tools=["read", "grep"],
+        skills_global_enabled=["global-skill"],
+        skills_project_disabled=["disabled-skill"],
+    )
+    temporary = TemporaryAgent(
+        id="temporary",
+        name="temporary",
+        model="openai/gpt-5.2",
+        cwd=repo,
+        tool_access=ToolAccess(
+            mode="all",
+            denied=("grep",),
+            granted=("write", "read"),
+        ),
+        allowed_skills=["*"],
+        tools={"read": {"safe": True}, "write": {"unsafe": True}},
+        fallback_models=[],
+    )
+    resolver = AgentResolver(
+        agents,
+        projects,
+        _openai_configured(),
+        lambda: {},
+        project_skill_names=lambda _project_id: frozenset({"project-skill", "disabled-skill"}),
+        temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
+    )
+
+    resolved = resolver.resolve_temporary_agent(
+        SessionAddress(project.project_id, "temporary", "session"),
+        generation_id="generation",
+        run_overrides=AgentRunOverrides(model="openai/gpt-mini", thinking_effort="high"),
+    )
+
+    assert resolved.model == "openai/gpt-mini"
+    assert resolved.thinking_effort == "high"
+    assert resolved.tool_access == ToolAccess(
+        mode="selected",
+        allowed=("read", "grep"),
+        denied=("grep",),
+        granted=("read",),
+    )
+    assert resolved.tools == {"read": {"safe": True}}
+    assert resolved.allowed_skills == ["global-skill", "project-skill"]
+    assert resolved.workspace == ""
+    assert resolved.root_project_id is None
+    assert resolved.custom_system_prompt_enabled is False
+
+
+def test_temporary_selected_empty_policy_stays_empty_inside_a_project(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    project = _project(projects, repo)
+    temporary = TemporaryAgent(
+        id="temporary",
+        name="temporary",
+        model="openai/gpt-5.2",
+        cwd=repo,
+        tool_access=ToolAccess(mode="selected", allowed=()),
+        allowed_skills=["identity-private"],
+        tools={},
+        fallback_models=[],
+    )
+    resolver = AgentResolver(
+        agents,
+        projects,
+        _openai_configured(),
+        lambda: {},
+        temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
+    )
+
+    resolved = resolver.resolve_temporary_agent(
+        SessionAddress(project.project_id, "temporary", "session"), generation_id="generation"
+    )
+
+    assert resolved.tool_access == ToolAccess(mode="selected", allowed=())
+    assert resolved.allowed_skills == []
+
+
+def test_temporary_profile_skill_selection_cannot_widen_a_project_ceiling(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    project = _project(projects, repo)
+    project = projects.update(project.project_id, skills_global_enabled=["allowed-skill"])
+    temporary = TemporaryAgent(
+        id="temporary",
+        name="temporary",
+        model="openai/gpt-5.2",
+        cwd=repo,
+        tool_access=ToolAccess(mode="selected", allowed=()),
+        allowed_skills=["allowed-*", "outside-*"],
+        tools={},
+        fallback_models=[],
+    )
+    resolver = AgentResolver(
+        agents,
+        projects,
+        _openai_configured(),
+        lambda: {},
+        temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
+    )
+
+    resolved = resolver.resolve_temporary_agent(
+        SessionAddress(project.project_id, "temporary", "session"), generation_id="generation"
+    )
+
+    assert resolved.allowed_skills == ["allowed-skill"]
 
 
 def test_effective_tools_drop_explorer_denials(

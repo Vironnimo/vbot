@@ -14,7 +14,7 @@ import pytest
 import core.automation.automation as automation_module
 from core.automation import TriggerService
 from core.chat import ChatSession, ChatSessionError, ChatSessionManager, MessageSender, ReplySurface
-from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmission, RunKind
+from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmission, RunExecutionOwner, RunKind
 from core.sessions import SessionAddress
 from core.subagents import SubAgentBatchTracker
 
@@ -625,6 +625,73 @@ class _CompletionChatLoop:
             executor,
             admission=RunAdmission(run_kind=run_kind),
         )
+
+
+async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(loop, manager, Mock(), sessions=sessions)
+    owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    owned = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="owned",
+        origin_run_id="origin",
+        body="owned result",
+        execution_owner=owner,
+    )
+    ordinary = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="ordinary",
+        origin_run_id="other",
+        body="ordinary result",
+    )
+    await service.close_execution_group("swarm", "group", "epoch")
+    assert owned.cancelled()
+    await asyncio.wait_for(ordinary, 2)
+    assert len(loop.messages) == 1
+    assert "ordinary result" in loop.messages[0]
+    assert "owned result" not in loop.messages[0]
+    late = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="late",
+        origin_run_id="origin",
+        body="late owned result",
+        execution_owner=owner,
+    )
+    assert late.cancelled()
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
+
+
+async def test_owned_completion_admission_failure_cannot_fallback_to_session_write(tmp_path):
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(loop, manager, Mock(), sessions=sessions)
+    owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    service.set_owned_completion_starter(AsyncMock(side_effect=ValueError("fixture rejection")))
+    delivery = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="owned",
+        origin_run_id="origin",
+        body="owned result",
+        execution_owner=owner,
+    )
+    with pytest.raises(ValueError):
+        await asyncio.wait_for(delivery, 2)
+    assert session.load() == []
+    assert loop.messages == []
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
 
 
 async def test_idle_completion_relays_through_latest_channel_surface(

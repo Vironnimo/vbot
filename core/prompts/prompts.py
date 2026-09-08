@@ -999,6 +999,7 @@ class SystemPromptManager:
         read_paths: list[Path] | None = None,
         effective_tool_names: Sequence[str] | None = None,
         session_tool_grants: Sequence[str] = (),
+        request_block_definitions: Sequence[BlockDefinition] = (),
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -1066,6 +1067,7 @@ class SystemPromptManager:
             prompt_scope,
             agent_body=agent_body,
             layout=layout,
+            request_block_definitions=request_block_definitions,
         )
         return assemble_system_prompt(
             definitions,
@@ -1105,6 +1107,7 @@ class SystemPromptManager:
         *,
         agent_body: str,
         layout: Sequence[LayoutEntry] = (),
+        request_block_definitions: Sequence[BlockDefinition] = (),
     ) -> list[BlockDefinition]:
         """Build the full ordered-agnostic block-definition list for one build.
 
@@ -1123,6 +1126,7 @@ class SystemPromptManager:
             memory_block_definition(),
             *self._data_block_definitions(agent_body=agent_body),
             *self._block_definitions,
+            *request_block_definitions,
             *self._custom_block_definitions(layout),
         ]
         return definitions

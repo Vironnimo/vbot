@@ -32,6 +32,13 @@ New Cron and Bootstrap job ids use `cron_` and `boot_` plus 12 lowercase base32 
 - Active once jobs write durable fire claims before triggering: pre-admission failure removes and retries with bounded backoff then abandons; an admitted Run consumes the fire even if it later fails; persistence failures retry saves with a bounded attempt cap, then log and continue on in-memory state without refiring. Pre-admission trigger failures never advance a job's execution-failure counter - only an admitted Run's failure can push a recurring job to the five-strike stop. At-most-once beats duplicate execution across restarts.
 - Background completions key exactly `(project_id, agent_id, session_id)` and capture their active Run: ready results inject at Model-request boundaries without extra requests or split Tool cycles; unconsumed notices deliver in one internal follow-up Run, recovering and persisting the latest `ReplySurface`, or persist as a System Reminder when that cannot start (append failures retry capped at 30s). A configured relay consumes the follow-up Run events for accessor delivery while the coordinator still owns durable note acknowledgement. Every completion message opens by stating it is not a new request and the Agent must re-evaluate the original goal; user-cancelled origins append notes instead of starting Runs - no cancellation-triggered cascades.
 
+Extension-owned completion notices additionally retain their exact execution owner.
+They join only a matching owned Run's request boundary or use the injected owned
+continuation starter. Admission failure never falls back to an arbitrary Session
+write for these notices. Group closure retires only matching notices and rejects
+late submissions; unrelated notices retain normal delivery behavior
+(`automation.py`, `tests/core/automation/test_automation.py`).
+
 ## Reflection (background self-improvement reviews)
 
 `ReflectionService` exposes `run_review(...)` and the cadence trigger:

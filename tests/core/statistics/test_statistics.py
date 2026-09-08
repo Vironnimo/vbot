@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
+from core.runs import RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import (
@@ -184,6 +185,116 @@ def test_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
     assert report.tools.tools == []
     # Fully JSON-serializable.
     assert json.loads(json.dumps(report.to_dict()))["overview"]["total_runs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_group_usage_slices_exact_owned_run_in_reused_session(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
+    session = manager.create("reused")
+    session.append(
+        _assistant(model="outside", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
+    )
+    session.append(_run_summary(status="completed", at=BASE, duration_ms=1, run_id="outside"))
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "0")
+    await manager.record_run_owner_async(session.address, run_id="owned", owner=owner)
+    session.append(
+        _assistant(model="fallback", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
+    )
+    session.append(_compaction(at=BASE, before=20, after=10))
+    session.append(_run_summary(status="completed", at=BASE, duration_ms=1, run_id="owned"))
+
+    usage = await service.group_usage(owner_name="swarm", group_id="group")
+
+    assert usage["owned_run_count"] == 1
+    assert usage["usage"]["totals"]["measured_input_tokens"] == 2
+    assert usage["usage"]["totals"]["measured_output_tokens"] == 3
+    assert usage["usage"]["models"][0]["model"] == "fallback"
+    assert usage["compactions"]["total_compactions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_group_usage_stops_open_owned_run_at_ordinary_successor(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
+    session = manager.create("reused")
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "0")
+    await manager.record_run_owner_async(session.address, run_id="owned", owner=owner)
+    session.append(
+        _assistant(model="owned", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
+    )
+    await manager.record_run_start_async(session.address, run_id="ordinary")
+    session.append(
+        _assistant(model="ordinary", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
+    )
+    session.append(_run_summary(status="completed", at=BASE, duration_ms=1, run_id="ordinary"))
+
+    usage = await service.group_usage(owner_name="swarm", group_id="group")
+
+    assert usage["usage"]["totals"]["measured_input_tokens"] == 2
+    assert usage["usage"]["models"][0]["model"] == "owned"
+
+
+@pytest.mark.asyncio
+async def test_group_usage_empty_owned_run_does_not_claim_same_sequence_successor(tmp_path):
+    manager = ChatSessionManager(tmp_path)
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    session = manager.create("ordinary")
+    owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
+    await manager.record_run_owner_async(session.address, run_id="empty-owned", owner=owner)
+    await manager.record_run_start_async(session.address, run_id="ordinary")
+    session.append(
+        _assistant(model="outside", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
+    )
+    usage = await service.group_usage(owner_name="swarm", group_id="group")
+    assert usage["usage"]["models"] == []
+    with pytest.raises(ValueError):
+        await service.group_usage(owner_name="swarm", group_id="group", query={"owner": "other"})
+
+
+@pytest.mark.asyncio
+async def test_group_usage_pages_canonical_boundaries_above_one_hundred_participants(tmp_path):
+    manager = ChatSessionManager(tmp_path)
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
+    for index in range(101):
+        binding = manager.create_bound_temporary_session(
+            SessionAddress(None, f"temporary-{index}", "participant"),
+            owner_name="swarm",
+            group_id="group",
+            participant_id=f"peer-{index}",
+            config={},
+        )
+        owner = RunExecutionOwner(
+            "swarm", "group", binding.participant_id, binding.generation_id, "epoch"
+        )
+        await manager.record_run_owner_async(binding.address, run_id=f"run-{index}", owner=owner)
+        manager.get(binding.address).append(
+            _assistant(model="owned", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
+        )
+    usage = await service.group_usage(owner_name="swarm", group_id="group")
+    assert usage["participant_count"] == 101
+    assert usage["usage"]["totals"]["measured_input_tokens"] == 202
 
 
 def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:

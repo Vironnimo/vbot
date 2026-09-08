@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.automation.cron import CronService
 from core.chat import ChatLoop
-from core.runs import ChatRunManager, RunKind, RunStatus
+from core.extensions import ExtensionRegistrationIdentity
+from core.runs import ChatRunManager, Run, RunKind, RunStatus
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
@@ -80,6 +81,83 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
+
+
+def test_create_app_wires_owner_qualified_extension_invalidations(tmp_path: Path) -> None:
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app):
+        publisher = runtime._extension_change_publisher  # noqa: SLF001 - wiring contract
+        assert publisher is not None
+        publisher("swarm", "board", ("swarm-one",), 7)
+
+        event = app.state.event_bus.events[-1]
+        assert event["type"] == "resource_changed"
+        assert event["payload"] == {
+            "kind": "extensions",
+            "scope": {
+                "owner": "swarm",
+                "resource": "board",
+                "ids": ["swarm-one"],
+                "revision": 7,
+            },
+        }
+
+
+def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: Path) -> None:
+    run = Run(run_id="run-a", agent_id="participant", session_id="session-a")
+    run.emit("model.response", {"text": "visible"})
+    identity = ExtensionRegistrationIdentity("alpha", "epoch-a")
+
+    class Groups:
+        calls = 0
+
+        async def owned_run(self, group_id: str, run_id: str) -> Any:
+            if (group_id, run_id) != ("group-a", "run-a"):
+                raise ValueError("foreign run")
+            self.calls += 1
+            if self.calls == 2:
+                run.mark_completed(None)
+            return SimpleNamespace(run=run)
+
+    class Registry:
+        current = True
+
+        def is_registration_current(self, candidate: Any) -> bool:
+            return self.current and candidate == identity
+
+        def page_declarations(self) -> list[tuple[Any, Any, Path]]:
+            return [(identity, SimpleNamespace(page_id="main"), tmp_path / "index.html")]
+
+        def host_for(self, candidate: Any) -> Any:
+            if not self.is_registration_current(candidate):
+                raise ValueError("stale owner")
+            return SimpleNamespace(temporary_agents=groups)
+
+    groups = Groups()
+    runtime = cast(Any, _StubServerRuntime(tmp_path / "data"))
+    runtime.extensions = Registry()
+    app = create_app(runtime=runtime, config=Config(data_dir=tmp_path / "data"))
+
+    with TestClient(app) as client:
+        url = app.state.file_delivery.open_extension_run(
+            extension="alpha",
+            page="main",
+            epoch="epoch-a",
+            group_id="group-a",
+            run_id="run-a",
+            after_sequence=0,
+        )["url"]
+        response = client.get(url)
+        runtime.extensions.current = False
+        stale_response = client.get(url)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: model.response" in response.text
+    assert '"text":"visible"' in response.text
+    assert stale_response.status_code == 404
 
 
 def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Path) -> None:

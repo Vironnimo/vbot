@@ -36,3 +36,4 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
 - Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules.
 - Notes are invisible in UI and public history - they are not a user-notification mechanism.
+- Extension-owned delivery uses the existing persisted-note or Tool-result channel. Chat commits the complete carrier and canonical receipt atomically before owner acknowledgment; the Extension supplies attributed data, never wrapper tags or Provider roles. Delivery and completion continuations enter only after the preceding whole Tool batch is durable (`chat.md`, `extensions.md`).

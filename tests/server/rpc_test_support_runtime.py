@@ -559,8 +559,9 @@ class StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_names: object = None,
         session_tool_grants: object = (),
+        request_block_definitions: object = (),
     ) -> str:
-        del agent_project_id
+        del agent_project_id, request_block_definitions
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"

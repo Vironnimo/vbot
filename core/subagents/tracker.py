@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.projects import format_agent_address
-from core.runs import RunStatus
+from core.runs import RunExecutionOwner, RunStatus
 from core.sessions import SessionAddress
 from core.tools.tools import JsonObject
 from core.utils.ids import new_id
@@ -52,6 +52,7 @@ class _SubAgentBatch:
     # project (config) agent resolves on its Team instead of falling through to
     # the identity path. ``None`` keeps the identity/global layout.
     project_id: str | None = None
+    execution_owner: RunExecutionOwner | None = None
 
 
 class SubAgentBatchTracker:
@@ -101,7 +102,12 @@ class SubAgentBatchTracker:
         )
 
     def reserve_slot(
-        self, parent_key: ParentKey, max_count: int, project_id: str | None = None
+        self,
+        parent_key: ParentKey,
+        max_count: int,
+        project_id: str | None = None,
+        *,
+        execution_owner: RunExecutionOwner | None = None,
     ) -> bool:
         """Reserve one sub-agent slot before async session/run work begins.
 
@@ -111,7 +117,9 @@ class SubAgentBatchTracker:
         """
         batch = self._batches.get(parent_key)
         if batch is None:
-            batch = _SubAgentBatch(entries={}, project_id=project_id)
+            batch = _SubAgentBatch(
+                entries={}, project_id=project_id, execution_owner=execution_owner
+            )
             self._batches[parent_key] = batch
         if self._spawn_count(batch) >= max_count:
             self._prune_if_empty(parent_key, batch)
@@ -273,6 +281,7 @@ class SubAgentBatchTracker:
             origin_run_id=parent_key[2],
             body=_entry_completion_message(entry),
             project_id=batch.project_id,
+            execution_owner=batch.execution_owner,
             on_persisted=lambda: self._acknowledge_delivered_entry(
                 parent_key,
                 entry.work_id,

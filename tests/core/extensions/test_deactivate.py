@@ -20,7 +20,20 @@ from pathlib import Path
 import pytest
 
 from core.chat import CommandDispatcher
-from core.extensions import ExtensionRegistry, HookContext, InteractionEvent
+from core.extensions import (
+    ExtensionAPI,
+    ExtensionRegistry,
+    HookContext,
+    InteractionEvent,
+)
+from core.extensions.extensions import (
+    ExtensionDeclarations,
+    ExtensionRecord,
+    PreparedSessionDelivery,
+    SessionCapabilityExpiredError,
+    SessionRequestContext,
+)
+from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.tools import ToolNotFoundError
@@ -305,3 +318,108 @@ def test_deactivate_leaves_colliding_tool_with_its_real_owner(tmp_path: Path) ->
 
     # The built-in "read" survives, still owned by the built-in handler.
     assert tool_registry.get("read").handler is _builtin_read
+
+
+@pytest.mark.asyncio
+async def test_deactivate_quiesces_before_removing_capabilities_and_retires_host(
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("owned", declarations, config={}, logger=None)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def quiesce() -> None:
+        entered.set()
+        await release.wait()
+
+    async def sample(*_args: object) -> dict[str, object]:
+        return {}
+
+    api.register_session_tool("owned_tool", "test-sentinel", {"type": "object"}, lambda *_: {})
+    api.register_session_runtime(
+        before_request=lambda *_: None,
+        run_finished=lambda *_args, **_kwargs: None,
+        quiesce=quiesce,
+    )
+    registry = ExtensionRegistry()
+    registry._records.append(  # noqa: SLF001 - focused lifecycle fixture
+        ExtensionRecord(
+            "owned", tmp_path, tmp_path / "owned.py", "loaded", declarations=declarations
+        )
+    )
+    registry.apply_tools(tools)
+    host = ExtensionHost(
+        data_dir=tmp_path,
+        sample=sample,
+        resolve_agent=lambda *_: None,
+        store_attachment=lambda *_: None,
+        resolve_credential=lambda _: "",
+        set_credential=lambda *_: None,
+        for_owner=lambda identity: ExtensionHost(
+            data_dir=tmp_path,
+            sample=sample,
+            resolve_agent=lambda *_: None,
+            store_attachment=lambda *_: None,
+            resolve_credential=lambda _: "",
+            set_credential=lambda *_: None,
+        ),
+    )
+    registry.bind_host(host)
+    identity = registry.registration_identity("owned")
+    registry.host_for(identity)
+
+    deactivation = asyncio.create_task(registry.deactivate("owned", tools))
+    await entered.wait()
+    assert tools.get("owned_tool").name == "owned_tool"
+
+    release.set()
+    assert await deactivation is True
+    with pytest.raises(ValueError, match="no longer current"):
+        registry.host_for(identity)
+    assert registry._owner_hosts == {}  # noqa: SLF001 - cached host must retire
+    with pytest.raises(ToolNotFoundError):
+        tools.get("owned_tool")
+
+
+@pytest.mark.asyncio
+async def test_retired_session_before_request_cannot_return_stale_delivery(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("owned", declarations, config={}, logger=None)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def before_request(*_args: object) -> PreparedSessionDelivery:
+        entered.set()
+        await release.wait()
+        return PreparedSessionDelivery("receipt", "hash", ("entry",), "1")
+
+    api.register_session_tool("owned_tool", "test-sentinel", {"type": "object"}, lambda *_: {})
+    api.register_session_runtime(
+        before_request=before_request,
+        run_finished=lambda *_args, **_kwargs: None,
+        quiesce=lambda: None,
+    )
+    registry = ExtensionRegistry()
+    registry._records.append(  # noqa: SLF001 - focused registration race fixture
+        ExtensionRecord(
+            "owned", tmp_path, tmp_path / "owned.py", "loaded", declarations=declarations
+        )
+    )
+    registry.apply_tools(tools)
+    binding = type("Binding", (), {"owner_name": "owned"})()
+    context = SessionRequestContext(binding, "run", "agent", "session")
+    pending = asyncio.create_task(registry.dispatch_session_before_request(binding, tools, context))
+    await entered.wait()
+    registry.retire_registration()
+    release.set()
+    with pytest.raises(SessionCapabilityExpiredError):
+        await pending
+    with pytest.raises(SessionCapabilityExpiredError):
+        await registry.dispatch_session_before_request(binding, tools, context)
+    with pytest.raises(SessionCapabilityExpiredError):
+        await registry.reconcile_session_tool_batch(binding, tools, context, (), (), True)
+    with pytest.raises(SessionCapabilityExpiredError):
+        await registry.dispatch_session_run_finished(binding, tools, context, "success")

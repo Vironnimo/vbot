@@ -67,6 +67,21 @@ def test_retired_extension_cannot_republish():
     assert registry.list_tools() == []
 
 
+def test_dynamic_hidden_catalog_tool_stays_registered_for_dispatch_ownership():
+    registry = ToolRegistry()
+    operations = ExtensionOperations("example")
+    operations.bind(registry)
+    private = declaration("private")
+    private["catalog_visible"] = False
+
+    operations.replace_tools("session", [private])
+
+    assert operations.tool_names == ("private",)
+    assert operations.catalog_visible_tool_names == ()
+    assert registry.get("private").catalog_visible is False
+    assert [tool.name for tool in registry.list_tools(include_catalog_hidden=False)] == []
+
+
 @pytest.mark.asyncio
 async def test_management_validation_does_not_disclose_secret_values():
     operations = ExtensionOperations("example")

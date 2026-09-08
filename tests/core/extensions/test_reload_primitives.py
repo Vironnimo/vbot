@@ -12,16 +12,20 @@ extension reload:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
-from core.extensions import purge_extension_modules
-from core.extensions.extensions import ExtensionRegistry
-from core.tools import ToolRegistry
+from core.extensions import ExtensionAPI, purge_extension_modules
+from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord, ExtensionRegistry
+from core.extensions.runtime import ExtensionRuntime
+from core.tools import ToolNotFoundError, ToolRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -114,3 +118,59 @@ def test_remove_applied_tools_leaves_record_statuses_untouched(tmp_path: Path) -
     record = next(item for item in registry.records() if item.name == "tooly")
     assert record.status == "loaded"
     assert [declaration.name for declaration in record.declarations.tools] == ["ext_echo"]
+
+
+@pytest.mark.asyncio
+async def test_reload_quiesces_active_owner_before_detaching_its_tools(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("owned", declarations, config={}, logger=None)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def quiesce() -> None:
+        entered.set()
+        await release.wait()
+
+    api.register_session_tool("owned_tool", "test-sentinel", {"type": "object"}, lambda *_: {})
+    api.register_session_runtime(
+        before_request=lambda *_: None,
+        run_finished=lambda *_args, **_kwargs: None,
+        quiesce=quiesce,
+    )
+    old = ExtensionRegistry()
+    old._records.append(  # noqa: SLF001 - focused reload fixture
+        ExtensionRecord(
+            "owned", tmp_path, tmp_path / "owned.py", "loaded", declarations=declarations
+        )
+    )
+    old.apply_tools(tools)
+    holder = {"registry": old}
+    storage = SimpleNamespace(data_dir=tmp_path, load_settings=lambda: {})
+    runtime = ExtensionRuntime(
+        storage=cast(Any, storage),
+        resources_path=tmp_path,
+        tools=tools,
+        get_registry=lambda: holder["registry"],
+        set_registry=lambda registry: holder.__setitem__("registry", registry),
+        get_command_dispatcher=lambda: None,
+        extra_directories=lambda _settings: [],
+        load_options=lambda _settings: (set(), {}),
+        live_config=lambda _name: {},
+        resolve_credential=lambda _key: "",
+        reload_recall=lambda: None,
+        refresh_prompts=lambda: None,
+        reload_skills=lambda: None,
+        recover_recall=lambda _names: None,
+        logger=SimpleNamespace(
+            info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None
+        ),
+    )
+
+    reload_task = asyncio.create_task(runtime.reload())
+    await entered.wait()
+    assert tools.get("owned_tool").name == "owned_tool"
+    release.set()
+    await reload_task
+    with pytest.raises(ToolNotFoundError):
+        tools.get("owned_tool")

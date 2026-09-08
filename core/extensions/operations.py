@@ -26,6 +26,11 @@ class ExtensionHost:
     resolve_credential: Callable[[str], str]
     set_credential: Callable[[str, str], None]
     resolve_cwd: Callable[[str | None, str], Path] | None = None
+    for_owner: Callable[[Any], ExtensionHost] | None = None
+    temporary_agents: Any | None = None
+    state_dir: Path | None = None
+    catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
+    publish_change: Callable[[str, Sequence[str], int], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,16 @@ class ExtensionOperations:
     @property
     def tool_names(self) -> tuple[str, ...]:
         return tuple(tool.name for catalog in self._catalogs.values() for tool in catalog)
+
+    @property
+    def catalog_visible_tool_names(self) -> tuple[str, ...]:
+        """Return only dynamic Tools intended for public catalog projections."""
+        return tuple(
+            tool.name
+            for catalog in self._catalogs.values()
+            for tool in catalog
+            if tool.catalog_visible
+        )
 
     @property
     def tool_registry(self) -> ToolRegistry | None:

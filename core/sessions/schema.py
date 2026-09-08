@@ -104,6 +104,69 @@ CREATE INDEX sessions_live_fork_source
   ON sessions (project_id, agent_id, json_extract(fork_source_json, '$.session_id'))
   WHERE status = 'live';
 
+CREATE TABLE temporary_session_bindings (
+  session_key INTEGER PRIMARY KEY,
+  generation_id TEXT NOT NULL,
+  owner_name TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  participant_id TEXT NOT NULL,
+  config_json TEXT NOT NULL CHECK (json_valid(config_json) AND json_type(config_json) = 'object'),
+  UNIQUE (owner_name, group_id, participant_id),
+  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX temporary_session_bindings_owner_group
+  ON temporary_session_bindings (owner_name, group_id, participant_id);
+
+CREATE TABLE session_delivery_receipts (
+  session_key INTEGER NOT NULL,
+  generation_id TEXT NOT NULL,
+  owner_name TEXT NOT NULL,
+  receipt_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  effect_kind TEXT NOT NULL,
+  carrier_kind TEXT NOT NULL,
+  carrier_sequence INTEGER NOT NULL CHECK (carrier_sequence >= 0),
+  PRIMARY KEY (generation_id, owner_name, receipt_id),
+  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX session_delivery_receipts_session
+  ON session_delivery_receipts (session_key, owner_name, receipt_id);
+
+CREATE TABLE run_execution_owners (
+  record_key INTEGER PRIMARY KEY,
+  session_key INTEGER NOT NULL,
+  generation_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  input_id TEXT,
+  owner_name TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  participant_id TEXT NOT NULL,
+  participant_generation_id TEXT NOT NULL,
+  epoch TEXT NOT NULL,
+  start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0),
+  UNIQUE (session_key, run_id),
+  UNIQUE (session_key, input_id),
+  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX run_execution_owners_group
+  ON run_execution_owners (owner_name, group_id, record_key);
+
+CREATE TABLE run_execution_starts (
+  record_key INTEGER PRIMARY KEY,
+  session_key INTEGER NOT NULL,
+  generation_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0),
+  UNIQUE (session_key, run_id),
+  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX run_execution_starts_session
+  ON run_execution_starts (session_key, generation_id, start_sequence);
+
 CREATE TABLE messages (
   message_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,
