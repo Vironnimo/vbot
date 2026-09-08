@@ -9,6 +9,7 @@ import {
   resetAppHarness,
   rpcMock,
   subscribeServerEventsMock,
+  waitForAssertion,
 } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -25,6 +26,105 @@ describe('App', () => {
 
   afterEach(async () => {
     mountedComponent = await cleanupAppHarness(mountedComponent);
+    document.documentElement.removeAttribute('style');
+  });
+
+  it('passes the live shell theme and display context to an Extension page', async () => {
+    document.documentElement.style.setProperty('--bg', '#111111');
+    document.documentElement.style.setProperty('--surface', '#222222');
+    document.documentElement.style.setProperty('--surface-2', '#333333');
+    document.documentElement.style.setProperty('--border', '#444444');
+    document.documentElement.style.setProperty('--text-hi', '#eeeeee');
+    document.documentElement.style.setProperty('--text-med', '#999999');
+    document.documentElement.style.setProperty('--accent', '#ff8800');
+    document.documentElement.style.colorScheme = 'dark';
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'extensions.pages') {
+        return {
+          pages: [
+            {
+              extension: 'fixture',
+              page: 'main',
+              title: 'Fixture page',
+              route: 'extension:fixture:main',
+              entry_url: '/fixture-page.html',
+              epoch: 'fixture-epoch',
+            },
+          ],
+        };
+      }
+      if (method === 'settings.get') {
+        return {
+          general: { timezone: 'Europe/Berlin' },
+          appearance: { language: 'de', available_languages: ['de'] },
+        };
+      }
+      if (method === 'agent.list') return { agents: [] };
+      if (method === 'chat.commands') return { items: [] };
+      if (method === 'skill.list') return { skills: [], invalid_skills: [] };
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(
+        Array.from(document.querySelectorAll('button')).find((button) =>
+          button.textContent.includes('Fixture page'),
+        ),
+      ).toBeTruthy();
+    });
+    Array.from(document.querySelectorAll('button'))
+      .find((button) => button.textContent.includes('Fixture page'))
+      .click();
+    flushSync();
+
+    const frame = document.querySelector('iframe');
+    const child = frame.contentWindow;
+    const sent = vi.spyOn(child, 'postMessage');
+    frame.dispatchEvent(new Event('load'));
+    const init = sent.mock.calls.find(
+      ([message]) => message.type === 'vbot.extension.init',
+    )[0];
+    expect(init).toMatchObject({
+      locale: 'de',
+      timezone: 'Europe/Berlin',
+      theme: {
+        mode: 'dark',
+        background: '#111111',
+        surface: '#222222',
+        elevatedSurface: '#333333',
+        border: '#444444',
+        text: '#eeeeee',
+        mutedText: '#999999',
+        accent: '#ff8800',
+      },
+    });
+
+    const ready = {
+      type: 'vbot.extension.ready',
+      version: 1,
+      nonce: init.nonce,
+      epoch: init.epoch,
+      descriptor: init.descriptor,
+    };
+    const event = new MessageEvent('message', { data: ready });
+    Object.defineProperties(event, {
+      origin: { value: 'null' },
+      source: { value: child },
+    });
+    window.dispatchEvent(event);
+    document.documentElement.style.setProperty('--accent', '#00cc88');
+
+    await waitForAssertion(() => {
+      expect(
+        sent.mock.calls.some(
+          ([message]) =>
+            message.type === 'vbot.extension.context' &&
+            message.theme.accent === '#00cc88',
+        ),
+      ).toBe(true);
+    });
   });
 
   it('maps app_error WebSocket events to error toasts', () => {

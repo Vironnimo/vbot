@@ -275,15 +275,29 @@ from pathlib import Path
 
 archive_path = Path(sys.argv[1])
 destination = Path(sys.argv[2])
-root = destination.resolve()
 with tarfile.open(archive_path, mode='r:gz') as archive:
-    for member in archive.getmembers():
+    members = archive.getmembers()
+    names = [member.name.rstrip('/') for member in members if member.name.rstrip('/')]
+    has_current_layout = any(name == 'webui/dist' or name.startswith('webui/dist/') for name in names)
+    has_legacy_layout = any(name == 'dist' or name.startswith('dist/') for name in names)
+    if has_current_layout:
+        extract_root = destination
+        allowed_prefixes = ('webui/', 'resources/extensions/')
+    elif has_legacy_layout:
+        extract_root = destination / 'webui'
+        allowed_prefixes = ('dist/',)
+    else:
+        raise SystemExit('WebUI archive has no recognized layout')
+    for member in members:
         if not (member.isdir() or member.isfile()):
             raise SystemExit(f'unsafe member type in WebUI archive: {member.name}')
-        target = (destination / member.name).resolve()
-        if not target.is_relative_to(root):
+        name = member.name.rstrip('/')
+        if name and not any(name == prefix.rstrip('/') or name.startswith(prefix) for prefix in allowed_prefixes):
+            raise SystemExit(f'unexpected path in WebUI archive: {member.name}')
+        target = (extract_root / member.name).resolve()
+        if not target.is_relative_to(extract_root.resolve()):
             raise SystemExit(f'unsafe path in WebUI archive: {member.name}')
-    archive.extractall(destination)
+    archive.extractall(extract_root)
 '@
     & python -c $extractScript $Archive $Destination
     if ($LASTEXITCODE -ne 0) {
@@ -401,7 +415,7 @@ else {
         $ProgressPreference = "SilentlyContinue"
         try {
             Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
-            Expand-WebuiArchive -Archive $archive -Destination $webuiDir
+            Expand-WebuiArchive -Archive $archive -Destination $InstallDir
         }
         finally {
             $ProgressPreference = $previousProgressPreference

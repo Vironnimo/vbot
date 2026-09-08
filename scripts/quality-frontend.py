@@ -36,6 +36,9 @@ configure_console_encoding()
 
 WEBUI_ROOT = PROJECT_ROOT / "webui"
 SRC_ROOT = WEBUI_ROOT / "src"
+EXTENSION_UI_ROOT = PROJECT_ROOT / "resources" / "extensions"
+EXTENSION_PAGE_FIXTURE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "extension-pages"
+EXTENSION_PAGE_TEST = "scripts/__tests__/build-extension-pages.test.js"
 FRONTEND_FILE_SUFFIXES = {
     ".cjs",
     ".css",
@@ -101,16 +104,16 @@ def _relative_to_webui(path: Path) -> str:
     return path.relative_to(WEBUI_ROOT).as_posix()
 
 
-def _iter_dirs_up_to_src(start_dir: Path) -> Iterator[Path]:
-    """Yield *start_dir* and each parent up to and including ``src/``.
+def _iter_dirs_up_to_webui(start_dir: Path) -> Iterator[Path]:
+    """Yield *start_dir* and each parent up to and including ``webui/``.
 
-    Stops at ``src/`` and never climbs above it; yields nothing when *start_dir*
-    is neither ``src/`` nor one of its descendants.
+    Stops at ``webui/`` and never climbs above it; yields nothing when
+    *start_dir* is not inside the WebUI tree.
     """
     directory = start_dir
-    while directory == SRC_ROOT or SRC_ROOT in directory.parents:
+    while directory == WEBUI_ROOT or WEBUI_ROOT in directory.parents:
         yield directory
-        if directory == SRC_ROOT:
+        if directory == WEBUI_ROOT:
             return
         directory = directory.parent
 
@@ -131,7 +134,7 @@ def _find_named_test_files(stem: str, start_dir: Path) -> list[Path]:
     changed ``src/components/settings/SettingsProvidersPanel.svelte`` find its
     test in ``src/components/__tests__/`` one level up.
     """
-    for directory in _iter_dirs_up_to_src(start_dir):
+    for directory in _iter_dirs_up_to_webui(start_dir):
         tests_dir = directory / "__tests__"
         if not tests_dir.is_dir():
             continue
@@ -149,10 +152,79 @@ def _find_named_test_files(stem: str, start_dir: Path) -> list[Path]:
 
 def _nearest_ancestor_with_tests(start_dir: Path) -> Path | None:
     """Return the nearest dir (from *start_dir* up to ``src/``) that holds tests."""
-    for directory in _iter_dirs_up_to_src(start_dir):
+    for directory in _iter_dirs_up_to_webui(start_dir):
         if _dir_has_tests(directory):
             return directory
     return None
+
+
+def _extension_ui_root(path: Path) -> Path | None:
+    """Return the declared UI root containing *path*, if any.
+
+    Extension packages contain Python, manifests, and generated ``web/`` output
+    beside their editable ``ui/`` sources. Only the latter belongs to the
+    frontend gate. Fixtures mirror that same owner/ui shape.
+    """
+    for root in (EXTENSION_UI_ROOT, EXTENSION_PAGE_FIXTURE_ROOT):
+        if not root.is_dir() or not (path == root or root in path.parents):
+            continue
+        relative = path.relative_to(root)
+        if len(relative.parts) >= 2 and relative.parts[1] == "ui":
+            return root / relative.parts[0] / "ui"
+    return None
+
+
+def _is_extension_page_source(path: Path) -> bool:
+    """Return whether *path* is a declared bundled page UI source."""
+    return _extension_ui_root(path) is not None
+
+
+def _find_extension_page_tests(path: Path) -> list[Path]:
+    """Find a page's explicit rendered test under its owning ``ui/`` root."""
+    if path.is_dir():
+        return []
+    root = _extension_ui_root(path)
+    if root is None:
+        return []
+    stem = path.stem
+    matches: list[Path] = []
+    directory = path.parent
+    while directory == root or root in directory.parents:
+        tests_dir = directory / "__tests__"
+        if tests_dir.is_dir():
+            matches.extend(
+                entry
+                for entry in sorted(tests_dir.iterdir())
+                if entry.is_file()
+                and entry.suffix in TEST_FILE_SUFFIXES
+                and (
+                    entry.name.startswith(f"{stem}.test.") or entry.name.startswith(f"{stem}.spec.")
+                )
+            )
+            if matches:
+                return matches
+        if directory == root:
+            break
+        directory = directory.parent
+    return []
+
+
+def _extension_page_ui_paths() -> list[str]:
+    """Return actual Extension page source directories for a full frontend gate."""
+    paths: list[str] = []
+    for root in (EXTENSION_UI_ROOT, EXTENSION_PAGE_FIXTURE_ROOT):
+        if not root.is_dir():
+            continue
+        for owner in sorted(root.iterdir()):
+            ui = owner / "ui"
+            if owner.is_dir() and ui.is_dir():
+                paths.append((Path("..") / ui.relative_to(PROJECT_ROOT)).as_posix())
+    return paths
+
+
+def _is_webui_testable_source(path: Path) -> bool:
+    """Return whether a WebUI source belongs to the declared test roots."""
+    return any(path == root or root in path.parents for root in (SRC_ROOT, WEBUI_ROOT / "scripts"))
 
 
 def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]:
@@ -179,7 +251,15 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             add(p)
             continue
 
-        absolute = WEBUI_ROOT / p
+        absolute = (WEBUI_ROOT / p).resolve()
+        if _is_extension_page_source(absolute):
+            for test_file in _find_extension_page_tests(absolute):
+                add((Path("..") / test_file.relative_to(PROJECT_ROOT)).as_posix())
+            add(EXTENSION_PAGE_TEST)
+            continue
+        if not _is_webui_testable_source(absolute):
+            notes.append(f"{p}: no tests found")
+            continue
 
         if absolute.is_dir():
             if _dir_has_tests(absolute):
@@ -211,6 +291,19 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             notes.append(f"{p}: no {stem} test, running {relative}/ instead")
 
     return deduplicate_paths(targets, _has_extension), notes
+
+
+def _tool_path_and_absolute(path: str) -> tuple[str, Path]:
+    """Resolve an allowed frontend input and its path from the WebUI working dir."""
+    normalized = strip_webui_prefix(path)
+    candidate = (WEBUI_ROOT / normalized).resolve()
+    project_candidate = (PROJECT_ROOT / path).resolve()
+    for external in (candidate, project_candidate):
+        if _is_extension_page_source(external):
+            return (Path("..") / external.relative_to(PROJECT_ROOT)).as_posix(), external
+    if candidate.is_relative_to(WEBUI_ROOT):
+        return normalized, candidate
+    return normalized, candidate
 
 
 # ---------- vitest output parsing ----------
@@ -338,13 +431,16 @@ def main() -> int:
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
     paths = deduplicate_paths(normalized, _has_extension)
-
-    # Strip webui/ prefix — all npm commands run with cwd=WEBUI_ROOT.
-    stripped = [strip_webui_prefix(p) for p in paths]
+    resolved_paths = [_tool_path_and_absolute(path) for path in paths]
+    stripped = [tool_path for tool_path, _absolute in resolved_paths]
 
     # Reject unknown paths before running anything: a typo would otherwise
     # surface as a confusing tool error instead of a clear message.
-    missing_inputs = [p for p in stripped if not (WEBUI_ROOT / p).exists()]
+    missing_inputs = [
+        tool_path
+        for tool_path, absolute in zip(stripped, (item[1] for item in resolved_paths), strict=True)
+        if not absolute.exists()
+    ]
     if missing_inputs:
         for missing in missing_inputs:
             print(f"ERROR: path not found under webui/: {missing}")
@@ -354,16 +450,32 @@ def main() -> int:
     is_full_scan = len(stripped) == 0
 
     if stripped:
-        prettier_paths = stripped
-        eslint_fix_paths = stripped
-        eslint_check_paths = stripped
-        vitest_paths, vitest_notes = translate_to_vitest_targets(stripped)
+        scope_paths = stripped
+        prettier_paths = scope_paths
+        vitest_paths, vitest_notes = translate_to_vitest_targets(scope_paths)
     else:
-        prettier_paths = ["src/"]
-        eslint_fix_paths = ["src/"]
-        eslint_check_paths = ["src/"]
-        vitest_paths = ["src/"]
+        scope_paths = ["src/", "scripts/", *_extension_page_ui_paths()]
+        prettier_paths = scope_paths
+        vitest_paths = ["src/", "scripts/"]
         vitest_notes = []
+
+    external_scope = any(
+        path.startswith("../resources/") or path.startswith("../tests/") for path in scope_paths
+    )
+    # Prettier resolves a file's configuration relative to that file. Extension
+    # page sources sit outside ``webui/``, so without explicit configuration it
+    # cannot discover the Svelte plugin or the repository formatting policy.
+    prettier_config = (
+        ["--config", "prettier.config.js", "--plugin", "prettier-plugin-svelte"]
+        if external_scope
+        else []
+    )
+    eslint_config = ["--config", "webui/eslint.config.js"] if external_scope else []
+    eslint_paths = (
+        [(WEBUI_ROOT / path).resolve().relative_to(PROJECT_ROOT).as_posix() for path in scope_paths]
+        if external_scope
+        else scope_paths
+    )
 
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
@@ -374,7 +486,7 @@ def main() -> int:
         steps = [
             (
                 "prettier",
-                [npx_exe, "prettier", "--check"] + prettier_paths,
+                [npx_exe, "prettier", *prettier_config, "--check"] + prettier_paths,
                 "gate",
                 None,
             )
@@ -383,20 +495,20 @@ def main() -> int:
         steps = [
             (
                 "prettier",
-                [npx_exe, "prettier", "--write"] + prettier_paths,
+                [npx_exe, "prettier", *prettier_config, "--write"] + prettier_paths,
                 "fix",
                 prettier_paths,
             ),
             (
                 "eslint fix",
-                [npx_exe, "eslint", "--fix"] + eslint_fix_paths,
+                [npx_exe, "eslint", *eslint_config, "--fix"] + eslint_paths,
                 "fix",
-                eslint_fix_paths,
+                scope_paths,
             ),
         ]
     steps.extend(
         [
-            ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate", None),
+            ("eslint", [npx_exe, "eslint", *eslint_config] + eslint_paths, "gate", None),
             (
                 "vitest",
                 # --passWithNoTests: a path filter without nearby tests must not
@@ -445,7 +557,7 @@ def main() -> int:
             cmd,
             capture_output=True,
             text=True,
-            cwd=WEBUI_ROOT,
+            cwd=PROJECT_ROOT if external_scope and label.startswith("eslint") else WEBUI_ROOT,
             encoding="utf-8",
             errors="replace",
         )

@@ -186,6 +186,39 @@ describe('App controller', () => {
     expect(onLoadSessionStoreStatus).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes Extension page descriptors on each bounded reconnect without replaying mutations', async () => {
+    const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
+    const { controller } = setup({ onReloadExtensionPages });
+
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      replay_status: 'resumed',
+      active_runs: [],
+    });
+
+    expect(onReloadExtensionPages).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes an Extension page after its owner-qualified invalidation', async () => {
+    const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
+    const { controller } = setup({ onReloadExtensionPages });
+
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: {
+        kind: 'extensions',
+        scope: {
+          owner: 'swarm',
+          resource: 'board',
+          ids: ['swarm-one'],
+          revision: 7,
+        },
+      },
+    });
+
+    expect(onReloadExtensionPages).toHaveBeenCalledOnce();
+  });
+
   it('applies an Agent rename mapping before reloading and remaps old history entries', async () => {
     const onAgentIdChanged = vi.fn();
     const { actions, controller, state } = setup({ onAgentIdChanged });
