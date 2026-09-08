@@ -14,7 +14,7 @@ and Agent grants, see [Browser Use](browser-use.md).
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **5**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5.
+`API_VERSION` is currently **6**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly. Managed operations and live Tool catalogs require API v4. Tools declaring `requires_opt_in=True` require API v5. Page declarations and explicit Tool catalog visibility require API v6.
 
 ## Install and discovery
 
@@ -61,7 +61,8 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.on(event, handler)` | a hook handler for one event |
 | `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
 | `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
-| `api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, family=None)` | an agent tool |
+| `api.register_tool(name, description, parameters, handler, *, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, family=None)` | an agent tool |
+| `api.register_page(page_id, title, entry, *, icon="network")` | an Extension-owned HTML page declaration |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
 | `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
@@ -131,6 +132,25 @@ def guard(ctx, *, tool_name, tool_call_id, input):
 `tool_result` is a **full-replace** pipeline: return a complete replacement envelope (re-validated against both the fixed envelope and the Tool's declared success-data contract) or `None` to leave it unchanged — there is no patching.
 
 ## Tools
+
+`catalog_visible=False` hides a Tool from public Tool catalogs, Extension capability lists, and Project Tool selection. It does not grant access or establish Session scope: ordinary policy and dispatch checks still apply. Hidden Tools remain registered for collision detection, identity-safe replacement, and teardown. The default is `True`, preserving existing catalogs.
+
+API 6 Extensions can register an isolated HTML page with `register_page` and private Session capabilities with `register_session_tool`, `register_session_prompt_block`, and `register_session_runtime`. Private Tools are absent from public catalogs and require the complete current owner grant set. Their handlers receive exact input types; ordinary Tools keep existing argument normalization. The two independently built examples in `tests/fixtures/extension-pages/` demonstrate generic pages without application-shell owner branches.
+
+A page does not require temporary Agents. For example, an inventory Extension can declare its own prebuilt dashboard:
+
+```python
+def register(api):
+    api.register_page("inventory", "Inventory", "web/page.html")
+```
+
+Its assets must be relative to that entry and stay beneath the registered build root. Bundled sources use `ui/page.html` and build to `web/` with `cd webui && npm run build`; arbitrary installed Python Extensions ship prebuilt assets. The same build and installer paths include these assets, with no Node requirement at runtime or separate npm dependency tree.
+
+The page runs in an opaque-origin sandbox. Its parent bridge validates the source window, nonce and loaded page epoch, and provides theme, locale, timezone and route. A bundled child imports `createExtensionPageClient` from `$lib/extensionPageClient.js`, calls `operation(name, arguments)` for its own registered operations, and uses `readHistory`, `subscribeRun`, `openLink` and `openMedia` for authorized history and references. Register context/invalidation callbacks, refresh read models on reconnect, and dispose the client on unmount. Reconnect never retries a mutation automatically. The child has no arbitrary RPC or application-origin fetch capability; stale page/Run tokens expire on reload or disposal.
+
+Startup receives an owner-bound `ExtensionHost`: `state_dir` is private persistent Extension data, `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
+
+`register_session_runtime` declares `before_request`, `run_finished`, and `quiesce`, with optional `acknowledge_delivery` and `reconcile_tool_batch` callbacks. Return `PreparedSessionDelivery` from the request boundary; Chat commits its note and receipt together before acknowledgment. A successful Tool can request a receipt or graceful turn end through its host-installed `ToolContext` callbacks. Reconciliation runs after every sibling Tool Result is durable and returns `ToolBatchDecision`. Required callback errors propagate; quiesce must drain owned work before its capabilities disappear.
 
 `api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the agent-facing design rules in `.vorch/domain-maps/tools/designing-agent-tools.md` and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
 
@@ -536,6 +556,29 @@ To turn the same idea into a hook instead, copy
 [`examples/extensions/guard_bash.py`](../examples/extensions/guard_bash.py),
 which denies destructive `bash` commands via the `tool_call` decision hook.
 
+
+## Swarm
+
+The bundled Swarm Extension contributes the **Swarms** page. Create a profile,
+select configured Models and participant counts, choose an explicit Project or
+working directory, and select ordinary Tools. An empty ordinary Tool selection
+still allows the three private coordination Tools in participant Sessions.
+Enter a goal and start from the page, or use `/swarm <profile-slug> "goal"`.
+The Command supplies only the entered goal; it does not import source Session
+history or attachments.
+
+Participants use separate durable Sessions and coordinate as peers on a public
+Board. Pings are public posts addressed to participant ids. Delivery mode and
+permission to wake idle participants are independent profile settings. Profile
+edits apply to future Swarms; applying live communication changes records a
+revision and old/new values for inspection.
+
+Stop closes admission and drains owned execution. Resume explicitly continues
+unfinished participants in their existing Sessions. Waiting and ordinary final
+answers do not mark work done: each participant must explicitly finish, with no
+pending messages or owned work. Results retain each participant's summary and
+artifacts without an extra synthesis Run. Usage comes from canonical Statistics.
+Disable/reload retains history; interrupted execution never restarts itself.
 
 ## Managed operations and MCP
 

@@ -76,4 +76,5 @@ Read these only when your task matches - not by default.
 - Changing Browser Use, its opt-in Tool, CDP connections, browser ownership, refs, or browser media -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled MCP client, transports, Agent grants, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
+- Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
 - Informing the Model about a background event or state change -> `model-communication.md`
