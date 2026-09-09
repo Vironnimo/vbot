@@ -96,7 +96,11 @@ reply; no Swarm Tool requests a Run end (`test_swarm_inbox.py`).
 
 `swarm_state` is read-only, with optional cursor and limit. It returns a compact paged
 roster, pending count and delivery/wake policy; cursors bind page size. Participants
-cannot rename themselves. Progress, results and requests for help belong on the
+cannot rename themselves. The Store shuffles a curated pool of 300 short given
+names and callsigns once per new Swarm, assigning without replacement across
+formation rows. Larger Swarms use numbered suffixes after the pool is exhausted.
+Saved names survive request replay, restart and Resume; participant ids remain
+the addressing contract (`test_swarm_store.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
 completion reservation, summary store or automatic group completion.
 

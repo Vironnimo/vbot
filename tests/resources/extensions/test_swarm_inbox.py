@@ -190,7 +190,11 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
         assert entry["author"] == (
             {"kind": "user", "id": "user", "name": "User"}
             if entry["text"] == "Human post"
-            else {"kind": "participant", "id": sender, "name": "Participant 1"}
+            else {
+                "kind": "participant",
+                "id": sender,
+                "name": board.swarm["participants"][0]["display_name"],
+            }
         )
     reply = next(entry for entry in entries if entry["text"] == "Reply ping")
     assert reply["reply_to"] == normal["post_id"]
