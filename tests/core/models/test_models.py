@@ -1690,6 +1690,18 @@ class TestModelRegistryRealResources:
         deepseek = registry.get("opencode-go", "deepseek-v4-pro")
         assert deepseek.capabilities.reasoning.supported is True
 
+    def test_every_bundled_provider_override_loads(self):
+        """A refreshed catalog must not leave silently omitted partial overrides."""
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        for path in sorted((RESOURCES_DIR / "models").glob("*.overrides.json")):
+            provider_id = path.name.removesuffix(".overrides.json")
+            if provider_id == "models":
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for model_id in data.get("models", {}):
+                assert registry.get(provider_id, model_id).model_id == model_id
+
     def test_ollama_cloud_catalog_is_separate_and_entirely_remote(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
 
@@ -1814,17 +1826,13 @@ class TestModelRegistryRealResources:
             "tools",
         }
 
-        for model_id in ("gpt-5.4", "gpt-5.4-mini", "gpt-5.5"):
-            model = registry.get("openai", model_id)
-            assert model.connections == ("api-key", "subscription")
-            assert model.metadata["openai"]["wire_policies"] == {
-                "api-key": {"protocol": "responses"},
-                "subscription": {"protocol": "responses"},
-            }
+        gpt_55 = registry.get("openai", "gpt-5.5")
+        assert gpt_55.connections == ("api-key", "subscription")
+        assert gpt_55.metadata["openai"]["wire_policies"] == {
+            "api-key": {"protocol": "responses"},
+            "subscription": {"protocol": "responses"},
+        }
 
-        assert registry.get("openai", "gpt-5.4").context_window_for("api-key") == 1_050_000
-        assert registry.get("openai", "gpt-5.4").context_window_for("subscription") == 272_000
-        assert registry.get("openai", "gpt-5.4-mini").context_window_for("api-key") == 400_000
         for model_id in ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
             model = registry.get("openai", model_id)
             assert model.context_window_for("api-key") == 1_050_000

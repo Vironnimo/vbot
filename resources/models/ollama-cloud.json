@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-02T20:15:28.955265+00:00",
+  "fetched_at": "2026-09-09T12:36:17.757416+00:00",
   "models": {
     "deepseek-v4-flash:0731": {
       "capabilities": {
@@ -552,7 +552,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 524288,
+      "context_window": 512000,
       "family": "minimax-m3",
       "max_output_tokens": 131072,
       "metadata": {

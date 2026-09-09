@@ -1299,6 +1299,35 @@
       "release_date": "2026-08-03",
       "temperature": true
     },
+    "alibaba/qwen3.8-max-0902": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "qwen",
+      "last_updated": "2026-09-02",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Max 0902",
+      "release_date": "2026-09-02",
+      "temperature": true
+    },
     "alibaba/qwen3.8-max-preview": {
       "capabilities": {
         "input_modalities": [
@@ -1379,6 +1408,120 @@
       "max_output_tokens": 8192,
       "name": "QwQ Plus",
       "release_date": "2025-03-05",
+      "temperature": true
+    },
+    "amazon/nova-2-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "nova",
+      "last_updated": "2025-12-01",
+      "max_output_tokens": 64000,
+      "name": "Nova 2 Lite",
+      "release_date": "2025-12-01",
+      "temperature": true
+    },
+    "amazon/nova-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 300000,
+      "family": "nova-lite",
+      "knowledge": "2024-10",
+      "last_updated": "2024-12-03",
+      "max_output_tokens": 8192,
+      "name": "Nova Lite",
+      "release_date": "2024-12-03",
+      "temperature": true
+    },
+    "amazon/nova-micro": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "nova-micro",
+      "knowledge": "2024-10",
+      "last_updated": "2024-12-03",
+      "max_output_tokens": 8192,
+      "name": "Nova Micro",
+      "release_date": "2024-12-03",
+      "temperature": true
+    },
+    "amazon/nova-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 300000,
+      "family": "nova-pro",
+      "knowledge": "2024-10",
+      "last_updated": "2024-12-03",
+      "max_output_tokens": 8192,
+      "name": "Nova Pro",
+      "release_date": "2024-12-03",
       "temperature": true
     },
     "anthropic/claude-3-5-haiku-20241022": {
@@ -3950,7 +4093,7 @@
       "knowledge": "2025-01",
       "last_updated": "2025-11-20",
       "max_output_tokens": 32768,
-      "name": "Nano Banana Pro",
+      "name": "Nano Banana Pro Preview",
       "release_date": "2025-11-20",
       "temperature": true
     },
@@ -4052,7 +4195,7 @@
       "knowledge": "2025-01",
       "last_updated": "2026-02-26",
       "max_output_tokens": 65536,
-      "name": "Nano Banana 2",
+      "name": "Nano Banana 2 Preview",
       "release_date": "2026-02-26",
       "temperature": true
     },
@@ -5061,6 +5204,33 @@
       "release_date": "2026-06-30",
       "temperature": true
     },
+    "meta/llama-3.1-70b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "llama",
+      "knowledge": "2023-12",
+      "last_updated": "2024-07-23",
+      "max_output_tokens": 4096,
+      "name": "Llama-3.1-70B-Instruct",
+      "release_date": "2024-07-23",
+      "temperature": true
+    },
     "meta/llama-3.1-8b-instruct": {
       "capabilities": {
         "input_modalities": [
@@ -5337,10 +5507,10 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 1000000,
+      "context_window": 1048576,
       "family": "muse",
       "last_updated": "2026-07-09",
-      "max_output_tokens": 32000,
+      "max_output_tokens": 131072,
       "name": "Muse Spark 1.1",
       "release_date": "2026-04-08",
       "temperature": true
@@ -5381,6 +5551,45 @@
       "max_output_tokens": 131072,
       "name": "Muse Spark 1.2",
       "release_date": "2026-08-05",
+      "temperature": true
+    },
+    "meta/muse-spark-1.3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "muse",
+      "last_updated": "2026-09-02",
+      "max_output_tokens": 131072,
+      "name": "Muse Spark 1.3",
+      "release_date": "2026-09-02",
       "temperature": true
     },
     "microsoft/mai-code-1-flash": {
@@ -6287,6 +6496,33 @@
       "release_date": "2024-09-01",
       "temperature": true
     },
+    "mistral/pixtral-large-2502": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "pixtral",
+      "last_updated": "2025-04-08",
+      "max_output_tokens": 8192,
+      "name": "Pixtral Large (25.02)",
+      "release_date": "2025-04-08",
+      "temperature": true
+    },
     "mistral/pixtral-large-latest": {
       "capabilities": {
         "input_modalities": [
@@ -6408,7 +6644,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "tools": true,
@@ -8256,6 +8491,65 @@
       "release_date": "2026-07-09",
       "temperature": false
     },
+    "openai/gpt-6-astra": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-astra",
+      "knowledge": "2026-04-30",
+      "last_updated": "2026-09-04",
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Astra",
+      "release_date": "2026-09-04",
+      "temperature": false
+    },
+    "openai/gpt-6-astra-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-astra",
+      "last_updated": "2026-09-04",
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Astra (Fast)",
+      "release_date": "2026-09-04",
+      "temperature": false
+    },
     "openai/gpt-image-1": {
       "capabilities": {
         "input_modalities": [
@@ -8748,6 +9042,31 @@
       "max_output_tokens": 448,
       "name": "Whisper Large v3 Turbo",
       "release_date": "2024-10-01"
+    },
+    "openbmb/minicpm5-1b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "last_updated": "2026-05-19",
+      "max_output_tokens": 131072,
+      "name": "MiniCPM5-1B",
+      "release_date": "2026-05-19",
+      "temperature": true
     },
     "perplexity/sonar": {
       "capabilities": {
@@ -9319,7 +9638,7 @@
       "context_window": 256000,
       "family": "Hy",
       "last_updated": "2026-07-06",
-      "max_output_tokens": 64000,
+      "max_output_tokens": 128000,
       "name": "Hy3",
       "release_date": "2026-07-06",
       "temperature": true
@@ -9559,6 +9878,58 @@
       "max_output_tokens": 131072,
       "name": "Solar Pro 4",
       "release_date": "2026-08-06",
+      "temperature": true
+    },
+    "writer/palmyra-x4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 122880,
+      "family": "palmyra",
+      "last_updated": "2025-04-28",
+      "max_output_tokens": 8192,
+      "name": "Palmyra X4",
+      "release_date": "2025-04-28",
+      "temperature": true
+    },
+    "writer/palmyra-x5": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1040000,
+      "family": "palmyra",
+      "last_updated": "2025-04-28",
+      "max_output_tokens": 8192,
+      "name": "Palmyra X5",
+      "release_date": "2025-04-28",
       "temperature": true
     },
     "xai/grok-4.1-fast": {

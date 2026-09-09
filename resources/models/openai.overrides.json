@@ -38,44 +38,6 @@
         }
       }
     },
-    "gpt-5.4": {
-      "connections": ["api-key", "subscription"],
-      "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
-      }
-    },
-    "gpt-5.4-mini": {
-      "connections": ["api-key", "subscription"],
-      "connection_context_windows": {
-        "api-key": 400000,
-        "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
-      }
-    },
     "gpt-5.5": {
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {

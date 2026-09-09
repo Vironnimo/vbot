@@ -117,6 +117,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 
 ## Codex Catalog (`/codex/models`)
 
+- The 2026-09-09 refresh no longer lists `gpt-5.4` or `gpt-5.4-mini`; their partial bundled overrides were removed with the catalog update. Earlier dated compatibility observations below and above do not establish current catalog availability. `TestModelRegistryRealResources.test_every_bundled_provider_override_loads` rejects leftover overrides that lack a loadable base.
 - `models_endpoint` is `/codex/models`; the `subscription` connection participates in `model.refresh_db` after OAuth is usable.
 - Discovery sends the same account-routing and beta/originator headers as runtime requests. `/codex/models` gates newly available Models by `client_version`: a refresh fetches the current stable `@openai/codex` npm version; if that fetch fails the adapter sends fallback `0.144.0`. Older values such as `0.1.0` can return a valid but empty list. GPT-5.6 Luna/Sol/Terra advertise `minimal_client_version` `0.144.0`. Chat `/codex/responses` requests do not send `client_version`.
 - `/codex/models` may return entries in a top-level `models` list rather than `data`, with ids/names exposed as `slug` and `display_name`.
