@@ -423,6 +423,19 @@ Two sizes, same visual language:
 
 Both: `surface-3` off-state, full `accent` on-state. White knob. Smooth 0.2s `left` transition.
 
+### Audio player
+
+Speech playback in Settings and Chat uses the shared `AudioPlayer` component.
+Its bounded 600px surface uses `surface`, a `border-2` outline and `md` rounding;
+the browser's native media controls stay hidden. One primary square Play/Pause
+button leads a thin accent progress track with Mono time labels. Quiet controls
+provide playback speed, mute, volume and download, using the shared Dropdown,
+Button and Quick tooltip. Below 440px of component width, these secondary
+controls move beneath the timeline so split Chat remains usable; below 280px,
+volume receives its own full-width row. Mobile/coarse
+pointer controls have 40px targets. Loading stays beside the time; playback
+failures use an inline Banner and leave Play available for retry.
+
 ### Dropdowns
 
 Two shared components, both **flat in `webui/src/components/`** — there is **no** `ui/Dropdown.svelte`, so don't go looking in `components/ui/` for them:

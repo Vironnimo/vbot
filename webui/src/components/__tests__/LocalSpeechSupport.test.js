@@ -20,6 +20,8 @@ const { default: LocalSpeechSupport } =
   await import('../settings/LocalSpeechSupport.svelte');
 let components = [];
 beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   init('en');
   status.mockReset().mockResolvedValue({ state: 'ready' });
   install
@@ -32,6 +34,7 @@ afterEach(async () => {
   components = [];
   document.body.innerHTML = '';
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 async function flush() {
   for (let n = 0; n < 10; n++) {
@@ -86,6 +89,13 @@ it('streams preview status and exposes a playable result, then unlocks retry', a
   expect(document.querySelector('audio').getAttribute('src')).toBe(
     '/api/speech/artifacts/aud_test',
   );
+  expect(document.querySelector('audio').controls).toBe(false);
+  expect(
+    document.querySelector(`[aria-label="${t('audio.play')}"]`),
+  ).toBeTruthy();
+  expect(
+    document.querySelector(`[aria-label="${t('audio.download')}"]`),
+  ).toBeTruthy();
   expect(button('settings.localSpeech.previewButton').disabled).toBe(false);
 });
 

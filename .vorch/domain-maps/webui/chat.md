@@ -87,6 +87,13 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 
 ## Usage and errors
 
+Speech Tool artifacts in `ChatAssistantRun.svelte` and `ChatTimelineEntry.svelte`
+use `components/ui/AudioPlayer.svelte`, also used by the Settings preview. It
+owns media state, seeking, speed, volume, download, playback errors and resource
+cleanup. Chat requests one automatic start per source; later `canplay` events
+must not undo Pause. Starting another shared player pauses the previous one.
+Mounted coverage: `components/__tests__/AudioPlayer.test.js`.
+
 - The context ring opens the shared interactive floating hover card and forwards `Force compaction` through `chatState.js` to the active Run. Pending/running requests disable repeat submission. Tool rows receive server-advertised background eligibility and forward `Move to background` through the same controller; no Session-depth policy is inferred in Svelte. Run-control events and sequenced reconnect/RPC snapshots restore these actions, rejecting stale projections (`ChatComposer.test.js`, `ChatAssistantRun.test.js`, `chatState.test.controller.test.js`). Background Bash terminal-event ingestion is untracked by the View effect so writing the process projection cannot retrigger the same ingestion (`ChatView.test.streaming-and-history.test.js`).
 
 Chat shows three distinct server-owned projections: last-step Provider Usage, cumulative Session Usage, and Current Context Usage (restored from History, updated from live/terminal events; badge uses `{tokens, estimated}`, tooltip exposes provenance). The frontend formats but never sums, recalculates cost, or infers missing values; cache counts are input subsets, provider-reported reasoning an output subset, absent counters stay absent, and `reasoning_turns` distinguishes no-reporting from zero.

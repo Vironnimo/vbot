@@ -649,12 +649,7 @@
 }
 
 .speech-audio-player {
-  display: block;
-  width: 100%;
-  max-width: 280px;
-  height: 36px;
-  margin-top: 6px;
-  border-radius: 6px;
+  margin-top: var(--space-sm);
 }
 
 .chat-terminal-event {

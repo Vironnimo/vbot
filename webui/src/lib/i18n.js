@@ -1,6 +1,20 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'audio.label': 'Speech audio',
+  'audio.play': 'Play audio',
+  'audio.pause': 'Pause audio',
+  'audio.seek': 'Playback position',
+  'audio.position': '{current} of {duration}',
+  'audio.mute': 'Mute audio',
+  'audio.unmute': 'Unmute audio',
+  'audio.volume': 'Volume',
+  'audio.speed': 'Playback speed',
+  'audio.download': 'Download audio',
+  'audio.loading': 'Loading…',
+  'audio.playFailed': 'Playback could not start. Press Play to try again.',
+  'audio.loadFailed':
+    'Audio could not be loaded. Press Play to retry, or download the file.',
   'computerControl.stopping': 'Stopping computer control…',
   'computerControl.hotkey':
     'Stop computer control — press Esc twice in any app',
