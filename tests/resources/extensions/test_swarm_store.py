@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 # mypy: disable-error-code=arg-type
 import pytest
@@ -294,6 +295,68 @@ async def test_discussion_create_is_atomic_and_main_membership_is_required(
     ]
     with pytest.raises(SwarmStoreError, match="main_membership_required"):
         await store.leave_discussion(started["swarm_id"], first, swarm["main_discussion_id"])
+
+
+@pytest.mark.asyncio
+async def test_discussion_announcements_have_actionable_text_and_verified_human_targets(store):
+    started = await _swarm(store)
+    sid = started["swarm_id"]
+    swarm = await store.get_swarm(sid)
+    author, peer = swarm["participants"]
+    arguments = {
+        "title": 'Detail "sentinel"',
+        "text": "opening-sentinel",
+        "request_id": "create-detail",
+    }
+    created = await store.create_discussion(sid, author["id"], **arguments)
+    announcement = (
+        await store.read_posts(sid, peer["id"], message_id=created["main_announcement_id"])
+    ).entries[0]
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(announcement["text"])
+    for value in (
+        author["display_name"],
+        arguments["title"],
+        created["discussion_id"],
+        created["opening_post_id"],
+    ):
+        assert value in announcement["text"]
+    assert "discussion_announcement" not in announcement
+    await store.bind_participant_session(
+        TemporarySessionBinding(
+            SessionAddress(None, "tmp", "ses"), "gen", "swarm", sid, peer["id"], {}
+        )
+    )
+    inbox = await store.prepare_inbox_delivery(sid, peer["id"])
+    delivered = next(
+        row for row in inbox["entries"] if row["id"] == created["main_announcement_id"]
+    )
+    assert delivered["text"] == announcement["text"]
+    expected = {
+        "discussion_id": created["discussion_id"],
+        "title": arguments["title"],
+        "opening_post_id": created["opening_post_id"],
+    }
+    # Copying the same content must not turn an ordinary post into an announcement.
+    for index, text in enumerate((announcement["text"], json.dumps(expected))):
+        posted = await store.post(sid, author["id"], text=text, request_id=f"copy-{index}")
+        ordinary = (await store.read_human_posts(sid, message_id=posted["post_id"])).entries[0]
+        assert ordinary["text"] == text
+        assert "discussion_announcement" not in ordinary
+    for result in (
+        await store.read_human_posts(sid),
+        await store.read_human_posts(sid, message_id=created["main_announcement_id"]),
+    ):
+        human = next(row for row in result.entries if row["id"] == created["main_announcement_id"])
+        assert human["discussion_announcement"] == expected
+        assert human["text"] == announcement["text"]
+    replay = await store.create_discussion(sid, author["id"], **arguments)
+    assert replay["main_announcement_id"] == created["main_announcement_id"]
+    assert replay["replayed"]
+    assert (
+        sum("discussion_announcement" in row for row in (await store.read_human_posts(sid)).entries)
+        == 1
+    )
 
 
 @pytest.mark.asyncio
