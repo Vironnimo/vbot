@@ -191,6 +191,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         await super().aclose()
 
     @classmethod
+    def can_refresh_discovery_after_unauthorized(cls, connection: ConnectionConfig | None) -> bool:
+        return (
+            connection is not None
+            and connection.type == "oauth"
+            and connection.mode == CODEX_RESPONSES_MODE
+        )
+
+    @classmethod
     def discovery_headers(
         cls,
         _provider_config: ProviderConfig,

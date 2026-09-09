@@ -871,6 +871,11 @@ class ProviderAdapter(ABC):
     # ------------------------------------------------------------------
 
     @classmethod
+    def can_refresh_discovery_after_unauthorized(cls, connection: ConnectionConfig | None) -> bool:
+        """Whether this Connection permits one token refresh after a catalog 401."""
+        return False
+
+    @classmethod
     def finalize_discovered_model(
         cls,
         model: Model,

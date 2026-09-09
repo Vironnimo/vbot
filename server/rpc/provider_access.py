@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
 from core.providers.accounts import split_connection_id
 from core.providers.auth_flow import DeviceFlowEngine
-from core.providers.token_getter import OAuthTokenGetter
+from core.providers.token_getter import OAuthTokenGetter, TokenGetter
 from core.utils.errors import ConfigError
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_OAUTH_NOT_SUPPORTED, RpcError
 
@@ -47,19 +49,27 @@ def _connection_reachability(runtime: Any, connection_id: str) -> bool | None:
     return cast("bool | None", reachability(connection_id))
 
 
+@asynccontextmanager
 async def _runtime_provider_credential(
     runtime: Any,
     provider_id: str,
     connection_id: str,
     connection: Any,
-) -> str:
+) -> AsyncIterator[str | TokenGetter]:
     if getattr(connection, "type", "") != "oauth" or getattr(connection, "oauth", None) is None:
-        return str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
+        yield str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
+        return
 
     token_store = _runtime_token_store(runtime)
-    getter = OAuthTokenGetter(token_store, provider_id, connection.id, connection.oauth)
+    account_id = runtime.provider_credentials.resolve_account_id(provider_id, connection_id)
+    getter = OAuthTokenGetter(
+        token_store, provider_id, connection.id, connection.oauth, account_id=account_id
+    )
     async with getter:
-        return await getter()
+        # Resolve expiring tokens before callers read token-derived endpoint metadata,
+        # but keep recovery and per-attempt credential access alive through discovery.
+        await getter()
+        yield getter
 
 
 def _runtime_resources_dir(runtime: Any) -> Path:
