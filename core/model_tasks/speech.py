@@ -117,7 +117,9 @@ class SpeechService:
             kind="speech",
             error=SpeechConfigurationError,
         )
-        self._local_executor = local_executor or LocalSpeechExecutor()
+        self._local_executor = local_executor or LocalSpeechExecutor(
+            engines_dir=DataDirectoryLayout(data_dir).speech_engines
+        )
         self._transcription_audio_getter = transcription_audio_getter or (
             lambda: {"transcription_audio": dict(DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS)}
         )
@@ -167,7 +169,6 @@ class SpeechService:
             except LocalSpeechError as exc:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
-        await self._local_executor.unload()
         if progress is not None:
             progress.update("transcribing")
         provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
@@ -197,13 +198,24 @@ class SpeechService:
     def local_setup(self) -> LocalSpeechSetup:
         return self._local_executor.setup
 
+    def local_setup_for(self, target: str) -> LocalSpeechSetup:
+        return self._local_executor.setup_for(target)
+
+    def local_memory_status(self) -> dict[str, Any]:
+        return self._local_executor.memory_status()
+
+    async def unload_local(self, target: str) -> dict[str, Any]:
+        return await self._local_executor.release_memory(target)
+
     def close(self) -> None:
         self._local_executor.close()
 
     async def aclose(self) -> None:
         await self._local_executor.aclose()
 
-    async def synthesize(self, text: str) -> SpeechSynthesisResult:
+    async def synthesize(
+        self, text: str, *, progress: SpeechProgress | None = None
+    ) -> SpeechSynthesisResult:
         """Synthesize one text string using the configured TTS binding."""
 
         normalized_text = text.strip() if isinstance(text, str) else ""
@@ -218,10 +230,15 @@ class SpeechService:
                     target_ref.local_id,
                     normalized_text,
                     options=options,
+                    progress=progress,
                 )
+            except LocalSpeechExecutionError as exc:
+                raise SpeechExecutionError(str(exc)) from exc
             except LocalSpeechError as exc:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
+        if progress is not None:
+            progress.update("synthesizing")
         provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
         try:
             return await provider_client.synthesize(normalized_text, options=options)
@@ -250,10 +267,12 @@ class SpeechService:
             _LOGGER.error("Speech synthesis failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
 
-    async def synthesize_artifact(self, text: str) -> SpeechArtifact:
+    async def synthesize_artifact(
+        self, text: str, *, progress: SpeechProgress | None = None
+    ) -> SpeechArtifact:
         """Synthesize speech and persist it as a runtime artifact."""
 
-        result = await self.synthesize(text)
+        result = await self.synthesize(text, progress=progress)
         stored = self._artifacts.write(
             result.audio,
             extension=_extension_for_audio(result.media_type, result.format),

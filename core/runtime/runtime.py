@@ -530,7 +530,7 @@ class Runtime:
             resources_path=resources_path,
             logger=self.logger,
         )
-        local_speech = LocalSpeechExecutor()
+        local_speech = LocalSpeechExecutor(engines_dir=self._storage.layout.speech_engines)
         self._model_tasks = TaskModelService(
             self._providers,
             self._models,

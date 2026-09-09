@@ -2,6 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
+  import LocalSpeechSupport from './LocalSpeechSupport.svelte';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -11,10 +12,9 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
+    getLocalSpeechMemory,
+    unloadLocalSpeech,
     getTaskModelOptions,
-    getLocalSpeechSetup,
-    installLocalSpeechSupport,
-    restartAfterLocalSpeechSetup,
     listTaskModelTargets,
     updateTaskModelSettings,
   } from '$lib/api.js';
@@ -82,110 +82,83 @@
   let lastModelsRefreshToken = null;
   let taskModelSchemaRequestIds = {};
   let destroyed = false;
-  let localSetup = $state(null);
-  let localSetupError = $state('');
-  let localSetupAction = $state(false);
-  let restartStartedAt = 0;
-  let setupTimer = null;
-  let setupRequestId = 0;
-  let localSelected = $derived(
-    taskModelBindings.speech_to_text?.target?.startsWith('local/'),
+  let speechMemory = $state(null);
+  let speechMemoryError = $state('');
+  const speechUnloading = new SvelteSet();
+  let speechUnloadErrors = $state({});
+  let speechMemoryTimer;
+  let speechMemoryRequest = 0;
+  let selectedSpeechTargets = $derived(
+    ['speech_to_text', 'text_to_speech']
+      .map((task) => taskModelBindings[task]?.target)
+      .filter((target) => target?.startsWith('local/')),
+  );
+  let speechMemoryModels = $derived(
+    (speechMemory?.models ?? []).filter(
+      (model) =>
+        model.loaded ||
+        model.busy ||
+        selectedSpeechTargets.includes(model.target),
+    ),
+  );
+  let showSpeechMemory = $derived(
+    speechMemoryModels.length > 0 || selectedSpeechTargets.length > 0,
   );
 
-  $effect(() => {
-    if (!localSelected) return;
-    untrack(() => void refreshLocalSetup());
-    return () => {
-      clearTimeout(setupTimer);
-      setupRequestId += 1;
-    };
-  });
-
-  function scheduleSetupRefresh() {
-    clearTimeout(setupTimer);
-    if (!destroyed && localSelected) {
-      setupTimer = setTimeout(() => void refreshLocalSetup(), 1500);
+  async function refreshSpeechMemory() {
+    const request = ++speechMemoryRequest;
+    try {
+      const result = await getLocalSpeechMemory();
+      if (destroyed || request !== speechMemoryRequest) return;
+      speechMemory = result;
+      speechMemoryError = '';
+    } catch {
+      if (destroyed || request !== speechMemoryRequest) return;
+      speechMemory = null;
+      speechMemoryError = t('settings.localSpeech.memoryError');
+    } finally {
+      if (!destroyed && request === speechMemoryRequest)
+        speechMemoryTimer = setTimeout(refreshSpeechMemory, 2000);
     }
   }
 
-  async function refreshLocalSetup() {
-    const requestId = ++setupRequestId;
+  async function unloadSpeechMemory(model) {
+    const target = model.target;
+    if (speechUnloading.has(target) || !model.loaded || model.busy) return;
+    speechUnloading.add(target);
+    speechMemoryRequest += 1;
+    clearTimeout(speechMemoryTimer);
+    speechUnloadErrors = { ...speechUnloadErrors, [target]: '' };
     try {
-      const next = await getLocalSpeechSetup();
-      if (destroyed || requestId !== setupRequestId) return;
-      localSetupError = '';
-      if (restartStartedAt && next.state !== 'ready') {
-        localSetup = { ...next, state: 'restarting' };
-      } else {
-        localSetup = next;
+      const result = await unloadLocalSpeech(target);
+      if (!destroyed) {
+        const updated = result.models.find((entry) => entry.target === target);
+        if (updated)
+          speechMemory = {
+            models: speechMemory.models.map((entry) =>
+              entry.target === target ? updated : entry,
+            ),
+          };
       }
-      if (next.state === 'ready') {
-        restartStartedAt = 0;
-        const targets = await listTaskModelTargets('speech_to_text');
-        if (destroyed || requestId !== setupRequestId) return;
-        taskModelTargetsByType = {
-          ...taskModelTargetsByType,
-          speech_to_text: normalizeTargets(targets),
+    } catch {
+      if (!destroyed)
+        speechUnloadErrors = {
+          ...speechUnloadErrors,
+          [target]: t('settings.localSpeech.unloadError'),
         };
-      }
-    } catch {
-      if (destroyed || requestId !== setupRequestId) return;
-      if (!restartStartedAt) localSetupError = 'connection';
-    }
-    if (restartStartedAt && Date.now() - restartStartedAt > 90_000) {
-      localSetupError = 'restart_timeout';
-      return;
-    }
-    if (restartStartedAt || localSetup?.state === 'installing')
-      scheduleSetupRefresh();
-  }
-
-  async function installLocalSpeech() {
-    if (localSetupAction || localSetup?.state === 'installing') return;
-    localSetupAction = true;
-    localSetupError = '';
-    clearTimeout(setupTimer);
-    setupRequestId += 1;
-    try {
-      const next = await installLocalSpeechSupport();
-      if (destroyed) return;
-      localSetup = next;
-      scheduleSetupRefresh();
-    } catch {
-      if (!destroyed) {
-        localSetupError = 'connection';
-        scheduleSetupRefresh();
-      }
     } finally {
-      if (!destroyed) localSetupAction = false;
+      speechUnloading.delete(target);
+      if (!destroyed && speechUnloading.size === 0)
+        speechMemoryTimer = setTimeout(refreshSpeechMemory, 2000);
     }
   }
-
-  async function restartLocalSpeechServer() {
-    if (localSetupAction || taskSurfaceBusy) return;
-    localSetupAction = true;
-    localSetupError = '';
-    setupRequestId += 1;
-    restartStartedAt = Date.now();
-    try {
-      const result = await restartAfterLocalSpeechSetup();
-      if (destroyed) return;
-      if (result.state !== 'restarting') {
-        restartStartedAt = 0;
-        localSetupError = result.error || 'restart_unavailable';
-      } else {
-        localSetup = { ...localSetup, state: 'restarting' };
-      }
-    } catch {
-      // The response may have been interrupted by the requested restart.
-      // Inspect status, never automatically repeat the restart mutation.
-      if (!destroyed) localSetup = { ...localSetup, state: 'restarting' };
-    } finally {
-      if (!destroyed) {
-        localSetupAction = false;
-        scheduleSetupRefresh();
-      }
-    }
+  async function refreshLocalTargets(taskType) {
+    const targets = await listTaskModelTargets(taskType);
+    if (!destroyed)
+      taskModelTargetsByType = {
+        ...taskModelTargetsByType,
+        [taskType]: normalizeTargets(targets),
+      };
   }
 
   let saveDisabled = $derived(
@@ -218,12 +191,13 @@
 
   onMount(() => {
     void loadTaskModelPanel();
+    void refreshSpeechMemory();
   });
 
   onDestroy(() => {
     destroyed = true;
-    clearTimeout(setupTimer);
-    setupRequestId += 1;
+    speechMemoryRequest += 1;
+    clearTimeout(speechMemoryTimer);
     taskModelSchemaRequestIds = {};
     unregisterTaskModelsAutosave();
     taskModelsAutosave.cancelPendingTimer();
@@ -587,6 +561,50 @@
   </Banner>
 {/if}
 
+{#if showSpeechMemory}
+  <div data-local-speech-memory>
+    <div class="s-row-label">{t('settings.localSpeech.memoryTitle')}</div>
+    <div class="s-row-desc">{t('settings.localSpeech.memoryHelp')}</div>
+    {#if speechMemoryError}<div role="alert">{speechMemoryError}</div>{/if}
+    {#if !speechMemory && !speechMemoryError}
+      <div role="status">{t('settings.localSpeech.memoryChecking')}</div>
+    {/if}
+    {#each speechMemoryModels as model (model.target)}
+      <div class="s-row" data-speech-memory-target={model.target}>
+        <div class="s-row-info">
+          <div class="s-row-label">{model.label}</div>
+          <div class="s-row-desc" role="status" aria-live="polite">
+            {#if speechUnloading.has(model.target)}
+              {t('settings.localSpeech.unloading')}
+            {:else if model.busy}
+              {t('settings.localSpeech.memoryBusy')}
+            {:else if model.loaded}
+              {t('settings.localSpeech.memoryLoaded')}
+            {:else}
+              {t('settings.localSpeech.memoryEmpty')}
+            {/if}
+          </div>
+          {#if speechUnloadErrors[model.target]}
+            <div role="alert">{speechUnloadErrors[model.target]}</div>
+          {/if}
+        </div>
+        <div class="s-row-control">
+          <Button
+            disabled={speechUnloading.has(model.target) ||
+              !model.loaded ||
+              model.busy}
+            ariaLabel={t('settings.localSpeech.unloadAria', undefined, {
+              model: model.label,
+            })}
+            onClick={() => unloadSpeechMemory(model)}
+            >{t('settings.localSpeech.unloadButton')}</Button
+          >
+        </div>
+      </div>
+    {/each}
+  </div>
+{/if}
+
 <div class="s-task-model-list">
   {#each TASK_MODEL_ROWS as row (row.taskType)}
     {@const binding = taskModelBindings[row.taskType] ?? {
@@ -641,72 +659,15 @@
         </div>
       </div>
 
-      {#if row.taskType === 'speech_to_text' && selectedTarget?.kind === 'local'}
-        {@const setupState = localSetup?.state ?? 'checking'}
-        <Banner
-          variant={localSetupError || setupState === 'failed'
-            ? 'warn'
-            : 'neutral'}
-        >
-          <div role="status" aria-live="polite">
-            {#if localSetupError}
-              {t(
-                `settings.localSpeech.error.${localSetupError}`,
-                t('settings.localSpeech.error.install_failed'),
-              )}
-            {:else if setupState === 'failed'}
-              {t(
-                `settings.localSpeech.error.${localSetup.error}`,
-                t('settings.localSpeech.error.install_failed'),
-              )}
-            {:else if setupState === 'installing'}
-              {t(
-                `settings.localSpeech.phase.${localSetup.phase}`,
-                t('settings.localSpeech.phase.installing'),
-              )}
-            {:else if setupState === 'ready'}
-              {t('settings.localSpeech.ready')}
-            {:else if setupState === 'restart_required' && !localSetup.restart_available}
-              {t('settings.localSpeech.error.restart_unavailable')}
-            {:else}
-              {t(`settings.localSpeech.state.${setupState}`)}
-            {/if}
-          </div>
-          {#if localSetupError === 'connection' || localSetupError === 'restart_timeout'}
-            <Button onClick={refreshLocalSetup}
-              >{t('settings.localSpeech.checkAgain')}</Button
-            >
-          {:else if setupState === 'missing' || setupState === 'failed'}
-            <Button
-              variant="primary"
-              loading={localSetupAction}
-              onClick={installLocalSpeech}
-            >
-              {t(
-                setupState === 'failed'
-                  ? 'settings.localSpeech.retry'
-                  : 'settings.localSpeech.installButton',
-              )}
-            </Button>
-          {:else if setupState === 'restart_required'}
-            <Button
-              variant="primary"
-              loading={localSetupAction}
-              disabled={taskSurfaceBusy || !localSetup.restart_available}
-              onClick={restartLocalSpeechServer}
-            >
-              {t('settings.localSpeech.restartButton')}
-            </Button>
-          {:else if setupState === 'installing' || setupState === 'restarting'}
-            <Button loading
-              >{t(
-                setupState === 'installing'
-                  ? 'settings.localSpeech.installingButton'
-                  : 'settings.localSpeech.restartingButton',
-              )}</Button
-            >
-          {/if}
-        </Banner>
+      {#if ['speech_to_text', 'text_to_speech'].includes(row.taskType) && selectedTarget?.kind === 'local'}
+        {#key binding.target}
+          <LocalSpeechSupport
+            target={binding.target}
+            tts={row.taskType === 'text_to_speech'}
+            {taskSurfaceBusy}
+            onReady={() => refreshLocalTargets(row.taskType)}
+          />
+        {/key}
       {/if}
 
       {#if binding.target && fields.length > 0}

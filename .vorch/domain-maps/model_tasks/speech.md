@@ -15,7 +15,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` - calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
 - `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` - accepts bounded safe opaque IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
 - `ProviderSpeechClient.transcribe(...)` / `ProviderSpeechClient.synthesize(...)` - small speech-specific HTTP clients built from runtime provider config, connection auth, credentials, and the target model ID.
-- `LocalSpeechExecutor.transcribe(...)` dispatches to registered local engines; `synthesize(...)` remains unsupported. `SpeechService.close/aclose` own local worker/model cleanup.
+- `LocalSpeechExecutor.transcribe(...)` dispatches to registered local engines; `synthesize(...)` dispatches to local TTS engines. `SpeechService.close/aclose` own local worker/model cleanup.
 
 `SpeechTranscriptionResult` contains normalized `text`, optional `language`, optional `segments`, optional `usage`, and the raw response payload when available.
 
@@ -44,13 +44,18 @@ and its target registry to SpeechService and TaskModelService. Built-ins are
 `local-speech` extra. Configuration does not load weights; first non-silent use does.
 
 To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory and
-optional load-affecting option names. Its synchronous `LocalTranscriptionEngine`
-implements `transcribe` and `close`; callers and accessors remain unchanged.
+optional load-affecting option names. Its synchronous `LocalTranscriptionEngine` or `LocalSynthesisEngine`
+implements `transcribe` or `synthesize`, plus `close`; callers and accessors remain unchanged.
 Unspecified load-option names mean every option participates in cache identity.
-One bounded worker serializes loading, inference and unloading outside the Event
-Loop. A different load configuration releases the previous model before loading
-the next; Provider STT calls `unload`, and Runtime shutdown calls `close`/`aclose`.
-Cancellation waits for already-started work before reporting cancellation.
+Each engine has its own cached model and bounded worker, serializing its loading,
+inference and unloading outside the Event Loop. Other engines remain independent:
+STT can be unloaded while TTS is busy. Changing load options replaces only that
+engine's model; switching bindings or using a Provider does not evict other models.
+Runtime shutdown closes all engines. Cancellation waits for already-started work
+before reporting cancellation. Memory status is metadata-only; targeted manual
+release refuses a busy engine immediately and retains downloaded files. Coverage:
+`test_speech_local.py` checks independent residency, busy TTS during STT release,
+cancellation, no-op release and loading again.
 
 PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
 seconds, cut near a quiet point in the last second, with no discarded samples.
@@ -62,8 +67,9 @@ snapshot, then loads native Transformers classes exclusively from its local
 path. Download callbacks report actual transfer activity; cached/local/offline
 loads do not fabricate download progress.
 
-`LocalSpeechSetup`, exposed through `SpeechService.local_setup`, owns one
-asynchronous fixed-recipe installation per Runtime. It reads the shipped
+`LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
+and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
+The shared STT job and individual TTS jobs serialize package operations. It reads the shipped
 `local-speech` extra, invokes the server interpreter's pip without reinstalling
 vBot launchers, preserves compatible working Torch or installs an official
 NVIDIA CUDA/CPU/platform build, and verifies imports plus NVIDIA execution in
@@ -75,8 +81,8 @@ verified restart-required state; a fresh Runtime rechecks package metadata.
 See `USAGE.md` -> Local speech recognition for the user setup flow.
 
 `SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
-time. `SpeechService.transcribe(progress=...)` carries it to local workers or
-Provider STT. Local factory signatures stay unchanged: the executor scopes
+time. `SpeechService.transcribe/synthesize(progress=...)` carries it to local workers
+or Provider speech. Local factory signatures stay unchanged: the executor scopes
 built-in loader reporting to its worker invocation and resets that context
 afterwards. Queued, preparation, model checks/download/loading and inference
 remain distinguishable; cached engines skip loading. No audio or transcript
@@ -86,8 +92,30 @@ Coverage: `tests/core/model_tasks/test_speech_local.py` tests custom engine
 substitution, cache/lifecycle, cancellation, decode/resampling/chunk coverage,
 failures, request progress, fixed setup commands/retry/cancellation and native
 adapter calls without downloading weights. `test_speech.py`
-covers service error translation and Provider handoff; Runtime registration and
+covers service error translation and Provider routing; Runtime registration and
 cleanup are covered by `tests/core/runtime/test_runtime.py`.
+
+
+Local TTS registrations are `local/qwen3-tts` (CustomVoice 1.7B/0.6B, preset
+voices/languages, 1.7B style instructions) and `local/chatterbox` (Multilingual V3,
+language, expressiveness/guidance). Their incompatible SDK dependencies are
+installed into managed Python 3.12 environments under the Runtime-injected
+`DataDirectoryLayout.speech_engines` root. `local-tts` installs only uv in the
+server interpreter; shipped recipes install each SDK and matched Torch/audio
+packages separately. Verification writes a recipe marker, never loads weights,
+and makes TTS immediately available without restarting the server. A changed
+recipe or missing interpreter requires setup again. Fixed upstream revisions
+avoid accidentally selecting Chatterbox's older PyPI V2 implementation.
+
+`speech_worker.py` starts without importing vBot, loads SDKs only inside its
+child environment, reports actual download/load/generation phases and writes
+mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS engine
+while that engine's load options match, bounds requests to 5,000 characters / 64 MiB output,
+and owns timeouts and whole-process-tree cleanup (Windows launchers have child
+interpreters). Sentence/word chunking bounds each generation context. No voice
+cloning input is exposed. Offline mode permits only cached model files. Native
+Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
+SDK calls, playable WAV chunks, process boundaries, setup isolation and availability.
 
 ## Provider Wire Behavior
 
@@ -122,10 +150,19 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
   still waits for active inference. Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - `speech.local_setup_status/install/restart` in `server/rpc/settings_methods.py`
-  accept no client commands, package names or paths. Restart requires verified
+  accept an optional exact local `target`, never client commands, package names or paths. Restart requires verified
   setup and the server startup callback; its detached CLI lifecycle helper
   targets the exact running bind/data directory. Coverage: task-model RPC and
   server-main tests.
+- `speech.local_memory_status` reports each engine's loaded/busy state.
+  `speech.local_unload` requires one exact `local/...` target and returns whether
+  release occurred plus refreshed memory status. It never unloads other engines
+  or interrupts work. Specialized Models polls status and offers one button per
+  model, disabling only the busy/unloaded model. RPC and component tests cover
+  targeted release, invalid requests and independent controls.
+- With `Accept: application/x-ndjson`, synthesis uses the same progress stream
+  and returns a persisted speech artifact projection as its terminal result.
+  The Settings preview uses its URL; ordinary clients still receive raw audio.
 - `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
 - `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
 - The built-in `text_to_speech` tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
