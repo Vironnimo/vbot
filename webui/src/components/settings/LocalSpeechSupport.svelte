@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Banner from '../ui/Banner.svelte';
+  import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -257,11 +258,10 @@
     {#if previewError}<Banner variant="warn"
         ><span role="alert">{previewError}</span></Banner
       >{/if}
-    {#if previewAudio}<audio
-        controls
+    {#if previewAudio}<AudioPlayer
         src={previewAudio}
-        aria-label={t('settings.localSpeech.previewAudio')}
-      ></audio>{/if}
+        ariaLabel={t('settings.localSpeech.previewAudio')}
+      />{/if}
   </div>
 {/if}
 
@@ -278,10 +278,7 @@
   }
   .speech-preview-actions [role='status'] {
     flex: 1 1 260px;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
     line-height: 1.45;
-  }
-  audio {
-    width: 100%;
   }
 </style>

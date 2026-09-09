@@ -95,7 +95,8 @@ keyed by the selected target inside Specialized Models. Setup polling survives
 navigation through server-owned jobs; TTS installs only its selected engine and
 refreshes availability immediately. The preview waits for saved options, streams
 phases/elapsed time, offers cancellation and displays the server-owned artifact
-in an audio player. Unmount aborts its request and timers; failed generation
+in the shared `components/ui/AudioPlayer.svelte` without autoplay (media ownership
+and coverage: `webui/chat.md`). Unmount aborts its request and timers; failed generation
 releases the controls for retry. Coverage: `LocalSpeechSupport.test.js` and the
 Specialized Models/API tests. All local target labels remain searchable by `local`.
 
