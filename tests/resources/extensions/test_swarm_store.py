@@ -1259,6 +1259,49 @@ async def test_no_participant_lifecycle_storage_or_summary_contract(store):
 
 
 @pytest.mark.asyncio
+async def test_completed_admission_outcomes_survive_reopen_and_later_epochs(store):
+    started = await _swarm(store, count=1)
+    sid = started["swarm_id"]
+    snapshot = await store.get_swarm(sid)
+    pid = snapshot["participants"][0]["id"]
+    await store.set_swarm_state(sid, "running")
+    admitted = await store.finish_admission(
+        sid, request_id="start-1", kind="start", runs=[{"participant_id": pid, "run_id": "first"}]
+    )
+    await store.begin_stop(sid, request_id="stop", actor="user")
+    stopped = await store.finish_stop(sid, request_id="stop", actor="user", drain_report={})
+    await store.begin_resume(sid, request_id="resume", actor="user")
+    await store.set_swarm_state(sid, "running")
+    resumed = await store.finish_admission(
+        sid, request_id="resume", kind="resume", runs=[{"participant_id": pid, "run_id": "second"}]
+    )
+    await store.begin_stop(sid, request_id="stop-2", actor="user")
+    await store.finish_stop(sid, request_id="stop-2", actor="user", drain_report={})
+    await store.begin_resume(sid, request_id="resume-2", actor="user")
+    await store.set_swarm_state(sid, "running")
+    current = await store.get_swarm(sid)
+    await store.close()
+    await store.open()
+    profile = snapshot["profile_snapshot"]
+    assert await store.create_swarm(
+        profile["id"],
+        "Investigate",
+        {"cwd": "C:/work"},
+        request_id="start-1",
+        expected_profile_revision=profile["revision"],
+    ) == {**admitted, "replayed": True}
+    assert await store.begin_resume(sid, request_id="resume", actor="user") == {
+        **resumed,
+        "replayed": True,
+    }
+    assert await store.begin_stop(sid, request_id="stop", actor="user") == {
+        **stopped,
+        "replayed": True,
+    }
+    assert await store.get_swarm(sid) == current
+
+
+@pytest.mark.asyncio
 async def test_late_start_and_wake_ack_cannot_resurrect_finished_run(store):
     started = await _swarm(store, count=1)
     sid = started["swarm_id"]

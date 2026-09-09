@@ -91,6 +91,12 @@ wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
 overflow remains available through Inbox. Read pages are bounded and cursors
 cannot cross queries.
 
+An already prepared wake batch remains replayable while its Run is active.
+New posts on an idle-mode route wait until the participant is idle again or
+explicitly reads Inbox; the retained wake boundary does not permit automatic
+delivery during later Model requests of that Run. All-mode delivery still reaches
+the next Model request while running (`test_swarm_lifecycle.py`).
+
 Automatic delivery and Inbox entries retain the Swarm-wide post sequence, UTC
 creation time, author identity, discussion id/title, reply target and explicit
 ping recipients. The saved per-recipient route (`main`, `discussion`, `ping`)
@@ -118,6 +124,8 @@ Participant status is an execution projection: `idle`, `running`, `failed`,
 `cancelled` or `interrupted`. A successful Run returns to idle and leaves the
 same Session reachable. All-idle Swarms remain open without polling Models;
 eligible new Board messages trigger Runs through the existing wake/receipt path.
+Successful wake admission publishes a page invalidation so an open participant
+Session can attach to the new Run before it finishes (`test_swarm_lifecycle.py`).
 Messages are retained for every addressed participant, including failed or
 cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
 failed/cancelled/interrupted peers. Stop and startup recovery mark only active
@@ -142,6 +150,14 @@ that newly opened epoch so a later Resume can retry; existing Sessions and the
 initial-input receipt remain authoritative. Resume is rejected while initial
 preparation or Stop is still in progress. Background wake failures
 retain pending delivery and expose needs_attention with ids-only diagnostics.
+
+Start and Resume persist admitted Run results in their existing request receipt;
+replaying that request returns the saved outcome without preparing Sessions or
+admitting work again. A completed Stop returns its saved drain result, and an
+unfinished Stop can drain only its original lifecycle epoch. The receipts survive
+restart and later Resume attempts. An interrupted admission requires a new explicit
+Resume request, not replay of the old Start/Resume request. Evidence:
+`test_swarm_store.py`, `test_swarm_lifecycle.py`.
 
 ## Verification routes
 
@@ -170,7 +186,11 @@ prompt. Profile selection opens the editor; New Swarm returns to the goal form.
 Participant selection opens Activity and disposes the previous Run subscription;
 late history/subscription replies cannot replace a newer participant selection.
 Terminal Run events reload canonical history so non-streamed final output appears
-without reopening Activity.
+without reopening Activity. Refresh and reconnect also reload the open History
+and reattach an active Run when its id is unchanged. Activity loads older canonical
+History pages through `next_before`, retaining the loaded page depth on refresh.
+Board, discussion, audit and Usage replies commit only for the current selection
+and request; delayed reads cannot overwrite newer navigation.
 Evidence: `SwarmPage.test.js` and `test_swarm_store.py`.
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
@@ -204,6 +224,6 @@ input defaults are resolved when a profile is saved or previewed.
 The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
 transactionally removes its Board, participants, events and request receipts.
-The profile and other Swarms remain. Stop/Resume/Delete are serialized; the durable
+The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
