@@ -13,7 +13,56 @@ import os
 import re
 import sys
 import wave
+from pathlib import Path
 from typing import Any
+
+
+def resolve_snapshot(repo: str, files: list[str], tqdm_class: Any) -> str:
+    """Reuse complete local files without HTTP; finish only missing downloads.
+
+    Kept in this standalone loader so the server's STT adapters and isolated
+    TTS SDK processes share one cache policy without importing vBot in the child.
+    Hub's local snapshot lookup alone does not prove that a download is complete.
+    """
+    hub = importlib.import_module("huggingface_hub")
+    missing = importlib.import_module("huggingface_hub.errors").LocalEntryNotFoundError
+    try:
+        cached = hub.snapshot_download(repo, local_files_only=True, allow_patterns=files)
+    except missing as error:
+        # Newer Hub versions expose the partial snapshot on this error; older
+        # SDK stacks return its directory and leave completeness to the caller.
+        cached = getattr(error, "snapshot_path", None)
+
+    def complete(source: str) -> bool:
+        return all(
+            (Path(source) / name).is_file() and (Path(source) / name).stat().st_size > 0
+            for name in files
+        )
+
+    if cached and complete(cached):
+        return str(cached)
+    # A partial snapshot must finish its existing revision, not combine it with
+    # whatever the remote main branch happens to point at today.
+    options = {"revision": Path(cached).name} if cached else {}
+    source = hub.snapshot_download(repo, allow_patterns=files, tqdm_class=tqdm_class, **options)
+    empty = [
+        name
+        for name in files
+        if (Path(source) / name).is_file() and (Path(source) / name).stat().st_size == 0
+    ]
+    if empty:
+        # Hub considers an existing blob cached even when it is empty. Repair
+        # only those files; valid weights must never be downloaded again.
+        source = hub.snapshot_download(
+            repo,
+            revision=Path(source).name,
+            allow_patterns=empty,
+            force_download=True,
+            tqdm_class=tqdm_class,
+        )
+    if not complete(source):
+        raise OSError("Incomplete speech model download")
+    return str(source)
 
 
 def sdk(engine: str) -> Any:
@@ -46,10 +95,6 @@ def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
             if torch.cuda.is_available()
             else ("mps" if torch.backends.mps.is_available() else "cpu")
         )
-    if options.get("offline"):
-        os.environ["HF_HUB_OFFLINE"] = "1"
-    cls = sdk(engine)
-    hub = importlib.import_module("huggingface_hub")
     hub_progress: Any = importlib.import_module("huggingface_hub.utils.tqdm")
     tqdm = hub_progress.tqdm
 
@@ -71,13 +116,44 @@ def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
 
     progress("checking_model")
     if engine == "qwen3-tts":
-        source = hub.snapshot_download(
+        source = resolve_snapshot(
             options.get("model", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
-            allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"],
-            local_files_only=bool(options.get("offline")),
-            tqdm_class=DownloadProgress,
+            [
+                "config.json",
+                "generation_config.json",
+                "merges.txt",
+                "model.safetensors",
+                "preprocessor_config.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "speech_tokenizer/config.json",
+                "speech_tokenizer/configuration.json",
+                "speech_tokenizer/model.safetensors",
+                "speech_tokenizer/preprocessor_config.json",
+            ],
+            DownloadProgress,
         )
-        progress("loading")
+    else:
+        source = resolve_snapshot(
+            "ResembleAI/chatterbox",
+            [
+                "ve.pt",
+                "t3_mtl23ls_v3.safetensors",
+                "s3gen.pt",
+                "grapheme_mtl_merged_expanded_v1.json",
+                "conds.pt",
+                "Cangjie5_TC.json",
+            ],
+            DownloadProgress,
+        )
+    # SDK internals may probe the Hub even when given local paths. All required
+    # files now exist, so keep this dedicated child offline for loading/inference.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    constants: Any = importlib.import_module("huggingface_hub.constants")
+    constants.HF_HUB_OFFLINE = True
+    cls = sdk(engine)
+    progress("loading")
+    if engine == "qwen3-tts":
         dtype = torch.float32 if device == "cpu" else torch.float16
         if device == "cuda" and torch.cuda.is_bf16_supported():
             dtype = torch.bfloat16
@@ -88,20 +164,16 @@ def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
             attn_implementation="sdpa",
             local_files_only=True,
         )
-    source = hub.snapshot_download(
-        "ResembleAI/chatterbox",
-        allow_patterns=[
-            "ve.pt",
-            "t3_mtl23ls_v3.safetensors",
-            "s3gen.pt",
-            "grapheme_mtl_merged_expanded_v1.json",
-            "conds.pt",
-            "Cangjie5_TC.json",
-        ],
-        local_files_only=bool(options.get("offline")),
-        tqdm_class=DownloadProgress,
-    )
-    progress("loading")
+    # The pinned SDK otherwise ignores its local mapping and starts another Hub
+    # lookup in a nested cache. Resolve this one tokenizer asset from our snapshot.
+    tokenizer: Any = importlib.import_module("chatterbox.models.tokenizers.tokenizer")
+
+    def tokenizer_asset(*, repo_id: str, filename: str, **_kwargs: Any) -> str:
+        if repo_id != "ResembleAI/chatterbox" or filename != "Cangjie5_TC.json":
+            raise ValueError("Unexpected Chatterbox tokenizer asset")
+        return str(Path(source) / filename)
+
+    tokenizer.hf_hub_download = tokenizer_asset
     return cls.from_local(source, device=device, t3_model="v3")
 
 

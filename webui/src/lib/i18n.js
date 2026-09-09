@@ -1778,10 +1778,10 @@ export const englishCatalog = Object.freeze({
   'settings.localSpeech.options.cfg_weight.label': 'Guidance',
   'chat.voice.progress.synthesizing': 'Generating speech…',
   'settings.localSpeech.ready':
-    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. After downloading, enable Offline only to use cached files without network access.',
+    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. Downloaded models are reused automatically without online checks.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',
   'settings.localSpeech.state.missing':
-    'Local speech support is not installed on this server. Installation includes support for both engines and may download several gigabytes.',
+    'Local speech support is not installed on this server. Installation supports all local speech-to-text engines and may download several gigabytes.',
   'settings.localSpeech.state.restart_required':
     'Installation complete. Restart the server to enable local speech recognition. Active Runs will be interrupted.',
   'settings.localSpeech.state.restarting':
@@ -1827,9 +1827,6 @@ export const englishCatalog = Object.freeze({
   'settings.localSpeech.options.model_path.label': 'Model directory',
   'settings.localSpeech.options.model_path.help':
     'Optional directory on the vBot server containing a Transformers model. Leave empty to download and cache the selected model from Hugging Face.',
-  'settings.localSpeech.options.offline.label': 'Offline only',
-  'settings.localSpeech.options.offline.help':
-    'Load only already downloaded model files; never contact Hugging Face.',
   'settings.localSpeech.options.language.label': 'Language',
   'settings.localSpeech.options.language.help':
     'Leave empty for automatic detection, or enter a language code such as de or en.',

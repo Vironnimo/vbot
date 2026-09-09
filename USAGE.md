@@ -684,7 +684,7 @@ vbot task-model clear text_embedding
 
 ### Local speech recognition
 
-Qwen3 ASR and Parakeet TDT v3 run on the **vBot server machine**, including when
+Qwen3 ASR, Parakeet TDT v3 and Nemotron 3.5 ASR run on the **vBot server machine**, including when
 the WebUI or Desktop connects from another computer. They require no paid API
 or subscription. In **Settings -> Tools & Media -> Specialized Models**, select
 a local speech-to-text engine and choose **Install**. Setup runs on the server
@@ -702,18 +702,23 @@ platforms can use a manually installed [PyTorch build](https://pytorch.org/get-s
 `Automatic` uses CUDA/ROCm when available, then Apple MPS,
 otherwise CPU. CPU execution is available but can be slow. This extra is separate
 from the normal server and Desktop dependencies; it does not install NeMo, vLLM,
-or the separate `qwen-asr` package. Both engines use native Transformers adapters.
+or the separate `qwen-asr` package. All three engines use native Transformers adapters.
 
 In **Settings → Tools & Media → Specialized Models → Speech to text**, select
-**Qwen3 ASR (local)** or **Parakeet TDT v3 (local)**; searching for **local** finds
-both. Expand its options to choose device, precision,
+**Qwen3 ASR (local)**, **Parakeet TDT v3 (local)**, or
+**Nemotron 3.5 ASR Streaming 0.6B (local)**; searching for **local** finds
+all three. Expand its options to choose device, precision,
 or a model directory. Qwen defaults to the 1.7B model, also offers 0.6B, and accepts
 an optional language and vocabulary/context hint. Parakeet detects language
-automatically. You can also select an engine through the CLI:
+automatically. Nemotron accepts an empty language for automatic detection or a
+code such as `de` / `de-DE` for German. Its native streaming engine reuses
+computed context inside each recording segment; the current Chat still returns
+the complete transcript after submission. You can also select an engine through the CLI:
 
 ```bash
 vbot task-model set speech_to_text local/qwen3-asr
 vbot task-model set speech_to_text local/parakeet
+vbot task-model set speech_to_text local/nemotron3.5-asr
 ```
 
 The first non-silent transcription downloads the selected public checkpoint from
@@ -722,9 +727,10 @@ model weights. Chat shows live download, model-loading and transcription phases
 with elapsed time above the composer and in the microphone tooltip. A cached
 model skips downloads; an already loaded model skips loading. Failures release
 the microphone for another attempt. The server's standard Hugging Face cache is reused (`HF_HOME` can
-relocate it). After downloading, enable **Offline only** to prevent model network
-lookups; a missing cache then produces an error. Alternatively, point **Model
-directory** at a complete compatible Transformers checkpoint on the server.
+relocate it). Complete model files are reused automatically without online update
+checks, including after unloading or restarting. Only missing files are downloaded;
+interrupted downloads resume their existing model revision. Alternatively, point
+**Model directory** at a complete compatible Transformers checkpoint on the server.
 Recordings are processed by the local engine, without a transcription API call.
 
 Local speech models stay loaded independently, so STT and TTS can remain ready
@@ -745,9 +751,10 @@ transcript; it does not stream partial text or distinguish speakers. Desktop Voi
 allows up to ten minutes for a transcription response, including a first download.
 
 The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf),
-[Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf) (Apache-2.0), and
+[Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf) (Apache-2.0),
 [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-(CC-BY-4.0). See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
+(CC-BY-4.0), and [NVIDIA Nemotron 3.5 ASR Streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+(OpenMDW-1.1). See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
 
 ### Local speech synthesis
 
@@ -770,8 +777,8 @@ then loads the model and generates audio. Live status and elapsed time remain
 visible; the audio player appears when the complete WAV is ready. The Agent's
 existing `text_to_speech` Tool uses the same saved engine and voice options.
 Local requests accept up to 5,000 characters and split longer passages within
-that limit at sentence/word boundaries. Only one STT or TTS model stays loaded
-per Runtime; switching engines releases its memory before the next one loads.
+that limit at sentence/word boundaries. STT and TTS models stay loaded independently;
+each model has its own **Unload from memory** button.
 
 The optional `local-tts` extra installs uv, which prepares managed Python 3.12
 and separate SDK environments under `<data-dir>/speech-engines/`. Fixed recipes
@@ -782,7 +789,8 @@ imports and, on NVIDIA systems, GPU execution. Chatterbox currently uses upstrea
 Torch 2.6 / CUDA 12.6 combination; GPUs requiring a newer Torch are not supported
 by that recipe. Qwen uses Torch 2.11 / CUDA 12.8. CPU and Apple builds are selected
 on systems without a detected NVIDIA GPU. First downloads require internet access;
-**Offline only** uses already cached files.
+Downloaded models are reused automatically without online update checks. Only
+missing files require internet access; there is no offline switch to configure.
 
 Model sources and licenses: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
 (Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).

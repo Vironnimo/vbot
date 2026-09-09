@@ -10,6 +10,8 @@ at first use; vBot does not bundle them in its distribution:
   under [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 - NVIDIA, [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
   under [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/).
+- NVIDIA, [Nemotron 3.5 ASR Streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b),
+  under OpenMDW-1.1 (see the model card's linked license terms).
 
 The linked model cards provide upstream attribution and model documentation.
 
