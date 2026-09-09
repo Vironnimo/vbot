@@ -69,15 +69,21 @@ _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
 # imperative self-instructions do not). Two examples — a user fact and a project
 # fact — cover both scopes.
 _MEMORY_GUIDANCE = (
-    "This memory is injected into every future session, so keep it to durable, high-signal "
-    "facts — the most valuable entry is one that stops the user from having to steer, "
-    "correct, or repeat themselves again. Save such facts as they surface, rather than "
-    "waiting to be asked. Write them as declarative facts, not instructions to yourself: "
-    '"User prefers concise answers" (good), not "Always answer concisely" (bad); '
-    '"Project uses pytest with xdist" (good), not "Run tests with pytest -n 4" (bad). '
-    "Imperative notes get re-read as standing directives in later sessions and can override "
-    "the user's current request. Saying \"I'll remember that\" is not remembering — make the "
-    "memory tool call in the same turn."
+    "Memory is shown in future Sessions, so keep only durable facts that reduce repeated "
+    "user steering or materially improve future decisions. General communication "
+    "preferences belong in user Memory when they express standing expectations; a one-off "
+    "request does not establish one. Stable environment or project facts belong in agent "
+    "Memory; name the project when needed to avoid applying them elsewhere. Procedures "
+    "belong in Skills. Skip routine knowledge, easily rediscovered facts, task progress, "
+    "completed-work logs, transient failures, guesses, and secrets. When the memory Tool is "
+    "available and a fact is worth saving, list the relevant scope first: the entries shown "
+    "here may be older than the current stored entries. Leave equivalent facts alone, "
+    "replace superseded facts, and consolidate overlap. Write declarative facts, not "
+    'instructions to yourself: "User prefers concise answers", not "Always answer '
+    'concisely"; "Project uses pytest with xdist", not "Run tests with pytest -n 4". Save '
+    "worthwhile changes in the same turn and check the Tool result before saying they were "
+    "saved. No change is needed when nothing qualifies; unavailable Memory is not a reason "
+    "to put the fact in a Skill."
 )
 # The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
 # input: the block renders only when the memory tool is enabled for the agent

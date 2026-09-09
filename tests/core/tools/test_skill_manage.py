@@ -8,6 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
@@ -139,6 +141,46 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         )
         == SKILL_MANAGE_TOOL_PARAMETERS
     )
+
+
+def test_patch_empty_content_removes_only_the_selected_text(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(content=_skill_md(body="Keep this step.\nObsolete step.\n"))
+    result = harness.run(
+        {"action": "patch", "name": "demo", "match": "Obsolete step.\n", "content": ""}
+    )
+    assert result["ok"] is True
+    text = (harness.home("main") / "demo/SKILL.md").read_text(encoding="utf-8")
+    assert "Obsolete step." not in text
+    assert "Keep this step." in text
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_write_file_preserves_intentional_empty_content(tmp_path: Path, existing: bool) -> None:
+    harness = _Harness(tmp_path)
+    harness.create()
+    arguments = {"action": "write_file", "name": "demo", "file_path": "assets/empty.txt"}
+    if existing:
+        assert harness.run({**arguments, "content": "old contents"})["ok"] is True
+    result = harness.run({**arguments, "content": ""})
+    assert result["ok"] is True
+    assert (harness.home("main") / "demo/assets/empty.txt").read_bytes() == b""
+
+
+@pytest.mark.parametrize("action", ["patch", "write_file"])
+@pytest.mark.parametrize("extra", [{}, {"content": None}, {"content": False}])
+def test_content_must_be_present_and_textual(
+    tmp_path: Path, action: str, extra: dict[str, object]
+) -> None:
+    harness = _Harness(tmp_path)
+    harness.create()
+    skill_path = harness.home("main") / "demo/SKILL.md"
+    before = skill_path.read_bytes()
+    fields = {"match": "Demo"} if action == "patch" else {"file_path": "assets/empty.txt"}
+    result = harness.run({"action": action, "name": "demo", **fields, **extra})
+    assert result["ok"] is False
+    assert skill_path.read_bytes() == before
+    assert not (skill_path.parent / "assets/empty.txt").exists()
 
 
 def test_create_is_immediately_live_and_invalidates(

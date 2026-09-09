@@ -344,9 +344,9 @@ def _build_learn_prompt(base_instruction: str, argument: str | None) -> str:
     if not cleaned:
         return (
             f"{base}\n\n"
-            "No request was given. Ask the user what they want captured into a skill, or, "
-            "if the recent conversation clearly demonstrates a reusable procedure, author "
-            "a skill from that."
+            "No request was given. If the recent conversation clearly establishes reusable "
+            "learning, apply the instructions above to it. Otherwise, ask the user what "
+            "they want captured."
         )
     return f"{base}\n\nThe request to learn from:\n{cleaned}"
 
