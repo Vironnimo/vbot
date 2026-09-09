@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from core.providers.accounts import ConnectionRef
+from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import (
     ProviderUsageHistoryStore,
@@ -190,6 +191,68 @@ def _openai_runtime(*, usable: bool = True) -> FakeRuntime:
         credentials=FakeCredentials(usable_set),
         extras={"openai:subscription": {"chatgpt_account_id": "acct-123"}},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "rejected_again", "forbidden", "refresh_failure"])
+async def test_usage_recovers_oauth_once_and_rebuilds_account_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    class Getter:
+        token = "old-test-token"
+        account = "old-test-account"
+        refreshes = 0
+
+        async def __call__(self) -> str:
+            return self.token
+
+        async def refresh_after_rejection(
+            self, rejected: str, *, status_code: int, response_body: str
+        ) -> str | None:
+            if status_code != 401:
+                return None
+            assert rejected == "old-test-token"
+            self.refreshes += 1
+            if outcome == "refresh_failure":
+                raise ProviderError("test refresh unavailable", retryable=True)
+            self.token = "new-test-token"
+            self.account = "new-test-account"
+            return self.token
+
+    class Transport:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        async def get(
+            self, url: str, *, headers: Any, timeout: float, params: Any = None
+        ) -> FakeResponse:
+            self.calls.append(dict(headers))
+            if len(self.calls) == 1:
+                return FakeResponse(403 if outcome == "forbidden" else 401)
+            return FakeResponse(401 if outcome == "rejected_again" else 200, _OPENAI_BODY)
+
+    runtime = _openai_runtime()
+    getter = Getter()
+    monkeypatch.setattr(runtime, "get_connection_token_getter", lambda _connection: getter)
+    monkeypatch.setattr(
+        runtime,
+        "get_connection_token_extra",
+        lambda _connection: {"chatgpt_account_id": getter.account},
+    )
+    transport = Transport()
+    service = ProviderUsageService(runtime, transport=transport)
+    try:
+        report = await service.report()
+        assert len(report.providers) == 1
+        assert (report.providers[0].error is None) == (outcome == "success")
+        assert getter.refreshes == (0 if outcome == "forbidden" else 1)
+        assert len(transport.calls) == (2 if outcome in {"success", "rejected_again"} else 1)
+        if len(transport.calls) == 2:
+            assert transport.calls[1]["Authorization"] == "Bearer new-test-token"
+            assert transport.calls[1]["chatgpt-account-id"] == "new-test-account"
+    finally:
+        await service.aclose()
 
 
 def _ollama_cloud_provider_config() -> ProviderConfig:

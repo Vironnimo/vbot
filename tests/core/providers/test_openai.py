@@ -138,7 +138,11 @@ class _RefreshableTokenGetter:
     async def __call__(self) -> str:
         return self._token
 
-    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str:
+    async def refresh_after_rejection(
+        self, rejected_access_token: str, *, status_code: int, response_body: str
+    ) -> str | None:
+        if status_code != 401:
+            return None
         self.refresh_calls.append(rejected_access_token)
         self._token = self._fresh_token
         return self._token
@@ -1656,13 +1660,12 @@ async def test_default_mode_send_targets_chat_completions_endpoint() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_platform_401_does_not_trigger_subscription_oauth_recovery() -> None:
-    """The rejected-token recovery is isolated from the API-key wire."""
+async def test_platform_401_does_not_refresh_static_api_key() -> None:
+    """Static API keys never acquire an OAuth recovery capability."""
 
-    token_getter = _RefreshableTokenGetter("sk-stale", "sk-fresh")
     adapter = OpenAIAdapter(
         _platform_config(),
-        token_getter,
+        "sk-invalid",
         model_lookup=_model_lookup_with_openai_wire_policies,
     )
     route = respx.post(OPENAI_PLATFORM_RESPONSES_URL).mock(
@@ -1673,7 +1676,6 @@ async def test_platform_401_does_not_trigger_subscription_oauth_recovery() -> No
         await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.6-terra")
 
     assert route.call_count == 1
-    assert token_getter.refresh_calls == []
 
 
 @respx.mock

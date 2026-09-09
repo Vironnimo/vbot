@@ -27,7 +27,7 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
-from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
 JsonObject = dict[str, Any]
@@ -219,6 +219,7 @@ class ProviderTaskClient:
         """
 
         operation_key = uuid4().hex
+        auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
 
         async def _do_request() -> ParsedResultT:
             async with httpx.AsyncClient(
@@ -242,6 +243,11 @@ class ProviderTaskClient:
                         retry_policy=retry_policy,
                         operation_key=operation_key,
                     ) from exc
+                auth_recovery.record_response(
+                    response.status_code,
+                    request_headers,
+                    response.text if response.status_code >= 400 else "",
+                )
                 _classify_task_response_for_retry_policy(
                     response,
                     retry_policy=retry_policy,
@@ -261,7 +267,7 @@ class ProviderTaskClient:
                         f"confirm a usable result: {exc}",
                     ) from exc
 
-        return await retry_async(_do_request)
+        return await auth_recovery.run(lambda: retry_async(_do_request))
 
     async def get_and_parse(
         self,
@@ -272,15 +278,23 @@ class ProviderTaskClient:
     ) -> ParsedResultT:
         """GET *endpoint* with task auth, retrying the replay-safe whole cycle."""
 
+        auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
+
         async def _do_request() -> ParsedResultT:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=timeout,
             ) as client:
+                request_headers = await self._headers()
                 try:
-                    response = await client.get(endpoint, headers=await self._headers())
+                    response = await client.get(endpoint, headers=request_headers)
                 except httpx.TransportError as exc:
                     raise wrap_network_error(exc) from exc
+                auth_recovery.record_response(
+                    response.status_code,
+                    request_headers,
+                    response.text if response.status_code >= 400 else "",
+                )
                 # A GET is replay-safe by contract here (status polls, result
                 # downloads): a transient 500 retries instead of aborting hard.
                 classify_task_response(
@@ -290,7 +304,7 @@ class ProviderTaskClient:
                 )
                 return parse(response)
 
-        return await retry_async(_do_request)
+        return await auth_recovery.run(lambda: retry_async(_do_request))
 
     async def _credential_value(self) -> str:
         """Return the current credential value for this request attempt."""

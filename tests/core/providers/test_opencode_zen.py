@@ -93,6 +93,55 @@ def test_public_package_exports_opencode_zen_adapter() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_id", ["gpt-5.6-sol", "claude-sonnet-5", "deepseek-v4-flash", "gemini-3.5-flash"]
+)
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("error_field", ["name", "type"])
+@pytest.mark.parametrize(
+    "error_code", ["CreditsError", "MonthlyLimitError", "UserLimitError", "ModelError"]
+)
+async def test_oauth_does_not_refresh_zen_entitlement_401(
+    model_id: str,
+    streaming: bool,
+    error_code: str,
+    error_field: str,
+) -> None:
+    class Getter:
+        async def __call__(self) -> str:
+            return "test-token"
+
+        async def refresh_after_rejection(
+            self, _rejected: str, *, status_code: int, response_body: str
+        ) -> str | None:
+            if status_code != 401:
+                return None
+            raise AssertionError("An entitlement failure cannot refresh credentials")
+
+    adapter = OpenCodeZenAdapter(_config(), Getter(), model_lookup=_model)
+    route = respx.route(method="POST").mock(
+        return_value=httpx.Response(401, json={"error": {error_field: error_code}})
+    )
+    try:
+        with pytest.raises(ProviderError) as caught:
+            if streaming:
+                _ = [
+                    delta
+                    async for delta in adapter.stream(
+                        [{"role": "user", "content": "test"}], model_id=model_id
+                    )
+                ]
+            else:
+                await adapter.send([{"role": "user", "content": "test"}], model_id=model_id)
+        assert not isinstance(caught.value, ProviderAuthError)
+        assert caught.value.retryable is False
+        assert route.call_count == 1
+    finally:
+        await adapter.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_responses_model_uses_responses_wire_and_bearer_auth(
     adapter: OpenCodeZenAdapter,
 ) -> None:
