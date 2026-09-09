@@ -151,6 +151,81 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
 
 
 @pytest.mark.asyncio
+async def test_automatic_delivery_updates_pending_during_each_running_iteration(
+    lifecycle, tmp_path
+):
+    class SteppedAdapter(StubAdapter):
+        def __init__(self):
+            super().__init__(
+                [
+                    {"tool_calls": [{"id": f"state-{i}", "name": "swarm_state", "arguments": {}}]}
+                    for i in range(3)
+                ]
+                + [{"content": "finished"}]
+            )
+            self.started = [asyncio.Event() for _ in range(4)]
+            self.release = [asyncio.Event() for _ in range(4)]
+
+        async def send(self, messages, *, model_id, **kwargs):
+            response = await super().send(messages, model_id=model_id, **kwargs)
+            index = len(self.requests) - 1
+            self.started[index].set()
+            await self.release[index].wait()
+            return response
+
+    adapter = SteppedAdapter()
+    lifecycle.runtime.adapter = adapter
+    changes = []
+    lifecycle.service.host = replace(
+        lifecycle.service.host, publish_change=lambda *args: changes.append(args)
+    )
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    profile = await lifecycle.service.store.save_profile(
+        {**profile, "delivery": {**profile["delivery"], "batch_messages": 4}},
+        expected_revision=profile["revision"],
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    sid = started["swarm_id"]
+    run = lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"])
+    async with asyncio.timeout(15):
+        await adapter.started[0].wait()
+        for index in range(12):
+            await lifecycle.service.operation(
+                "board.post",
+                {
+                    "swarm_id": sid,
+                    "text": f"pending-sentinel-{index}",
+                    "request_id": f"post-{index}",
+                },
+            )
+        assert (await lifecycle.service.store.get_swarm(sid))["participants"][0][
+            "pending_count"
+        ] == 12
+        for index, expected in enumerate((8, 4, 0), start=1):
+            changes.clear()
+            adapter.release[index - 1].set()
+            await adapter.started[index].wait()
+            snapshot = await lifecycle.service.store.get_swarm(sid)
+            assert run.status.value == "running"
+            assert run.iteration_count == index
+            assert snapshot["participants"][0]["pending_count"] == expected
+            assert any(change[0:2] == ("swarms", [sid]) for change in changes)
+        adapter.release[-1].set()
+        await run.wait()
+    delivered = []
+    for message in adapter.requests[-1]["messages"]:
+        content = message.get("content", "")
+        if isinstance(content, str) and "pending-sentinel-" in content:
+            payload, _ = json.JSONDecoder().raw_decode(content[content.index("{") :])
+            delivered.extend(payload["entries"])
+    assert [entry["sequence"] for entry in delivered] == list(range(1, 13))
+    assert len({entry["id"] for entry in delivered}) == 12
+    assert run.status.value == "completed"
+
+
+@pytest.mark.asyncio
 async def test_wake_failure_retains_pending_and_reports_attention(
     lifecycle, tmp_path, monkeypatch, caplog
 ):

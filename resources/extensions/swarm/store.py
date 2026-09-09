@@ -664,6 +664,7 @@ class SwarmStore:
             participant_id,
             expected_epoch,
             admission_boundary,
+            False,
         )
 
     async def prepare_wake(
@@ -673,7 +674,7 @@ class SwarmStore:
         if type(expected_epoch) is not int or expected_epoch < 0:
             raise SwarmStoreError("invalid_arguments", field="expected_epoch")
         return await self._run(
-            self._prepare_automatic_delivery, swarm_id, participant_id, expected_epoch, None
+            self._prepare_automatic_delivery, swarm_id, participant_id, expected_epoch, None, True
         )
 
     async def reconcile_delivery(self, receipt_id: str) -> bool:
@@ -1998,11 +1999,24 @@ class SwarmStore:
         return self._write(operation)
 
     def _prepare_automatic_delivery(
-        self, swarm_id: str, participant_id: str, expected_epoch: int, boundary: int | None
+        self,
+        swarm_id: str,
+        participant_id: str,
+        expected_epoch: int,
+        boundary: int | None,
+        wake_only: bool,
     ) -> Json:
         def operation(connection: sqlite3.Connection) -> Json:
             self._assert_epoch(connection, swarm_id, expected_epoch)
             participant = self._participant(connection, swarm_id, participant_id)
+            # Busy participants select their batch at the next request boundary;
+            # freezing it in the wake scan could replay content read by a Tool.
+            if wake_only and participant["state"] != "idle":
+                return {
+                    "entries": [],
+                    "wake": False,
+                    "pending_remaining": self._pending_count(connection, swarm_id, participant_id),
+                }
             resolved_boundary = (
                 int(participant["idle_boundary"] or 0) if boundary is None else boundary
             )
