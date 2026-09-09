@@ -280,6 +280,88 @@ afterEach(async () => {
 });
 
 describe('SwarmPage', () => {
+  it('opens an announced discussion outside the loaded selector page and preserves ordinary JSON posts', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const title = '<img src=x onerror=alert(1)> topic-sentinel';
+    const announcement = {
+      discussion_id: 'dsc-unlisted',
+      title,
+      opening_post_id: 'pst-opening',
+    };
+    const ordinaryText = JSON.stringify(announcement);
+    operation.mockImplementation((name, args) => {
+      if (name === 'board.list')
+        return Promise.resolve(
+          args.cursor
+            ? { entries: [{ id: 'dsc-unlisted', title }] }
+            : { entries: [swarm.discussions[0]], cursor: 'more-discussions' },
+        );
+      if (name === 'board.read')
+        return Promise.resolve({
+          entries:
+            args.discussion_id === 'dsc-unlisted'
+              ? [
+                  {
+                    id: 'pst-opening',
+                    author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+                    text: 'opening-sentinel',
+                  },
+                ]
+              : [
+                  {
+                    id: 'pst-announcement',
+                    author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+                    text: 'stored-body-sentinel',
+                    discussion_announcement: announcement,
+                  },
+                  {
+                    id: 'pst-ordinary',
+                    author: { id: 'prt-b', kind: 'participant', name: 'Beta' },
+                    text: ordinaryText,
+                  },
+                ],
+        });
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.discussion-announcement button'),
+      ).not.toBeNull(),
+    );
+    const board = document.querySelector('.board');
+    expect(board.textContent).toContain(ordinaryText);
+    expect(board.textContent).not.toContain('stored-body-sentinel');
+    expect(board.querySelector('img')).toBeNull();
+    const target = document.querySelector('.discussion-announcement button');
+    expect(target.textContent.trim()).toBe(title);
+    target.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.board').textContent).toContain(
+        'opening-sentinel',
+      ),
+    );
+    expect(operation).toHaveBeenCalledWith('board.read', {
+      swarm_id: 'swr-a',
+      discussion_id: 'dsc-unlisted',
+      limit: 100,
+    });
+    expect(
+      [...document.querySelectorAll('select')].some(
+        (select) => select.value === 'dsc-unlisted',
+      ),
+    ).toBe(true);
+    button('Load more discussions').click();
+    await vi.waitFor(() =>
+      expect(button('Load more discussions')).toBeUndefined(),
+    );
+    expect(
+      document.querySelectorAll('option[value="dsc-unlisted"]'),
+    ).toHaveLength(1);
+  });
+
   it('keeps participant avatars consistent across Board, Activity and remounts', async () => {
     const { bridge, operation } = createBridge();
     const original = operation.getMockImplementation();

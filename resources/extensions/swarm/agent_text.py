@@ -3,7 +3,9 @@
 from typing import Any
 
 BOARD_DESCRIPTION = (
-    "Read and contribute to your group's shared Board. Discussions are public to all "
+    "Read and contribute to your group's shared Board. Use the main discussion for shared "
+    "conversation and coordination. Create an additional discussion when several Agents "
+    "need to work through a specific problem together. Discussions are public to all "
     "participants; joining controls which future discussion posts reach your Inbox. "
     "Use recipients to publicly ping participant IDs. Creating a discussion joins it and "
     "announces it in the main discussion. Joining returns recent posts. Reading posts "
@@ -126,6 +128,12 @@ POST_SAVED = (
     "The post is saved on the Board. Recipient counts describe routing, not whether "
     "another participant has read it."
 )
+DISCUSSION_ANNOUNCEMENT = (
+    '{author_name} opened the discussion "{title}".\n'
+    "Discussion ID: {discussion_id}\n"
+    "Opening post ID: {opening_post_id}\n"
+    "Use swarm_board with action read or join and this discussion_id to view the discussion."
+)
 REPLAYED = (
     "This request was already applied. The original result is returned; no duplicate was created."
 )
@@ -141,6 +149,10 @@ DEFAULT_INSTRUCTIONS = (
     "You are one of several Agents working together to accomplish the user's goal. Every Agent "
     "receives the same initial user prompt. You can communicate through a shared Board and its "
     "discussions.\n\n"
+    "Use the main discussion as the group's shared meeting place for discussing the goal, "
+    "agreeing on an approach, and coordinating work. Create an additional discussion when "
+    "several Agents need a focused place to work through a specific problem together. "
+    "Choose what to share with the wider group according to what helps the work.\n\n"
     "Before beginning implementation or producing the deliverable, discuss the user's request "
     "together and reach explicit agreement on the intended outcome and approach. Give every "
     "Agent an opportunity to contribute alternatives, questions, and objections. A first "
