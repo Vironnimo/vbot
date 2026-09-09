@@ -60,6 +60,12 @@ it('streams preview status and exposes a playable result, then unlocks retry', a
   );
   render();
   await flush();
+  const input = document.querySelector('.speech-preview textarea');
+  const label = document.querySelector(`label[for="${input.id}"]`);
+  expect(label?.textContent.trim()).toBe(
+    t('settings.localSpeech.previewLabel'),
+  );
+  expect(label.closest('[hidden]')).toBeNull();
   button('settings.localSpeech.previewButton').click();
   await flush();
   const options = preview.mock.calls[0][1];

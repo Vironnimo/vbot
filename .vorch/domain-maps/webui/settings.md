@@ -16,6 +16,7 @@ Settings-style panels register their pending local draft and save lifecycle with
 
 ## Providers and models
 
+- Specialized Model options render directly below the selected target without a per-target disclosure. Local speech setup and the visibly labeled TTS preview follow those fields. `SettingsSpecializedModelsPanel.test.js` covers initial Qwen/Chatterbox visibility, field order, edits and target changes; `LocalSpeechSupport.test.js` covers the preview label and generation lifecycle.
 - Provider rows distinguish added Connections, configured credentials, usable Accounts, reachability, and enabled state. Those values come from backend contracts; the UI must not infer connectivity from the presence of a masked credential or a Model result.
 - Connect and disconnect payloads preserve Provider id, connection id, and account id. OAuth, device-flow, API-key, environment, local, and keyless connections have different affordances and must not be collapsed into a single credential form.
 - Adding a Provider means exposing a backend-advertised Connection candidate. Keyless local Connections use the same Add Provider flow: adding persists enablement and triggers discovery but never loads a Model. The frontend does not maintain its own Provider registry.
