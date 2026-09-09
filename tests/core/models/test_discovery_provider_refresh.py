@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.providers import OAuthConfig
+from core.providers.token_getter import OAuthTokenGetter
+from core.providers.token_store import OAuthToken, TokenStore
 
 from .discovery_test_support import (
     _SIMPLE_MODELS_URL,
@@ -49,6 +55,231 @@ from .discovery_test_support import openrouter_config as openrouter_config
 
 
 class TestRefreshModels:
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("initial_status", "retry_status", "expected_catalog_calls", "expected_refresh_calls"),
+        [(401, 200, 2, 1), (401, 401, 2, 1), (401, 403, 2, 1), (403, 200, 1, 0)],
+    )
+    async def test_openai_catalog_recovers_rejected_token_once(
+        self,
+        tmp_path: Path,
+        openai_subscription_connection_config: ProviderConfig,
+        initial_status: int,
+        retry_status: int,
+        expected_catalog_calls: int,
+        expected_refresh_calls: int,
+    ) -> None:
+        config = openai_subscription_connection_config
+        connection = config.get_connection("subscription")
+        old_token = jwt_with_openai_account("old-test-account")
+        new_token = jwt_with_openai_account("new-test-account")
+        store = TokenStore(tmp_path / "data")
+        store.save(
+            "openai",
+            "subscription",
+            OAuthToken(
+                access_token=old_token,
+                refresh_token="test-refresh-secret",
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            ),
+        )
+        oauth = OAuthConfig(
+            flow="device",
+            device_flow="openai_codex",
+            client_id="test-client",
+            device_auth_url="https://auth.openai.com/device",
+            token_url="https://auth.openai.com/oauth/token",
+            scopes=[],
+        )
+        refresh_route = None
+        if expected_refresh_calls:
+            refresh_route = respx.post(oauth.token_url).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "access_token": new_token,
+                        "refresh_token": "rotated-test-refresh-secret",
+                        "expires_in": 3600,
+                    },
+                )
+            )
+        mock_openai_codex_package()
+        catalog_route = respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
+            side_effect=[
+                httpx.Response(initial_status, json={"error": {"code": "token_expired"}}),
+                httpx.Response(
+                    retry_status,
+                    json={"models": [{"slug": "test-model", "display_name": "Test Model"}]},
+                ),
+            ]
+        )
+        resources_dir = tmp_path / "resources"
+        async with OAuthTokenGetter(store, "openai", "subscription", oauth) as getter:
+            if initial_status == 401 and retry_status == 200:
+                result = await refresh_models(
+                    config, getter, resources_dir, credential_connection=connection
+                )
+                assert result["model_count"] == 1
+                assert ModelRegistry.load(resources_dir).get("openai", "test-model")
+            else:
+                with pytest.raises(ModelDiscoveryError) as caught:
+                    await refresh_models(
+                        config, getter, resources_dir, credential_connection=connection
+                    )
+                assert isinstance(caught.value.__cause__, ProviderAuthError)
+                assert not (resources_dir / "models" / "openai.json").exists()
+
+        assert catalog_route.call_count == expected_catalog_calls
+        assert (refresh_route.call_count if refresh_route else 0) == expected_refresh_calls
+        first_headers = catalog_route.calls[0].request.headers
+        assert first_headers["Authorization"] == f"Bearer {old_token}"
+        assert first_headers["chatgpt-account-id"] == "old-test-account"
+        if expected_refresh_calls:
+            retry_headers = catalog_route.calls[1].request.headers
+            assert retry_headers["Authorization"] == f"Bearer {new_token}"
+            assert retry_headers["chatgpt-account-id"] == "new-test-account"
+            saved = store.load("openai", "subscription")
+            assert saved is not None
+            assert saved.access_token == new_token
+            assert saved.refresh_token == "rotated-test-refresh-secret"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("retryable_refresh_error", [False, True])
+    async def test_openai_catalog_stops_when_token_refresh_fails(
+        self,
+        tmp_path: Path,
+        openai_subscription_connection_config: ProviderConfig,
+        retryable_refresh_error: bool,
+    ) -> None:
+        config = openai_subscription_connection_config
+        mock_openai_codex_package()
+        catalog_route = respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
+            return_value=httpx.Response(401)
+        )
+        failure = (
+            ProviderError("test-owned-refresh-outage", retryable=True)
+            if retryable_refresh_error
+            else ProviderAuthError("test-owned-refresh-rejection")
+        )
+
+        class FailingGetter:
+            refresh_calls = 0
+
+            async def __call__(self) -> str:
+                return jwt_with_openai_account()
+
+            async def refresh_after_unauthorized(self, rejected_token: str) -> str:
+                assert rejected_token == jwt_with_openai_account()
+                self.refresh_calls += 1
+                raise failure
+
+        getter = FailingGetter()
+        with pytest.raises(ModelDiscoveryError) as caught:
+            await refresh_models(
+                config,
+                getter,
+                tmp_path / "resources",
+                credential_connection=config.get_connection("subscription"),
+            )
+        assert caught.value.__cause__ is failure
+        assert catalog_route.call_count == 1
+        assert getter.refresh_calls == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_catalog_does_not_recover_token_getter_failure(
+        self, tmp_path: Path, openai_subscription_connection_config: ProviderConfig
+    ) -> None:
+        config = openai_subscription_connection_config
+        mock_openai_codex_package()
+        failure = ProviderAuthError("test-owned-getter-rejection")
+        failure.status_code = 401
+
+        class Getter:
+            async def __call__(self) -> str:
+                raise failure
+
+            async def refresh_after_unauthorized(self, _rejected_token: str) -> str:
+                raise AssertionError("Only a rejected catalog request permits recovery")
+
+        with pytest.raises(ModelDiscoveryError) as caught:
+            await refresh_models(
+                config,
+                Getter(),
+                tmp_path / "resources",
+                credential_connection=config.get_connection("subscription"),
+            )
+        assert caught.value.__cause__ is failure
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("adapter", "connection_type", "mode", "static_credential"),
+        [
+            ("openai", "api_key", "codex_responses", False),
+            ("xai", "oauth", None, False),
+            ("openai", "oauth", "codex_responses", True),
+        ],
+    )
+    async def test_catalog_does_not_refresh_unauthorized_other_connections(
+        self,
+        tmp_path: Path,
+        adapter: str,
+        connection_type: str,
+        mode: str | None,
+        static_credential: bool,
+    ) -> None:
+        config = _simple_compatible_config()
+        connection = replace(config.connections[0], type=connection_type, mode=mode)
+        config = replace(config, adapter=adapter, connections=[connection])
+        if adapter == "openai":
+            mock_openai_codex_package()
+        route = respx.get(_SIMPLE_MODELS_URL).mock(return_value=httpx.Response(401))
+
+        class Getter:
+            async def __call__(self) -> str:
+                return jwt_with_openai_account()
+
+            async def refresh_after_unauthorized(self, _rejected_token: str) -> str:
+                raise AssertionError("This Connection must not refresh on a catalog 401")
+
+        with pytest.raises(ModelDiscoveryError):
+            await refresh_models(
+                config,
+                jwt_with_openai_account() if static_credential else Getter(),
+                tmp_path / "resources",
+                credential_connection=connection,
+            )
+        assert route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_catalog_rebuilds_auth_headers_on_transient_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def no_sleep(_delay: float) -> None:
+            pass
+
+        tokens = iter(("first-test-token", "second-test-token"))
+
+        async def getter() -> str:
+            return next(tokens)
+
+        monkeypatch.setattr("core.utils.retry.asyncio.sleep", no_sleep)
+        route = respx.get(_SIMPLE_MODELS_URL).mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, json={"data": [{"id": "test-model"}]}),
+            ]
+        )
+        await refresh_models(_simple_compatible_config(), getter, tmp_path / "resources")
+        assert [call.request.headers["Authorization"] for call in route.calls] == [
+            "Bearer first-test-token",
+            "Bearer second-test-token",
+        ]
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_opencode_zen_discovery_enriches_exact_allowlist_and_merges_connections(
