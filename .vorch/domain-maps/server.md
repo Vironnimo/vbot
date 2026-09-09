@@ -17,6 +17,12 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 - Static website previews extend `file_delivery.py`: `file.preview_open` in `operations_methods.py` accepts an absolute HTML entry path or an existing signed file URL and grants a domain-separated, per-process capability to the entry's parent directory. `file.preview_revision` scans a bounded website tree off the Event Loop; `/api/preview-assets/{token}/{path}` serves allowed website file types, rejecting traversal, hidden/private paths, symlinks/junctions and excluded dependency folders. Relative assets, modules, data fetches, subpages and HTTPS presentation assets work; server execution and root-relative website routing are outside this contract. Opening a delivered HTML file redirects to the same website URL; standalone pages poll the capability-scoped `.revision` endpoint for live updates, while embedded pages leave polling to the WebUI. HTML responses announce their location to the parent for reload recovery; the WebUI validates that message against the active frame and capability prefix. Evidence: `tests/server/test_file_delivery.py`.
 - **`/health` identity contract:** HTTP 200 with body exactly `{"status":"ok"}` is what CLI/Desktop probes require before treating a listener as vBot. Built WebUI assets serve as SPA when present; the entry document sends no-store so persistent Desktop WebView profiles always refresh, individual static files keep ordinary delivery.
 - `POST /_vbot/control/shutdown` is the private cooperative lifecycle edge letting the local CLI trigger normal lifespan teardown; it requires the current per-process secret from `<data_dir>/runtime/server-<port>.json`. The transport-neutral `core/utils/server_control.py` owns secret comparison, atomic persistence, PID plus process-creation-time identity for the post-listener shutdown window, and exact-owner cleanup.
+- `server/main.py` also supplies an optional app-state restart callback. It reuses
+  the detached CLI lifecycle helper for its exact bind/data directory, waits for
+  its own PID to exit, and schedules cooperative shutdown after the RPC response.
+  Local-speech setup admits restart only after verification; embedded apps without
+  this callback report restart unavailable. See `model_tasks/speech.md` and
+  `tests/server/test_main.py`.
 
 ## Source routing
 

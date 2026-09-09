@@ -11,11 +11,18 @@ import asyncio
 import gc
 import io
 import json
+import os
+import shutil
+import sys
+import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
+from functools import partial
 from importlib import metadata, util
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
@@ -25,7 +32,11 @@ from core.model_tasks.options import (
     TaskModelOptionSchema,
     validate_task_model_options,
 )
-from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.speech_types import (
+    SpeechProgress,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -34,6 +45,185 @@ _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
 _LOAD_OPTIONS = ("model", "model_path", "device", "dtype", "offline")
+_PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
+
+
+class LocalSpeechSetup:
+    """One server-owned, fixed-recipe dependency installation; no client commands."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task[None] | None = None
+        self._process: asyncio.subprocess.Process | None = None
+        self._state = "idle"
+        self._phase = "checking"
+        self._error = ""
+        self._closed = False
+
+    @property
+    def blocks_execution(self) -> bool:
+        return self._state in {"installing", "restart_required", "failed"}
+
+    def status(self) -> dict[str, Any]:
+        state = self._state
+        if state == "idle":
+            state = "ready" if _dependencies_available() else "missing"
+        return {"state": state, "phase": self._phase, "error": self._error}
+
+    def install(self) -> dict[str, Any]:
+        if self._closed or self._state in {"installing", "restart_required"}:
+            return self.status()
+        if self.status()["state"] == "ready":
+            return self.status()
+        self._state, self._phase, self._error = "installing", "checking", ""
+        self._task = asyncio.create_task(self._install())
+        return self.status()
+
+    async def _install(self) -> None:
+        try:
+            async with asyncio.timeout(3600):
+                # Only the shipped extra is installable, never packages or paths
+                # supplied by an RPC caller. Install dependencies, not vBot's
+                # launchers, which may be locked by an open Windows Desktop.
+                project_file = Path(__file__).resolve().parents[2] / "pyproject.toml"
+                requirements = tomllib.loads(project_file.read_text(encoding="utf-8"))["project"][
+                    "optional-dependencies"
+                ]["local-speech"]
+                if await self._command([sys.executable, "-m", "pip", "--version"]) != 0:
+                    self._fail("pip_unavailable")
+                    return
+                gpu_tool = shutil.which("nvidia-smi")
+                use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
+                self._phase = "gpu" if use_cuda else "downloading"
+                torch_check = (
+                    "import torch; "
+                    "v=tuple(int(p) for p in torch.__version__.split('.')[:2]); "
+                    "assert (2,10) <= v < (3,); "
+                )
+                if use_cuda:
+                    torch_check += (
+                        "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096"
+                    )
+                if await self._command([sys.executable, "-c", torch_check]) != 0:
+                    torch_requirement = next(
+                        item for item in requirements if item.startswith("torch")
+                    )
+                    index = (
+                        "https://download.pytorch.org/whl/cu128"
+                        if use_cuda
+                        else "https://download.pytorch.org/whl/cpu"
+                    )
+                    if sys.platform == "darwin":
+                        index = "https://pypi.org/simple"
+                    if (
+                        await self._pip(
+                            [
+                                torch_requirement,
+                                "--force-reinstall",
+                                "--no-deps",
+                                "--index-url",
+                                index,
+                            ]
+                        )
+                        != 0
+                    ):
+                        self._fail("install_failed")
+                        return
+                if await self._pip(requirements) != 0:
+                    self._fail("install_failed")
+                    return
+                self._phase = "verifying"
+                # A fresh process proves imports without contaminating the live
+                # server with a mixture of old and newly installed libraries.
+                probe = (
+                    "import torch, av, librosa; "
+                    "from transformers import AutoProcessor, AutoModelForMultimodalLM; "
+                    "from transformers import AutoModelForTDT; "
+                    "from core.model_tasks.speech_local import _dependencies_available; "
+                    "assert _dependencies_available(); "
+                )
+                if use_cuda:
+                    probe += (
+                        "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096; "
+                    )
+                if await self._command([sys.executable, "-c", probe]) != 0:
+                    self._fail("gpu_unavailable" if use_cuda else "verification_failed")
+                    return
+                self._state = "restart_required"
+                _LOGGER.info("Local speech support installed; server restart required")
+        except asyncio.CancelledError:
+            self._fail("interrupted")
+            raise
+        except TimeoutError:
+            self._fail("timeout")
+        except (OSError, ValueError, KeyError, StopIteration):
+            self._fail("setup_unavailable")
+        except Exception:
+            self._fail("install_failed")
+
+    def _fail(self, code: str) -> None:
+        self._state, self._error = "failed", code
+        _LOGGER.warning("Local speech installation failed (reason=%s)", code)
+
+    async def _pip(self, arguments: Sequence[str]) -> int:
+        return await self._command(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--progress-bar",
+                "off",
+                "--only-binary=:all:",
+                *arguments,
+            ],
+            progress=True,
+        )
+
+    async def _command(self, arguments: Sequence[str], *, progress: bool = False) -> int:
+        from core.tools.process_manager import subprocess_creation_flags
+
+        process = await asyncio.create_subprocess_exec(
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            creationflags=subprocess_creation_flags(),
+            env={**os.environ, "PYTHONUTF8": "1", "PIP_NO_INPUT": "1"},
+        )
+        self._process = process
+        try:
+            assert process.stdout is not None
+            while line := await process.stdout.readline():
+                # Never expose package-manager output: custom indexes can carry
+                # credentials. Surface only fixed, translated phase identifiers.
+                if progress and line.startswith(b"Installing collected packages"):
+                    self._phase = "installing"
+                elif progress and line.startswith(b"Downloading"):
+                    self._phase = "downloading"
+            return await process.wait()
+        finally:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+            self._process = None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        if self._process is not None and self._process.returncode is None:
+            with suppress(ProcessLookupError):
+                self._process.kill()
+
+    async def aclose(self) -> None:
+        self.close()
+        if self._task is not None:
+            await asyncio.gather(self._task, return_exceptions=True)
 
 
 class LocalSpeechError(VBotError):
@@ -63,8 +253,17 @@ def _dependencies_available() -> bool:
     # Inspect metadata only: startup/status must not import torch or load models.
     try:
         version = tuple(int(part) for part in metadata.version("transformers").split(".")[:3])
-        return (5, 16, 1) <= version < (6,) and all(
-            util.find_spec(name) is not None for name in ("torch", "numpy", "av", "librosa")
+        torch_version = tuple(int(part) for part in metadata.version("torch").split(".")[:2])
+        hub_version = tuple(
+            int(part) for part in metadata.version("huggingface-hub").split(".")[:2]
+        )
+        return (
+            (5, 16, 1) <= version < (6,)
+            and (2, 10) <= torch_version < (3,)
+            and (1, 30) <= hub_version < (2,)
+            and all(
+                util.find_spec(name) is not None for name in ("torch", "numpy", "av", "librosa")
+            )
         )
     except (metadata.PackageNotFoundError, ImportError, ValueError):
         return False
@@ -177,7 +376,18 @@ class LocalSpeechExecutor:
     """Own one cached engine per Runtime, with bounded and cancellation-safe work."""
 
     def __init__(self, *, engines: Sequence[SpeechEngineDefinition] | None = None) -> None:
+        self.setup = LocalSpeechSetup()
         definitions = tuple(engines) if engines is not None else builtin_speech_engines()
+        definitions = tuple(
+            replace(
+                entry,
+                descriptor=replace(
+                    entry.descriptor,
+                    availability=partial(self._can_execute, entry.descriptor),
+                ),
+            )
+            for entry in definitions
+        )
         self._definitions = {entry.descriptor.id: entry for entry in definitions}
         if len(self._definitions) != len(definitions):
             raise ValueError("Duplicate local speech engine id")
@@ -188,6 +398,9 @@ class LocalSpeechExecutor:
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
 
+    def _can_execute(self, descriptor: LocalTaskTargetDescriptor) -> bool:
+        return not self.setup.blocks_execution and descriptor.can_execute()
+
     async def transcribe(
         self,
         local_id: str,
@@ -196,12 +409,34 @@ class LocalSpeechExecutor:
         filename: str,
         media_type: str,
         options: dict[str, Any],
+        progress: SpeechProgress | None = None,
     ) -> SpeechTranscriptionResult:
         if self._closed:
             raise LocalSpeechError(
                 "Local speech recognition is closed. Restart the vBot server before retrying."
             )
-        return await self._workers.run(self._transcribe, local_id, audio, dict(options))
+        if progress is not None:
+            progress.update("queued")
+        return await self._workers.run(
+            self._transcribe_with_progress, local_id, audio, dict(options), progress
+        )
+
+    def _transcribe_with_progress(
+        self,
+        local_id: str,
+        audio: bytes,
+        options: dict[str, Any],
+        progress: SpeechProgress | None,
+    ) -> SpeechTranscriptionResult:
+        # Scope built-in loader reporting to this worker invocation without adding
+        # transport or progress requirements to third-party engine factories.
+        token = _PROGRESS.set(progress)
+        try:
+            if progress is not None:
+                progress.update("preparing")
+            return self._transcribe(local_id, audio, options)
+        finally:
+            _PROGRESS.reset(token)
 
     def _transcribe(
         self, local_id: str, audio: bytes, options: dict[str, Any]
@@ -215,9 +450,10 @@ class LocalSpeechExecutor:
             raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
         if not definition.descriptor.can_execute():
             raise LocalSpeechError(
-                "Local speech recognition requires the local-speech extra on the vBot server. "
-                "In its installation directory and Python environment, run "
-                "python -m pip install -e '.[local-speech]' and restart vBot."
+                "Local speech recognition is not installed. "
+                "Open Settings → Tools & Media → Specialized Models, select a local "
+                "speech-to-text engine, and choose Install. "
+                "Restart the server when setup has finished."
             )
         schema = TaskModelOptionSchema(
             TASK_SPEECH_TO_TEXT,
@@ -247,10 +483,14 @@ class LocalSpeechExecutor:
                 if not samples.any():
                     continue
                 if self._engine is None:
+                    if (progress := _PROGRESS.get()) is not None:
+                        progress.update("loading")
                     _LOGGER.info("Loading local STT model (engine=%s)", local_id)
                     self._engine = definition.create(options)
                     self._engine_key = key
                     _LOGGER.info("Local STT model ready (engine=%s)", local_id)
+                if (progress := _PROGRESS.get()) is not None:
+                    progress.update("transcribing")
                 result = self._engine.transcribe(samples, options)
                 if not isinstance(result.text, str):
                     raise ValueError("Local engine returned a non-text transcription")
@@ -296,11 +536,13 @@ class LocalSpeechExecutor:
             await self._workers.run(self._unload)
 
     def close(self) -> None:
+        self.setup.close()
         self._closed = True
         self._workers.shutdown()
         self._unload()
 
     async def aclose(self) -> None:
+        await self.setup.aclose()
         if self._close_task is None:
             if self._closed:
                 return
@@ -420,6 +662,32 @@ class _TransformersEngine:
             "trust_remote_code": False,
         }
         try:
+            progress = _PROGRESS.get()
+            if not options.get("model_path"):
+                from huggingface_hub import snapshot_download
+                from tqdm.auto import tqdm  # type: ignore[import-untyped]
+
+                class DownloadProgress(tqdm):
+                    def __init__(self, *args: Any, **kwargs: Any) -> None:
+                        kwargs["file"] = io.StringIO()
+                        super().__init__(*args, **kwargs)
+
+                    def update(self, n: float | None = 1) -> bool | None:
+                        if progress is not None and self.unit == "B" and (n or 0) > 0:
+                            progress.update("downloading")
+                        return cast(bool | None, super().update(n))
+
+                if progress is not None:
+                    progress.update("checking_model")
+                source = snapshot_download(
+                    source,
+                    local_files_only=bool(options.get("offline")),
+                    allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken"],
+                    tqdm_class=DownloadProgress,
+                )
+                load_options["local_files_only"] = True
+            if progress is not None:
+                progress.update("loading")
             self._processor = transformers.AutoProcessor.from_pretrained(source, **load_options)
             self._model = (
                 getattr(transformers, self.model_class)

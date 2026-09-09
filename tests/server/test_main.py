@@ -7,6 +7,9 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
 
 from core.utils.config import Config
 from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLifecycleFilter
@@ -134,8 +137,15 @@ def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
     }
 
 
-def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("action", ["shutdown", "restart", "restart_failure"])
+def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, action: str) -> None:
+    from cli import server_management
+
     calls: list[dict[str, Any]] = []
+    schedule = MagicMock(return_value=SimpleNamespace(ok=action != "restart_failure"))
+    loop = MagicMock()
+    monkeypatch.setattr(server_management, "schedule_server_restart", schedule)
+    monkeypatch.setattr(server_main.asyncio, "get_running_loop", lambda: loop)
 
     class FakeConfig:
         def __init__(self, app, **kwargs) -> None:
@@ -148,6 +158,24 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) ->
             self.should_exit = False
 
         def run(self) -> None:
+            if action == "restart_failure":
+                with pytest.raises(RuntimeError):
+                    self.config.app["request_restart"]()
+                assert not self.should_exit
+                loop.call_later.assert_not_called()
+            elif action == "restart":
+                self.config.app["request_restart"]()
+                self.config.app["request_restart"]()
+                schedule.assert_called_once()
+                instance = schedule.call_args.args[0]
+                assert instance.port == 8765 and instance.host == "127.0.0.1"
+                assert instance.data_dir == tmp_path / "data"
+                assert schedule.call_args.kwargs == {"wait_pid": server_main.os.getpid()}
+                assert not self.should_exit
+                delay, callback = loop.call_later.call_args.args
+                assert delay > 0
+                callback()
+                assert self.should_exit
             self.config.app["request_shutdown"]()
             assert self.should_exit is True
 
@@ -160,11 +188,12 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(
         server_main,
         "create_app",
-        lambda *, config, server_bind, shutdown_token, request_shutdown: {
+        lambda *, config, server_bind, shutdown_token, request_shutdown, request_restart: {
             "config": config,
             "server_bind": server_bind,
             "shutdown_token": shutdown_token,
             "request_shutdown": request_shutdown,
+            "request_restart": request_restart,
         },
     )
 
