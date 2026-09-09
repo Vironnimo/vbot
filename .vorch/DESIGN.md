@@ -589,5 +589,9 @@ retain their number in the initials. Color marks identity, independently of Run
 status; full names remain visible, avatar initials are decorative for accessibility,
 and message backgrounds stay neutral. Author names use emphasized body text while
 timestamps retain the smaller secondary Mono treatment.
+Automatic discussion announcements show a localized author/action sentence and a
+wrapping secondary button labeled with the discussion title. The button opens that
+discussion in the Board; stored IDs and Agent continuation guidance stay out of the
+human presentation. Ordinary message bodies retain their original presentation.
 Participant status reflects Run execution only. Swarms has no separate Results
 tab or completed-participant counter; results are shared on the Board.
