@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from dataclasses import replace
 from difflib import get_close_matches
 from pathlib import Path
@@ -1071,42 +1072,37 @@ async def _refresh_provider_connections(
         if not _connection_effective_endpoint(connection, provider):
             continue
         connection_id = f"{provider_id}:{connection.id}"
-        credential_value = ""
-        if getattr(connection, "catalog_requires_credentials", True):
-            if not runtime.provider_credentials.is_usable(provider_id, connection_id):
-                continue
-            try:
-                credential_value = await _runtime_provider_credential(
-                    runtime, provider_id, connection_id, connection
-                )
-            except (ConfigError, RpcError) as exc:
-                _LOGGER.warning(
-                    "Skipping model refresh for provider '%s' connection '%s': %s",
-                    provider_id,
-                    connection.id,
-                    exc,
-                )
-                continue
+        requires_credentials = getattr(connection, "catalog_requires_credentials", True)
+        if requires_credentials and not runtime.provider_credentials.is_usable(
+            provider_id, connection_id
+        ):
+            continue
         try:
-            discovery_connection = connection
-            if provider_id == "github-copilot":
-                token_extra_reader = getattr(runtime, "get_connection_token_extra", None)
-                token_extra = (
-                    token_extra_reader(provider_id, connection_id)
-                    if callable(token_extra_reader)
-                    else {}
-                )
-                copilot_endpoint = token_extra.get(COPILOT_API_ENDPOINT_EXTRA_KEY)
-                if copilot_endpoint:
-                    discovery_connection = replace(connection, base_url=copilot_endpoint)
-            result = await refresh_models(
-                provider,
-                credential_value,
-                resources_dir,
-                credential_connection=discovery_connection,
-                models_dev_catalog=models_dev_catalog,
+            credential_context = (
+                _runtime_provider_credential(runtime, provider_id, connection_id, connection)
+                if requires_credentials
+                else nullcontext("")
             )
-        except ModelDiscoveryError as exc:
+            async with credential_context as credential_value:
+                discovery_connection = connection
+                if provider_id == "github-copilot":
+                    token_extra_reader = getattr(runtime, "get_connection_token_extra", None)
+                    token_extra = (
+                        token_extra_reader(ConnectionRef(provider_id, connection_id))
+                        if callable(token_extra_reader)
+                        else {}
+                    )
+                    copilot_endpoint = token_extra.get(COPILOT_API_ENDPOINT_EXTRA_KEY)
+                    if copilot_endpoint:
+                        discovery_connection = replace(connection, base_url=copilot_endpoint)
+                result = await refresh_models(
+                    provider,
+                    credential_value,
+                    resources_dir,
+                    credential_connection=discovery_connection,
+                    models_dev_catalog=models_dev_catalog,
+                )
+        except (ConfigError, RpcError, ModelDiscoveryError, ProviderError, NetworkError) as exc:
             _LOGGER.warning(
                 "Model refresh failed for provider '%s' connection '%s': %s",
                 provider_id,
