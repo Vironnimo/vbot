@@ -26,7 +26,7 @@ Pinned memory contributes the declared `memory:guidance` block (owner `memory`, 
 
 - Gate 2 renders it whenever mode != off, independent of Tool denial - including before the first entry exists (the block's own non-empty default text guarantees the guidance appears exactly when it helps).
 - The marker expands to rendered entries only: each selected scope under its heading label with its bullets, an explicit `No entries yet.` placeholder for missing/empty scopes (identical framing before/after creation; reading never creates files), `""` only for `off`. Guidance/wrapper live in the declaration, entries come from `read_prompt_files`.
-- The guidance text carries the writing-quality half: what justifies permanent prompt cost, a proactive save-as-you-go nudge, and the one non-obvious rule - write durable declarative facts, not imperative self-instructions that later sessions re-read as standing directives.
+- The guidance text carries the writing-quality half: durable user preferences versus environment/project facts, declarative facts rather than standing self-instructions, and a current-scope list before saving a worthwhile candidate. Equivalent facts need no write; procedures belong in Skills, and unavailable Memory is not a reason to copy facts there. This guidance also appears for read-only Memory, so Tool use is conditional on availability. Model decision evaluation is documented in `automation.md` under Reflection.
 
 ## Interfaces
 

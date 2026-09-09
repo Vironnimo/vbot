@@ -29,13 +29,13 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
-    "Create, edit, patch, or delete one private Skill, or write/remove one support "
-    "file. Read an existing target with skill before changing it. Global, Project, "
-    "and bundled Skills are read-only here. A new Skill needs a description of ONE "
-    "sentence with at most 60 characters, trigger first — COUNT before saving; the "
-    "Available Skills list shows every Skill by description, so anything past 60 "
-    "buries the trigger. Good Skills state trigger conditions, numbered steps with "
-    "exact commands, pitfalls, and verification."
+    "Create, edit, patch, or delete one private Skill, or write/remove one support file. "
+    "Global, Project, and bundled Skills are read-only here. Use create for reusable "
+    "procedural knowledge not already covered by a fitting Skill; routine work and general "
+    "preferences do not justify a new Skill. Before changing an existing target, read its "
+    "current complete file. A Skill description should concisely state when to load it and "
+    "distinguish its scope; the body teaches the supported method, pitfalls, and "
+    "verification."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
@@ -319,6 +319,9 @@ def register_skill_manage_tool(
         ),
         family="skills",
         constraints=("identity_agent",),
+        # Empty content deletes patch text or writes an empty support file.
+        # Generic optional-string omission would silently remove that payload.
+        coerce_arguments=False,
         open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(parts_builder=_skill_manage_display_parts),

@@ -1,0 +1,413 @@
+[
+  {
+    "id": "routine",
+    "history": [
+      {
+        "role": "user",
+        "content": "Alphabetize these labels: pear, apple, plum."
+      },
+      {
+        "role": "assistant",
+        "content": "apple, pear, plum"
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "one_off_format",
+    "history": [
+      {
+        "role": "user",
+        "content": "For this answer only, use a numbered list of the three labels."
+      },
+      {
+        "role": "assistant",
+        "content": "1. apple\n2. pear\n3. plum"
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "standing_preference",
+    "history": [
+      {
+        "role": "user",
+        "content": "For future conversations, my preferred response language is German, even if I send the question in English."
+      },
+      {
+        "role": "assistant",
+        "content": "Understood."
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "user",
+        "contains": [
+          "German"
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "user",
+        "contains": [
+          "German"
+        ]
+      }
+    }
+  },
+  {
+    "id": "environment_fact",
+    "history": [
+      {
+        "role": "user",
+        "content": "For the Northstar project, we permanently use Podman as the container runtime. I keep having to correct the Docker assumption; retain this project fact."
+      },
+      {
+        "role": "assistant",
+        "content": "Northstar uses Podman."
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "agent",
+        "contains": [
+          "Northstar",
+          "Podman"
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "agent",
+        "contains": [
+          "Northstar",
+          "Podman"
+        ]
+      }
+    }
+  },
+  {
+    "id": "unresolved_attempts",
+    "history": [
+      {
+        "role": "user",
+        "content": "Restore the encrypted archive. We tried changing its extension, a forced header repair, and the compatibility flag. All attempts failed; there is still no working method."
+      },
+      {
+        "role": "assistant",
+        "content": "I could not restore it. The attempts did not establish a reliable recovery procedure."
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "new_verified_workflow",
+    "history": [
+      {
+        "role": "user",
+        "content": "We solved the recurring Helix export problem after extensive investigation. I verified the successful method twice: request the export lease, freeze writes, export the bundle, verify its checksum against the lease manifest, then release the lease and resume writes. Skipping the lease check caused inconsistent bundles. Preserve this workflow for future Helix exports."
+      },
+      {
+        "role": "assistant",
+        "content": "The two verified exports matched their lease manifests; the earlier export without a lease did not. The successful sequence is now established."
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "create",
+        "contains": [
+          "Helix",
+          "lease",
+          "checksum"
+        ]
+      },
+      "combined": {
+        "kind": "create",
+        "contains": [
+          "Helix",
+          "lease",
+          "checksum"
+        ]
+      }
+    }
+  },
+  {
+    "id": "already_saved_memory",
+    "history": [
+      {
+        "role": "user",
+        "content": "Remember for future Sessions that the response language I prefer is German."
+      },
+      {
+        "role": "assistant",
+        "content": "You prefer German responses."
+      }
+    ],
+    "memory": {
+      "user": [
+        "User prefers German responses in future Sessions."
+      ]
+    },
+    "stale_memory_prompt": true,
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "replace_memory",
+    "history": [
+      {
+        "role": "user",
+        "content": "My preferred response language has changed. From now on use German rather than French in future conversations."
+      },
+      {
+        "role": "assistant",
+        "content": "German is your current preferred response language."
+      }
+    ],
+    "memory": {
+      "user": [
+        "User prefers French responses in future Sessions."
+      ]
+    },
+    "expected": {
+      "memory": {
+        "kind": "user",
+        "contains": [
+          "German"
+        ],
+        "excludes": [
+          "French"
+        ]
+      },
+      "combined": {
+        "kind": "user",
+        "contains": [
+          "German"
+        ],
+        "excludes": [
+          "French"
+        ]
+      }
+    }
+  },
+  {
+    "id": "correct_existing_skill",
+    "history": [
+      {
+        "role": "user",
+        "content": "The archive-publishing Skill has the sequence wrong. The distribution service accepts uploads before validation, but publication must wait for a successful checksum check. We tested upload -> checksum validation -> publish and the published archive was intact. Update the procedure we use for future releases."
+      },
+      {
+        "role": "assistant",
+        "content": "The tested sequence is upload, verify checksum, then publish. The 30-day source archive retention requirement remains."
+      }
+    ],
+    "skills": [
+      {
+        "name": "archive-publishing",
+        "content": "---\nname: archive-publishing\ndescription: Publish verified archive bundles to the distribution service.\n---\n\n# Archive Publishing\n\n1. Upload the archive.\n2. Publish it immediately.\n3. Check its checksum after publication.\n\nKeep source archives for 30 days.\n"
+      }
+    ],
+    "expected": {
+      "skill": {
+        "kind": "update",
+        "name": "archive-publishing",
+        "contains": [
+          "checksum",
+          "Keep source archives for 30 days."
+        ],
+        "excludes": [
+          "Publish it immediately.",
+          "Check its checksum after publication."
+        ]
+      },
+      "combined": {
+        "kind": "update",
+        "name": "archive-publishing",
+        "contains": [
+          "checksum",
+          "Keep source archives for 30 days."
+        ],
+        "excludes": [
+          "Publish it immediately.",
+          "Check its checksum after publication."
+        ]
+      }
+    }
+  },
+  {
+    "id": "already_saved_skill",
+    "history": [
+      {
+        "role": "user",
+        "content": "The archive-publishing Skill has the sequence wrong. The distribution service accepts uploads before validation, but publication must wait for a successful checksum check. We tested upload -> checksum validation -> publish and the published archive was intact. Update the procedure we use for future releases."
+      },
+      {
+        "role": "assistant",
+        "content": "The tested sequence is upload, verify checksum, then publish. The 30-day source archive retention requirement remains."
+      }
+    ],
+    "skills": [
+      {
+        "name": "archive-publishing",
+        "content": "---\nname: archive-publishing\ndescription: Publish verified archive bundles to the distribution service.\n---\n\n# Archive Publishing\n\n1. Upload the archive.\n2. Verify its checksum before publication.\n3. Publish only after verification succeeds.\n\nKeep source archives for 30 days.\n"
+      }
+    ],
+    "expected": {
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "protected_skill",
+    "history": [
+      {
+        "role": "user",
+        "content": "The archive-publishing Skill has the sequence wrong. The distribution service accepts uploads before validation, but publication must wait for a successful checksum check. We tested upload -> checksum validation -> publish and the published archive was intact. Update the procedure we use for future releases."
+      },
+      {
+        "role": "assistant",
+        "content": "The tested sequence is upload, verify checksum, then publish. The 30-day source archive retention requirement remains."
+      }
+    ],
+    "skills": [
+      {
+        "name": "archive-publishing",
+        "readonly": true,
+        "content": "---\nname: archive-publishing\ndescription: Publish verified archive bundles to the distribution service.\n---\n\n# Archive Publishing\n\n1. Upload the archive.\n2. Publish it immediately.\n3. Check its checksum after publication.\n\nKeep source archives for 30 days.\n"
+      }
+    ],
+    "expected": {
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "learn_existing",
+    "history": [
+      {
+        "role": "user",
+        "content": "The archive-publishing Skill has the sequence wrong. The distribution service accepts uploads before validation, but publication must wait for a successful checksum check. We tested upload -> checksum validation -> publish and the published archive was intact. Update the procedure we use for future releases."
+      },
+      {
+        "role": "assistant",
+        "content": "The tested sequence is upload, verify checksum, then publish. The 30-day source archive retention requirement remains."
+      }
+    ],
+    "learn_request": "Capture the verified publishing correction from this conversation.",
+    "skills": [
+      {
+        "name": "archive-publishing",
+        "content": "---\nname: archive-publishing\ndescription: Publish verified archive bundles to the distribution service.\n---\n\n# Archive Publishing\n\n1. Upload the archive.\n2. Publish it immediately.\n3. Check its checksum after publication.\n\nKeep source archives for 30 days.\n"
+      }
+    ],
+    "expected": {
+      "learn": {
+        "kind": "update",
+        "name": "archive-publishing",
+        "contains": [
+          "checksum",
+          "Keep source archives for 30 days."
+        ],
+        "excludes": [
+          "Publish it immediately."
+        ]
+      }
+    }
+  },
+  {
+    "id": "learn_no_procedure",
+    "history": [
+      {
+        "role": "user",
+        "content": "Here is the output: apple, pear, plum."
+      },
+      {
+        "role": "assistant",
+        "content": "Those labels are in alphabetical order."
+      }
+    ],
+    "learn_request": "Learn a reusable workflow from the output above, if it contains one.",
+    "expected": {
+      "learn": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "learn_new",
+    "history": [
+      {
+        "role": "user",
+        "content": "For our release notes, use the agreed review workflow: reconcile each item against its issue, classify user-visible changes, check that breaking changes include migration steps, then verify the final document contains no unresolved issue placeholders. This is the workflow I want reused."
+      },
+      {
+        "role": "assistant",
+        "content": "The release-note review workflow and its checks are agreed."
+      }
+    ],
+    "learn_request": "Create a Skill for our agreed release-note review workflow.",
+    "expected": {
+      "learn": {
+        "kind": "create",
+        "contains": [
+          "issue",
+          "migration"
+        ]
+      }
+    }
+  }
+]

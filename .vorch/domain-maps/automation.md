@@ -43,6 +43,18 @@ late submissions; unrelated notices retain normal delivery behavior
 
 `ReflectionService` exposes `run_review(...)` and the cadence trigger:
 
+The bundled review briefs classify candidates before authoring: durable facts go
+to Memory, supported reusable procedures to Skills, and already captured or
+low-value material needs no write. A missing write capability never changes the
+candidate's destination. Candidates are checked against current Tool reads rather
+than inherited prompt snapshots; Skill maintenance replaces obsolete guidance in
+the affected passage. These are Model instructions, not semantic runtime guards.
+`tests/core/automation/test_reflection.py` checks brief delivery and dispatch scope;
+`scripts/probe_provider_tool_call.py --scenario reflection_workflow` evaluates
+decisions against `tests/fixtures/reflection/cases.json` with production guidance,
+definitions, and disposable Memory/Skill handlers. Expected outcomes stay outside
+the Model context; the probe checks stored effects and read-before-write behavior.
+
 - **Shared review orchestration:** requires an Identity Agent with active `memory` Tool; forks same-Agent (always-strip keys applied, pinned Skill catalog kept), titles the fork from the Agent display name, records the scope-specific Run kind, and starts an internal Run in the fork. Scope selects brief + dispatch boundary: `memory` -> reflect-memory brief with only `memory`; `skill` -> skill brief with `skill`+`skill_manage`; `combined` -> combined brief with all three. No Run-local Tool grant - fork keeps source definitions and prompt unchanged; each brief states all other Tools are disabled. The review is a real Run (admission, cancellation, viewing, history, traces) but produces no attention status; the source Session is untouched; `/reflect` rejects before forking when Memory is inactive.
 - **Cadence trigger** fires non-blocking at every Run end: internal Runs, empty workspaces, inactive memory Tools, and Sub-Agent Sessions never count. Each completed visible Run (and each user-cancelled one with >=1 completed Model step) increments counters in canonical Session metadata; a dispatched memory call resets the Memory counter even if the Run later fails; iteration counting uses Chat's canonical count, never derived from messages. Settings read live per boundary; at interval one scoped review fires (both due -> combined). Counts consume only on successful completion - failed reviews stay due; one review at a time per Agent; due Sessions during a review keep counters for next end. The review being internal never re-triggers accounting; forks strip counters and restart at zero.
 - `reset_counters` zeroes and advances generation (manual `/reflect` covers both dimensions; generation prevents overlapping background consumption). `aclose()` rejects later notifications and clears per-Agent guards.
