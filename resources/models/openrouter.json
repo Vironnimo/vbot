@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-09T12:36:27.864363+00:00",
+  "fetched_at": "2026-09-09T13:09:06.349842+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -24889,7 +24889,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": 28800,
+      "max_output_tokens": 29491,
       "metadata": {
         "openrouter": {
           "modality": "text->embeddings"
