@@ -172,7 +172,7 @@ async def test_runtime_registers_local_speech_and_closes_its_executor(config: Co
             == runtime.storage.layout.speech_engines / "chatterbox"
         )
         runtime.model_tasks.update(
-            {"speech_to_text": {"target": "local/parakeet", "options": {"offline": True}}}
+            {"speech_to_text": {"target": "local/parakeet", "options": {"device": "cpu"}}}
         )
         assert runtime.model_tasks.binding_for("speech_to_text").target == "local/parakeet"
         assert not any(model["loaded"] for model in speech.local_memory_status()["models"])

@@ -1827,9 +1827,6 @@ export const englishCatalog = Object.freeze({
   'settings.localSpeech.options.model_path.label': 'Model directory',
   'settings.localSpeech.options.model_path.help':
     'Optional directory on the vBot server containing a Transformers model. Leave empty to download and cache the selected model from Hugging Face.',
-  'settings.localSpeech.options.offline.label': 'Offline only',
-  'settings.localSpeech.options.offline.help':
-    'Load only already downloaded model files; never contact Hugging Face.',
   'settings.localSpeech.options.language.label': 'Language',
   'settings.localSpeech.options.language.help':
     'Leave empty for automatic detection, or enter a language code such as de or en.',

@@ -61,11 +61,15 @@ PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
 seconds, cut near a quiet point in the last second, with no discarded samples.
 Exact digital silence skips inference. Result segment times are chunk bounds,
 not word alignment. Models load from the Hugging Face cache/download or an
-explicit server directory, with remote code disabled; offline mode permits
-only cached files. The built-in loader first resolves a filtered Hugging Face
-snapshot, then loads native Transformers classes exclusively from its local
-path. Download callbacks report actual transfer activity; cached/local/offline
-loads do not fabricate download progress.
+explicit server directory, with remote code disabled. The shared standalone
+loader first resolves the cached Hugging Face snapshot without HTTP and checks
+all required engine files. Complete snapshots are reused without update checks;
+missing/empty files trigger download, completing a partial snapshot at its existing
+revision. Native Transformers loads exclusively from the resolved local path.
+There is no offline option in the schema. Download callbacks report actual
+transfer activity; cached/local loads do not fabricate download progress.
+Coverage: `test_speech_tts.py` checks complete, absent, partial and empty-file
+caches, and `test_speech_local.py` checks both STT adapter contracts.
 
 `LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
@@ -113,8 +117,10 @@ mono PCM16 WAV to a parent-owned temporary path. The parent retains one process 
 while that engine's load options match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child
 interpreters). Sentence/word chunking bounds each generation context. No voice
-cloning input is exposed. Offline mode permits only cached model files. Native
-Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
+cloning input is exposed. After resolving all required files, the child disables
+Hub networking for SDK loading/inference. The pinned Chatterbox tokenizer's
+mapping lookup resolves directly from that snapshot instead of probing a nested
+Hub cache. Native Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
 SDK calls, playable WAV chunks, process boundaries, setup isolation and availability.
 
 ## Provider Wire Behavior
