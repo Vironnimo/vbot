@@ -9,6 +9,9 @@ import { reactiveProps } from './_reactiveProps.svelte.js';
 const listTaskModelTargetsMock = vi.fn();
 const getTaskModelOptionsMock = vi.fn();
 const updateTaskModelSettingsMock = vi.fn();
+const getLocalSpeechSetupMock = vi.fn();
+const installLocalSpeechSupportMock = vi.fn();
+const restartAfterLocalSpeechSetupMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -18,6 +21,11 @@ vi.mock('$lib/api.js', () => ({
   listTaskModelTargets: (...args) => listTaskModelTargetsMock(...args),
   getTaskModelOptions: (...args) => getTaskModelOptionsMock(...args),
   updateTaskModelSettings: (...args) => updateTaskModelSettingsMock(...args),
+  getLocalSpeechSetup: (...args) => getLocalSpeechSetupMock(...args),
+  installLocalSpeechSupport: (...args) =>
+    installLocalSpeechSupportMock(...args),
+  restartAfterLocalSpeechSetup: (...args) =>
+    restartAfterLocalSpeechSetupMock(...args),
 }));
 
 const { default: SettingsSpecializedModelsPanel } =
@@ -32,6 +40,17 @@ describe('SettingsSpecializedModelsPanel', () => {
     listTaskModelTargetsMock.mockReset();
     getTaskModelOptionsMock.mockReset();
     updateTaskModelSettingsMock.mockReset();
+    getLocalSpeechSetupMock
+      .mockReset()
+      .mockResolvedValue({ state: 'ready', restart_available: true });
+    installLocalSpeechSupportMock.mockReset().mockResolvedValue({
+      state: 'installing',
+      phase: 'downloading',
+      restart_available: true,
+    });
+    restartAfterLocalSpeechSetupMock
+      .mockReset()
+      .mockResolvedValue({ state: 'restarting' });
     listTaskModelTargetsMock.mockResolvedValue({ targets: [] });
     getTaskModelOptionsMock.mockResolvedValue({ fields: [] });
     updateTaskModelSettingsMock.mockResolvedValue({ model_tasks: {} });
@@ -69,7 +88,11 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(listTaskModelTargetsMock.mock.calls.length).toBeGreaterThan(before);
   });
 
-  it('switches local engines and explains missing support and the first download', async () => {
+  it('offers installation for local engines while preserving their separate options', async () => {
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'missing',
+      restart_available: true,
+    });
     listTaskModelTargetsMock.mockImplementation((taskType) =>
       Promise.resolve({
         targets:
@@ -125,26 +148,145 @@ describe('SettingsSpecializedModelsPanel', () => {
           ?.disabled,
     );
     selectTarget('speech_to_text', 'Qwen3 ASR');
-    await waitForCondition(() =>
-      document.body.textContent.includes('Install local speech support'),
-    );
-    expect(document.body.textContent).toContain('.[local-speech]');
+    await waitForCondition(() => button('Install'));
+    expect(document.body.textContent).not.toContain('.[local-speech]');
     await waitForCondition(() =>
       document.querySelector('#task-model-speech_to_text-language'),
     );
     selectTarget('speech_to_text', 'Parakeet TDT v3');
-    await waitForCondition(() =>
-      document.body.textContent.includes('first transcription downloads'),
-    );
     await waitForCondition(() =>
       document.querySelector('#task-model-speech_to_text-device'),
     );
     expect(
       document.querySelector('#task-model-speech_to_text-language'),
     ).toBeNull();
-    expect(document.body.textContent).not.toContain(
-      'Install local speech support',
+    expect(button('Install')).toBeTruthy();
+    const trigger = document.getElementById(
+      'settings-specialized-speech_to_text',
     );
+    expect(trigger.textContent).toContain('Parakeet TDT v3 (local)');
+    trigger.click();
+    flushSync();
+    const search = document.querySelector('.searchable-dropdown__search input');
+    search.value = 'local';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const matches = [
+      ...document.querySelectorAll('.searchable-dropdown__option'),
+    ];
+    expect(matches).toHaveLength(2);
+    expect(
+      matches.every((option) => option.textContent.includes('(local)')),
+    ).toBe(true);
+  });
+
+  async function mountLocalPanel() {
+    listTaskModelTargetsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        targets:
+          taskType === 'speech_to_text'
+            ? [
+                {
+                  id: 'local/qwen3-asr',
+                  label: 'Qwen3 ASR',
+                  kind: 'local',
+                  usable: false,
+                },
+              ]
+            : [],
+      }),
+    );
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          model_tasks: {
+            speech_to_text: { target: 'local/qwen3-asr', options: {} },
+          },
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(() => document.querySelector('[role="status"]'));
+  }
+
+  it('keeps setup running across navigation and enables one explicit restart after verification', async () => {
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'missing',
+      restart_available: true,
+    });
+    await mountLocalPanel();
+    await waitForCondition(() => button('Install'));
+    button('Install').click();
+    button('Install')?.click();
+    await waitForCondition(() => button('Installing…'));
+    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
+    expect(button('Installing…').disabled).toBe(true);
+    expect(button('Restart server')).toBeUndefined();
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    document.body.innerHTML = '';
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'restart_required',
+      restart_available: true,
+    });
+    await mountLocalPanel();
+    await waitForCondition(
+      () => button('Restart server') && !button('Restart server').disabled,
+    );
+    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
+    button('Restart server').click();
+    await waitForCondition(() => button('Restarting…'));
+    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'ready',
+      restart_available: true,
+    });
+    await waitForCondition(() => !button('Restarting…'), 30, 100);
+    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
+    expect(button('Install')).toBeUndefined();
+  });
+
+  it('offers retry after a failed installation and respects unsupported restarts', async () => {
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'failed',
+      error: 'install_failed',
+      restart_available: false,
+    });
+    await mountLocalPanel();
+    await waitForCondition(() => button('Try again'));
+    installLocalSpeechSupportMock.mockResolvedValue({
+      state: 'restart_required',
+      restart_available: false,
+    });
+    button('Try again').click();
+    await waitForCondition(() => button('Restart server'));
+    expect(button('Restart server').disabled).toBe(true);
+    expect(restartAfterLocalSpeechSetupMock).not.toHaveBeenCalled();
+    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks status after a lost restart response without replaying the restart', async () => {
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'restart_required',
+      restart_available: true,
+    });
+    await mountLocalPanel();
+    await waitForCondition(
+      () => button('Restart server') && !button('Restart server').disabled,
+    );
+    restartAfterLocalSpeechSetupMock.mockRejectedValue(
+      new Error('disconnected'),
+    );
+    button('Restart server').click();
+    await waitForCondition(() => button('Restarting…'));
+    getLocalSpeechSetupMock.mockResolvedValue({
+      state: 'ready',
+      restart_available: true,
+    });
+    await waitForCondition(() => !button('Restarting…'), 30, 100);
+    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
+    expect(button('Check again')).toBeUndefined();
   });
 
   it('loads image-understanding targets with the other specialized models', async () => {
@@ -398,6 +540,12 @@ function selectTarget(taskType, label) {
   expect(option).toBeTruthy();
   option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   flushSync();
+}
+
+function button(label) {
+  return [...document.querySelectorAll('button')].find(
+    (element) => element.textContent.trim() === label,
+  );
 }
 
 function deferred() {

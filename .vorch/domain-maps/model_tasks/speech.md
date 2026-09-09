@@ -57,11 +57,35 @@ seconds, cut near a quiet point in the last second, with no discarded samples.
 Exact digital silence skips inference. Result segment times are chunk bounds,
 not word alignment. Models load from the Hugging Face cache/download or an
 explicit server directory, with remote code disabled; offline mode permits
-only cached files. See `USAGE.md` → Local speech recognition for installation.
+only cached files. The built-in loader first resolves a filtered Hugging Face
+snapshot, then loads native Transformers classes exclusively from its local
+path. Download callbacks report actual transfer activity; cached/local/offline
+loads do not fabricate download progress.
+
+`LocalSpeechSetup`, exposed through `SpeechService.local_setup`, owns one
+asynchronous fixed-recipe installation per Runtime. It reads the shipped
+`local-speech` extra, invokes the server interpreter's pip without reinstalling
+vBot launchers, preserves compatible working Torch or installs an official
+NVIDIA CUDA/CPU/platform build, and verifies imports plus NVIDIA execution in
+a fresh process. Status is process-local and survives browser navigation;
+duplicate requests share the job, failures permit explicit retry, shutdown
+cancels and reaps the package subprocess. Raw package output stays private.
+Local execution remains unavailable during installation, failure and the
+verified restart-required state; a fresh Runtime rechecks package metadata.
+See `USAGE.md` -> Local speech recognition for the user setup flow.
+
+`SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
+time. `SpeechService.transcribe(progress=...)` carries it to local workers or
+Provider STT. Local factory signatures stay unchanged: the executor scopes
+built-in loader reporting to its worker invocation and resets that context
+afterwards. Queued, preparation, model checks/download/loading and inference
+remain distinguishable; cached engines skip loading. No audio or transcript
+is included in progress snapshots.
 
 Coverage: `tests/core/model_tasks/test_speech_local.py` tests custom engine
 substitution, cache/lifecycle, cancellation, decode/resampling/chunk coverage,
-failures and native adapter calls without downloading weights. `test_speech.py`
+failures, request progress, fixed setup commands/retry/cancellation and native
+adapter calls without downloading weights. `test_speech.py`
 covers service error translation and Provider handoff; Runtime registration and
 cleanup are covered by `tests/core/runtime/test_runtime.py`.
 
@@ -92,6 +116,16 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 ## Server & Tool Contracts
 
 - `POST /api/speech/transcribe` accepts multipart file upload, enforces the runtime upload limit before reading into `SpeechService`, and returns `SpeechTranscriptionResult.to_dict()`.
+- With `Accept: application/x-ndjson`, the same upload streams request-local
+  progress heartbeats and one terminal result/error. `server/app.py` owns this
+  transport and cancels/reaps work on disconnect; local worker cancellation
+  still waits for active inference. Ordinary JSON clients remain supported.
+  Coverage: `tests/server/test_speech_endpoints.py`.
+- `speech.local_setup_status/install/restart` in `server/rpc/settings_methods.py`
+  accept no client commands, package names or paths. Restart requires verified
+  setup and the server startup callback; its detached CLI lifecycle helper
+  targets the exact running bind/data directory. Coverage: task-model RPC and
+  server-main tests.
 - `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
 - `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
 - The built-in `text_to_speech` tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.

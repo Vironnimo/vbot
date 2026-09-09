@@ -19,9 +19,14 @@ from core.model_tasks.speech_local import (
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
+    LocalSpeechSetup,
 )
 from core.model_tasks.speech_providers import ProviderSpeechClient
-from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.speech_types import (
+    SpeechProgress,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
@@ -123,6 +128,7 @@ class SpeechService:
         *,
         filename: str = "recording.webm",
         media_type: str = "application/octet-stream",
+        progress: SpeechProgress | None = None,
     ) -> SpeechTranscriptionResult:
         """Transcribe one audio blob using the configured STT binding."""
 
@@ -154,6 +160,7 @@ class SpeechService:
                     filename=prepared.filename,
                     media_type=prepared.media_type,
                     options=options,
+                    progress=progress,
                 )
             except LocalSpeechExecutionError as exc:
                 raise SpeechExecutionError(str(exc)) from exc
@@ -161,6 +168,8 @@ class SpeechService:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
         await self._local_executor.unload()
+        if progress is not None:
+            progress.update("transcribing")
         provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
         try:
             return await provider_client.transcribe(
@@ -183,6 +192,10 @@ class SpeechService:
         except Exception as exc:
             _LOGGER.error("Speech transcription failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
+
+    @property
+    def local_setup(self) -> LocalSpeechSetup:
+        return self._local_executor.setup
 
     def close(self) -> None:
         self._local_executor.close()

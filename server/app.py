@@ -26,6 +26,7 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
+from core.model_tasks.speech_types import SpeechProgress
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, ChatRunManager, RunNotFoundError, RunStatus
 from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.tools.terminal_manager import TerminalNotFoundError
@@ -378,6 +379,7 @@ def create_app(
     server_bind: ServerBindState | None = None,
     shutdown_token: str | None = None,
     request_shutdown: Callable[[], None] | None = None,
+    request_restart: Callable[[], None] | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state."""
     if FastAPI is None:
@@ -394,6 +396,7 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        app.state.request_restart = request_restart
         app.state.statistics_warmup_task = _start_statistics_warmup(app.state)
         await _fire_extension_startup(app_runtime)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
@@ -522,7 +525,7 @@ def create_app(
         )
 
     @app.post("/api/speech/transcribe")
-    async def transcribe_speech(request: Request) -> JsonObject:
+    async def transcribe_speech(request: Request) -> Any:
         runtime = request.app.state.runtime
         speech_service = runtime.speech
         file = await _parse_upload_file_with_limit(
@@ -538,15 +541,20 @@ def create_app(
                 max_size_bytes=runtime.speech_upload_max_size_bytes,
                 upload_kind="Speech audio",
             )
+        finally:
+            await file.close()
+        if "application/x-ndjson" in request.headers.get("accept", ""):
+            return StreamingResponse(
+                _stream_transcription(speech_service, audio, filename, media_type),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
+        try:
             result = await speech_service.transcribe(
-                audio,
-                filename=filename,
-                media_type=media_type,
+                audio, filename=filename, media_type=media_type
             )
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
-        finally:
-            await file.close()
         return cast(JsonObject, result.to_dict())
 
     @app.post("/api/speech/synthesize")
@@ -1148,6 +1156,53 @@ async def _stream_request_body_with_limit(
                 f"{upload_kind} request body exceeds limit {max_body_size_bytes}"
             )
         yield chunk
+
+
+async def _stream_transcription(
+    speech_service: Any,
+    audio: bytes,
+    filename: str,
+    media_type: str,
+) -> AsyncGenerator[str, None]:
+    """Request-local progress heartbeats followed by one terminal result."""
+    progress = SpeechProgress()
+    task = asyncio.create_task(
+        speech_service.transcribe(
+            audio,
+            filename=filename,
+            media_type=media_type,
+            progress=progress,
+        )
+    )
+    try:
+        while not task.done():
+            yield json.dumps({"type": "progress", **progress.snapshot()}) + "\n"
+            await asyncio.wait({task}, timeout=0.5)
+        try:
+            result = task.result()
+        except SpeechError as exc:
+            error = _speech_http_exception(exc)
+            yield (
+                json.dumps({"type": "error", "detail": error.detail, "status": error.status_code})
+                + "\n"
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Speech transcription stream failed")
+            yield (
+                json.dumps(
+                    {"type": "error", "detail": "Speech transcription failed", "status": 500}
+                )
+                + "\n"
+            )
+        else:
+            yield json.dumps({"type": "result", "result": result.to_dict()}) + "\n"
+    finally:
+        if not task.done():
+            task.cancel()
+        # Local inference keeps its existing cancellation-safe worker semantics:
+        # a disconnected client cannot release an engine still doing work.
+        with suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:

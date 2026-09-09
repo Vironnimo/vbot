@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,6 +16,55 @@ from core.model_tasks import (
     TaskModelOptionSchema,
 )
 from server.rpc.methods import dispatch_rpc
+
+
+@pytest.mark.asyncio
+async def test_local_speech_setup_rpc_status_install_and_guarded_restart() -> None:
+    setup = MagicMock()
+    setup.status.return_value = {"state": "missing"}
+    setup.install.return_value = {"state": "installing", "phase": "checking", "error": ""}
+    restart = MagicMock()
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(speech=SimpleNamespace(local_setup=setup)),
+        request_restart=restart,
+    )
+
+    async def invoke(action: str):
+        return await dispatch_rpc(state, {"method": f"speech.local_setup_{action}", "params": {}})
+
+    assert (await invoke("status"))["result"] == {"state": "missing", "restart_available": True}
+    assert (await invoke("install"))["result"]["state"] == "installing"
+    setup.install.assert_called_once_with()
+    assert (await invoke("restart"))["result"]["error"] == "setup_not_finished"
+    restart.assert_not_called()
+    setup.status.return_value = {"state": "restart_required"}
+    assert (await invoke("restart"))["result"] == {"state": "restarting"}
+    restart.assert_called_once_with()
+    restart.side_effect = OSError("private details")
+    assert (await invoke("restart"))["result"] == {
+        "state": "failed",
+        "error": "restart_unavailable",
+    }
+    state.request_restart = None
+    assert (await invoke("status"))["result"]["restart_available"] is False
+    assert (await invoke("restart"))["result"]["error"] == "restart_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "install", "restart"])
+async def test_local_speech_setup_rpc_rejects_client_commands(action: str) -> None:
+    state = MagicMock()
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": f"speech.local_setup_{action}",
+            "params": {"packages": ["untrusted"], "command": "shell"},
+        },
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+    state.runtime.speech.local_setup.install.assert_not_called()
+    state.request_restart.assert_not_called()
 
 
 @pytest.mark.asyncio

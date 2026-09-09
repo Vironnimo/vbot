@@ -931,10 +931,43 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
     return item
 
 
+def _local_speech_setup_status(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "speech.local_setup_status")
+    return {
+        **state.runtime.speech.local_setup.status(),
+        "restart_available": state.request_restart is not None,
+    }
+
+
+def _local_speech_setup_install(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "speech.local_setup_install")
+    return {
+        **state.runtime.speech.local_setup.install(),
+        "restart_available": state.request_restart is not None,
+    }
+
+
+def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "speech.local_setup_restart")
+    if state.runtime.speech.local_setup.status()["state"] != "restart_required":
+        return {"state": "failed", "error": "setup_not_finished"}
+    if state.request_restart is None:
+        return {"state": "failed", "error": "restart_unavailable"}
+    try:
+        state.request_restart()
+    except Exception:
+        _LOGGER.warning("Local speech setup could not schedule server restart")
+        return {"state": "failed", "error": "restart_unavailable"}
+    return {"state": "restarting"}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return settings and task-model RPC handlers."""
 
     return {
+        "speech.local_setup_status": _local_speech_setup_status,
+        "speech.local_setup_install": _local_speech_setup_install,
+        "speech.local_setup_restart": _local_speech_setup_restart,
         "settings.get_raw": _get_settings_raw,
         "settings.get": _get_settings,
         "settings.values": _get_public_settings,

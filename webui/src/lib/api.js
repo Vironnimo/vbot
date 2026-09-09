@@ -953,6 +953,18 @@ export function updateTaskModelSettings(modelTasks, options = {}) {
   return rpc('task_model.update', { model_tasks: modelTasks }, options);
 }
 
+export function getLocalSpeechSetup(options = {}) {
+  return rpc('speech.local_setup_status', {}, options);
+}
+
+export function installLocalSpeechSupport(options = {}) {
+  return rpc('speech.local_setup_install', {}, options);
+}
+
+export function restartAfterLocalSpeechSetup(options = {}) {
+  return rpc('speech.local_setup_restart', {}, options);
+}
+
 export function listTaskModelTargets(taskType, options = {}) {
   requireNonEmptyString(
     taskType,
@@ -1010,6 +1022,9 @@ export async function transcribeSpeech(audioBlob, options = {}) {
         method: 'POST',
         body: formData,
         signal: options.signal,
+        headers: options.onProgress
+          ? { Accept: 'application/x-ndjson' }
+          : undefined,
       },
     );
   } catch (error) {
@@ -1023,7 +1038,11 @@ export async function transcribeSpeech(audioBlob, options = {}) {
     );
   }
 
-  const payload = await readJsonHttpPayload(response, 'speech.transcribe');
+  const payload =
+    response.ok &&
+    response.headers.get('content-type')?.includes('application/x-ndjson')
+      ? await readSpeechProgress(response, options.onProgress)
+      : await readJsonHttpPayload(response, 'speech.transcribe');
   if (!response.ok) {
     throw new ApiClientError(
       RPC_ERROR_HTTP,
@@ -1049,6 +1068,58 @@ export async function transcribeSpeech(audioBlob, options = {}) {
     );
   }
   return payload;
+}
+
+async function readSpeechProgress(response, onProgress) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  try {
+    while (true) {
+      let timer;
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new ApiClientError(
+                  RPC_ERROR_NETWORK,
+                  'The speech server stopped responding. Please try again.',
+                  { method: 'speech.transcribe' },
+                ),
+              ),
+            30_000,
+          );
+        }),
+      ]).finally(() => clearTimeout(timer));
+      pending += decoder.decode(chunk.value, { stream: !chunk.done });
+      let boundary;
+      while ((boundary = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 1);
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === 'progress') onProgress?.(event);
+        else if (event.type === 'result') return event.result;
+        else if (event.type === 'error') {
+          throw new ApiClientError(RPC_ERROR_HTTP, event.detail, {
+            method: 'speech.transcribe',
+            status: event.status,
+          });
+        }
+      }
+      if (chunk.done)
+        throw new ApiClientError(
+          RPC_ERROR_RESPONSE,
+          'Speech transcription ended before a result arrived. Please try again.',
+          { method: 'speech.transcribe' },
+        );
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export function getAttachmentUrl(attachmentId) {

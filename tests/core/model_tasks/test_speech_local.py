@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -23,11 +23,12 @@ from core.model_tasks.speech_local import (
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
+    LocalSpeechSetup,
     SpeechEngineDefinition,
     _audio_chunks,
     builtin_speech_engines,
 )
-from core.model_tasks.speech_types import SpeechTranscriptionResult
+from core.model_tasks.speech_types import SpeechProgress, SpeechTranscriptionResult
 
 
 def wav(samples: Any = None, *, rate: int = 16_000, channels: int = 1) -> bytes:
@@ -85,7 +86,8 @@ def test_builtin_catalog_is_lazy_and_reports_missing_dependencies(
 ) -> None:
     from core.model_tasks import speech_local
 
-    monkeypatch.setattr(speech_local.metadata, "version", lambda _name: "5.16.1")
+    versions = {"torch": "2.11.0+cu128", "transformers": "5.16.1", "huggingface-hub": "1.30.0"}
+    monkeypatch.setattr(speech_local.metadata, "version", versions.__getitem__)
     monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: None)
     engines = builtin_speech_engines()
     assert [engine.descriptor.public_id for engine in engines] == [
@@ -95,6 +97,8 @@ def test_builtin_catalog_is_lazy_and_reports_missing_dependencies(
     assert not any(engine.descriptor.can_execute() for engine in engines)
     monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: object())
     assert all(engine.descriptor.can_execute() for engine in engines)
+    versions["torch"] = "2.9.0"
+    assert not any(engine.descriptor.can_execute() for engine in engines)
     monkeypatch.setattr(speech_local.metadata, "version", lambda _name: "5.12.0")
     assert not any(engine.descriptor.can_execute() for engine in engines)
     assert "prompt" not in {field.name for field in engines[1].descriptor.option_fields}
@@ -136,7 +140,7 @@ async def test_validation_and_unavailable_engine_never_load() -> None:
     try:
         with pytest.raises(LocalSpeechError, match="not available"):
             await transcribe(executor, "unknown")
-        with pytest.raises(LocalSpeechError, match="local-speech"):
+        with pytest.raises(LocalSpeechError):
             await transcribe(executor, "missing")
         with pytest.raises(LocalSpeechError, match="not supported"):
             await transcribe(executor, unexpected="value")
@@ -251,9 +255,13 @@ def test_native_transformers_adapter_contracts_without_weights(
 ) -> None:
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
+    import huggingface_hub
+
     from core.model_tasks.speech_local import _ParakeetEngine, _QwenEngine
 
     engine_type = _QwenEngine if engine_name == "qwen" else _ParakeetEngine
+    snapshot = MagicMock(return_value=engine_type.default_model)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
     # Resolve actual native auto classes: this catches unsupported extra versions.
     auto_class = getattr(transformers, engine_type.model_class)
     model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
@@ -283,6 +291,10 @@ def test_native_transformers_adapter_contracts_without_weights(
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"
         assert load_model.call_args.kwargs["local_files_only"] is True
+        assert snapshot.call_args.kwargs["local_files_only"] is True
+        progress_class = snapshot.call_args.kwargs["tqdm_class"]
+        with progress_class(total=10, unit="B") as bar:
+            bar.update(5)
         assert load_model.call_args.kwargs["trust_remote_code"] is False
         assert load_processor.call_args.args == (engine_type.default_model,)
         assert inputs["input_ids"].dtype == torch.int64
@@ -298,3 +310,179 @@ def test_native_transformers_adapter_contracts_without_weights(
     finally:
         engine.close()
     assert engine._model is None and engine._processor is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gpu", [False, True])
+async def test_setup_installs_only_shipped_dependencies_and_verifies_before_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    gpu: bool,
+) -> None:
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
+    monkeypatch.setattr(speech_local.shutil, "which", lambda _name: "nvidia-smi" if gpu else None)
+    commands: list[list[str]] = []
+    setup = LocalSpeechSetup()
+
+    async def command(arguments: Any, **kwargs: Any) -> int:
+        commands.append(list(arguments))
+        return (
+            1
+            if arguments[-1].startswith("import torch") and "transformers" not in arguments[-1]
+            else 0
+        )
+
+    monkeypatch.setattr(setup, "_command", command)
+    first = setup.install()
+    task = setup._task
+    assert first["state"] == "installing"
+    assert setup.install()["state"] == "installing" and setup._task is task
+    assert task is not None
+    await task
+    assert setup.status()["state"] == "restart_required"
+    assert setup.blocks_execution
+    assert setup.install()["state"] == "restart_required" and setup._task is task
+    pip_commands = [argv for argv in commands if "install" in argv]
+    assert len(pip_commands) == 2
+    assert all(argv[:3] == [speech_local.sys.executable, "-m", "pip"] for argv in pip_commands)
+    assert all("-e" not in argv and ".[local-speech]" not in argv for argv in pip_commands)
+    assert "--no-deps" in pip_commands[0] and "--force-reinstall" in pip_commands[0]
+    assert ("https://download.pytorch.org/whl/cu128" in pip_commands[0]) is gpu
+    assert "AutoModelForTDT" in commands[-1][-1]
+    await setup.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_setup_can_retry_and_active_setup_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
+    monkeypatch.setattr(speech_local.shutil, "which", lambda _name: None)
+    setup = LocalSpeechSetup()
+    monkeypatch.setattr(setup, "_command", AsyncMock(return_value=0))
+    install = AsyncMock(return_value=1)
+    monkeypatch.setattr(setup, "_pip", install)
+    setup.install()
+    assert setup._task is not None
+    await setup._task
+    assert setup.status()["state"] == "failed"
+    assert setup.status()["error"] == "install_failed"
+    install.return_value = 0
+    setup.install()
+    await setup._task
+    assert setup.status()["state"] == "restart_required"
+    await setup.aclose()
+
+    setup = LocalSpeechSetup()
+    entered = asyncio.Event()
+
+    async def blocking(arguments: Any, **kwargs: Any) -> int:
+        entered.set()
+        await asyncio.Event().wait()
+        return 0
+
+    monkeypatch.setattr(setup, "_command", blocking)
+    setup.install()
+    await entered.wait()
+    await setup.aclose()
+    assert setup.status()["error"] == "interrupted"
+    assert setup._task is not None and setup._task.done()
+
+
+@pytest.mark.asyncio
+async def test_setup_ready_is_a_noop_and_status_never_imports_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_dependencies_available", lambda: True)
+    setup = LocalSpeechSetup()
+    assert setup.install()["state"] == "ready"
+    assert setup._task is None
+    await setup.aclose()
+
+
+@pytest.mark.asyncio
+async def test_setup_blocks_catalog_and_inference_until_a_new_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
+    monkeypatch.setattr(speech_local.shutil, "which", lambda _name: None)
+    events: list[Any] = []
+    executor = LocalSpeechExecutor(engines=[definition("first", events)])
+    monkeypatch.setattr(executor.setup, "_command", AsyncMock(return_value=0))
+    try:
+        assert executor._definitions["first"].descriptor.can_execute()
+        executor.setup.install()
+        assert not executor._definitions["first"].descriptor.can_execute()
+        assert executor.setup._task is not None
+        await executor.setup._task
+        assert executor.setup.status()["state"] == "restart_required"
+        assert not executor._definitions["first"].descriptor.can_execute()
+        with pytest.raises(LocalSpeechError):
+            await transcribe(executor)
+        assert events == []
+    finally:
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_progress_survives_worker_boundary_and_clears_between_recordings() -> None:
+    from core.model_tasks.speech_local import _PROGRESS
+
+    progress = SpeechProgress()
+    observed: list[str] = []
+    events: list[Any] = []
+    entry = definition("first", events)
+
+    def create(options: Mapping[str, Any]) -> Engine:
+        assert _PROGRESS.get() is progress
+        observed.append(progress.snapshot()["phase"])
+        model = Engine("first", events)
+        original = model.transcribe
+
+        def run(samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+            current = _PROGRESS.get()
+            observed.append(current.snapshot()["phase"] if current else "none")
+            return original(samples, options)
+
+        model.transcribe = run  # type: ignore[method-assign]
+        return model
+
+    executor = LocalSpeechExecutor(engines=[replace(entry, create=create)])
+    try:
+        await executor.transcribe(
+            "first", wav(), filename="a.wav", media_type="audio/wav", options={}, progress=progress
+        )
+        assert observed == ["loading", "transcribing"]
+        assert _PROGRESS.get() is None
+        await transcribe(executor)
+        assert observed[-1] == "none"
+        assert len([event for event in events if event[1] == "transcribe"]) == 2
+    finally:
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_setup_command_reaps_cancelled_child_without_exposing_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = MagicMock(returncode=None)
+    process.stdout = asyncio.StreamReader()
+    process.stdout.feed_data(b"Downloading https://secret:password@example.invalid/pkg.whl\n")
+    process.wait = AsyncMock(return_value=0)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    setup = LocalSpeechSetup()
+    task = asyncio.create_task(setup._command(["python", "-m", "pip"], progress=True))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    process.kill.assert_called_once()
+    process.wait.assert_awaited_once()
+    assert "password" not in str(setup.status())
