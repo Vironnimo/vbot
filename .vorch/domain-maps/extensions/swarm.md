@@ -13,10 +13,10 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 - `agent_text.py` owns the scoped Tool definitions and reviewed runtime wording.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
   shell and page bridge remain generic; built assets live in generated `web/`.
-- The initial overview fetches retained profiles and Swarms only. Model, Tool,
-  Skill and Project choices load when opening a profile editor, not on display
-  context updates; failed editor loads leave the overview usable
-  (`SwarmPage.test.js`).
+- Retained-list refreshes read profiles and Swarms. Model, Tool, Skill and
+  Project choices load when opening a profile editor; the Run form also loads
+  the catalog to resolve a selected Project default, not on display context
+  updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
 - Profile editing uses the shared Model search/selection and effort helpers,
   the shared Secondary bar, topic tabs, a bounded scrollport, and a fixed save footer.
   Creation saves explicitly; saved profiles autosave and flush before navigation
@@ -51,6 +51,8 @@ not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
 
 ## Invariants that affect changes
 
+The human UI calls reusable profiles "Swarms" and their executions "Runs";
+management operations and persistence retain their profile/swarm identifiers.
 Profiles are versioned, revision-checked starting configurations. A started Swarm
 retains its prompt and configuration snapshot. The formation is fixed; participant
 Sessions persist across explicit Resume. Temporary execution ownership belongs to
@@ -182,7 +184,19 @@ contracts. Swarm must consume their canonical history and usage instead of
 maintaining a second transcript or authoritative usage counter.
 
 The retained Swarm list projects a bounded first-line goal title from the stored
-prompt. Profile selection opens the editor; New Swarm returns to the goal form.
+prompt. The sidebar groups preparing/running/stopping records as Active runs;
+all other states, including idle and needs_attention, appear under Inactive runs.
+This presentation does not close an idle execution group or disable its Board wakes.
+Swarm selection opens the editor; New run returns to the goal form.
+The form prefills the directory after Swarm selection and preserves manual edits
+during invalidation. Project defaults resolve through the catalog; unchanged
+defaults retain the explicit Project selection. A changed directory is sent as
+the optional absolute-path `swarms.start.working_directory` argument and selects
+directory-only execution, without inferring Project identity from a path.
+Start validates the effective directory and catalog before creating Sessions.
+The stored profile and profile snapshot stay unchanged; `effective_configuration`
+records the Run directory and Project selection for Resume and request replay.
+Evidence: `SwarmPage.test.js` and `test_swarm_lifecycle.py`.
 Participant selection opens Activity and disposes the previous Run subscription;
 late history/subscription replies cannot replace a newer participant selection.
 Terminal Run events reload canonical history so non-streamed final output appears

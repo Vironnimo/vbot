@@ -8,6 +8,7 @@
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
@@ -49,6 +50,9 @@
     deliveryDraft = $state(null),
     profileSnapshotOpen = $state(false);
   let goal = $state(''),
+    runDirectory = $state(''),
+    defaultDirectory = $state(''),
+    directoryLoading = $state(false),
     postText = $state(''),
     composeOpen = $state(false),
     postRecipients = $state(''),
@@ -70,6 +74,7 @@
   let eventsRequest = 0;
   let historyRequest = 0;
   let historyPageCount = 1;
+  let directoryRequest = 0;
   let historyLoading = $state(false);
   let disposed = false;
   function leaveActivity() {
@@ -93,7 +98,34 @@
       selectedSwarm = null;
       leaveActivity();
       client.replaceRoute('');
+      void selectRunProfile(selectedProfile);
     });
+  }
+  async function selectRunProfile(profile) {
+    const request = ++directoryRequest;
+    selectedProfile = profile;
+    runDirectory = '';
+    defaultDirectory = '';
+    directoryLoading = false;
+    if (!profile) return;
+    const directory = profile.working_directory;
+    if (directory.kind === 'directory') {
+      runDirectory = defaultDirectory = directory.path;
+      return;
+    }
+    directoryLoading = true;
+    try {
+      const nextCatalog = (await call('catalog')).catalog;
+      if (disposed || request !== directoryRequest) return;
+      const project = nextCatalog.projects?.find(
+        (item) => item.id === directory.project_id,
+      );
+      runDirectory = defaultDirectory = project?.cwd ?? '';
+    } catch (cause) {
+      if (!disposed && request === directoryRequest) error = cause.message;
+    } finally {
+      if (!disposed && request === directoryRequest) directoryLoading = false;
+    }
   }
   const requestId = () =>
     crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -119,10 +151,26 @@
     Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
   const call = (operation, arguments_ = {}) =>
     client.operation(operation, arguments_);
-  const isActive = (state) =>
+  const canStop = (state) =>
     ['preparing', 'running', 'idle', 'needs_attention', 'stopping'].includes(
       state,
     );
+  const runGroups = $derived([
+    {
+      id: 'active',
+      label: t('swarm.runs.active', 'Active runs'),
+      entries: swarms.filter((swarm) =>
+        ['preparing', 'running', 'stopping'].includes(swarm.state),
+      ),
+    },
+    {
+      id: 'inactive',
+      label: t('swarm.runs.inactive', 'Inactive runs'),
+      entries: swarms.filter(
+        (swarm) => !['preparing', 'running', 'stopping'].includes(swarm.state),
+      ),
+    },
+  ]);
   const resumableParticipantState = (state) =>
     ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
   const canResume = $derived(
@@ -289,6 +337,7 @@
       swarms = page(nextSwarms);
       profilesCursor = nextProfiles.cursor ?? null;
       swarmsCursor = nextSwarms.cursor ?? null;
+      const previousProfile = selectedProfile;
       if (!keepSelection || !selectedProfile)
         selectedProfile = profiles[0] ?? null;
       if (selectedProfile)
@@ -296,6 +345,15 @@
           profiles.find((item) => item.id === selectedProfile.id) ??
           profiles[0] ??
           null;
+      if (
+        previousProfile?.id !== selectedProfile?.id ||
+        (!editor &&
+          !selectedSwarm &&
+          runDirectory === defaultDirectory &&
+          JSON.stringify(previousProfile?.working_directory) !==
+            JSON.stringify(selectedProfile?.working_directory))
+      )
+        void selectRunProfile(selectedProfile);
       if (
         selection === selectionRequest &&
         selectedSwarm &&
@@ -570,7 +628,11 @@
   async function startSwarm() {
     error = '';
     if (!selectedProfile || !goal.trim()) {
-      error = t('swarm.start.validation', 'Choose a profile and enter a goal.');
+      error = t('swarm.start.validation', 'Choose a Swarm and enter a goal.');
+      return;
+    }
+    if (directoryLoading || !runDirectory.trim()) {
+      error = t('swarm.start.directoryRequired', 'Choose a working directory.');
       return;
     }
     pending = 'start';
@@ -580,6 +642,9 @@
         expected_profile_revision: selectedProfile.revision,
         prompt: goal,
         request_id: requestId(),
+        ...(runDirectory !== defaultDirectory
+          ? { working_directory: runDirectory }
+          : {}),
       });
       goal = '';
       await refresh();
@@ -991,21 +1056,19 @@
 <main class="swarm-page">
   <aside class="secondary-pane">
     <div class="secondary-pane__header">
-      <span class="secondary-pane__title"
-        >{t('swarm.profiles', 'Profiles')}</span
-      >
+      <span class="secondary-pane__title">{t('swarm.profiles', 'Swarms')}</span>
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('swarm.newProfile', 'New profile')}
-        tooltip={t('swarm.newProfile', 'New profile')}
+        ariaLabel={t('swarm.newProfile', 'New Swarm')}
+        tooltip={t('swarm.newProfile', 'New Swarm')}
         loading={pending === 'profile'}
         onClick={() => navigate(() => openProfile())}
         >{@render actionIcon('plus')}</Button
       >
     </div>
     <div class="secondary-pane__scroll">
-      <nav class="secondary-list" aria-label={t('swarm.profiles', 'Profiles')}>
+      <nav class="secondary-list" aria-label={t('swarm.profiles', 'Swarms')}>
         {#each profiles as profile (profile.id)}
           <button
             class="secondary-list__item"
@@ -1013,73 +1076,57 @@
             aria-current={editor?.id === profile.id ? 'page' : undefined}
             onclick={() => navigate(() => openProfile(profile))}
           >
-            <strong>{profile.name}</strong><span
-              >{t('swarm.profile.participantSummary', '{count} participants', {
-                count: (profile.participants ?? []).reduce(
-                  (sum, row) => sum + row.count,
-                  0,
-                ),
-              })}</span
+            <span class="sidebar-title"
+              >{profile.name} ({(profile.participants ?? []).reduce(
+                (sum, row) => sum + row.count,
+                0,
+              )})</span
             >
           </button>
         {:else}<EmptyState
             density="compact"
-            title={t('swarm.noProfiles', 'No profiles yet.')}
+            title={t('swarm.noProfiles', 'No Swarms yet.')}
             description={t(
               'swarm.noProfilesHelp',
-              'Create a profile to start a Swarm.',
+              'Create a Swarm to start a Run.',
             )}
           />{/each}
         {#if profilesCursor}<Button
             variant="tertiary"
             onClick={loadMoreProfiles}
-            >{t('swarm.profiles.more', 'Load more profiles')}</Button
+            >{t('swarm.profiles.more', 'Load more Swarms')}</Button
           >{/if}
       </nav>
-      <div class="secondary-pane__header swarms-head">
-        <span class="secondary-pane__title"
-          >{t('swarm.retained', 'Retained Swarms')}</span
-        >
-        <Button
-          variant="tertiary"
-          icon
-          ariaLabel={t('swarm.newSwarm', 'New Swarm')}
-          tooltip={t('swarm.newSwarm', 'New Swarm')}
-          onClick={newSwarm}>{@render actionIcon('plus')}</Button
-        >
-      </div>
-      <nav
-        class="secondary-list"
-        aria-label={t('swarm.retained', 'Retained Swarms')}
-      >
-        {#each swarms as swarm (swarm.id)}
-          <button
-            class="secondary-list__item"
-            class:active={!editor && selectedSwarm?.id === swarm.id}
-            use:tooltip={swarm.title || swarm.id}
-            onclick={() => navigate(() => selectSwarm(swarm.id))}
-          >
-            <strong
-              >{swarm.title ||
-                swarm.prompt?.split(/\r?\n/)[0] ||
-                swarm.id}</strong
-            >
-            <span
-              ><i class="dot" class:running={swarm.state === 'running'}></i>{t(
-                `swarm.state.${swarm.state}`,
-                swarm.state,
-              )} · {swarm.participant_count}</span
-            >
-          </button>
-        {/each}
-        {#if swarmsCursor}<Button variant="tertiary" onClick={loadMoreSwarms}
-            >{t('swarm.swarms.more', 'Load more Swarms')}</Button
-          >{/if}
-      </nav>
+      {#each runGroups as group (group.id)}
+        <section class="run-group">
+          <div class="secondary-pane__header swarms-head">
+            <span class="secondary-pane__title">{group.label}</span>
+          </div>
+          <nav class="secondary-list" aria-label={group.label}>
+            {#each group.entries as swarm (swarm.id)}
+              <button
+                class="secondary-list__item"
+                class:active={!editor && selectedSwarm?.id === swarm.id}
+                use:tooltip={swarm.title || swarm.id}
+                onclick={() => navigate(() => selectSwarm(swarm.id))}
+              >
+                <span class="sidebar-title"
+                  >{swarm.title ||
+                    swarm.prompt?.split(/\r?\n/)[0] ||
+                    swarm.id}</span
+                >
+              </button>
+            {/each}
+          </nav>
+        </section>
+      {/each}
+      {#if swarmsCursor}<Button variant="tertiary" onClick={loadMoreSwarms}
+          >{t('swarm.swarms.more', 'Load more runs')}</Button
+        >{/if}
     </div>
     <div class="sidebar-footer">
       <Button variant="secondary" onClick={newSwarm}
-        >{@render actionIcon('play')}{t('swarm.newSwarm', 'New Swarm')}</Button
+        >{@render actionIcon('play')}{t('swarm.newRun', 'New run')}</Button
       >
     </div>
   </aside>
@@ -1117,13 +1164,11 @@
               <h2>{t('swarm.userPrompt', 'User Prompt:')}</h2>
               <p class="goal">{selectedSwarm.prompt}</p>
               <p class="muted">
-                {selectedSwarm.working_directory?.path ??
-                  selectedSwarm.working_directory?.project_id ??
-                  ''}
+                {selectedSwarm.effective_configuration?.cwd ?? ''}
               </p>
             </div>
             <div class="actions">
-              {#if isActive(selectedSwarm.state)}<Button
+              {#if canStop(selectedSwarm.state)}<Button
                   variant="danger"
                   loading={pending === 'stop'}
                   onClick={() => lifecycle('stop')}
@@ -1140,26 +1185,23 @@
                     : t('swarm.resume', 'Resume')}</Button
                 >{/if}<Button
                 variant="danger"
-                disabled={!!pending || isActive(selectedSwarm.state)}
-                tooltip={isActive(selectedSwarm.state)
+                disabled={!!pending || canStop(selectedSwarm.state)}
+                tooltip={canStop(selectedSwarm.state)
                   ? t(
                       'swarm.deleteRun.stopFirst',
                       'Stop the Swarm before deleting it.',
                     )
-                  : t('swarm.deleteRun.title', 'Delete Swarm')}
+                  : t('swarm.deleteRun.title', 'Delete Run')}
                 onClick={() => {
                   deleteError = '';
                   swarmDeleteCandidate = selectedSwarm;
-                }}>{t('swarm.deleteRun.title', 'Delete Swarm')}</Button
+                }}>{t('swarm.deleteRun.title', 'Delete Run')}</Button
               ><Button
                 variant="secondary"
                 onClick={() => (profileSnapshotOpen = true)}
                 icon
-                ariaLabel={t(
-                  'swarm.profileSnapshot',
-                  'Inspect profile snapshot',
-                )}
-                tooltip={t('swarm.profileSnapshot', 'Inspect profile snapshot')}
+                ariaLabel={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
+                tooltip={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
                 >{@render actionIcon('document')}</Button
               ><Button
                 variant="tertiary"
@@ -1183,7 +1225,7 @@
               ariaLabel={t('swarm.details', 'Swarm details')}
               onChange={(next) => (activeTab = next)}
             /><StatusChip
-              variant={isActive(selectedSwarm.state) ? 'warn' : 'neutral'}
+              variant={canStop(selectedSwarm.state) ? 'warn' : 'neutral'}
               >{t(
                 `swarm.state.${selectedSwarm.state}`,
                 selectedSwarm.state,
@@ -1520,33 +1562,33 @@
             <p>
               {t(
                 'swarm.startHelp',
-                'Every participant starts with this same goal and the selected profile snapshot.',
+                'Every participant starts with this same goal and the selected Swarm configuration.',
               )}
             </p>
             <div class="start-profile">
               <FormField
                 controlId="swarm-start-profile"
-                label={t('swarm.profile', 'Profile')}
+                label={t('swarm.profile', 'Swarm')}
               >
                 <Dropdown
                   id="swarm-start-profile"
-                  ariaLabel={t('swarm.profile', 'Profile')}
+                  ariaLabel={t('swarm.profile', 'Swarm')}
                   value={selectedProfile?.id ?? ''}
                   options={profiles.map((profile) => ({
                     value: profile.id,
                     label: profile.name,
                   }))}
                   onValueChange={(id) =>
-                    (selectedProfile = profiles.find(
-                      (profile) => profile.id === id,
-                    ))}
+                    selectRunProfile(
+                      profiles.find((profile) => profile.id === id),
+                    )}
                 />
               </FormField>
               <Button
                 variant="tertiary"
                 icon
                 ariaLabel={t('common.edit', 'Edit')}
-                tooltip={t('swarm.editProfile', 'Edit profile')}
+                tooltip={t('swarm.editProfile', 'Edit Swarm')}
                 disabled={!selectedProfile}
                 onClick={() => openProfile(selectedProfile)}
                 >{@render actionIcon('edit')}</Button
@@ -1555,12 +1597,25 @@
                 variant="tertiary"
                 icon
                 ariaLabel={t('common.delete', 'Delete')}
-                tooltip={t('swarm.delete.title', 'Delete profile')}
+                tooltip={t('swarm.delete.title', 'Delete Swarm')}
                 disabled={!selectedProfile}
                 onClick={() => (deleteCandidate = selectedProfile)}
                 >{@render actionIcon('trash')}</Button
               >
             </div>
+            <FormField
+              controlId="swarm-start-directory"
+              label={t('swarm.profile.directoryHeading', 'Working directory')}
+            >
+              <TextField
+                id="swarm-start-directory"
+                value={runDirectory}
+                disabled={!selectedProfile ||
+                  directoryLoading ||
+                  pending === 'start'}
+                onInput={(value) => (runDirectory = value)}
+              />
+            </FormField>
             <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}>
               <TextArea
                 id="swarm-goal"
@@ -1575,11 +1630,13 @@
             </FormField><Button
               variant="primary"
               loading={pending === 'start'}
-              disabled={!selectedProfile}
+              disabled={!selectedProfile ||
+                directoryLoading ||
+                !runDirectory.trim()}
               onClick={startSwarm}
               >{@render actionIcon('play')}{pending === 'start'
                 ? t('swarm.starting', 'Starting…')
-                : t('swarm.startButton', 'Start Swarm')}</Button
+                : t('swarm.startButton', 'Start Run')}</Button
             >
           </section>{/if}
       </section>
@@ -1643,7 +1700,7 @@
       >{/snippet}
   </Modal>{/if}
 {#if swarmDeleteCandidate}<Modal
-    title={t('swarm.deleteRun.title', 'Delete Swarm')}
+    title={t('swarm.deleteRun.title', 'Delete Run')}
     closeDisabled={pending === 'delete'}
     onClose={() => (swarmDeleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy">
@@ -1651,7 +1708,7 @@
         <p>
           {t(
             'swarm.deleteRun.body',
-            'Permanently delete this Swarm, its Board and participant Sessions? The profile will be kept. This cannot be undone.',
+            'Permanently delete this Run, its Board and participant Sessions? The Swarm will be kept. This cannot be undone.',
           )}
         </p>
         {#if deleteError}<Banner variant="error">{deleteError}</Banner>{/if}
@@ -1667,13 +1724,13 @@
       >{/snippet}</Modal
   >{/if}
 {#if deleteCandidate}<Modal
-    title={t('swarm.delete.title', 'Delete profile')}
+    title={t('swarm.delete.title', 'Delete Swarm')}
     onClose={() => (deleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy">
         <p>
           {t(
             'swarm.delete.body',
-            'Delete {name}? Historical Swarms remain available.',
+            'Delete {name}? Existing Runs remain available.',
             { name: deleteCandidate.name },
           )}
         </p>
@@ -1814,7 +1871,7 @@
       >{/snippet}</Modal
   >{/if}
 {#if profileSnapshotOpen}<Modal
-    title={t('swarm.profileSnapshot', 'Profile snapshot')}
+    title={t('swarm.profileSnapshot', 'Swarm snapshot')}
     onClose={() => (profileSnapshotOpen = false)}
     >{#snippet body()}<div class="modal-copy">
         <pre>{JSON.stringify(
@@ -1863,20 +1920,12 @@
   .secondary-list__item.active {
     color: var(--accent);
   }
-  .secondary-list__item strong {
-    font-weight: 500;
+  .sidebar-title {
+    min-width: 0;
+    font-weight: 400;
     overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
     text-overflow: ellipsis;
-  }
-  .secondary-list__item span {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
   }
   .swarms-head {
     margin-top: 16px;
@@ -2177,15 +2226,6 @@
     border: 1px solid var(--border-2);
     text-align: left;
   }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-lo);
-  }
-  .dot.running {
-    background: var(--amber);
-  }
   .history pre,
   .panel pre {
     overflow: auto;
@@ -2285,20 +2325,11 @@
       border-right: 0;
       border-bottom: 1px solid var(--border);
     }
-    .secondary-pane__scroll {
-      display: flex;
-      align-items: start;
-    }
     .secondary-list {
-      display: flex;
-      gap: 8px;
-      flex: 1;
+      padding-block: 6px;
     }
     .secondary-list__item {
       min-width: 160px;
-    }
-    .swarms-head {
-      display: none;
     }
     .content {
       padding: 16px;

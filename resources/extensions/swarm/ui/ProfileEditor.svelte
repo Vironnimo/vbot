@@ -302,7 +302,7 @@
     error = '';
     if (!draft.name.trim())
       return invalid(
-        t('swarm.profile.nameRequired', 'Enter a profile name.'),
+        t('swarm.profile.nameRequired', 'Enter a Swarm name.'),
         'swarm-profile-name',
       );
     if (draft.slug?.trim() && !/^[a-z0-9][a-z0-9_-]*$/.test(draft.slug)) {
@@ -375,17 +375,17 @@
 
 <section
   class="editor"
-  aria-label={t('swarm.profile.editorLabel', 'Swarm profile editor')}
+  aria-label={t('swarm.profile.editorLabel', 'Swarm editor')}
 >
   <header class="editor-head">
     <div>
       <h2>
-        {profile ? savedProfile.name : t('swarm.profile.new', 'New profile')}
+        {profile ? savedProfile.name : t('swarm.profile.new', 'New Swarm')}
       </h2>
       <p>
         {t(
           'swarm.profile.scopeHelp',
-          'A reusable setup. Changes apply to new Swarms.',
+          'A reusable setup. Changes apply to new Runs.',
         )}
       </p>
     </div>
@@ -412,7 +412,7 @@
     items={tabs}
     value={tab}
     idPrefix="swarm-profile"
-    ariaLabel={t('swarm.profile.sections', 'Profile sections')}
+    ariaLabel={t('swarm.profile.sections', 'Swarm sections')}
     onChange={changeTab}
   />
   {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
@@ -637,7 +637,7 @@
           <p class="hint">
             {t(
               'swarm.profile.shortcutHelp',
-              'A shortcut is generated from the name when you save. Use it to choose this profile with /swarm from Chat.',
+              'A shortcut is generated from the name when you save. Use it to choose this Swarm with /swarm from Chat.',
             )}
           </p>
           <FormField
@@ -990,7 +990,7 @@
       >
         {profile
           ? t('common.saveChanges', 'Save changes')
-          : t('swarm.profile.save', 'Save profile')}
+          : t('swarm.profile.save', 'Save Swarm')}
       </Button>
     </div>
   </footer>
