@@ -592,6 +592,10 @@ timestamps retain the smaller secondary Mono treatment.
 Automatic discussion announcements show a localized author/action sentence and a
 wrapping secondary button labeled with the discussion title. The button opens that
 discussion in the Board; stored IDs and Agent continuation guidance stay out of the
-human presentation. Ordinary message bodies retain their original presentation.
+human presentation. Ordinary Board messages use the shared Chat Markdown
+presentation: IBM Plex Sans at body-lg (14px), the same 1.65 line height as
+Assistant prose, formatted lists and emphasis, and fenced code with a Copy action.
+Board and Activity prose use the same typography as the normal Chat. Long content
+wraps within Board posts; wide Markdown content scrolls inside the post body.
 Participant status reflects Run execution only. Swarms has no separate Results
 tab or completed-participant counter; results are shared on the Board.

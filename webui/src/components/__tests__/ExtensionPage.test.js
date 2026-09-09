@@ -60,6 +60,17 @@ function message(child, data) {
 }
 
 describe('ExtensionPage', () => {
+  it('permits clipboard writes from the opaque frame without granting reads or same-origin access', () => {
+    component = mount(ExtensionPageHost, {
+      target: document.body,
+      props: { initialDescriptor: descriptor },
+    });
+    flushSync();
+    const frame = document.querySelector('iframe');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.getAttribute('allow')).toBe('clipboard-write *');
+  });
+
   it('waits for the current iframe editor to save and rejects a pending flush on reload', async () => {
     let participant;
     const autosaveContext = {

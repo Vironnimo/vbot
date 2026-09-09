@@ -276,10 +276,149 @@ async function render(bridge) {
 afterEach(async () => {
   if (mounted) mounted = await unmount(mounted);
   document.body.innerHTML = '';
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 describe('SwarmPage', () => {
+  it.each(['dsc-main', 'dsc-findings'])(
+    'renders Board Markdown and opens links through the host in %s',
+    async (discussionId) => {
+      const { bridge, operation } = createBridge();
+      const original = operation.getMockImplementation();
+      operation.mockImplementation((name, args) =>
+        name === 'board.read'
+          ? Promise.resolve({
+              entries: [
+                {
+                  id: `pst-${args.discussion_id}`,
+                  author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
+                  text: [
+                    `## QA ${args.discussion_id}`,
+                    '',
+                    '**Final verification** with *emphasis*.',
+                    '',
+                    '1. **Unit tests:** 31/31',
+                    '2. **Facade:** 23/23',
+                    '3. **Game loop:** 600 frames',
+                    '4. **Browser:** 0 errors',
+                    '5. **HTTP:** 200 OK',
+                    '',
+                    'Files: `core-stats.js` and `arpg-game/start.bat`.',
+                    '',
+                    '- First item',
+                    '- Second item',
+                    '',
+                    '> Quoted result',
+                    '',
+                    '| Check | Result |',
+                    '| --- | --- |',
+                    '| QA | Passed |',
+                    '',
+                    '[Report](https://example.test/report)',
+                    'https://example.test/game',
+                  ].join('\n'),
+                },
+              ],
+            })
+          : original(name, args),
+      );
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('.board')).not.toBeNull(),
+      );
+      if (discussionId !== swarm.main_discussion_id) {
+        const dropdown = document.getElementById('swarm-discussion');
+        dropdown.value = discussionId;
+        dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      await vi.waitFor(() =>
+        expect(document.querySelector('.board h2')?.textContent).toBe(
+          `QA ${discussionId}`,
+        ),
+      );
+      const post = document.querySelector('.board > li');
+      expect(post.querySelector('p strong').textContent).toBe(
+        'Final verification',
+      );
+      expect(post.querySelector('em').textContent).toBe('emphasis');
+      expect(post.querySelectorAll('ol > li')).toHaveLength(5);
+      expect(post.querySelectorAll('ul > li')).toHaveLength(2);
+      expect(
+        [...post.querySelectorAll('code')].map((el) => el.textContent),
+      ).toEqual(['core-stats.js', 'arpg-game/start.bat']);
+      expect(post.querySelector('blockquote').textContent.trim()).toBe(
+        'Quoted result',
+      );
+      expect(post.querySelectorAll('table tbody td')).toHaveLength(2);
+      expect(post.querySelector('p').textContent).not.toContain('**');
+      const links = [...post.querySelectorAll('a')];
+      expect(links.map((link) => link.href)).toEqual([
+        'https://example.test/report',
+        'https://example.test/game',
+      ]);
+      for (const link of links) {
+        link.click();
+        expect(operation).toHaveBeenCalledWith('link.open', { url: link.href });
+      }
+    },
+  );
+
+  it('copies the exact fenced code from a Board post', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const code = 'const result = "<verified>";\n  console.log(result);\n';
+    operation.mockImplementation((name, args) =>
+      name === 'board.read'
+        ? Promise.resolve({
+            entries: [{ id: 'pst-code', text: '```js\n' + code + '```' }],
+          })
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.board .msg-code__copy')).not.toBeNull(),
+    );
+    expect(document.querySelector('.board pre code').textContent).toBe(code);
+    expect(
+      document.querySelector('.board .msg-code__language').textContent,
+    ).toBe('js');
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    document.querySelector('.board .msg-code__copy').click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(code));
+  });
+
+  it('keeps raw HTML and unsafe Markdown links inert in Board posts', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const html = '<img src=x onerror=alert(1)><script>alert(1)</script>';
+    operation.mockImplementation((name, args) =>
+      name === 'board.read'
+        ? Promise.resolve({
+            entries: [
+              {
+                id: 'pst-unsafe',
+                text: `${html}\n\n[unsafe](javascript:alert(1))\n\n**Safe formatting**`,
+              },
+            ],
+          })
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.board p strong')?.textContent).toBe(
+        'Safe formatting',
+      ),
+    );
+    const board = document.querySelector('.board');
+    expect(board.textContent).toContain(html);
+    expect(board.querySelector('img, script, [onerror], a')).toBeNull();
+  });
+
   it('opens an announced discussion outside the loaded selector page and preserves ordinary JSON posts', async () => {
     const { bridge, operation } = createBridge();
     const original = operation.getMockImplementation();

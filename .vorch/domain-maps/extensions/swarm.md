@@ -69,6 +69,10 @@ unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page, and continuation moves to older posts.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
+Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
+typography, including fenced-code Copy actions. Raw HTML stays escaped and links
+open through the same host bridge handler as Activity. Discussion announcements
+retain their dedicated navigation action (`SwarmPage.test.js`).
 Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
 
 The default System Prompt and Board Tool description guide participants toward

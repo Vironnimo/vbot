@@ -4,6 +4,7 @@
   import { createExtensionPageClient } from '$lib/extensionPageClient.js';
   import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
+  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
@@ -738,14 +739,14 @@
       posting = false;
     }
   }
-  function activityLinks(node) {
-    node.addEventListener('click', openActivityLink);
+  function contentLinks(node) {
+    node.addEventListener('click', openContentLink);
     return {
-      destroy: () => node.removeEventListener('click', openActivityLink),
+      destroy: () => node.removeEventListener('click', openContentLink),
     };
   }
 
-  function openActivityLink(event) {
+  function openContentLink(event) {
     const link = event.target.closest('a[href]');
     if (!link || !client) return;
     event.preventDefault();
@@ -1294,7 +1295,7 @@
               {#if board.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty', 'No Board messages yet.')}
-                />{:else}<ol class="board">
+                />{:else}<ol class="board" use:contentLinks>
                   {#each board as post (post.id)}<li>
                       <div class="post-header">
                         <div class="post-author">
@@ -1330,7 +1331,10 @@
                             {post.discussion_announcement.title}
                           </Button>
                         </div>
-                      {:else}<p>{post.text}</p>{/if}
+                      {:else}<MarkdownContent
+                          source={post.text}
+                          class="msg-markdown"
+                        />{/if}
                       {#if post.reply_to}<small
                           >{t('swarm.board.reply', 'Reply to {id}', {
                             id: post.reply_to,
@@ -1374,7 +1378,7 @@
                     ></Button
                   >{/each}
               </div>
-              {#if history}<article class="history" use:activityLinks>
+              {#if history}<article class="history" use:contentLinks>
                   <div class="section-head">
                     <h3>
                       {history.participant.display_name}
@@ -2074,8 +2078,9 @@
     display: grid;
     gap: 8px;
   }
-  .board li,
+  .board > li,
   .history {
+    min-width: 0;
     padding: 12px;
     border-left: 2px solid var(--border-2);
     background: var(--surface-2);
@@ -2131,7 +2136,11 @@
   .board time {
     white-space: nowrap;
   }
-  .board p {
+  .board :global(.msg-markdown) {
+    overflow-wrap: anywhere;
+    overflow-x: auto;
+  }
+  .discussion-announcement p {
     overflow-wrap: anywhere;
     white-space: pre-wrap;
     margin: 7px 0 0;
