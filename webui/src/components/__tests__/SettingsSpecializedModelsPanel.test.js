@@ -10,6 +10,8 @@ const listTaskModelTargetsMock = vi.fn();
 const getTaskModelOptionsMock = vi.fn();
 const updateTaskModelSettingsMock = vi.fn();
 const getLocalSpeechSetupMock = vi.fn();
+const getLocalSpeechMemoryMock = vi.fn();
+const unloadLocalSpeechMock = vi.fn();
 const installLocalSpeechSupportMock = vi.fn();
 const restartAfterLocalSpeechSetupMock = vi.fn();
 
@@ -22,6 +24,8 @@ vi.mock('$lib/api.js', () => ({
   getTaskModelOptions: (...args) => getTaskModelOptionsMock(...args),
   updateTaskModelSettings: (...args) => updateTaskModelSettingsMock(...args),
   getLocalSpeechSetup: (...args) => getLocalSpeechSetupMock(...args),
+  getLocalSpeechMemory: (...args) => getLocalSpeechMemoryMock(...args),
+  unloadLocalSpeech: (...args) => unloadLocalSpeechMock(...args),
   installLocalSpeechSupport: (...args) =>
     installLocalSpeechSupportMock(...args),
   restartAfterLocalSpeechSetup: (...args) =>
@@ -40,6 +44,18 @@ describe('SettingsSpecializedModelsPanel', () => {
     listTaskModelTargetsMock.mockReset();
     getTaskModelOptionsMock.mockReset();
     updateTaskModelSettingsMock.mockReset();
+    getLocalSpeechMemoryMock.mockReset().mockResolvedValue({ models: [] });
+    unloadLocalSpeechMock.mockReset().mockResolvedValue({
+      models: [
+        {
+          target: 'local/chatterbox',
+          label: 'Test loaded voice',
+          loaded: false,
+          busy: false,
+        },
+      ],
+      released: true,
+    });
     getLocalSpeechSetupMock
       .mockReset()
       .mockResolvedValue({ state: 'ready', restart_available: true });
@@ -63,6 +79,138 @@ describe('SettingsSpecializedModelsPanel', () => {
       mountedComponent = null;
     }
     document.body.innerHTML = '';
+    vi.useRealTimers();
+  });
+
+  it('unloads a specific model and ignores an older in-flight status poll', async () => {
+    vi.useFakeTimers();
+    const loaded = {
+      target: 'local/chatterbox',
+      label: 'Test loaded voice',
+      loaded: true,
+      busy: false,
+    };
+    const stale = deferred();
+    getLocalSpeechMemoryMock
+      .mockResolvedValueOnce({ models: [loaded] })
+      .mockReturnValueOnce(stale.promise);
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {},
+    });
+    await settle();
+    const panel = () => document.querySelector('[data-local-speech-memory]');
+    expect(panel().textContent).toContain(loaded.label);
+    expect(button('Unload from memory').disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    button('Unload from memory').click();
+    await settle();
+    expect(unloadLocalSpeechMock).toHaveBeenCalledOnce();
+    expect(panel()).toBeNull();
+    stale.resolve({ models: [loaded] });
+    await settle();
+    expect(panel()).toBeNull();
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    const calls = getLocalSpeechMemoryMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(getLocalSpeechMemoryMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each([
+    {
+      target: 'local/qwen3-asr',
+      label: 'Busy model',
+      loaded: true,
+      busy: true,
+    },
+    {
+      target: 'local/qwen3-asr',
+      label: 'Empty model',
+      loaded: false,
+      busy: false,
+    },
+  ])('disables unload for busy or empty speech memory: %j', async (status) => {
+    getLocalSpeechMemoryMock.mockResolvedValue({ models: [status] });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          model_tasks: {
+            speech_to_text: { target: 'local/qwen3-asr', options: {} },
+          },
+        },
+      },
+    });
+    await waitForCondition(() => button('Unload from memory'));
+    expect(button('Unload from memory').disabled).toBe(true);
+    button('Unload from memory').click();
+    expect(unloadLocalSpeechMock).not.toHaveBeenCalled();
+  });
+
+  it('recovers from an unload failure and respects a busy response to a race', async () => {
+    const loaded = {
+      target: 'local/qwen3-tts',
+      label: 'Voice',
+      loaded: true,
+      busy: false,
+    };
+    getLocalSpeechMemoryMock.mockResolvedValue({ models: [loaded] });
+    unloadLocalSpeechMock
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce({
+        models: [{ ...loaded, busy: true }],
+        released: false,
+      });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {},
+    });
+    await waitForCondition(() => button('Unload from memory'));
+    button('Unload from memory').click();
+    await waitForCondition(() => document.querySelector('[role="alert"]'));
+    expect(button('Unload from memory').disabled).toBe(false);
+    button('Unload from memory').click();
+    await waitForCondition(
+      () =>
+        button('Unload from memory').disabled &&
+        !document.querySelector('[role="alert"]'),
+    );
+    expect(unloadLocalSpeechMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('unloads STT while TTS is busy and keeps the TTS row intact', async () => {
+    const stt = {
+      target: 'local/qwen3-asr',
+      label: 'STT',
+      loaded: true,
+      busy: false,
+    };
+    const tts = {
+      target: 'local/qwen3-tts',
+      label: 'TTS',
+      loaded: true,
+      busy: true,
+    };
+    getLocalSpeechMemoryMock.mockResolvedValue({ models: [stt, tts] });
+    unloadLocalSpeechMock.mockResolvedValue({
+      models: [{ ...stt, loaded: false }, tts],
+      released: true,
+    });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {},
+    });
+    const row = (target) =>
+      document.querySelector(`[data-speech-memory-target="${target}"]`);
+    await waitForCondition(() => row(stt.target));
+    expect(row(tts.target).querySelector('button').disabled).toBe(true);
+    expect(row(stt.target).querySelector('button').disabled).toBe(false);
+    row(stt.target).querySelector('button').click();
+    await waitForCondition(() => !row(stt.target));
+    expect(unloadLocalSpeechMock).toHaveBeenCalledWith(stt.target);
+    expect(row(tts.target).textContent).toContain(tts.label);
+    expect(row(tts.target).querySelector('button').disabled).toBe(true);
   });
 
   it('reloads task-model targets when modelsRefreshToken changes', async () => {
@@ -554,4 +702,11 @@ function deferred() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function settle() {
+  for (let index = 0; index < 20; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
 }

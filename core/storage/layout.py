@@ -67,6 +67,10 @@ class DataDirectoryLayout:
         return self.artifacts / "speech"
 
     @property
+    def speech_engines(self) -> Path:
+        return self.root / "speech-engines"
+
+    @property
     def models(self) -> Path:
         return self.artifacts / "models"
 

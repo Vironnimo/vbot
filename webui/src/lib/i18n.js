@@ -1740,6 +1740,43 @@ export const englishCatalog = Object.freeze({
     'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
+  'settings.localSpeech.memoryTitle': 'Local speech memory',
+  'settings.localSpeech.memoryLoaded': 'Loaded in memory',
+  'settings.localSpeech.memoryEmpty': 'Not loaded',
+  'settings.localSpeech.memoryBusy':
+    'This model is busy. Unload becomes available when processing finishes.',
+  'settings.localSpeech.memoryChecking': 'Checking loaded speech model…',
+  'settings.localSpeech.memoryHelp':
+    'Unload models individually to free RAM and GPU memory. Other models stay loaded. Downloads stay on disk for the next use.',
+  'settings.localSpeech.unloadButton': 'Unload from memory',
+  'settings.localSpeech.unloadAria': 'Unload {model} from memory',
+  'settings.localSpeech.unloading': 'Releasing speech model memory…',
+  'settings.localSpeech.memoryError':
+    'Could not check speech memory. Reconnecting…',
+  'settings.localSpeech.unloadError':
+    'Could not unload the speech model. Try again.',
+  'settings.localSpeech.ttsReady':
+    'Runs locally on the vBot server. The first preview or Tool request downloads and loads the model. You can use the audio player when generation finishes.',
+  'settings.localSpeech.ttsMissing':
+    'Install support for this local voice engine. Setup may download several gigabytes and can take a few minutes.',
+  'settings.localSpeech.phase.queued':
+    'Waiting for another speech installation to finish…',
+  'settings.localSpeech.phase.python': 'Preparing the local voice environment…',
+  'settings.localSpeech.previewText':
+    'Hello! This is a preview of my local voice.',
+  'settings.localSpeech.previewLabel': 'Text for voice preview',
+  'settings.localSpeech.previewButton': 'Generate voice preview',
+  'settings.localSpeech.cancelPreview': 'Cancel',
+  'settings.localSpeech.previewAudio': 'Voice preview',
+  'settings.localSpeech.previewFailed':
+    'Voice preview failed. Please try again.',
+  'settings.localSpeech.options.voice.label': 'Voice',
+  'settings.localSpeech.options.instructions.label': 'Speaking instructions',
+  'settings.localSpeech.options.instructions.help':
+    'Optional style instructions for the 1.7B model.',
+  'settings.localSpeech.options.exaggeration.label': 'Expressiveness',
+  'settings.localSpeech.options.cfg_weight.label': 'Guidance',
+  'chat.voice.progress.synthesizing': 'Generating speech…',
   'settings.localSpeech.ready':
     'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. After downloading, enable Offline only to use cached files without network access.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',

@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, MutableMapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import aclosing, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -545,7 +545,11 @@ def create_app(
             await file.close()
         if "application/x-ndjson" in request.headers.get("accept", ""):
             return StreamingResponse(
-                _stream_transcription(speech_service, audio, filename, media_type),
+                _stream_speech(
+                    lambda progress: speech_service.transcribe(
+                        audio, filename=filename, media_type=media_type, progress=progress
+                    )
+                ),
                 media_type="application/x-ndjson",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
@@ -571,6 +575,14 @@ def create_app(
         text = payload.get("text") if isinstance(payload, dict) else None
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(status_code=400, detail="text must be a non-empty string")
+        if "application/x-ndjson" in request.headers.get("accept", ""):
+            return StreamingResponse(
+                _stream_speech(
+                    lambda progress: speech_service.synthesize_artifact(text, progress=progress)
+                ),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
         try:
             result = await speech_service.synthesize(text)
         except SpeechError as exc:
@@ -1158,22 +1170,12 @@ async def _stream_request_body_with_limit(
         yield chunk
 
 
-async def _stream_transcription(
-    speech_service: Any,
-    audio: bytes,
-    filename: str,
-    media_type: str,
+async def _stream_speech(
+    operation: Callable[[SpeechProgress], Awaitable[Any]],
 ) -> AsyncGenerator[str, None]:
     """Request-local progress heartbeats followed by one terminal result."""
     progress = SpeechProgress()
-    task = asyncio.create_task(
-        speech_service.transcribe(
-            audio,
-            filename=filename,
-            media_type=media_type,
-            progress=progress,
-        )
-    )
+    task = asyncio.ensure_future(operation(progress))
     try:
         while not task.done():
             yield json.dumps({"type": "progress", **progress.snapshot()}) + "\n"
@@ -1187,11 +1189,9 @@ async def _stream_transcription(
                 + "\n"
             )
         except Exception:
-            logging.getLogger(__name__).exception("Speech transcription stream failed")
+            logging.getLogger(__name__).exception("Speech stream failed")
             yield (
-                json.dumps(
-                    {"type": "error", "detail": "Speech transcription failed", "status": 500}
-                )
+                json.dumps({"type": "error", "detail": "Speech request failed", "status": 500})
                 + "\n"
             )
         else:

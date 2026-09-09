@@ -162,11 +162,20 @@ async def test_runtime_registers_local_speech_and_closes_its_executor(config: Co
             "local/qwen3-asr",
             "local/parakeet",
         }
+        tts = runtime.model_tasks.list_targets("text_to_speech")
+        assert {target.id for target in tts if target.kind == "local"} == {
+            "local/qwen3-tts",
+            "local/chatterbox",
+        }
+        assert (
+            speech.local_setup_for("local/chatterbox").directory
+            == runtime.storage.layout.speech_engines / "chatterbox"
+        )
         runtime.model_tasks.update(
             {"speech_to_text": {"target": "local/parakeet", "options": {"offline": True}}}
         )
         assert runtime.model_tasks.binding_for("speech_to_text").target == "local/parakeet"
-        assert speech._local_executor._engine is None
+        assert not any(model["loaded"] for model in speech.local_memory_status()["models"])
     finally:
         await runtime.aclose()
     assert speech._local_executor._closed

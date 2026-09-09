@@ -932,24 +932,24 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
 
 
 def _local_speech_setup_status(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "speech.local_setup_status")
+    setup = _speech_setup(state, params)
     return {
-        **state.runtime.speech.local_setup.status(),
+        **setup.status(),
         "restart_available": state.request_restart is not None,
     }
 
 
 def _local_speech_setup_install(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "speech.local_setup_install")
+    setup = _speech_setup(state, params)
     return {
-        **state.runtime.speech.local_setup.install(),
+        **setup.install(),
         "restart_available": state.request_restart is not None,
     }
 
 
 def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, set(), "speech.local_setup_restart")
-    if state.runtime.speech.local_setup.status()["state"] != "restart_required":
+    setup = _speech_setup(state, params)
+    if setup.status()["state"] != "restart_required":
         return {"state": "failed", "error": "setup_not_finished"}
     if state.request_restart is None:
         return {"state": "failed", "error": "restart_unavailable"}
@@ -961,10 +961,41 @@ def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
     return {"state": "restarting"}
 
 
+def _local_speech_memory_status(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "speech.local_memory_status")
+    return dict(state.runtime.speech.local_memory_status())
+
+
+async def _local_speech_unload(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"target"}, "speech.local_unload")
+    target = params.get("target")
+    if not isinstance(target, str) or not target:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a non-empty string")
+    try:
+        return dict(await state.runtime.speech.unload_local(target))
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+def _speech_setup(state: Any, params: JsonObject) -> Any:
+    _reject_unsupported(params, {"target"}, "speech.local_setup")
+    target = params.get("target", "")
+    if not isinstance(target, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a string")
+    if not target:
+        return state.runtime.speech.local_setup
+    try:
+        return state.runtime.speech.local_setup_for(target)
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return settings and task-model RPC handlers."""
 
     return {
+        "speech.local_memory_status": _local_speech_memory_status,
+        "speech.local_unload": _local_speech_unload,
         "speech.local_setup_status": _local_speech_setup_status,
         "speech.local_setup_install": _local_speech_setup_install,
         "speech.local_setup_restart": _local_speech_setup_restart,

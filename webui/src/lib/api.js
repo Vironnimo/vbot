@@ -953,16 +953,78 @@ export function updateTaskModelSettings(modelTasks, options = {}) {
   return rpc('task_model.update', { model_tasks: modelTasks }, options);
 }
 
+export function getLocalSpeechMemory(options = {}) {
+  return rpc('speech.local_memory_status', {}, options);
+}
+
+export function unloadLocalSpeech(target, options = {}) {
+  requireNonEmptyString(
+    target,
+    'Target must not be empty',
+    'speech.local_unload',
+  );
+  return rpc('speech.local_unload', { target }, options);
+}
+
 export function getLocalSpeechSetup(options = {}) {
-  return rpc('speech.local_setup_status', {}, options);
+  return rpc(
+    'speech.local_setup_status',
+    options.target ? { target: options.target } : {},
+    options,
+  );
 }
 
 export function installLocalSpeechSupport(options = {}) {
-  return rpc('speech.local_setup_install', {}, options);
+  return rpc(
+    'speech.local_setup_install',
+    options.target ? { target: options.target } : {},
+    options,
+  );
 }
 
 export function restartAfterLocalSpeechSetup(options = {}) {
-  return rpc('speech.local_setup_restart', {}, options);
+  return rpc(
+    'speech.local_setup_restart',
+    options.target ? { target: options.target } : {},
+    options,
+  );
+}
+
+export async function previewSpeech(text, options = {}) {
+  requireNonEmptyString(text, 'Text must not be empty', 'speech.synthesize');
+  const response = await (options.fetch ?? globalThis.fetch)(
+    buildHttpUrl('/api/speech/synthesize', options.baseUrl),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/x-ndjson',
+      },
+      body: JSON.stringify({ text }),
+      signal: options.signal,
+    },
+  );
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new ApiClientError(RPC_ERROR_HTTP, payload.detail, {
+      method: 'speech.synthesize',
+      status: response.status,
+    });
+  }
+  const result = await readSpeechProgress(response, options.onProgress);
+  if (
+    !isPlainObject(result) ||
+    !/^\/api\/speech\/artifacts\/[^/?#]+$/.test(result.url ?? '')
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'Invalid speech preview response',
+      {
+        method: 'speech.synthesize',
+      },
+    );
+  }
+  return result;
 }
 
 export function listTaskModelTargets(taskType, options = {}) {
@@ -1070,7 +1132,11 @@ export async function transcribeSpeech(audioBlob, options = {}) {
   return payload;
 }
 
-async function readSpeechProgress(response, onProgress) {
+async function readSpeechProgress(
+  response,
+  onProgress,
+  method = 'speech.transcribe',
+) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = '';
@@ -1086,7 +1152,7 @@ async function readSpeechProgress(response, onProgress) {
                 new ApiClientError(
                   RPC_ERROR_NETWORK,
                   'The speech server stopped responding. Please try again.',
-                  { method: 'speech.transcribe' },
+                  { method },
                 ),
               ),
             30_000,
@@ -1104,7 +1170,7 @@ async function readSpeechProgress(response, onProgress) {
         else if (event.type === 'result') return event.result;
         else if (event.type === 'error') {
           throw new ApiClientError(RPC_ERROR_HTTP, event.detail, {
-            method: 'speech.transcribe',
+            method,
             status: event.status,
           });
         }
@@ -1112,8 +1178,8 @@ async function readSpeechProgress(response, onProgress) {
       if (chunk.done)
         throw new ApiClientError(
           RPC_ERROR_RESPONSE,
-          'Speech transcription ended before a result arrived. Please try again.',
-          { method: 'speech.transcribe' },
+          'Speech ended before a result arrived. Please try again.',
+          { method },
         );
     }
   } finally {
