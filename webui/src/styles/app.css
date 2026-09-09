@@ -526,9 +526,11 @@ svg {
   z-index: 1;
   width: var(--sidebar-toggle-size);
   height: var(--sidebar-toggle-height);
+  min-height: 0;
   transform: translateY(-50%);
   border-color: var(--border-2);
   border-radius: var(--r-md);
+  color: var(--text-lo);
   background: var(--surface);
 }
 
