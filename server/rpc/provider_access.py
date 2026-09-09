@@ -61,7 +61,7 @@ async def _runtime_provider_credential(
         return
 
     token_store = _runtime_token_store(runtime)
-    account_id = runtime.provider_credentials.resolve_account_id(provider_id, connection_id)
+    account_id = runtime.provider_credentials.resolve_account_id(provider_id, connection.id)
     getter = OAuthTokenGetter(
         token_store, provider_id, connection.id, connection.oauth, account_id=account_id
     )

@@ -13,8 +13,15 @@ import respx
 
 from core.providers.accounts import ConnectionRef
 from core.providers.auth_flow import DeviceFlowSession
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
-from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
+from core.providers.providers import (
+    AuthConfig,
+    ConnectionConfig,
+    OAuthConfig,
+    ProviderConfig,
+    ProviderRegistry,
+)
 from core.providers.token_store import OAuthToken, TokenStore
 from core.storage.layout import DataDirectoryLayout
 from server.events import (
@@ -146,6 +153,7 @@ class StubProviderCredentials:
         raise KeyError(connection_id)
 
     def resolve_account_id(self, provider_id: str, connection_id: str) -> str:
+        assert f"{provider_id}:{connection_id}" in self._usable_connection_ids
         return "default"
 
 
@@ -750,7 +758,8 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
     monkeypatch: pytest.MonkeyPatch,
     account_id: str,
 ) -> None:
-    state = make_state(tmp_path, make_refreshable_oauth_provider())
+    provider = make_refreshable_oauth_provider()
+    state = make_state(tmp_path, provider)
     state.runtime.token_store.save(
         "github-copilot",
         "oauth",
@@ -758,8 +767,17 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
         account_id=account_id,
     )
     refreshed: dict[str, Any] = {}
+    state.runtime.provider_credentials = ProviderCredentialResolver(
+        ProviderRegistry({provider.id: provider}),
+        process_env={},
+        token_store=state.runtime.token_store,
+    )
+
+    def reject_static_credential(*_args: Any) -> str:
+        raise AssertionError("OAuth discovery must use the live getter")
+
     monkeypatch.setattr(
-        state.runtime.provider_credentials, "resolve_account_id", lambda *_args: account_id
+        state.runtime.provider_credentials, "get_credentials", reject_static_credential
     )
 
     def token_extra(connection: ConnectionRef) -> dict[str, str]:
@@ -823,7 +841,6 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
     assert refreshed["closed"] is True
     assert refreshed["account_id"] == account_id
     assert refreshed["connection"].base_url == "https://api.enterprise.githubcopilot.com"
-    assert state.runtime.provider_credentials.requested_credentials == []
 
 
 @respx.mock
