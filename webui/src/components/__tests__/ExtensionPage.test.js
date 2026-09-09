@@ -33,6 +33,10 @@ afterEach(async () => {
   document.body.innerHTML = '';
   operation.mockReset();
   history.mockReset();
+  const api = await import('$lib/api.js');
+  api.openExtensionPageRun.mockReset();
+  api.subscribeRunEvents.mockReset();
+  vi.restoreAllMocks();
 });
 
 function loadFrame() {
@@ -386,4 +390,151 @@ describe('ExtensionPage', () => {
     ).toBe(true);
     open.mockRestore();
   });
+});
+
+it.each([
+  ['assistant_output_delta', { content_delta: 'live-sentinel' }],
+  [
+    'tool_call_stdout',
+    { chunk: 'tool-output-sentinel', tool_call_id: 'tool-a' },
+  ],
+  ['model_step_usage', { context_usage: { tokens: 2468, estimated: true } }],
+])(
+  'forwards the actual %s SSE payload to the Extension page',
+  async (type, payload) => {
+    const mocked = await import('$lib/api.js');
+    const actual = await vi.importActual('$lib/api.js');
+    let source;
+    class ReviewEventSource extends EventTarget {
+      constructor() {
+        super();
+        source = this;
+      }
+      close() {}
+    }
+    mocked.openExtensionPageRun.mockResolvedValue({
+      stream: { url: '/api/extension-runs/review' },
+    });
+    mocked.subscribeRunEvents.mockImplementation((url, handlers) =>
+      actual.subscribeRunEvents(url, handlers, {
+        EventSource: ReviewEventSource,
+      }),
+    );
+    component = mount(ExtensionPageHost, {
+      target: document.body,
+      props: { initialDescriptor: descriptor },
+    });
+    flushSync();
+    const { child, sent, init } = loadFrame();
+    message(child, { ...init, type: 'vbot.extension.ready' });
+    message(child, {
+      ...init,
+      type: 'vbot.extension.call',
+      id: 'review-sub',
+      method: 'run.subscribe',
+      params: { group_id: 'review-group', run_id: 'review-run' },
+    });
+    await vi.waitFor(() => expect(source).toBeDefined());
+    source.dispatchEvent(
+      new MessageEvent(type, {
+        data: JSON.stringify({
+          run_id: 'review-run',
+          sequence: 3,
+          payload,
+        }),
+      }),
+    );
+    const forwarded = sent.mock.calls
+      .map(([value]) => value)
+      .find((value) => value.type === 'vbot.extension.stream');
+    expect(forwarded.id).toBe('review-sub');
+    expect(forwarded.event).toMatchObject({
+      type,
+      run_id: 'review-run',
+      sequence: 3,
+      payload,
+    });
+  },
+);
+
+it('keeps file links from every loaded history page and rejects stale participant replies', async () => {
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+  component = mount(ExtensionPageHost, {
+    target: document.body,
+    props: { initialDescriptor: descriptor },
+  });
+  flushSync();
+  const { child, sent, init } = loadFrame();
+  message(child, { ...init, type: 'vbot.extension.ready' });
+  const call = (id, method, params) =>
+    message(child, {
+      ...init,
+      type: 'vbot.extension.call',
+      id,
+      method,
+      params,
+    });
+  const read = (id, participant, query = {}) =>
+    call(id, 'history.read', {
+      group_id: 'group-a',
+      participant_id: participant,
+      query,
+    });
+  const reply = (id) =>
+    vi.waitFor(() =>
+      expect(
+        sent.mock.calls.some(
+          ([data]) => data.type === 'vbot.extension.result' && data.id === id,
+        ),
+      ).toBe(true),
+    );
+  for (const [id, query] of [
+    ['newest', {}],
+    ['oldest', { before: 'older' }],
+  ]) {
+    history.mockResolvedValueOnce({
+      file_urls: [`/api/files/${id}.signature`],
+    });
+    read(id, 'participant-a', query);
+    await reply(id);
+  }
+  for (const id of ['newest', 'oldest'])
+    call(`open-${id}`, 'link.open', { url: `/api/files/${id}.signature` });
+  expect(open).toHaveBeenCalledTimes(2);
+
+  let finishStale;
+  history.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishStale = resolve;
+      }),
+  );
+  read('stale', 'participant-a');
+  history.mockResolvedValueOnce({
+    file_urls: ['/api/files/current.signature'],
+  });
+  read('current', 'participant-b');
+  await reply('current');
+  finishStale({ file_urls: ['/api/files/stale.signature'] });
+  await reply('stale');
+  for (const id of ['newest', 'oldest', 'stale', 'current'])
+    call(`after-switch-${id}`, 'link.open', {
+      url: `/api/files/${id}.signature`,
+    });
+  await reply('after-switch-current');
+  expect(open).toHaveBeenCalledTimes(3);
+  expect(open).toHaveBeenLastCalledWith(
+    window.location.origin + '/api/files/current.signature',
+    '_blank',
+    'noopener,noreferrer',
+  );
+  expect(
+    sent.mock.calls
+      .filter(([data]) => data.type === 'vbot.extension.error')
+      .map(([data]) => data.id),
+  ).toEqual([
+    'after-switch-newest',
+    'after-switch-oldest',
+    'after-switch-stale',
+  ]);
 });

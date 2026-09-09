@@ -282,7 +282,7 @@ class SwarmExtension:
                 "board.read": self._board_read,
                 "board.post": self._board_post,
             }
-            if name in {"swarms.stop", "swarms.resume", "swarms.delete"}:
+            if name in {"swarms.start", "swarms.stop", "swarms.resume", "swarms.delete"}:
                 async with self._control_lock:
                     return await handlers[name](arguments)
             return await handlers[name](arguments)
@@ -436,6 +436,13 @@ class SwarmExtension:
             request_id=_string(arguments, "request_id"),
             actor="user",
         )
+        snapshot = await self._store().get_swarm(result["swarm_id"])
+        if (
+            result["state"] != "stopping"
+            or snapshot["state"] != "stopping"
+            or result["epoch"] != snapshot["epoch"]
+        ):
+            return result
         host = self.host
         if host is None or host.temporary_agents is None:
             raise SwarmStoreError("swarm_closed")
@@ -506,7 +513,10 @@ class SwarmExtension:
             )
         profile_id, prompt = _swarm_command_argument(argument)
         profile_id = await self._profile_id_for_slug(profile_id)
-        result = await self._start_swarm(profile_id, prompt, new_id("req"))
+        result = await self.operation(
+            "swarms.start",
+            {"profile_id": profile_id, "prompt": prompt, "request_id": new_id("req")},
+        )
         return CommandOutcome(
             command="swarm",
             feedback=CommandFeedback(kind="notice", text="Swarm started."),
@@ -686,6 +696,7 @@ class SwarmExtension:
                         run_id=admission.run_id,
                         boundary=claim["boundary"],
                     )
+                    self._changed(swarm_id, swarm["settings_revision"])
                 if claimed_count == 0 or len(page.entries) < 100:
                     break
 
@@ -724,6 +735,8 @@ class SwarmExtension:
             request_id=request_id,
             expected_profile_revision=expected_profile_revision or profile["revision"],
         )
+        if swarm.get("replayed"):
+            return swarm
         snapshot = await self._store().get_swarm(swarm["swarm_id"])
         group = host.temporary_agents
         try:
@@ -746,7 +759,9 @@ class SwarmExtension:
             await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
             raise
         self._changed(snapshot["id"], snapshot["settings_revision"])
-        return {**swarm, "runs": admissions}
+        return await self._store().finish_admission(
+            snapshot["id"], request_id=request_id, kind="start", runs=admissions
+        )
 
     async def _resume_swarm(
         self, swarm_id: str, request_id: str, *, participant_id: str | None = None
@@ -757,6 +772,8 @@ class SwarmExtension:
         resumed = await self._store().begin_resume(
             swarm_id, request_id=request_id, actor="user", participant_id=participant_id
         )
+        if resumed.get("replayed"):
+            return resumed
         snapshot = await self._store().get_swarm(swarm_id)
         group = host.temporary_agents
         existing: dict[str, TemporarySessionBinding] = {}
@@ -827,7 +844,9 @@ class SwarmExtension:
                 await self._store().set_participant_state(swarm_id, participant_id, "failed")
                 admissions.append({"participant_id": participant_id, "error": type(error).__name__})
         self._changed(swarm_id, snapshot["settings_revision"])
-        return {**resumed, "runs": admissions}
+        return await self._store().finish_admission(
+            swarm_id, request_id=request_id, kind="resume", runs=admissions
+        )
 
     async def _admit_initial(
         self, swarm: Json, handle: Any, prompt: str, request_id: str

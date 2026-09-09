@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { createExtensionPageClient } from '$lib/extensionPageClient.js';
   import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
@@ -62,8 +63,20 @@
   let currentSubscription = null;
   let activityRequest = 0;
   let selectionRequest = 0;
+  let overviewRequest = 0;
+  let boardRequest = 0;
+  let discussionsRequest = 0;
+  let usageRequest = 0;
+  let eventsRequest = 0;
+  let historyRequest = 0;
+  let historyPageCount = 1;
+  let historyLoading = $state(false);
+  let disposed = false;
   function leaveActivity() {
     activityRequest += 1;
+    historyRequest += 1;
+    historyPageCount = 1;
+    historyLoading = false;
     currentSubscription?.();
     currentSubscription = null;
     history = null;
@@ -190,7 +203,10 @@
           messages: history.data.messages ?? [],
           runEvents: live,
           streamingRunEvents: [],
-          status: history.data.status ?? 'completed',
+          status:
+            history.data.status ??
+            (history.participant.run_active ? 'running' : 'completed'),
+          currentRun: { runId: history.participant.lifecycle_run_id },
         })
       : [],
   );
@@ -258,6 +274,8 @@
       );
   }
   async function refresh({ keepSelection = true } = {}) {
+    const request = ++overviewRequest;
+    const selection = selectionRequest;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
     error = '';
@@ -266,6 +284,7 @@
         call('profiles.list', { limit: 100 }),
         call('swarms.list', { limit: 100 }),
       ]);
+      if (disposed || request !== overviewRequest) return;
       profiles = page(nextProfiles);
       swarms = page(nextSwarms);
       profilesCursor = nextProfiles.cursor ?? null;
@@ -277,13 +296,18 @@
           profiles.find((item) => item.id === selectedProfile.id) ??
           profiles[0] ??
           null;
-      if (selectedSwarm && pending !== 'delete')
+      if (
+        selection === selectionRequest &&
+        selectedSwarm &&
+        pending !== 'delete'
+      )
         await selectSwarm(selectedSwarm.id, { silent: true });
     } catch (cause) {
+      if (disposed || request !== overviewRequest) return;
       error =
         cause.message ?? t('swarm.loadError', 'The Swarm page could not load.');
     } finally {
-      loading = false;
+      if (!disposed && request === overviewRequest) loading = false;
     }
   }
   async function selectSwarm(id, { silent = false } = {}) {
@@ -294,37 +318,40 @@
       composeOpen = false;
     }
     try {
-      const preservedDiscussion =
-        selectedSwarm?.id === id ? selectedDiscussion : '';
       const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
-      if (request !== selectionRequest) return;
+      if (disposed || request !== selectionRequest) return;
+      if (selectedSwarm?.id !== id) {
+        selectedDiscussion = swarm.main_discussion_id;
+        discussions = [];
+        board = [];
+        boardCursor = null;
+        events = [];
+        usage = null;
+        participantUsage = [];
+      }
       selectedSwarm = swarm;
       if (!silent) editor = null;
       const inspected = swarm.participants?.find(
         (item) => item.id === history?.participant.id,
       );
-      if (
-        silent &&
-        inspected &&
-        inspected.lifecycle_run_id !== history.participant.lifecycle_run_id
-      ) {
-        void inspectParticipant(inspected, { activate: false });
+      if (silent && inspected) {
+        void inspectParticipant(inspected, {
+          activate: false,
+          preserve:
+            inspected.lifecycle_run_id === history.participant.lifecycle_run_id,
+        });
       }
       await loadDiscussions(swarm);
-      const nextDiscussion = discussions.some(
-        (item) => item.id === preservedDiscussion,
-      )
-        ? preservedDiscussion
-        : swarm.main_discussion_id;
-      selectedDiscussion = nextDiscussion;
+      if (disposed || request !== selectionRequest) return;
       await Promise.all([
-        loadBoard(swarm, nextDiscussion),
+        loadBoard(swarm, selectedDiscussion),
         loadEvents(swarm),
         loadUsage(swarm),
       ]);
-      if (!silent) await client.replaceRoute(`/swarms/${id}`);
+      if (!disposed && request === selectionRequest && !silent)
+        await client.replaceRoute(`/swarms/${id}`);
     } catch (cause) {
-      error = cause.message;
+      if (!disposed && request === selectionRequest) error = cause.message;
     }
   }
   async function loadMoreProfiles() {
@@ -347,11 +374,21 @@
   }
   async function loadDiscussions(swarm = selectedSwarm, cursor = null) {
     if (!swarm) return;
+    const selection = selectionRequest;
+    const request = ++discussionsRequest;
     const result = await call('board.list', {
       swarm_id: swarm.id,
       limit: 100,
       ...(cursor ? { cursor } : {}),
     });
+    if (
+      disposed ||
+      selection !== selectionRequest ||
+      request !== discussionsRequest ||
+      selectedSwarm?.id !== swarm.id
+    )
+      return;
+    const selected = discussions.find((item) => item.id === selectedDiscussion);
     discussions = cursor
       ? [
           ...new Map(
@@ -359,6 +396,8 @@
           ).values(),
         ]
       : page(result);
+    if (selected && !discussions.some((item) => item.id === selected.id))
+      discussions = [...discussions, selected];
     discussionCursor = result.cursor ?? null;
   }
   async function loadBoard(
@@ -367,18 +406,30 @@
     cursor = null,
   ) {
     if (!swarm) return;
+    const selection = selectionRequest;
+    const request = ++boardRequest;
     const result = await call('board.read', {
       swarm_id: swarm.id,
       discussion_id: discussionId,
       limit: 100,
       ...(cursor ? { cursor } : {}),
     });
+    if (
+      disposed ||
+      selection !== selectionRequest ||
+      request !== boardRequest ||
+      selectedSwarm?.id !== swarm.id ||
+      selectedDiscussion !== discussionId
+    )
+      return;
     const posts = [...page(result)].reverse();
     board = cursor ? [...board, ...posts] : posts;
     boardCursor = result.next_cursor ?? result.cursor ?? null;
   }
   async function chooseDiscussion(id) {
     selectedDiscussion = id;
+    board = [];
+    boardCursor = null;
     await loadBoard(selectedSwarm, id);
   }
   async function openDiscussion(announcement) {
@@ -395,26 +446,41 @@
   }
   async function loadEvents(swarm = selectedSwarm) {
     if (swarm) {
+      const selection = selectionRequest;
+      const request = ++eventsRequest;
       const result = await call('swarms.events', {
         swarm_id: swarm.id,
         limit: 100,
       });
+      if (
+        disposed ||
+        selection !== selectionRequest ||
+        request !== eventsRequest ||
+        selectedSwarm?.id !== swarm.id
+      )
+        return;
       events = page(result);
       eventsCursor = result.cursor ?? null;
     }
   }
   async function loadMoreEvents() {
     if (!selectedSwarm || !eventsCursor) return;
+    const selection = selectionRequest;
+    const request = ++eventsRequest;
     const result = await call('swarms.events', {
       swarm_id: selectedSwarm.id,
       limit: 100,
       cursor: eventsCursor,
     });
+    if (disposed || selection !== selectionRequest || request !== eventsRequest)
+      return;
     events = [...events, ...page(result)];
     eventsCursor = result.cursor ?? null;
   }
   async function loadUsage(swarm = selectedSwarm) {
     if (!swarm) return;
+    const selection = selectionRequest;
+    const request = ++usageRequest;
     const reports = await Promise.all([
       call('swarms.usage', { swarm_id: swarm.id }),
       ...(swarm.participants ?? []).map(async (participant) => ({
@@ -425,6 +491,13 @@
         }),
       })),
     ]);
+    if (
+      disposed ||
+      selection !== selectionRequest ||
+      request !== usageRequest ||
+      selectedSwarm?.id !== swarm.id
+    )
+      return;
     usage = reports[0];
     participantUsage = reports.slice(1);
   }
@@ -627,26 +700,108 @@
     participant,
     settled = false,
   ) {
+    const read = ++historyRequest;
+    const pageCount = historyPageCount;
+    historyLoading = true;
     try {
       const data = await client.readHistory(swarmId, participant.id, {
         limit: 100,
       });
-      if (request === activityRequest) {
-        history = { participant, data };
+      const pages = [data];
+      while (
+        pages.length < pageCount &&
+        pages.at(-1).has_more &&
+        pages.at(-1).next_before
+      ) {
+        if (disposed || request !== activityRequest || read !== historyRequest)
+          return;
+        pages.push(
+          await client.readHistory(swarmId, participant.id, {
+            limit: 100,
+            before: pages.at(-1).next_before,
+          }),
+        );
+      }
+      if (!disposed && request === activityRequest && read === historyRequest) {
+        const oldest = pages.at(-1);
+        historyPageCount = pages.length;
+        history = {
+          participant: settled
+            ? { ...participant, run_active: false }
+            : participant,
+          data: {
+            ...data,
+            messages: pages.toReversed().flatMap((page) => page.messages ?? []),
+            has_more: oldest.has_more,
+            next_before: oldest.next_before,
+          },
+        };
         if (settled) live = [];
       }
     } catch (cause) {
-      if (request === activityRequest) error = cause.message;
+      if (!disposed && request === activityRequest && read === historyRequest)
+        error = cause.message;
+    } finally {
+      if (!disposed && request === activityRequest && read === historyRequest)
+        historyLoading = false;
     }
   }
-  async function inspectParticipant(participant, { activate = true } = {}) {
+  async function loadEarlierActivity() {
+    if (!history?.data.has_more || !history.data.next_before || historyLoading)
+      return;
+    const request = activityRequest;
+    const read = ++historyRequest;
+    const selected = history;
+    historyLoading = true;
+    try {
+      const data = await client.readHistory(
+        selectedSwarm.id,
+        selected.participant.id,
+        {
+          limit: 100,
+          before: selected.data.next_before,
+        },
+      );
+      if (disposed || request !== activityRequest || read !== historyRequest)
+        return;
+      historyPageCount += 1;
+      history = {
+        ...selected,
+        data: {
+          ...history.data,
+          messages: [...(data.messages ?? []), ...selected.data.messages],
+          has_more: data.has_more,
+          next_before: data.next_before,
+        },
+      };
+    } catch (cause) {
+      if (!disposed && request === activityRequest && read === historyRequest)
+        error = cause.message;
+    } finally {
+      if (!disposed && request === activityRequest && read === historyRequest)
+        historyLoading = false;
+    }
+  }
+  async function inspectParticipant(
+    participant,
+    { activate = true, preserve = false } = {},
+  ) {
     if (!selectedSwarm) return;
     if (activate) activeTab = 'participants';
-    leaveActivity();
+    if (preserve) {
+      activityRequest += 1;
+      currentSubscription?.();
+      currentSubscription = null;
+    } else leaveActivity();
     const request = activityRequest;
     const swarmId = selectedSwarm.id;
     await Promise.all([
-      reconcileActivity(request, swarmId, participant),
+      reconcileActivity(
+        request,
+        swarmId,
+        participant,
+        participant.run_active === false,
+      ),
       catalog.models
         ? Promise.resolve()
         : call('catalog')
@@ -658,15 +813,27 @@
             }),
     ]);
     if (
+      disposed ||
       request !== activityRequest ||
       !history ||
-      !participant.lifecycle_run_id
+      !participant.lifecycle_run_id ||
+      participant.run_active === false
     )
       return;
     let key = null;
     const buffered = [];
+    const sequences = new SvelteSet();
+    live = [];
     const receive = (id, event) => {
-      if (request !== activityRequest || id !== key) return;
+      if (
+        disposed ||
+        request !== activityRequest ||
+        id !== key ||
+        event.run_id !== participant.lifecycle_run_id ||
+        sequences.has(event.sequence)
+      )
+        return;
+      sequences.add(event.sequence);
       live = [...live, event];
       const payload = event.payload ?? {};
       if (
@@ -695,6 +862,8 @@
           'run_interrupted',
         ].includes(event.type)
       ) {
+        currentSubscription?.();
+        currentSubscription = null;
         void reconcileActivity(request, swarmId, participant, true);
       }
     };
@@ -702,19 +871,32 @@
       if (key === null) buffered.push([id, event]);
       else receive(id, event);
     });
+    const unsubscribe = (id) => {
+      void client.unsubscribeRun(id).catch((cause) => {
+        if (!disposed && request === activityRequest) error = cause.message;
+      });
+    };
     currentSubscription = () => {
       off();
-      if (key) client.unsubscribeRun(key);
+      if (key) unsubscribe(key);
     };
     try {
       const subscription = await client.subscribeRun(
         swarmId,
         participant.lifecycle_run_id,
       );
-      key = subscription.subscription_id;
-      if (request !== activityRequest) {
+      if (!subscription.subscription_id) {
         off();
-        client.unsubscribeRun(key);
+        if (request === activityRequest) {
+          currentSubscription = null;
+          await reconcileActivity(request, swarmId, participant, true);
+        }
+        return;
+      }
+      key = subscription.subscription_id;
+      if (disposed || request !== activityRequest) {
+        off();
+        unsubscribe(key);
         return;
       }
       for (const [id, event] of buffered) receive(id, event);
@@ -749,6 +931,9 @@
     });
     const offInvalidation = client.onInvalidation(() => refresh());
     return () => {
+      disposed = true;
+      selectionRequest += 1;
+      activityRequest += 1;
       clearTimeout(startupTimeout);
       currentSubscription?.();
       offContext();
@@ -1210,6 +1395,15 @@
                       >
                     </div>
                   </div>
+                  {#if history.data.has_more && history.data.next_before}
+                    <Button
+                      variant="secondary"
+                      disabled={historyLoading}
+                      onClick={loadEarlierActivity}
+                    >
+                      {t('chat.loadOlderMessages', 'Load older messages')}
+                    </Button>
+                  {/if}
                   {#each activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
                         {item}
