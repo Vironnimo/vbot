@@ -671,6 +671,8 @@ def test_process_cases_use_production_schema_and_exact_expected_arguments() -> N
 
         assert scenario.tools[0]["parameters"] is PROBE.PROCESS_TOOL_PARAMETERS
         assert arguments is not None
+        assert set(arguments) <= {"action", "process_id"}
+        assert arguments["action"] in {"status", "kill"}
         contracts[PROBE.PROCESS_TOOL_NAME].validate_arguments(arguments)
         assert (
             PROBE._expected_argument_measurements(
@@ -682,16 +684,15 @@ def test_process_cases_use_production_schema_and_exact_expected_arguments() -> N
 
 
 def test_process_argument_measurements_report_only_structural_differences() -> None:
-    scenario = PROBE._process_scenario("input_omit_omit")
+    scenario = PROBE._process_scenario("status_one")
     marker = "DO_NOT_PRINT_THIS_VALUE"
     result = PROBE._expected_argument_measurements(
         [
             {
                 "name": PROBE.PROCESS_TOOL_NAME,
                 "arguments": {
-                    "action": "input",
-                    "session_id": marker,
-                    "text": "probe input",
+                    "action": "status",
+                    "process_id": marker,
                     "eof": False,
                 },
             }
@@ -705,7 +706,7 @@ def test_process_argument_measurements_report_only_structural_differences() -> N
         "actual_call_count": 1,
         "missing_expected_fields": [],
         "unexpected_fields": ["eof"],
-        "mismatched_fields": ["session_id"],
+        "mismatched_fields": ["process_id"],
     }
     assert marker not in json.dumps(result)
 

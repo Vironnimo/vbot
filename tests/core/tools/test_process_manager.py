@@ -27,7 +27,6 @@ from core.tools import process_manager as process_manager_module
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
     PROCESS_TERMINAL_OUTPUT_CAP_CHARS,
-    ProcessInputClosedError,
     ProcessManager,
     ProcessNotFoundError,
     guarded_process_launch,
@@ -44,7 +43,7 @@ SCOPE_A = "run-a"
 @pytest.mark.asyncio
 async def test_execution_group_stop_keeps_unrelated_process_in_same_scope(manager):
     owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
-    argv = [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"]
+    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
     owned = await manager.spawn(
         SCOPE_A,
         AGENT_A,
@@ -87,7 +86,7 @@ async def test_execution_group_stop_waits_for_pending_process_creation(manager, 
         manager.spawn(
             SCOPE_A,
             AGENT_A,
-            [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+            [sys.executable, "-c", "import time; time.sleep(30)"],
             env=None,
             cwd=None,
             execution_owner=owner,
@@ -440,93 +439,31 @@ async def test_poll_timeout_returns_empty_when_no_output_arrives(manager: Proces
 
 
 @pytest.mark.asyncio
-async def test_send_input_kill_and_list_processes(manager: ProcessManager) -> None:
-    script = "import sys; line = sys.stdin.readline(); print('got:' + line.strip())"
+@pytest.mark.parametrize(
+    "read_expression", ["sys.stdin.read()", "sys.stdin.readline()", "sys.stdin.buffer.read()"]
+)
+async def test_spawn_provides_immediate_stdin_eof(manager, read_expression):
     process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
-        [sys.executable, "-c", script],
-        env=None,
-        cwd=None,
-    )
-
-    await manager.send_input(
-        process_id,
-        AGENT_A,
-        "value",
-        newline=True,
-        eof=False,
-    )
-    result = await poll_until_terminal(manager, process_id)
-
-    assert result["status"] == "completed"
-    assert "got:value" in as_text(result["stdout"])
-    assert [tracked.process_id for tracked in manager.list_processes(AGENT_A)] == [process_id]
-
-    await manager.kill(process_id, AGENT_A)
-
-    assert [tracked.process_id for tracked in manager.list_processes(AGENT_A)] == [process_id]
-
-
-@pytest.mark.asyncio
-async def test_send_input_with_eof_closes_stdin(manager: ProcessManager) -> None:
-    script = "import sys; data = sys.stdin.read(); print('read:' + data)"
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", script],
-        env=None,
-        cwd=None,
-    )
-
-    await manager.send_input(
-        process_id,
-        AGENT_A,
-        "payload",
-        newline=False,
-        eof=True,
-    )
-    result = await poll_until_terminal(manager, process_id)
-
-    assert result["status"] == "completed"
-    assert "read:payload" in as_text(result["stdout"])
-
-
-@pytest.mark.asyncio
-async def test_send_input_translates_raced_stdin_close_to_input_closed_error(
-    manager: ProcessManager,
-) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        [sys.executable, "-c", f"import sys; assert not {read_expression}; print('eof')"],
         env=None,
         cwd=None,
     )
     tracked = manager.get_process(process_id, AGENT_A)
-    assert tracked.proc.stdin is not None
-
-    async def raise_connection_reset() -> None:
-        raise ConnectionResetError("peer closed")
-
-    # Simulate a kill / process exit closing stdin while drain() awaits.
-    tracked.proc.stdin.drain = raise_connection_reset  # type: ignore[method-assign]
-
-    with pytest.raises(ProcessInputClosedError, match=process_id):
-        await manager.send_input(
-            process_id,
-            AGENT_A,
-            "value",
-            newline=False,
-            eof=False,
-        )
-    assert tracked.stdin_open is False
-
-    await manager.kill(process_id, AGENT_A)
+    assert tracked.proc.stdin is None
+    assert tracked.wait_task is not None
+    await asyncio.wait_for(asyncio.shield(tracked.wait_task), 5)
+    result = await manager.snapshot(process_id, AGENT_A)
+    assert result["status"] == "completed"
+    assert result["exit_code"] == 0
+    assert str(result["output"]).strip() == "eof"
+    assert "stdin_open" not in result
+    assert "waiting_for_input" not in result
 
 
 @pytest.mark.asyncio
-async def test_completed_process_closes_stdin_writer(manager: ProcessManager) -> None:
+async def test_completed_process_releases_pipe_references(manager: ProcessManager) -> None:
     process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
@@ -539,8 +476,7 @@ async def test_completed_process_closes_stdin_writer(manager: ProcessManager) ->
     tracked = manager.get_process(process_id, AGENT_A)
 
     assert result["status"] == "completed"
-    assert tracked.proc.stdin is not None
-    assert tracked.proc.stdin.is_closing() is True
+    assert tracked.proc.stdin is None
     transport = getattr(tracked.proc, "_transport", None)
     pipes = getattr(transport, "_pipes", None)
     if isinstance(pipes, dict):
@@ -692,14 +628,6 @@ async def test_agent_isolation_for_access_methods(manager: ProcessManager) -> No
         await manager.log(process_id, AGENT_B)
     with pytest.raises(ProcessNotFoundError):
         await manager.snapshot(process_id, AGENT_B)
-    with pytest.raises(ProcessNotFoundError):
-        await manager.send_input(
-            process_id,
-            AGENT_B,
-            "data",
-            newline=True,
-            eof=False,
-        )
     with pytest.raises(ProcessNotFoundError):
         await manager.kill(process_id, AGENT_B)
 
