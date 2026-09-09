@@ -48,6 +48,8 @@ CredentialResolver = Callable[[str], str]
 # file, so the result only ever carries the newest slice; anything bigger is a
 # context bomb (500 KiB of build output is >100k tokens in one tool message).
 BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
+BASH_HANDOFF_OUTPUT_CAP_CHARS = 4_000
+BASH_HANDOFF_OUTPUT_MAX_LINES = 20
 # Failure messages (timeout, sub-agent kill) carry a shorter tail: enough to
 # diagnose, small enough not to bloat an error envelope.
 FAILURE_OUTPUT_TAIL_CHARS = 10_000
@@ -1127,7 +1129,8 @@ async def _run_foreground_phase(
                 process_manager,
                 context,
                 process_id,
-                mode="auto" if background_requested else mode,
+                mode=mode,
+                requested_by_user=background_requested,
                 handoff_after=(
                     (
                         datetime.now(UTC)
@@ -1183,13 +1186,14 @@ async def _background_result(
     *,
     mode: str,
     handoff_after: float | None,
+    requested_by_user: bool = False,
 ) -> JsonObject:
     process_manager.mark_backgrounded(process_id, context.agent_id, project_id=context.project_id)
     tracked = process_manager.get_process(
         process_id, context.agent_id, project_id=context.project_id
     )
     output = await _combined_output(process_manager, context, process_id)
-    fields = _shape_output_fields(tracked, output)
+    fields = _shape_output_fields(tracked, output, handoff=True)
     if tracked.log_file is not None:
         # A background process keeps writing after this result; always hand the
         # model the log path so it can grep progress without polling.
@@ -1200,7 +1204,7 @@ async def _background_result(
         **fields,
     }
     result["delivery"] = "automatic"
-    result["handoff_note"] = _handoff_note(mode, handoff_after)
+    result["handoff_note"] = _handoff_note(mode, handoff_after, requested_by_user=requested_by_user)
     return tool_success(result)
 
 
@@ -1319,24 +1323,38 @@ async def _completion_result(
     return tool_success(result)
 
 
-def _handoff_note(mode: str, handoff_after: float | None) -> str:
-    if mode == "auto" and handoff_after is not None:
+def _handoff_note(
+    mode: str, handoff_after: float | None, *, requested_by_user: bool = False
+) -> str:
+    if requested_by_user and handoff_after is not None:
+        transition = (
+            "The user moved this command to the background after "
+            f"{_format_elapsed_duration(handoff_after)}. The command is still running."
+        )
+    elif mode == "auto" and handoff_after is not None:
         transition = (
             "The command is still running and has been handed off to vBot after "
             f"{handoff_after:g} seconds."
         )
     else:
         transition = "The command is still running and has been handed off to vBot immediately."
-    return (
+    note = (
         f"{transition} vBot will monitor it and deliver its terminal result automatically "
         "in one coalesced follow-up Run. You may continue work that does not depend on "
-        "this result, or finish the current Run now. Do not poll merely to wait, and do "
+        "this result, or finish the current Run now."
+    )
+    if requested_by_user:
+        return note
+    return (
+        f"{note} Do not poll merely to wait, and do "
         "not start another copy of the command. If your next action depends on the "
         "result, inspect the process explicitly or use foreground mode next time."
     )
 
 
-def _shape_output_fields(tracked: TrackedProcess, output: str) -> JsonObject:
+def _shape_output_fields(
+    tracked: TrackedProcess, output: str, *, handoff: bool = False
+) -> JsonObject:
     """Cap model-facing output to the newest chars and point at the full log.
 
     ``truncated`` covers both cut points: the model cap applied here and the
@@ -1344,12 +1362,25 @@ def _shape_output_fields(tracked: TrackedProcess, output: str) -> JsonObject:
     way the missing part is the beginning, and the marker says so.
     """
     log_file = model_path(tracked.log_file) if tracked.log_file is not None else None
-    capped = len(output) > BASH_MODEL_OUTPUT_CAP_CHARS
+    cap_chars = BASH_HANDOFF_OUTPUT_CAP_CHARS if handoff else BASH_MODEL_OUTPUT_CAP_CHARS
+    capped = len(output) > cap_chars
+    if handoff:
+        lines = output.splitlines(keepends=True)
+        capped = capped or len(lines) > BASH_HANDOFF_OUTPUT_MAX_LINES
+        output = "".join(lines[-BASH_HANDOFF_OUTPUT_MAX_LINES:])
     truncated = capped or tracked.truncated
-    if capped:
-        output = output[-BASH_MODEL_OUTPUT_CAP_CHARS:]
+    marker = _truncation_marker(log_file) if truncated else ""
+    if handoff and truncated:
+        # The pointer normally fits easily; keep the output bounded even if a
+        # pathological log path consumes the entire snapshot budget.
+        if len(marker) >= cap_chars:
+            marker = _truncation_marker(None)
+        budget = cap_chars - len(marker)
+        output = output[-budget:] if budget > 0 else ""
+    elif capped:
+        output = output[-cap_chars:]
     if truncated:
-        output = _truncation_marker(log_file) + output
+        output = marker + output
 
     fields: JsonObject = {"output": output, "truncated": truncated}
     if truncated and log_file is not None:

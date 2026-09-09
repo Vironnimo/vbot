@@ -61,6 +61,14 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     ready = asyncio.Event()
     delivered = asyncio.Event()
     notices = []
+    handoffs = []
+    original_handoff_note = bash_module._handoff_note
+
+    def record_handoff(mode, elapsed, *, requested_by_user=False):
+        handoffs.append((mode, elapsed, requested_by_user))
+        return original_handoff_note(mode, elapsed, requested_by_user=requested_by_user)
+
+    monkeypatch.setattr(bash_module, "_handoff_note", record_handoff)
 
     def register(callback):
         run.register_tool_background("call-a", callback)
@@ -91,6 +99,10 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     assert run.background_tool_call("call-a")
     result = await asyncio.wait_for(task, 5)
     assert result["ok"] and result["data"]["delivery"] == "automatic"
+    assert len(handoffs) == 1
+    assert handoffs[0][0] == mode
+    assert handoffs[0][1] >= 0
+    assert handoffs[0][2] is True
     process_id = result["data"]["process_id"]
     assert manager.get_process(process_id, AGENT_ID, project_id=None).status == "running"
     await manager.send_input(
@@ -895,14 +907,13 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
     spool_manager = make_spool_manager(tmp_path)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-        monkeypatch.setattr(bash_module, "BASH_MODEL_OUTPUT_CAP_CHARS", 50)
         context = make_context(tmp_path)
 
         result = await bash_handler(
             context,
             {
                 "command": (
-                    "print('x' * 200 + 'HANDOFF-END', flush=True); import time; time.sleep(30)"
+                    "print('x' * 5000 + 'HANDOFF-END', flush=True); import time; time.sleep(30)"
                 ),
                 "mode": "auto",
                 "background_after_seconds": 0.5,
@@ -919,11 +930,12 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
         process_id = data["process_id"]
         assert isinstance(process_id, str) and process_id
         assert data["truncated"] is True
+        assert len(data["output"]) <= 4000
         assert data["output"].replace("\r\n", "\n").endswith("HANDOFF-END\n")
         assert "[earlier output truncated" in data["output"]
         log_file = Path(data["log_file"])
         assert log_file.exists()
-        assert "x" * 200 + "HANDOFF-END" in log_file.read_text(encoding="utf-8")
+        assert "x" * 5000 + "HANDOFF-END" in log_file.read_text(encoding="utf-8")
 
         process_context = ToolContext(
             agent_id=AGENT_ID,
@@ -2608,6 +2620,63 @@ async def test_user_cancel_kill_failure_is_logged(
     ]
     assert kill_errors, "expected an error log for the failing user-cancel kill task"
     assert kill_errors[0].exc_info is not None
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("has_log", [False, True])
+def test_handoff_snapshot_keeps_twenty_newest_lines(tmp_path, newline, has_log):
+    tracked = types.SimpleNamespace(
+        log_file=tmp_path / "command.log" if has_log else None, truncated=False
+    )
+    lines = [f"line-{index}{newline}" for index in range(40)]
+    fields = bash_module._shape_output_fields(tracked, "".join(lines), handoff=True)
+    assert fields["truncated"] is True
+    assert fields["output"].split("\n", 1)[1] == "".join(lines[-20:])
+    assert len(fields["output"]) <= 4000
+    if has_log:
+        assert Path(fields["log_file"]) == tracked.log_file
+
+
+@pytest.mark.parametrize("output", ["", "tiny\n", "x" * 4000, "x" * 5000, "x\n" * 20])
+@pytest.mark.parametrize("already_truncated", [False, True])
+def test_handoff_snapshot_character_budget_and_upstream_truncation(output, already_truncated):
+    tracked = types.SimpleNamespace(log_file=None, truncated=already_truncated)
+    fields = bash_module._shape_output_fields(tracked, output, handoff=True)
+    truncated = already_truncated or len(output) > 4000
+    assert fields["truncated"] is truncated
+    assert len(fields["output"]) <= 4000
+    if not truncated:
+        assert fields["output"] == output
+    else:
+        tail = fields["output"].split("\n", 1)[1]
+        assert output.endswith(tail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+async def test_every_handoff_mode_uses_snapshot(manager, tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    output = "".join(f"activity-{index}\n" for index in range(40))
+
+    async def captured_output(*args):
+        return output
+
+    monkeypatch.setattr(bash_module, "_combined_output", captured_output)
+    context = make_context(tmp_path)
+    if mode == "foreground":
+        context = replace(context, background_registration_hook=lambda callback: callback())
+    arguments = {"command": "import sys; sys.stdin.readline()", "mode": mode}
+    if mode == "auto":
+        arguments["background_after_seconds"] = 0
+    result = await bash_handler(context, arguments, manager)
+    try:
+        data = result["data"]
+        assert data["status"] == "running"
+        assert data["delivery"] == "automatic"
+        assert data["truncated"] is True
+        assert data["output"].split("\n", 1)[1] == "".join(output.splitlines(True)[-20:])
+    finally:
+        await kill_background(manager, result)
 
 
 def make_spool_manager(tmp_path: Path) -> ProcessManager:
