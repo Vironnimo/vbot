@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import FormField from '../ui/FormField.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import {
     getLocalSpeechSetup,
@@ -11,6 +12,7 @@
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
+  const componentId = $props.id();
   let {
     target,
     tts = false,
@@ -217,14 +219,21 @@
 
 {#if tts && setupState === 'ready'}
   <div class="speech-preview">
-    <TextArea
-      value={previewText}
-      onInput={(value) => (previewText = value)}
-      ariaLabel={t('settings.localSpeech.previewLabel')}
-      rows={2}
-      maxlength={5000}
-      disabled={previewBusy}
-    />
+    <FormField
+      controlId={`${componentId}-preview`}
+      label={t('settings.localSpeech.previewLabel')}
+    >
+      {#snippet children(field)}
+        <TextArea
+          id={field.controlId}
+          value={previewText}
+          onInput={(value) => (previewText = value)}
+          rows={2}
+          maxlength={5000}
+          disabled={previewBusy}
+        />
+      {/snippet}
+    </FormField>
     <div class="speech-preview-actions">
       <Button
         onClick={playPreview}

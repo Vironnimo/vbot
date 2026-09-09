@@ -458,6 +458,152 @@ describe('SettingsSpecializedModelsPanel', () => {
     ).toBeTruthy();
   });
 
+  it.each([
+    {
+      target: 'local/qwen3-tts',
+      name: 'instructions',
+      type: 'textarea',
+      value: 'test-owned style',
+    },
+    {
+      target: 'local/chatterbox',
+      name: 'exaggeration',
+      type: 'number',
+      value: 0.7,
+    },
+  ])(
+    'shows $target options before the preview and saves edits without a disclosure',
+    async (scenario) => {
+      listTaskModelTargetsMock.mockImplementation((taskType) =>
+        Promise.resolve({
+          targets:
+            taskType === 'text_to_speech'
+              ? [
+                  {
+                    id: scenario.target,
+                    label: 'Test voice',
+                    kind: 'local',
+                    usable: true,
+                  },
+                ]
+              : [],
+        }),
+      );
+      getTaskModelOptionsMock.mockResolvedValue({
+        fields: [
+          {
+            name: scenario.name,
+            type: scenario.type,
+            label: 'Test option',
+            default: scenario.type === 'number' ? 0.5 : '',
+          },
+        ],
+      });
+      updateTaskModelSettingsMock.mockImplementation(async (model_tasks) => ({
+        model_tasks,
+      }));
+      const props = reactiveProps({
+        settings: {
+          model_tasks: {
+            text_to_speech: { target: scenario.target, options: {} },
+          },
+        },
+      });
+      props.onCommit = (settings) => {
+        props.settings = settings;
+      };
+      mountedComponent = mount(SettingsSpecializedModelsPanel, {
+        target: document.body,
+        props,
+      });
+      await waitForCondition(() =>
+        document.querySelector('.speech-preview textarea'),
+      );
+      const input = document.getElementById(
+        `task-model-text_to_speech-${scenario.name}`,
+      );
+      const preview = document.querySelector('.speech-preview textarea');
+      expect(input).toBeTruthy();
+      expect(input.closest('[hidden]')).toBeNull();
+      expect(
+        input.compareDocumentPosition(preview) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(document.querySelector('.s-disclosure-btn')).toBeNull();
+      expect(updateTaskModelSettingsMock).not.toHaveBeenCalled();
+      input.value = String(scenario.value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      await waitForCondition(
+        () => updateTaskModelSettingsMock.mock.calls.length > 0,
+        20,
+        100,
+      );
+      expect(
+        updateTaskModelSettingsMock.mock.calls[0][0].text_to_speech,
+      ).toEqual({
+        target: scenario.target,
+        options: { [scenario.name]: scenario.value },
+      });
+    },
+  );
+
+  it('shows the new model options immediately when switching local TTS engines', async () => {
+    const targets = [
+      { id: 'local/qwen3-tts', label: 'Qwen3-TTS', kind: 'local' },
+      { id: 'local/chatterbox', label: 'Chatterbox', kind: 'local' },
+    ];
+    listTaskModelTargetsMock.mockImplementation(async (taskType) => ({
+      targets: taskType === 'text_to_speech' ? targets : [],
+    }));
+    getTaskModelOptionsMock.mockImplementation(async (_taskType, target) => ({
+      fields: [
+        target === targets[0].id
+          ? {
+              name: 'instructions',
+              type: 'textarea',
+              label: 'Style',
+              default: '',
+            }
+          : {
+              name: 'exaggeration',
+              type: 'number',
+              label: 'Expression',
+              default: 0.5,
+            },
+      ],
+    }));
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          model_tasks: {
+            text_to_speech: { target: targets[0].id, options: {} },
+          },
+        },
+      },
+    });
+    await waitForCondition(() =>
+      document.getElementById('task-model-text_to_speech-instructions'),
+    );
+    selectTarget('text_to_speech', 'Chatterbox');
+    await waitForCondition(() =>
+      document.getElementById('task-model-text_to_speech-exaggeration'),
+    );
+    expect(
+      document.getElementById('task-model-text_to_speech-instructions'),
+    ).toBeNull();
+    const field = document.getElementById(
+      'task-model-text_to_speech-exaggeration',
+    );
+    expect(field.closest('[hidden]')).toBeNull();
+    expect(field.value).toBe('0.5');
+    expect(
+      field.compareDocumentPosition(document.querySelector('.speech-preview')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('renders every task-model target picker as searchable and filters by target id', async () => {
     listTaskModelTargetsMock.mockResolvedValue({
       targets: [
