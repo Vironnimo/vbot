@@ -66,12 +66,7 @@ def _shell_syntax_notes() -> str:
         return (
             " Commands use PowerShell 7 (pwsh), not cmd or bash: use $env:VAR, redirect "
             "stderr with 2>$null, and assign environment variables separately. PowerShell "
-            "is non-interactive and its stdin never reaches EOF: Read-Host is unavailable; "
-            "$input in double-quoted strings expands and hangs the command forever "
-            "(single-quote it or escape as `$input); raw stdin requires "
-            "[Console]::In.ReadLine() or a native child process. The outer shell is "
-            "already PowerShell — pipe into cmdlets directly instead of a nested "
-            "pwsh -Command."
+            "runs non-interactively."
         )
     return " Commands run in bash on this host."
 
@@ -79,8 +74,10 @@ def _shell_syntax_notes() -> str:
 BASH_TOOL_DESCRIPTION = (
     "Run an unattended shell command on the host through pipes when no interactive terminal "
     "input or live screen is needed, such as scripts, builds, non-interactive Git, file "
-    "operations, and servers. Use foreground when this Run needs the result, auto to wait "
-    "before handing off a still-running command, and background for known long-lived commands. "
+    "operations, and servers. Provide required input through files or pipelines in the "
+    "command; no input can be sent after launch. Use foreground when this Run needs the result, "
+    "auto to wait before handing off a still-running command, and background for known "
+    "long-lived commands. "
     "Handed-off commands are monitored automatically: continue independent work or end the Run "
     "instead of polling or starting another copy. Never manually detach or daemonize a command "
     "because that bypasses vBot's process ownership." + _shell_syntax_notes()
@@ -88,8 +85,9 @@ BASH_TOOL_DESCRIPTION = (
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
     "terminal input or live screen is needed, such as scripts, builds, non-interactive Git, and "
-    "file operations; process handoff is unavailable. Use foreground to wait for completion and "
-    "auto only for bounded work; auto kills a command still running after "
+    "file operations; process handoff is unavailable. Provide required input through files or "
+    "pipelines in the command; no input can be sent after launch. Use foreground to wait for "
+    "completion and auto only for bounded work; auto kills a command still running after "
     "background_after_seconds. Never "
     "manually detach or daemonize a command." + _shell_syntax_notes()
 )
@@ -819,9 +817,8 @@ def _resolve_workdir(context: ToolContext, workdir: object) -> Path:
 
 def _shell_argv(command: str) -> list[str]:
     if sys.platform == "win32":
-        # stdin stays open so backgrounded native programs can still receive
-        # input through the process tool. Prevent PowerShell itself from
-        # treating that pipe as an interactive host after a command failure.
+        # Keep PowerShell host prompts unavailable even when a command attempts
+        # to use the host instead of the closed standard input stream.
         return ["pwsh", "-NonInteractive", "-Command", command]
     return ["bash", "-c", command]
 

@@ -5,9 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from core.tools.arguments import optional_bool, optional_string, required_string
+from core.tools.arguments import optional_string, required_string
 from core.tools.process_manager import (
-    ProcessInputClosedError,
     ProcessManager,
     ProcessNotFoundError,
     TrackedProcess,
@@ -25,17 +24,13 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
-PROCESS_TOOL_DESCRIPTION = (
-    "Inspect or control a `bash` command that runs in the background — not arbitrary "
-    "operating-system processes. Input is not an interactive terminal or TTY."
-)
-PROCESS_ACTIONS = ("status", "input", "kill")
+PROCESS_TOOL_DESCRIPTION = "Inspect or stop a `bash` command that runs in the background."
+PROCESS_ACTIONS = ("status", "kill")
 PROCESS_OUTPUT_CAP_CHARS = 8_000
 PROCESS_OUTPUT_MAX_LINES = 100
 
 _PROCESS_ACTION_ARGUMENTS = {
     "status": frozenset({"action", "process_id"}),
-    "input": frozenset({"action", "process_id", "text", "newline", "eof"}),
     "kill": frozenset({"action", "process_id"}),
 }
 
@@ -51,29 +46,9 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Id of the background `bash` command to act on. Required for input "
-                "and kill; omit for status to list all."
+                "Id of the background `bash` command to act on. Required for kill; "
+                "omit for status to list all."
             ),
-        },
-        "text": {
-            "type": "string",
-            "description": (
-                "Text to send for input; required but may be empty to send only a "
-                "newline or EOF. This is a raw stdin pipe, not a terminal or TTY. On Windows, "
-                "Read-Host is unavailable; use [Console]::In.ReadLine(), "
-                "[Console]::In.ReadToEnd(), or a native child process."
-            ),
-        },
-        "newline": {
-            "type": "boolean",
-            "description": (
-                "For input, append the platform line ending after text; default true. Set "
-                "false for raw text or when closing stdin without sending a line."
-            ),
-        },
-        "eof": {
-            "type": "boolean",
-            "description": ("For input, close stdin after sending text and the optional newline."),
         },
     },
     "required": ["action"],
@@ -113,19 +88,11 @@ async def _handle_process_tool(
     try:
         if action == "status":
             return await _handle_status(process_manager, context, arguments)
-        if action == "input":
-            return await _handle_input(process_manager, context, arguments)
         return await _handle_kill(process_manager, context, arguments)
     except ProcessNotFoundError:
         return tool_failure(
             "process_not_found",
             "Process not found",
-            retryable=False,
-        )
-    except ProcessInputClosedError as error:
-        return tool_failure(
-            "process_input_closed",
-            str(error),
             retryable=False,
         )
     except ValueError as error:
@@ -162,35 +129,6 @@ async def _handle_status(
     return tool_success(_status_snapshot_data(snapshot))
 
 
-async def _handle_input(
-    process_manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
-    process_id = required_string(arguments.get("process_id"), field_name="process_id")
-    text = arguments.get("text")
-    if not isinstance(text, str):
-        raise ValueError("text must be a string")
-    newline = optional_bool(arguments.get("newline"), field_name="newline", default=True)
-    eof = optional_bool(arguments.get("eof"), field_name="eof", default=False)
-    if not text and not newline and not eof:
-        raise ValueError("input must send text, append a newline, or close stdin with eof")
-
-    await process_manager.send_input(
-        process_id,
-        context.agent_id,
-        text,
-        newline=newline,
-        eof=eof,
-        project_id=context.project_id,
-    )
-    # Success itself is the confirmation: every echo of the agent's own
-    # arguments (process_id, newline, eof, derived characters_sent) would be
-    # information the agent already has, and stdin state lives in the next
-    # status snapshot.
-    return tool_success({})
-
-
 async def _handle_kill(
     process_manager: ProcessManager,
     context: ToolContext,
@@ -212,7 +150,6 @@ def _process_summary(tracked: TrackedProcess) -> JsonObject:
         "exit_code": tracked.exit_code,
         "started_at": _format_timestamp(tracked.started_at),
         "finished_at": _format_timestamp(tracked.finished_at),
-        "stdin_open": tracked.stdin_open,
         "log_file": model_path(tracked.log_file) if tracked.log_file is not None else None,
     }
 
@@ -231,8 +168,6 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
         "exit_code": snapshot["exit_code"],
         "started_at": _format_timestamp(snapshot.get("started_at")),
         "finished_at": _format_timestamp(snapshot.get("finished_at")),
-        "stdin_open": snapshot["stdin_open"],
-        "waiting_for_input": snapshot["waiting_for_input"],
         "output_tail": fields["output"],
         "output_truncated": fields["truncated"],
         "log_file": log_file,
