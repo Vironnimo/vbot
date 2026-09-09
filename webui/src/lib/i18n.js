@@ -336,6 +336,12 @@ export const englishCatalog = Object.freeze({
   'terminals.historyTerminalLabel': 'Retained terminal history.',
   'terminals.scrollLatest': 'Jump to latest',
   'terminals.close': 'Close terminal',
+  'terminals.voice.start': 'Dictate into terminal',
+  'terminals.voice.stop': 'Stop recording and insert text',
+  'terminals.voice.cancel': 'Discard voice input',
+  'terminals.voice.requesting': 'Opening microphone…',
+  'terminals.voice.startFailed': 'Microphone recording could not start.',
+  'terminals.voice.transcriptionFailed': 'Speech transcription failed.',
   'terminals.closedTitle': 'Terminal closed',
   'terminals.closedMessage':
     'The Terminal Session was removed from the list and is being stopped.',
