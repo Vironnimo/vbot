@@ -1778,7 +1778,7 @@ export const englishCatalog = Object.freeze({
   'settings.localSpeech.options.cfg_weight.label': 'Guidance',
   'chat.voice.progress.synthesizing': 'Generating speech…',
   'settings.localSpeech.ready':
-    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. After downloading, enable Offline only to use cached files without network access.',
+    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. Downloaded models are reused automatically without online checks.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',
   'settings.localSpeech.state.missing':
     'Local speech support is not installed on this server. Installation includes support for both engines and may download several gigabytes.',

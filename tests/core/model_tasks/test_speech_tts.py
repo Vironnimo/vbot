@@ -267,7 +267,9 @@ def test_snapshot_reuses_local_files_and_finishes_only_missing_revision(
 
     def download(repo, **kwargs):
         calls.append(kwargs)
-        assert kwargs["allow_patterns"] == files
+        assert kwargs["allow_patterns"] == (
+            ["config.json"] if kwargs.get("force_download") else files
+        )
         if kwargs.get("local_files_only"):
             if initial == "partial_error" and len(calls) == 1:
                 error = MissingError()
@@ -276,12 +278,11 @@ def test_snapshot_reuses_local_files_and_finishes_only_missing_revision(
             if initial == "missing" and len(calls) == 1:
                 raise MissingError()
             return str(source)
-        assert kwargs["allow_patterns"] == files
         assert kwargs.get("revision") == (source.name if initial != "missing" else None)
-        for name in files:
+        for name in kwargs["allow_patterns"]:
             path = source / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists() or not path.stat().st_size:
+            if not path.exists() or kwargs.get("force_download"):
                 path.write_bytes(b"downloaded")
         return str(source)
 
@@ -293,7 +294,7 @@ def test_snapshot_reuses_local_files_and_finishes_only_missing_revision(
     for _ in range(2):
         assert speech_worker.resolve_snapshot("owner/model", files, object) == str(source)
     assert sum(not call.get("local_files_only") for call in calls) == (
-        0 if initial == "complete" else 1
+        0 if initial == "complete" else (2 if initial == "empty_file" else 1)
     )
     if initial != "missing":
         assert (source / "model.safetensors").read_bytes() == sentinel

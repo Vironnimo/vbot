@@ -45,6 +45,21 @@ def resolve_snapshot(repo: str, files: list[str], tqdm_class: Any) -> str:
     # whatever the remote main branch happens to point at today.
     options = {"revision": Path(cached).name} if cached else {}
     source = hub.snapshot_download(repo, allow_patterns=files, tqdm_class=tqdm_class, **options)
+    empty = [
+        name
+        for name in files
+        if (Path(source) / name).is_file() and (Path(source) / name).stat().st_size == 0
+    ]
+    if empty:
+        # Hub considers an existing blob cached even when it is empty. Repair
+        # only those files; valid weights must never be downloaded again.
+        source = hub.snapshot_download(
+            repo,
+            revision=Path(source).name,
+            allow_patterns=empty,
+            force_download=True,
+            tqdm_class=tqdm_class,
+        )
     if not complete(source):
         raise OSError("Incomplete speech model download")
     return str(source)
