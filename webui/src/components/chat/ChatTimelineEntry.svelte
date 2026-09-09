@@ -55,6 +55,7 @@
   } from '$lib/chatTimelinePresentation.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
+  import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
@@ -656,12 +657,11 @@
         {#if isTextToSpeechResult(item.event)}
           {@const speechArtifact = speechArtifactFromResult(item.event)}
           {#if speechArtifact}
-            <audio
+            <AudioPlayer
               class="speech-audio-player"
               src={speechArtifact.url}
-              controls
-              oncanplay={(event) => event.currentTarget.play().catch(() => {})}
-            ></audio>
+              autoplay
+            />
           {/if}
         {/if}
       </div>

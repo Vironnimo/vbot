@@ -1,6 +1,7 @@
 <script>
   import { toolDetailImages } from '$lib/chatToolDetails.js';
   import Banner from '../ui/Banner.svelte';
+  import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
@@ -709,13 +710,11 @@
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
             {#if speechArtifact}
-              <audio
+              <AudioPlayer
                 class="speech-audio-player"
                 src={speechArtifact.url}
-                controls
-                oncanplay={(event) =>
-                  event.currentTarget.play().catch(() => {})}
-              ></audio>
+                autoplay
+              />
             {/if}
           {/if}
         {/if}
