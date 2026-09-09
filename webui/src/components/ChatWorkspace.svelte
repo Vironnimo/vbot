@@ -23,6 +23,7 @@
   let kinds = $state(['chat', 'chat']);
   let previews = $state([null, null]);
   let sessions = $state([null, null]);
+  let firstSessionFilters = $state(null);
   let sameSession = $derived(
     Boolean(sessions[0]?.sessionId) &&
       sessions[0]?.agentId === sessions[1]?.agentId &&
@@ -545,6 +546,8 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
+              onSessionFiltersChange={(filters) =>
+                (firstSessionFilters = filters)}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
           {:else if secondChatCreated}
@@ -557,7 +560,7 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
-              initialSessionDrawer
+              initialSessionFilters={firstSessionFilters}
               sharedSelectedAgentId={secondAgent}
               selectedProjectId={secondProject}
               sharedSelectedProjectAgentId={secondProjectAgent}

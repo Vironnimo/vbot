@@ -31,8 +31,12 @@ describe('ChatWorkspace', () => {
   const pane = (index) =>
     document.querySelectorAll('.chat-workspace__pane')[index];
   const button = (root, label) =>
-    root.querySelector(
-      `.chat-workspace__body:not([hidden]) button[aria-label="${label}"]`,
+    Array.from(
+      root.querySelectorAll('.chat-workspace__body:not([hidden]) button'),
+    ).find(
+      (element) =>
+        (element.getAttribute('aria-label') || element.textContent.trim()) ===
+        label,
     );
 
   function action(index, label) {
@@ -101,6 +105,8 @@ describe('ChatWorkspace', () => {
     await waitForCondition(() => pane(0)?.textContent.includes('Hello'), 100);
     if (!split) return;
     action(0, 'Split view');
+    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    action(1, 'Sessions');
     await waitForCondition(
       () => pane(1)?.textContent.includes('Second topic'),
       100,
@@ -113,6 +119,108 @@ describe('ChatWorkspace', () => {
       100,
     );
   }
+
+  it.each([0, 1])(
+    'keeps the Session list open after selecting a Session in area %i',
+    async (index) => {
+      await start(false);
+      if (index === 1) {
+        action(0, 'Split view');
+        await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+      }
+      action(index, 'Sessions');
+      await waitForCondition(
+        () => pane(index).querySelector('.session-row__select'),
+        100,
+      );
+      const drawer = pane(index).querySelector('.session-drawer');
+      drawer.querySelector('.session-row__select').click();
+      await waitForCondition(
+        () => pane(index).textContent.includes('Second conversation sentinel'),
+        100,
+      );
+      expect(pane(index).querySelector('.session-drawer')).toBe(drawer);
+      const selectedRow = drawer.querySelector('.session-row__select--active');
+      expect(selectedRow).not.toBeNull();
+      selectedRow.click();
+      flushSync();
+      expect(pane(index).querySelector('.session-drawer')).toBe(drawer);
+      action(index, 'Sessions');
+      expect(pane(index).querySelector('.session-drawer')).toBeNull();
+    },
+  );
+
+  it.each(['split', 'preview'])(
+    'starts a new Chat with its list closed and copies Session filters through %s',
+    async (route) => {
+      await start(false);
+      if (route === 'preview') {
+        mockPreviewOpening();
+        pane(0).querySelector('.msg-markdown a').click();
+        await waitForCondition(() => pane(1)?.querySelector('iframe'), 100);
+        expect(testChatStateRefs).toHaveLength(1);
+      }
+      action(0, 'Sessions');
+      const firstDrawer = pane(0).querySelector('.session-drawer');
+      firstDrawer.querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+      const switches = () => [
+        ...document.querySelectorAll(
+          '.session-drawer__filter-menu [role="switch"]',
+        ),
+      ];
+      expect(switches()).toHaveLength(5);
+      for (const toggle of switches()) {
+        toggle.click();
+        flushSync();
+      }
+      firstDrawer.querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+      if (route === 'split') action(0, 'Split view');
+      else action(1, 'Back to chat');
+      await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+      expect(pane(1).querySelector('.session-drawer')).toBeNull();
+      expect(pane(0).querySelector('.session-drawer')).toBe(firstDrawer);
+
+      listSessionsMock.mockClear();
+      action(1, 'Sessions');
+      await waitForCondition(() => listSessionsMock.mock.calls.length > 0, 100);
+      expect(listSessionsMock).toHaveBeenLastCalledWith(
+        ['alpha'],
+        expect.objectContaining({
+          includeSubagents: true,
+          includeMemoryReflections: true,
+          includeSkillReflections: true,
+          includeCron: true,
+        }),
+      );
+      const secondDrawer = pane(1).querySelector('.session-drawer');
+      secondDrawer.querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+      expect(
+        switches().map((toggle) => toggle.getAttribute('aria-checked')),
+      ).toEqual(Array(5).fill('true'));
+      // Subsequent choices remain local and survive list/area close and reopen.
+      switches()[0].click();
+      flushSync();
+      action(1, 'Sessions');
+      action(1, 'Close area');
+      action(0, 'Split view');
+      expect(pane(1).querySelector('.session-drawer')).toBeNull();
+      action(1, 'Sessions');
+      pane(1).querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+      expect(switches()[0].getAttribute('aria-checked')).toBe('false');
+      action(1, 'Sessions');
+      action(0, 'Sessions');
+      action(0, 'Sessions');
+      pane(0).querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+      expect(
+        switches().map((toggle) => toggle.getAttribute('aria-checked')),
+      ).toEqual(Array(5).fill('true'));
+    },
+  );
 
   it('keeps two real Chat owners independent, retains drafts, and restores closed areas', async () => {
     await start();
