@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
-from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
+from resources.extensions.swarm.store import _PARTICIPANT_NAMES, SwarmStore, SwarmStoreError
 
 
 def _profile(*, slug: str = "research", count: int = 2) -> dict[str, object]:
@@ -248,14 +248,13 @@ async def test_delete_profile_and_start_require_the_current_profile_revision(
 
 
 @pytest.mark.asyncio
-async def test_swarm_snapshots_profile_and_has_deterministic_roster(store: SwarmStore) -> None:
+async def test_swarm_snapshots_profile_and_has_stable_roster(store: SwarmStore) -> None:
     started = await _swarm(store)
     swarm = await store.get_swarm(started["swarm_id"])
     assert swarm["state"] == "preparing"
-    assert [item["display_name"] for item in swarm["participants"]] == [
-        "Participant 1",
-        "Participant 2",
-    ]
+    names = [item["display_name"] for item in swarm["participants"]]
+    assert len(set(names)) == 2
+    assert set(names) <= set(_PARTICIPANT_NAMES)
     profile = await store.get_profile(swarm["profile_snapshot"]["id"])
     profile["name"] = "Later"
     await store.save_profile(profile, expected_revision=1)
@@ -857,7 +856,10 @@ async def test_status_and_exact_run_finish(store: SwarmStore) -> None:
     started = await _swarm(store)
     participant = (await store.get_swarm(started["swarm_id"]))["participants"][0]["id"]
     status = await store.participant_status(started["swarm_id"], participant, limit=1)
-    assert status["roster"][0]["name"] == "Participant 1"
+    assert (
+        status["roster"][0]["name"]
+        == (await store.get_swarm(started["swarm_id"]))["participants"][0]["display_name"]
+    )
     assert "epoch" not in status and "usage" not in status
     await store.record_run_started(started["swarm_id"], participant, run_id="new", expected_epoch=0)
     with pytest.raises(SwarmStoreError, match="stale_run"):
@@ -1021,9 +1023,9 @@ async def test_board_epoch_stale_after_resume_and_post_author_is_immutable(
     await store.post(
         started["swarm_id"], first, text="before", request_id="before", expected_epoch=0
     )
-    assert (await store.read_posts(started["swarm_id"], second)).entries[0]["author"][
-        "name"
-    ] == "Participant 1"
+    assert (await store.read_posts(started["swarm_id"], second)).entries[0]["author"]["name"] == (
+        await store.get_swarm(started["swarm_id"])
+    )["participants"][0]["display_name"]
     await store.begin_stop(started["swarm_id"], request_id="stop", actor="test")
     await store.finish_stop(started["swarm_id"], request_id="finish", actor="test", drain_report={})
     await store.begin_resume(started["swarm_id"], request_id="resume", actor="test")
@@ -1149,6 +1151,7 @@ async def test_stop_resume_keeps_every_participant_and_rejects_stale_callbacks(s
     started = await _swarm(store, count=3)
     swarm_id = started["swarm_id"]
     participants = [p["id"] for p in (await store.get_swarm(swarm_id))["participants"]]
+    names = {p["id"]: p["display_name"] for p in (await store.get_swarm(swarm_id))["participants"]}
     await store.set_swarm_state(swarm_id, "running")
     for peer, outcome in zip(participants, ["completed", "failed", "cancelled"], strict=True):
         await store.record_run_started(swarm_id, peer, run_id=peer, expected_epoch=0)
@@ -1162,6 +1165,9 @@ async def test_stop_resume_keeps_every_participant_and_rejects_stale_callbacks(s
     )
     resumed = await store.begin_resume(swarm_id, request_id="resume", actor="user")
     assert resumed["participant_ids"] == participants and resumed["epoch"] == stop["epoch"] + 1
+    assert {
+        p["id"]: p["display_name"] for p in (await store.get_swarm(swarm_id))["participants"]
+    } == names
     assert (await store.begin_resume(swarm_id, request_id="resume", actor="user"))["replayed"]
     with pytest.raises(SwarmStoreError, match="stale_epoch"):
         await store.reconcile_run_finished(
@@ -1281,3 +1287,60 @@ async def test_targeted_resume_rejects_foreign_or_active_participant(store):
             await store.begin_resume(
                 swarm_id, request_id=peer_id, actor="user", participant_id=peer_id
             )
+
+
+def test_participant_name_pool_is_short_and_unique():
+    assert len(_PARTICIPANT_NAMES) == 300
+    assert len({name.casefold() for name in _PARTICIPANT_NAMES}) == 300
+    assert all(
+        name.isascii() and name.isalpha() and 1 <= len(name) <= 8 for name in _PARTICIPANT_NAMES
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [300, 601])
+async def test_names_are_unique_across_formations_and_persist(store, count, monkeypatch):
+    import secrets
+
+    shuffles = []
+
+    def shuffle(_random, names):
+        shuffles.append(tuple(names))
+        names.reverse()
+
+    monkeypatch.setattr(secrets.SystemRandom, "shuffle", shuffle)
+    saved = await store.save_profile(
+        {
+            **_profile(),
+            "participants": [
+                {"model": "model-a", "count": 150},
+                {"model": "model-b", "count": count - 150},
+            ],
+        },
+        expected_revision=None,
+    )
+
+    async def start(request_id):
+        return await store.create_swarm(
+            saved["id"],
+            "goal",
+            {},
+            request_id=request_id,
+            expected_profile_revision=saved["revision"],
+        )
+
+    started = await start("names")
+    swarm_id = started["swarm_id"]
+    original = (await store.get_swarm(swarm_id))["participants"]
+    names = [p["display_name"] for p in original]
+    assert names[:300] == list(reversed(_PARTICIPANT_NAMES))
+    assert len(set(names)) == count
+    assert all(len(name) <= 8 for name in names)
+    assert [p["ordinal"] for p in original] == list(range(1, count + 1))
+    assert (await start("names"))["replayed"]
+    assert len(shuffles) == 1
+    await store.close()
+    await store.open()
+    assert (await store.get_swarm(swarm_id))["participants"] == original
+    await start("another-swarm")
+    assert len(shuffles) == 2
