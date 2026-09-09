@@ -164,24 +164,45 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
     await fresh.aclose()
 
 
-def test_worker_selects_v3_and_reports_cache_loading_without_fake_download(monkeypatch):
+@pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
+def test_worker_uses_complete_cache_and_keeps_sdk_loading_offline(monkeypatch, engine):
     calls = []
-    cls = SimpleNamespace(from_local=Mock(return_value="model"))
+    cls = SimpleNamespace(
+        from_local=Mock(return_value="model"), from_pretrained=Mock(return_value="model")
+    )
     torch = SimpleNamespace(
+        float32="float32",
         cuda=SimpleNamespace(is_available=lambda: False),
         backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
     )
-    hub = SimpleNamespace(snapshot_download=Mock(return_value="cached"))
+    constants = SimpleNamespace(HF_HUB_OFFLINE=False)
+    tokenizer = SimpleNamespace()
     modules = {
         "torch": torch,
-        "huggingface_hub": hub,
         "huggingface_hub.utils.tqdm": SimpleNamespace(tqdm=object),
+        "huggingface_hub.constants": constants,
+        "chatterbox.models.tokenizers.tokenizer": tokenizer,
     }
+    snapshot = Mock(return_value="cached")
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
     monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
+    monkeypatch.setattr(speech_worker, "resolve_snapshot", snapshot)
     monkeypatch.setattr(speech_worker, "sdk", lambda _name: cls)
-    assert speech_worker.load("chatterbox", {}, calls.append) == "model"
-    cls.from_local.assert_called_once_with("cached", device="cpu", t3_model="v3")
-    assert "t3_mtl23ls_v3.safetensors" in hub.snapshot_download.call_args.kwargs["allow_patterns"]
+    assert speech_worker.load(engine, {}, calls.append) == "model"
+    assert constants.HF_HUB_OFFLINE
+    if engine == "chatterbox":
+        cls.from_local.assert_called_once_with("cached", device="cpu", t3_model="v3")
+        assert "t3_mtl23ls_v3.safetensors" in snapshot.call_args.args[1]
+        assert Path(
+            tokenizer.hf_hub_download(
+                repo_id="ResembleAI/chatterbox", filename="Cangjie5_TC.json", cache_dir="ignored"
+            )
+        ) == Path("cached/Cangjie5_TC.json")
+        with pytest.raises(ValueError):
+            tokenizer.hf_hub_download(repo_id="other", filename="other")
+    else:
+        assert cls.from_pretrained.call_args.kwargs["local_files_only"] is True
+        assert "speech_tokenizer/model.safetensors" in snapshot.call_args.args[1]
     assert calls == ["checking_model", "loading"]
 
 
@@ -190,7 +211,6 @@ def test_disabled_download_bars_still_report_real_transfer(monkeypatch):
 
     class DisabledBar:
         def __init__(self, **kwargs):
-            # Real tqdm can return early when disabled, without a unit member.
             pass
 
         def update(self, n):
@@ -207,13 +227,100 @@ def test_disabled_download_bars_still_report_real_transfer(monkeypatch):
 
     modules = {
         "torch": SimpleNamespace(),
-        "huggingface_hub": SimpleNamespace(snapshot_download=snapshot),
         "huggingface_hub.utils.tqdm": bars,
+        "huggingface_hub.constants": SimpleNamespace(),
+        "chatterbox.models.tokenizers.tokenizer": SimpleNamespace(),
     }
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
     monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
+    monkeypatch.setattr(speech_worker, "resolve_snapshot", snapshot)
     monkeypatch.setattr(speech_worker, "sdk", lambda _name: SimpleNamespace(from_local=Mock()))
     speech_worker.load("chatterbox", {"device": "cpu"}, phases.append)
     assert phases == ["checking_model", "downloading", "loading"]
+
+
+@pytest.mark.parametrize(
+    "initial", ["complete", "missing", "partial", "partial_error", "empty_file"]
+)
+def test_snapshot_reuses_local_files_and_finishes_only_missing_revision(
+    tmp_path, monkeypatch, initial
+):
+    source = tmp_path / ("a" * 40)
+    source.mkdir()
+    files = ["config.json", "model.safetensors", "tokenizer/config.json"]
+    sentinel = b"existing weights"
+    if initial != "missing":
+        (source / "model.safetensors").write_bytes(sentinel)
+    if initial in ("complete", "empty_file"):
+        for name in files:
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_bytes(b"asset")
+    if initial == "empty_file":
+        (source / "config.json").write_bytes(b"")
+
+    class MissingError(Exception):
+        pass
+
+    calls = []
+
+    def download(repo, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["allow_patterns"] == files
+        if kwargs.get("local_files_only"):
+            if initial == "partial_error" and len(calls) == 1:
+                error = MissingError()
+                error.snapshot_path = str(source)
+                raise error
+            if initial == "missing" and len(calls) == 1:
+                raise MissingError()
+            return str(source)
+        assert kwargs["allow_patterns"] == files
+        assert kwargs.get("revision") == (source.name if initial != "missing" else None)
+        for name in files:
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists() or not path.stat().st_size:
+                path.write_bytes(b"downloaded")
+        return str(source)
+
+    modules = {
+        "huggingface_hub": SimpleNamespace(snapshot_download=download),
+        "huggingface_hub.errors": SimpleNamespace(LocalEntryNotFoundError=MissingError),
+    }
+    monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
+    for _ in range(2):
+        assert speech_worker.resolve_snapshot("owner/model", files, object) == str(source)
+    assert sum(not call.get("local_files_only") for call in calls) == (
+        0 if initial == "complete" else 1
+    )
+    if initial != "missing":
+        assert (source / "model.safetensors").read_bytes() == sentinel
+
+
+def test_incomplete_download_and_unrelated_cache_errors_are_not_treated_as_ready(
+    tmp_path, monkeypatch
+):
+    class MissingError(Exception):
+        pass
+
+    download = Mock(return_value=str(tmp_path))
+    modules = {
+        "huggingface_hub": SimpleNamespace(snapshot_download=download),
+        "huggingface_hub.errors": SimpleNamespace(LocalEntryNotFoundError=MissingError),
+    }
+    monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
+    with pytest.raises(OSError):
+        speech_worker.resolve_snapshot("owner/model", ["required.file"], object)
+    assert download.call_count == 2
+    download.reset_mock(side_effect=True)
+    download.side_effect = PermissionError()
+    with pytest.raises(PermissionError):
+        speech_worker.resolve_snapshot("owner/model", ["required.file"], object)
+    download.assert_called_once_with(
+        "owner/model", local_files_only=True, allow_patterns=["required.file"]
+    )
 
 
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])

@@ -722,9 +722,10 @@ model weights. Chat shows live download, model-loading and transcription phases
 with elapsed time above the composer and in the microphone tooltip. A cached
 model skips downloads; an already loaded model skips loading. Failures release
 the microphone for another attempt. The server's standard Hugging Face cache is reused (`HF_HOME` can
-relocate it). After downloading, enable **Offline only** to prevent model network
-lookups; a missing cache then produces an error. Alternatively, point **Model
-directory** at a complete compatible Transformers checkpoint on the server.
+relocate it). Complete model files are reused automatically without online update
+checks, including after unloading or restarting. Only missing files are downloaded;
+interrupted downloads resume their existing model revision. Alternatively, point
+**Model directory** at a complete compatible Transformers checkpoint on the server.
 Recordings are processed by the local engine, without a transcription API call.
 
 Local speech models stay loaded independently, so STT and TTS can remain ready
@@ -770,8 +771,8 @@ then loads the model and generates audio. Live status and elapsed time remain
 visible; the audio player appears when the complete WAV is ready. The Agent's
 existing `text_to_speech` Tool uses the same saved engine and voice options.
 Local requests accept up to 5,000 characters and split longer passages within
-that limit at sentence/word boundaries. Only one STT or TTS model stays loaded
-per Runtime; switching engines releases its memory before the next one loads.
+that limit at sentence/word boundaries. STT and TTS models stay loaded independently;
+each model has its own **Unload from memory** button.
 
 The optional `local-tts` extra installs uv, which prepares managed Python 3.12
 and separate SDK environments under `<data-dir>/speech-engines/`. Fixed recipes
@@ -782,7 +783,8 @@ imports and, on NVIDIA systems, GPU execution. Chatterbox currently uses upstrea
 Torch 2.6 / CUDA 12.6 combination; GPUs requiring a newer Torch are not supported
 by that recipe. Qwen uses Torch 2.11 / CUDA 12.8. CPU and Apple builds are selected
 on systems without a detected NVIDIA GPU. First downloads require internet access;
-**Offline only** uses already cached files.
+Downloaded models are reused automatically without online update checks. Only
+missing files require internet access; there is no offline switch to configure.
 
 Model sources and licenses: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
 (Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).

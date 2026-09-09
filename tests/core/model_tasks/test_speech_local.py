@@ -261,13 +261,12 @@ def test_native_transformers_adapter_contracts_without_weights(
 ) -> None:
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
-    import huggingface_hub
 
     from core.model_tasks.speech_local import _PROGRESS, _ParakeetEngine, _QwenEngine
 
     engine_type = _QwenEngine if engine_name == "qwen" else _ParakeetEngine
     snapshot = MagicMock(return_value=engine_type.default_model)
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    monkeypatch.setattr("core.model_tasks.speech_local.resolve_snapshot", snapshot)
     # Resolve actual native auto classes: this catches unsupported extra versions.
     auto_class = getattr(transformers, engine_type.model_class)
     model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
@@ -291,7 +290,7 @@ def test_native_transformers_adapter_contracts_without_weights(
     load_processor = MagicMock(return_value=processor)
     monkeypatch.setattr(auto_class, "from_pretrained", load_model)
     monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", load_processor)
-    options = {"device": "cpu", "offline": True, "language": "de", "prompt": "vBot"}
+    options = {"device": "cpu", "language": "de", "prompt": "vBot"}
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
     try:
@@ -302,8 +301,8 @@ def test_native_transformers_adapter_contracts_without_weights(
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"
         assert load_model.call_args.kwargs["local_files_only"] is True
-        assert snapshot.call_args.kwargs["local_files_only"] is True
-        progress_class = snapshot.call_args.kwargs["tqdm_class"]
+        assert "model.safetensors" in snapshot.call_args.args[1]
+        progress_class = snapshot.call_args.args[2]
         with progress_class(total=10, unit="B", disable=True) as bar:
             bar.update(5)
         assert progress.snapshot()["phase"] == "downloading"
@@ -678,3 +677,20 @@ async def test_shutdown_waits_for_other_engines_even_when_one_close_fails():
     finally:
         release.set()
         await asyncio.gather(closing, return_exceptions=True)
+
+
+@pytest.mark.parametrize("task_type", [TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH])
+def test_local_speech_options_do_not_expose_an_offline_switch(task_type):
+    executor = LocalSpeechExecutor()
+    try:
+        definitions = [
+            entry
+            for entry in executor._definitions.values()
+            if task_type in entry.descriptor.task_types
+        ]
+        assert len(definitions) == 2
+        for entry in definitions:
+            assert "offline" not in {field.name for field in entry.descriptor.option_fields}
+            assert "offline" not in entry.load_options
+    finally:
+        executor.close()

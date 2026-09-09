@@ -38,6 +38,7 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
+from core.model_tasks.speech_worker import resolve_snapshot
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -45,7 +46,7 @@ from core.utils.workers import BoundedWorkerPool
 _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
-_LOAD_OPTIONS = ("model", "model_path", "device", "dtype", "offline")
+_LOAD_OPTIONS = ("model", "model_path", "device", "dtype")
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
 
 
@@ -120,13 +121,6 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             default="",
             description="Optional directory on the vBot server containing a Transformers model. "
             "Leave empty to download and cache the selected model from Hugging Face.",
-        ),
-        TaskModelOptionField(
-            "offline",
-            "boolean",
-            "Offline only",
-            default=False,
-            description="Load only already downloaded model files; never contact Hugging Face.",
         ),
     )
     qwen = LocalTaskTargetDescriptor(
@@ -561,10 +555,7 @@ def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngi
             options=tuple(TaskModelOptionChoice(x, x) for x in choices),
         )
 
-    common = (
-        select("device", "Device", "auto", ("auto", "cuda", "cpu", "mps")),
-        TaskModelOptionField("offline", "boolean", "Offline only", default=False),
-    )
+    common = (select("device", "Device", "auto", ("auto", "cuda", "cpu", "mps")),)
     qwen_options = (
         select(
             "model",
@@ -661,7 +652,7 @@ def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngi
                 option_fields=fields,
             ),
             partial(_TtsEngine, setups[name]),
-            ("model", "device", "offline"),
+            ("model", "device"),
         )
         for name, label, license_name, fields in (
             ("qwen3-tts", "Qwen3-TTS", "Apache-2.0", qwen_options),
@@ -823,13 +814,12 @@ class _TransformersEngine:
         else:
             source = options.get("model") or self.default_model
         load_options = {
-            "local_files_only": bool(options.get("offline") or options.get("model_path")),
+            "local_files_only": True,
             "trust_remote_code": False,
         }
         try:
             progress = _PROGRESS.get()
             if not options.get("model_path"):
-                from huggingface_hub import snapshot_download
                 from tqdm.auto import tqdm  # type: ignore[import-untyped]
 
                 class DownloadProgress(tqdm):
@@ -845,13 +835,17 @@ class _TransformersEngine:
 
                 if progress is not None:
                     progress.update("checking_model")
-                source = snapshot_download(
-                    source,
-                    local_files_only=bool(options.get("offline")),
-                    allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken"],
-                    tqdm_class=DownloadProgress,
-                )
-                load_options["local_files_only"] = True
+                files = [
+                    "config.json",
+                    "generation_config.json",
+                    "model.safetensors",
+                    "processor_config.json",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                ]
+                if self.model_class == "AutoModelForMultimodalLM":
+                    files.append("chat_template.jinja")
+                source = resolve_snapshot(source, files, DownloadProgress)
             if progress is not None:
                 progress.update("loading")
             self._processor = transformers.AutoProcessor.from_pretrained(source, **load_options)
