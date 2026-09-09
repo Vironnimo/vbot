@@ -84,6 +84,24 @@
   }
   const requestId = () =>
     crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  function participantColor(id) {
+    let hash = 2166136261;
+    for (const char of id ?? '')
+      hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
+    return `hsl(${(hash >>> 0) % 360} 60% 75%)`;
+  }
+  function participantInitials(name) {
+    const parts = (name ?? '').trim().split(/\s+/u).filter(Boolean);
+    if (!parts.length) return '?';
+    const last = parts.at(-1);
+    if (parts.length > 1 && /^\d+$/u.test(last))
+      return `${Array.from(parts[0])[0]}${last}`.toUpperCase();
+    return (
+      parts.length > 1
+        ? `${Array.from(parts[0])[0]}${Array.from(last)[0]}`
+        : Array.from(parts[0]).slice(0, 2).join('')
+    ).toUpperCase();
+  }
   const page = (value) =>
     Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
   const call = (operation, arguments_ = {}) =>
@@ -722,6 +740,16 @@
   });
 </script>
 
+{#snippet participantAvatar(id, name, kind = 'participant')}
+  <span
+    class="participant-avatar"
+    style:--participant-color={kind === 'participant' && id
+      ? participantColor(id)
+      : 'var(--text-med)'}
+    aria-hidden="true">{participantInitials(name)}</span
+  >
+{/snippet}
+
 <svelte:head><title>{t('swarm.title', 'Swarms')}</title></svelte:head>
 {#snippet actionIcon(kind)}
   <svg
@@ -1003,7 +1031,10 @@
                   {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
                       variant="secondary"
                       onClick={() => inspectParticipant(participant)}
-                      ><span
+                      >{@render participantAvatar(
+                        participant.id,
+                        participant.display_name,
+                      )}<span
                         ><strong>{participant.display_name}</strong><small
                           >{participant.model} / {participant.state} / {participant.pending_count ??
                             0}
@@ -1021,11 +1052,19 @@
                 />{:else}<ol class="board">
                   {#each board as post (post.id)}<li>
                       <div class="post-header">
-                        <strong
-                          >{post.author_name ??
-                            post.author?.name ??
-                            t('swarm.participant', 'Participant')}</strong
-                        ><time datetime={post.created_at}
+                        <div class="post-author">
+                          {@render participantAvatar(
+                            post.author?.id,
+                            post.author?.name,
+                            post.author?.kind,
+                          )}
+                          <strong
+                            >{post.author_name ??
+                              post.author?.name ??
+                              t('swarm.participant', 'Participant')}</strong
+                          >
+                        </div>
+                        <time datetime={post.created_at}
                           >{date(post.created_at)}</time
                         >
                       </div>
@@ -1058,7 +1097,10 @@
                     variant="secondary"
                     aria-pressed={history?.participant.id === participant.id}
                     onClick={() => inspectParticipant(participant)}
-                    ><span
+                    >{@render participantAvatar(
+                      participant.id,
+                      participant.display_name,
+                    )}<span
                       class:running={participant.state === 'running'}
                       class="dot"
                     ></span><span
@@ -1778,7 +1820,35 @@
     margin-bottom: 10px;
   }
   .post-header strong {
-    font-size: var(--fs-body-sm);
+    font-size: var(--fs-body-md);
+    color: var(--text-hi);
+    overflow-wrap: anywhere;
+  }
+  .post-author {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .participant-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 32px;
+    height: 32px;
+    padding-inline: 4px;
+    box-sizing: border-box;
+    border-radius: var(--r-sm);
+    color: var(--participant-color);
+    background: var(--bg);
+    border: 1px solid currentColor;
+    font: 600 var(--fs-label-sm) var(--font-ui);
+    white-space: nowrap;
+  }
+  .participant-row strong {
+    color: var(--text-hi);
+    font-weight: 600;
   }
   .board time {
     white-space: nowrap;

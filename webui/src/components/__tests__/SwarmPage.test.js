@@ -280,6 +280,72 @@ afterEach(async () => {
 });
 
 describe('SwarmPage', () => {
+  it('keeps participant avatars consistent across Board, Activity and remounts', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const participants = [
+      { ...swarm.participants[0], display_name: 'Participant 9' },
+      { ...swarm.participants[1], display_name: 'Participant 10' },
+    ];
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({ swarm: { ...swarm, participants } });
+      if (name === 'board.read')
+        return Promise.resolve({
+          entries: participants.map((participant) => ({
+            id: `post-${participant.id}`,
+            author: {
+              id: participant.id,
+              name: participant.display_name,
+              kind: 'participant',
+            },
+            text: `message-${participant.id}`,
+            created_at: '2026-09-08T09:15:00+00:00',
+          })),
+        });
+      return original(name, args);
+    });
+    const colors = new Map();
+    for (let pass = 0; pass < 2; pass += 1) {
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('.board li')).toHaveLength(2),
+      );
+      for (const [index, participant] of participants.entries()) {
+        const rosterAvatar = button(participant.display_name).querySelector(
+          '.participant-avatar',
+        );
+        const post = [...document.querySelectorAll('.board li')].find((item) =>
+          item.textContent.includes(`message-${participant.id}`),
+        );
+        const postAvatar = post.querySelector('.participant-avatar');
+        expect(postAvatar.textContent.trim()).toBe(index === 0 ? 'P9' : 'P10');
+        expect(postAvatar.getAttribute('aria-hidden')).toBe('true');
+        expect(post.querySelector('strong').textContent).toBe(
+          participant.display_name,
+        );
+        const color = postAvatar.style.getPropertyValue('--participant-color');
+        expect(color).toBe(
+          rosterAvatar.style.getPropertyValue('--participant-color'),
+        );
+        if (pass) expect(color).toBe(colors.get(participant.id));
+        colors.set(participant.id, color);
+      }
+      expect(new Set(colors.values()).size).toBe(2);
+      button('Participant 9').click();
+      await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalled());
+      const activityAvatar = document.querySelector(
+        '.participants .participant-avatar',
+      );
+      expect(activityAvatar.style.getPropertyValue('--participant-color')).toBe(
+        colors.get('prt-a'),
+      );
+      mounted = await unmount(mounted);
+      document.body.innerHTML = '';
+    }
+  });
+
   it('renders complete prompt, timestamped author headers and participants above posts', async () => {
     const { bridge, operation } = createBridge();
     const original = operation.getMockImplementation();
