@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { CONNECTION_STATUS_CONNECTED } from '../../lib/connectionState.js';
+
+const appStyles = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../../styles/app.css'),
+  'utf8',
+);
 
 const desktopBridge = vi.hoisted(() => ({
   getDesktopClipboardText: vi.fn(),
@@ -53,6 +62,34 @@ describe('AppShell Desktop context menu', () => {
     flushSync();
     return document.querySelector('.app-shell__content');
   }
+
+  it('keeps the inset toggle free of the shared button minimum height', () => {
+    mountShell(false);
+    const stylesheet = document.createElement('style');
+    stylesheet.textContent = appStyles;
+    document.head.append(stylesheet);
+    const toggle = document.querySelector('.app-shell__sidebar-toggle');
+    const ordinaryIconButton = toggle.cloneNode(false);
+    ordinaryIconButton.classList.remove('app-shell__sidebar-toggle');
+    document.body.append(ordinaryIconButton);
+
+    try {
+      expect(getComputedStyle(ordinaryIconButton).minHeight).toBe('30px');
+      expect(getComputedStyle(toggle).minHeight).toBe('0px');
+      toggle.click();
+      flushSync();
+      expect(getComputedStyle(toggle).minHeight).toBe('0px');
+      toggle.click();
+      flushSync();
+      expect(getComputedStyle(toggle).minHeight).toBe('0px');
+      expect(toggle.getAttribute('aria-pressed')).toBe('false');
+      expect(toggle.getAttribute('aria-label')).toBe('Collapse sidebar');
+      expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
+    } finally {
+      stylesheet.remove();
+      ordinaryIconButton.remove();
+    }
+  });
 
   it('collapses navigation to accessible icons and saves the choice', () => {
     mountedComponent = mount(AppShell, {
