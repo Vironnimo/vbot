@@ -86,8 +86,9 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
             context,
             {
                 "command": (
-                    "import sys; print('ready', flush=True); "
-                    "sys.stdin.readline(); print('finished')"
+                    "from pathlib import Path\nimport time\nprint('ready', flush=True)\n"
+                    "while not Path('release').exists():\n    time.sleep(0.01)\n"
+                    "print('finished')"
                 ),
                 "mode": mode,
             },
@@ -105,9 +106,7 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     assert handoffs[0][2] is True
     process_id = result["data"]["process_id"]
     assert manager.get_process(process_id, AGENT_ID, project_id=None).status == "running"
-    await manager.send_input(
-        process_id, AGENT_ID, "continue", newline=True, eof=False, project_id=None
-    )
+    (tmp_path / "release").write_text("continue", encoding="utf-8")
     await asyncio.wait_for(delivered.wait(), 5)
     assert len(notices) == 1
     assert "finished" in notices[0]["body"]
@@ -177,6 +176,97 @@ def make_context(
 
 def python_command(command: str) -> list[str]:
     return [sys.executable, "-c", command]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [None, "foreground", "auto", "background"])
+async def test_bash_modes_finish_without_stdin_input(manager, tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    arguments = {"command": "import sys; assert sys.stdin.read() == ''; print('eof')"}
+    if mode is not None:
+        arguments["mode"] = mode
+    result = await asyncio.wait_for(bash_handler(make_context(tmp_path), arguments, manager), 5)
+    if mode == "background":
+        tracked = manager.get_process(result["data"]["process_id"], AGENT_ID)
+        assert tracked.wait_task is not None
+        await asyncio.wait_for(asyncio.shield(tracked.wait_task), 5)
+        data = await manager.snapshot(tracked.process_id, AGENT_ID)
+    else:
+        data = result["data"]
+    assert result["ok"] is True
+    assert data["exit_code"] == 0
+    assert data["output"].strip() == "eof"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell-specific stdin contract")
+@pytest.mark.parametrize(
+    "command, expected",
+    [
+        ('Write-Output "x: $input"', "x:"),
+        ('$input | ForEach-Object { $_ }; Write-Output "done"', "done"),
+        ('[Console]::In.ReadToEnd(); Write-Output "done"', "done"),
+        ("'alpha','beta' | ForEach-Object { $_.ToUpper() }", "ALPHA\nBETA"),
+        (
+            "'alpha','beta' | pwsh -NonInteractive -Command "
+            "'$input | ForEach-Object { $_.ToUpper() }'",
+            "ALPHA\nBETA",
+        ),
+    ],
+)
+async def test_windows_shell_eof_and_command_pipelines(manager, tmp_path, command, expected):
+    result = await asyncio.wait_for(
+        bash_handler(make_context(tmp_path), {"command": command}, manager), 10
+    )
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["output"].strip().replace("\r\n", "\n") == expected
+
+
+@pytest.mark.asyncio
+async def test_shell_pipeline_and_script_owned_input_remain_available(manager, tmp_path):
+    from core.tools.process_manager import subprocess_creation_flags
+
+    child = (
+        "import sys\nvalue = 0\n"
+        "for line in sys.stdin:\n"
+        "    value += int(line)\n"
+        "    print(value, flush=True)\n"
+    )
+    script = tmp_path / "input test.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "assert sys.stdin.read().strip() == 'pipeline-input'\n"
+        f"child = subprocess.Popen([sys.executable, '-u', '-c', {child!r}], "
+        "stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, "
+        f"creationflags={subprocess_creation_flags()})\n"
+        "try:\n"
+        "    child.stdin.write('3\\n'); child.stdin.flush()\n"
+        "    observed = int(child.stdout.readline())\n"
+        "    assert observed == 3\n"
+        "    child.stdin.write(str(10 - observed) + '\\n'); child.stdin.flush()\n"
+        "    assert child.stdout.readline().strip() == '10'\n"
+        "    child.stdin.close()\n"
+        "    assert child.wait(timeout=3) == 0\n"
+        "    print('child-dialog-ok')\n"
+        "finally:\n"
+        "    if child.poll() is None:\n"
+        "        child.kill(); child.wait()\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        executable = sys.executable.replace("'", "''")
+        command = f"'pipeline-input' | & '{executable}' 'input test.py'"
+    else:
+        import shlex
+
+        command = f"printf '%s' 'pipeline-input' | {shlex.quote(sys.executable)} 'input test.py'"
+    result = await asyncio.wait_for(
+        bash_handler(make_context(tmp_path), {"command": command, "timeout": 8}, manager), 10
+    )
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["output"].strip() == "child-dialog-ok"
 
 
 async def kill_background(manager: ProcessManager, result: dict[str, Any]) -> None:
@@ -367,57 +457,6 @@ async def test_background_mode_returns_running_process_with_clear_handoff(
     assert isinstance(result["data"]["process_id"], str)
 
     await kill_background(manager, result)
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell-specific stdin contract")
-async def test_windows_background_process_accepts_raw_stdin_via_process_tool(
-    manager: ProcessManager,
-    tmp_path: Path,
-) -> None:
-    bash_context = make_context(tmp_path)
-    bash_result = await bash_handler(
-        bash_context,
-        {
-            "command": ('$value = [Console]::In.ReadLine(); Write-Output "stdin-mode-$value"'),
-            "mode": "background",
-            "timeout": 10,
-        },
-        manager,
-    )
-    bash_data = bash_result["data"]
-    assert isinstance(bash_data, dict)
-    process_id = bash_data["process_id"]
-    assert isinstance(process_id, str)
-
-    process_context = ToolContext(
-        agent_id=AGENT_ID,
-        session_id=bash_context.session_id,
-        run_id=RUN_ID,
-        tool_call_id="call-process-input",
-        tool_name=PROCESS_TOOL_NAME,
-        tool_call_index=1,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-    )
-    input_result = await make_process_handler(manager)(
-        process_context,
-        {
-            "action": "input",
-            "process_id": process_id,
-            "text": "hello-from-input",
-            "eof": True,
-        },
-    )
-    tracked = manager.get_process(process_id, AGENT_ID)
-    assert tracked.wait_task is not None
-    await asyncio.wait_for(tracked.wait_task, timeout=5)
-    terminal = await manager.snapshot(process_id, AGENT_ID)
-
-    assert input_result["ok"] is True
-    assert terminal["status"] == "completed"
-    assert "stdin-mode-hello-from-input" in str(terminal["output"])
 
 
 @pytest.mark.asyncio

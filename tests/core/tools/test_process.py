@@ -6,7 +6,6 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -109,21 +108,14 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert "oneOf" not in PROCESS_TOOL_PARAMETERS
     properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
     assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
-    assert set(properties) == {
-        "action",
-        "process_id",
-        "text",
-        "newline",
-        "eof",
-    }
+    assert set(properties) == {"action", "process_id"}
+    assert PROCESS_ACTIONS == ("status", "kill")
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
     assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in properties.values()
     )
-    assert "default" not in properties["newline"]
-    assert "default" not in properties["eof"]
 
 
 @pytest.mark.asyncio
@@ -147,7 +139,6 @@ async def test_status_without_process_id_lists_owned_processes_only(
             "exit_code": None,
             "started_at": manager.get_process(owned_process_id, AGENT_A).started_at.isoformat(),
             "finished_at": None,
-            "stdin_open": True,
             "log_file": None,
         }
     ]
@@ -184,8 +175,8 @@ async def test_status_with_process_id_returns_non_consuming_snapshot(
     assert first_data["exit_code"] == 0
     assert first_data["output_tail"].strip() == "snapshot-output"
     assert first_data["output_truncated"] is False
-    assert first_data["stdin_open"] is False
-    assert first_data["waiting_for_input"] is False
+    assert "stdin_open" not in first_data
+    assert "waiting_for_input" not in first_data
     assert first_data["log_file"] is None
 
 
@@ -270,94 +261,6 @@ async def test_status_line_limit_preserves_complete_log_and_is_non_consuming(tmp
 
 
 @pytest.mark.asyncio
-async def test_status_reports_waiting_for_input_after_idle_period(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    process_id = await spawn_python(manager, "import time; time.sleep(30)")
-    tracked = manager.get_process(process_id, AGENT_A)
-    tracked.started_at = datetime.now(UTC) - timedelta(seconds=16)
-
-    result = await call_process(
-        manager,
-        context,
-        {"action": "status", "process_id": process_id},
-    )
-    await manager.kill(process_id, AGENT_A)
-
-    assert cast(dict[str, Any], result["data"])["waiting_for_input"] is True
-    assert cast(dict[str, Any], result["data"])["stdin_open"] is True
-
-
-@pytest.mark.asyncio
-async def test_input_sends_one_line_by_default(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    script = "import sys; line = sys.stdin.readline(); print('got:' + line.strip())"
-    process_id = await spawn_python(manager, script)
-
-    result = await call_process(
-        manager,
-        context,
-        {"action": "input", "process_id": process_id, "text": "value"},
-    )
-    terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
-
-    assert result == tool_success({})
-    assert "got:value" in str(terminal["output"])
-
-
-@pytest.mark.asyncio
-async def test_input_can_send_raw_text_and_close_stdin(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    script = "import sys; data = sys.stdin.read(); print('read:' + data)"
-    process_id = await spawn_python(manager, script)
-
-    result = await call_process(
-        manager,
-        context,
-        {
-            "action": "input",
-            "process_id": process_id,
-            "text": "payload",
-            "newline": False,
-            "eof": True,
-        },
-    )
-    terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
-
-    assert result == tool_success({})
-    assert "read:payload" in str(terminal["output"])
-
-
-@pytest.mark.asyncio
-async def test_input_rejects_a_noop(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    result = await call_process(
-        manager,
-        context,
-        {
-            "action": "input",
-            "process_id": "process-a",
-            "text": "",
-            "newline": False,
-            "eof": False,
-        },
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "input must send text, append a newline, or close stdin with eof",
-        retryable=False,
-    )
-
-
-@pytest.mark.asyncio
 async def test_kill_stops_a_process(
     manager: ProcessManager,
     context: ToolContext,
@@ -420,6 +323,7 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
     (
         {"request": {"operation": "poll", "process_id": "process-a"}},
         {"poll": {"process_id": "process-a"}},
+        {"action": "input", "process_id": "process-a", "text": "value"},
         {"action": "list"},
         {"action": "poll", "process_id": "process-a"},
         {"action": "log", "process_id": "process-a"},
@@ -438,6 +342,23 @@ async def test_retired_process_calls_are_rejected(
 
     assert result["ok"] is False
     assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", [False, True])
+async def test_removed_input_action_cannot_affect_a_running_process(manager, context, dispatch):
+    process_id = await spawn_python(manager, "import time; time.sleep(30)")
+    invoke = dispatch_process if dispatch else call_process
+    result = await invoke(
+        manager,
+        context,
+        {"action": "input", "process_id": process_id, "text": "value", "eof": True},
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.get_process(process_id, AGENT_A).status == "running"
+    assert manager.get_process(process_id, AGENT_A).proc.stdin is None
+    await manager.kill(process_id, AGENT_A)
 
 
 @pytest.mark.asyncio
@@ -467,8 +388,6 @@ async def test_cross_agent_process_access_returns_not_found(
 ) -> None:
     process_id = await spawn_python(manager, "import time; time.sleep(30)")
     arguments: JsonObject = {"action": action, "process_id": process_id}
-    if action == "input":
-        arguments["text"] = "value"
 
     result = await call_process(
         manager,

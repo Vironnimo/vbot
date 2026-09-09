@@ -1005,22 +1005,7 @@ HISTORY_CASES = (
     "around_all",
     "around_cursor",
 )
-PROCESS_CASES = (
-    "status_list",
-    "status_one",
-    "input_omit_omit",
-    "input_true_omit",
-    "input_false_omit",
-    "input_omit_true",
-    "input_omit_false",
-    "input_true_true",
-    "input_true_false",
-    "input_false_true",
-    "input_false_false",
-    "input_empty_newline",
-    "input_empty_eof",
-    "kill",
-)
+PROCESS_CASES = ("status_list", "status_one", "kill")
 READ_CASES = (
     "path_only",
     "offset_line",
@@ -2548,82 +2533,11 @@ def _memory_scenario(case_name: str) -> ProbeScenario:
 
 
 def _process_scenario(case_name: str) -> ProbeScenario:
-    session_id = "process-probe-session"
-    text = "probe input"
+    process_id = "process-probe-process"
     process_arguments: dict[str, dict[str, Any]] = {
         "status_list": {"action": "status"},
-        "status_one": {"action": "status", "session_id": session_id},
-        "input_omit_omit": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-        },
-        "input_true_omit": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": True,
-        },
-        "input_false_omit": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": False,
-        },
-        "input_omit_true": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "eof": True,
-        },
-        "input_omit_false": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "eof": False,
-        },
-        "input_true_true": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": True,
-            "eof": True,
-        },
-        "input_true_false": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": True,
-            "eof": False,
-        },
-        "input_false_true": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": False,
-            "eof": True,
-        },
-        "input_false_false": {
-            "action": "input",
-            "session_id": session_id,
-            "text": text,
-            "newline": False,
-            "eof": False,
-        },
-        "input_empty_newline": {
-            "action": "input",
-            "session_id": session_id,
-            "text": "",
-            "newline": True,
-        },
-        "input_empty_eof": {
-            "action": "input",
-            "session_id": session_id,
-            "text": "",
-            "newline": False,
-            "eof": True,
-        },
-        "kill": {"action": "kill", "session_id": session_id},
+        "status_one": {"action": "status", "process_id": process_id},
+        "kill": {"action": "kill", "process_id": process_id},
     }
     expected_arguments = process_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
