@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from core.model_tasks.constants import TASK_SPEECH_TO_TEXT
+from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
@@ -28,7 +28,11 @@ from core.model_tasks.speech_local import (
     _audio_chunks,
     builtin_speech_engines,
 )
-from core.model_tasks.speech_types import SpeechProgress, SpeechTranscriptionResult
+from core.model_tasks.speech_types import (
+    SpeechProgress,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 
 
 def wav(samples: Any = None, *, rate: int = 16_000, channels: int = 1) -> bytes:
@@ -84,7 +88,7 @@ async def transcribe(
 def test_builtin_catalog_is_lazy_and_reports_missing_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import speech_setup as speech_local
 
     versions = {"torch": "2.11.0+cu128", "transformers": "5.16.1", "huggingface-hub": "1.30.0"}
     monkeypatch.setattr(speech_local.metadata, "version", versions.__getitem__)
@@ -120,9 +124,11 @@ async def test_third_engine_reuses_and_switches_with_its_own_options() -> None:
         assert result.text == "third"
         assert result.language == "de"
         assert result.segments == ({"start": 0.0, "end": 0.1, "text": "third"},)
-        assert events[-3:-1] == [("first", "close"), ("third", "load", {"custom": "one"})]
-        await executor.unload()
+        assert events[-2] == ("third", "load", {"custom": "one"})
+        assert [model["loaded"] for model in executor.memory_status()["models"]] == [True, True]
+        await executor.release_memory("local/third")
         assert events[-1] == ("third", "close")
+        assert [model["loaded"] for model in executor.memory_status()["models"]] == [True, False]
     finally:
         await executor.aclose()
     with pytest.raises(LocalSpeechError, match="closed"):
@@ -257,7 +263,7 @@ def test_native_transformers_adapter_contracts_without_weights(
     transformers = pytest.importorskip("transformers")
     import huggingface_hub
 
-    from core.model_tasks.speech_local import _ParakeetEngine, _QwenEngine
+    from core.model_tasks.speech_local import _PROGRESS, _ParakeetEngine, _QwenEngine
 
     engine_type = _QwenEngine if engine_name == "qwen" else _ParakeetEngine
     snapshot = MagicMock(return_value=engine_type.default_model)
@@ -286,15 +292,21 @@ def test_native_transformers_adapter_contracts_without_weights(
     monkeypatch.setattr(auto_class, "from_pretrained", load_model)
     monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", load_processor)
     options = {"device": "cpu", "offline": True, "language": "de", "prompt": "vBot"}
-    engine = engine_type(options)
+    progress = SpeechProgress()
+    token = _PROGRESS.set(progress)
+    try:
+        engine = engine_type(options)
+    finally:
+        _PROGRESS.reset(token)
     try:
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"
         assert load_model.call_args.kwargs["local_files_only"] is True
         assert snapshot.call_args.kwargs["local_files_only"] is True
         progress_class = snapshot.call_args.kwargs["tqdm_class"]
-        with progress_class(total=10, unit="B") as bar:
+        with progress_class(total=10, unit="B", disable=True) as bar:
             bar.update(5)
+        assert progress.snapshot()["phase"] == "downloading"
         assert load_model.call_args.kwargs["trust_remote_code"] is False
         assert load_processor.call_args.args == (engine_type.default_model,)
         assert inputs["input_ids"].dtype == torch.int64
@@ -318,7 +330,7 @@ async def test_setup_installs_only_shipped_dependencies_and_verifies_before_rest
     monkeypatch: pytest.MonkeyPatch,
     gpu: bool,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import speech_setup as speech_local
 
     monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
     monkeypatch.setattr(speech_local.shutil, "which", lambda _name: "nvidia-smi" if gpu else None)
@@ -357,7 +369,7 @@ async def test_setup_installs_only_shipped_dependencies_and_verifies_before_rest
 async def test_failed_setup_can_retry_and_active_setup_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import speech_setup as speech_local
 
     monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
     monkeypatch.setattr(speech_local.shutil, "which", lambda _name: None)
@@ -396,7 +408,7 @@ async def test_failed_setup_can_retry_and_active_setup_closes(
 async def test_setup_ready_is_a_noop_and_status_never_imports_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import speech_setup as speech_local
 
     monkeypatch.setattr(speech_local, "_dependencies_available", lambda: True)
     setup = LocalSpeechSetup()
@@ -409,7 +421,7 @@ async def test_setup_ready_is_a_noop_and_status_never_imports_models(
 async def test_setup_blocks_catalog_and_inference_until_a_new_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import speech_setup as speech_local
 
     monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
     monkeypatch.setattr(speech_local.shutil, "which", lambda _name: None)
@@ -477,12 +489,192 @@ async def test_setup_command_reaps_cancelled_child_without_exposing_output(
     process.stdout.feed_data(b"Downloading https://secret:password@example.invalid/pkg.whl\n")
     process.wait = AsyncMock(return_value=0)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    kill_tree = AsyncMock()
+    monkeypatch.setattr("core.tools.process_manager.kill_process_tree_async", kill_tree)
     setup = LocalSpeechSetup()
     task = asyncio.create_task(setup._command(["python", "-m", "pip"], progress=True))
     await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    process.kill.assert_called_once()
+    kill_tree.assert_awaited_once_with(process)
     process.wait.assert_awaited_once()
     assert "password" not in str(setup.status())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", [TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH])
+async def test_manual_memory_release_guards_work_and_reloads_both_speech_tasks(task_type):
+    started = asyncio.Event()
+    finish = threading.Event()
+    loop = asyncio.get_running_loop()
+    events = []
+
+    class BlockingEngine:
+        def __init__(self, _options):
+            events.append("load")
+
+        def work(self):
+            loop.call_soon_threadsafe(started.set)
+            assert finish.wait(5)
+
+        def transcribe(self, _samples, _options):
+            self.work()
+            return SpeechTranscriptionResult(text="result")
+
+        def synthesize(self, _text, _options):
+            self.work()
+            return SpeechSynthesisResult(b"audio", "audio/wav", "wav")
+
+        def close(self):
+            events.append("close")
+
+    entry = SpeechEngineDefinition(
+        LocalTaskTargetDescriptor(
+            id="test", label="Test voice", task_types=(task_type,), availability=lambda: True
+        ),
+        BlockingEngine,
+    )
+    executor = LocalSpeechExecutor(engines=[entry])
+
+    async def request():
+        if task_type == TASK_SPEECH_TO_TEXT:
+            return await transcribe(executor, "test")
+        return await executor.synthesize("test", "hello", options={})
+
+    pending = None
+    try:
+        empty = {"target": "local/test", "label": "Test voice", "loaded": False, "busy": False}
+        assert executor.memory_status() == {"models": [empty]}
+        assert not (await executor.release_memory("local/test"))["released"]
+        pending = asyncio.create_task(request())
+        await asyncio.wait_for(started.wait(), 2)
+        status = executor.memory_status()
+        assert status == {"models": [{**empty, "loaded": True, "busy": True}]}
+        assert await asyncio.wait_for(executor.release_memory("local/test"), 0.5) == {
+            **status,
+            "released": False,
+        }
+        # A cancelled queued request and cancellation of admitted work must not
+        # make the UI offer release while the native worker is still running.
+        queued = asyncio.create_task(request())
+        await asyncio.sleep(0)
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queued
+        pending.cancel()
+        await asyncio.sleep(0)
+        assert executor.memory_status()["models"][0]["busy"]
+        assert not (await executor.release_memory("local/test"))["released"]
+        assert events == ["load"]
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert not executor.memory_status()["models"][0]["busy"]
+        released = await executor.release_memory("local/test")
+        assert released == {"models": [empty], "released": True}
+        assert events == ["load", "close"]
+        assert not (await executor.release_memory("local/test"))["released"]
+        await request()
+        assert events == ["load", "close", "load"]
+        assert executor.memory_status()["models"][0]["target"] == "local/test"
+    finally:
+        finish.set()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
+        await executor.aclose()
+    assert events[-1] == "close"
+
+
+@pytest.mark.asyncio
+async def test_unloading_stt_does_not_wait_for_or_close_busy_tts():
+    events = []
+    started = asyncio.Event()
+    finish = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class Voice:
+        def synthesize(self, _text, _options):
+            loop.call_soon_threadsafe(started.set)
+            assert finish.wait(5)
+            return SpeechSynthesisResult(b"audio", "audio/wav", "wav")
+
+        def close(self):
+            events.append(("tts", "close"))
+
+    executor = LocalSpeechExecutor(
+        engines=[
+            definition("stt", events),
+            SpeechEngineDefinition(
+                LocalTaskTargetDescriptor(
+                    id="tts",
+                    label="TTS",
+                    task_types=(TASK_TEXT_TO_SPEECH,),
+                    availability=lambda: True,
+                ),
+                lambda _options: Voice(),
+            ),
+        ]
+    )
+    task = None
+    try:
+        await transcribe(executor, "stt")
+        task = asyncio.create_task(executor.synthesize("tts", "hello", options={}))
+        await asyncio.wait_for(started.wait(), 2)
+        result = await asyncio.wait_for(executor.release_memory("local/stt"), 0.5)
+        assert result["released"]
+        stt, tts = result["models"]
+        assert not stt["loaded"] and not stt["busy"]
+        assert tts["loaded"] and tts["busy"]
+        assert events[-1] == ("stt", "close")
+        assert ("tts", "close") not in events
+        finish.set()
+        assert (await task).audio == b"audio"
+        await transcribe(executor, "stt")
+        assert sum(event[1] == "load" for event in events) == 2
+        assert all(model["loaded"] for model in executor.memory_status()["models"])
+        with pytest.raises(ValueError):
+            await executor.release_memory("local/unknown")
+        assert ("tts", "close") not in events
+    finally:
+        finish.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_other_engines_even_when_one_close_fails():
+    events = []
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    first = Engine("first", events)
+    second = Engine("second", events)
+
+    def close_second():
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        events.append("second closed")
+
+    first.close = MagicMock(side_effect=RuntimeError("test close failure"))
+    second.close = MagicMock(side_effect=close_second)
+    executor = LocalSpeechExecutor(
+        engines=[
+            replace(definition("first", events), create=lambda _options: first),
+            replace(definition("second", events), create=lambda _options: second),
+        ]
+    )
+    await transcribe(executor, "first")
+    await transcribe(executor, "second")
+    closing = asyncio.create_task(executor.aclose())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not closing.done()
+        release.set()
+        with pytest.raises(RuntimeError):
+            await closing
+        assert events[-1] == "second closed"
+    finally:
+        release.set()
+        await asyncio.gather(closing, return_exceptions=True)

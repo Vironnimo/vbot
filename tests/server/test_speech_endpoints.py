@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -16,7 +17,7 @@ from core.model_tasks import (
     SpeechTranscriptionResult,
 )
 from core.runs import ChatRunManager
-from server.app import _stream_transcription, create_app
+from server.app import _stream_speech, create_app
 
 
 def test_transcribe_endpoint_returns_normalized_json(tmp_path: Path) -> None:
@@ -64,7 +65,11 @@ async def test_transcription_stream_reports_each_live_phase_and_reaps_disconnect
             finally:
                 cancelled.set()
 
-    stream = _stream_transcription(Speech(), b"audio", "clip.wav", "audio/wav")
+    stream = _stream_speech(
+        lambda progress: Speech().transcribe(
+            b"audio", filename="clip.wav", media_type="audio/wav", progress=progress
+        )
+    )
     assert json.loads(await anext(stream))["phase"] == "preparing"
     for phase in ("downloading", "loading", "transcribing"):
         event = json.loads(await anext(stream))
@@ -82,6 +87,20 @@ def test_synthesize_endpoint_returns_audio_bytes(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("audio/mpeg")
     assert response.content == b"audio"
+
+
+def test_synthesis_preview_stream_returns_progress_and_artifact(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        response = client.post(
+            "/api/speech/synthesize",
+            json={"text": "hello"},
+            headers={"Accept": "application/x-ndjson"},
+        )
+    assert response.headers["x-accel-buffering"] == "no"
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[0]["type"] == "progress"
+    assert events[-1] == {"type": "result", "result": {"url": "/api/speech/artifacts/aud_test"}}
+    assert len([event for event in events if event["type"] != "progress"]) == 1
 
 
 def test_synthesize_endpoint_rejects_malformed_json_before_speech_call(tmp_path: Path) -> None:
@@ -207,6 +226,11 @@ class _Speech:
     async def synthesize(self, _text: str) -> SpeechSynthesisResult:
         self.synthesize_calls += 1
         return SpeechSynthesisResult(audio=b"audio", media_type="audio/mpeg", format="mp3")
+
+    async def synthesize_artifact(self, text: str, *, progress: Any):
+        assert text == "hello"
+        progress.update("synthesizing")
+        return SimpleNamespace(to_dict=lambda: {"url": "/api/speech/artifacts/aud_test"})
 
 
 class _FailingSpeech(_Speech):

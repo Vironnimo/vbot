@@ -82,11 +82,11 @@ async def test_local_inference_failure_is_execution_error(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_provider_transcription_unloads_previous_local_engine(tmp_path: Path) -> None:
+async def test_provider_transcription_preserves_independent_local_models(tmp_path: Path) -> None:
     from unittest.mock import AsyncMock
 
     executor = LocalSpeechExecutor(engines=[])
-    executor.unload = AsyncMock()  # type: ignore[method-assign]
+    executor.release_memory = AsyncMock()  # type: ignore[method-assign]
     service = SpeechService(
         _ProviderSttModelTasks(), cast(Any, object()), tmp_path, local_executor=executor
     )
@@ -96,7 +96,7 @@ async def test_provider_transcription_unloads_previous_local_engine(tmp_path: Pa
             "core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client
         ):
             assert (await service.transcribe(_wav_audio_bytes())).text == "hello"
-        executor.unload.assert_awaited_once()
+        executor.release_memory.assert_not_awaited()
     finally:
         await service.aclose()
 
@@ -116,6 +116,7 @@ class _LocalTts(LocalSpeechExecutor):
         _text: str,
         *,
         options: dict[str, object],
+        progress: Any = None,
     ) -> SpeechSynthesisResult:
         return SpeechSynthesisResult(audio=b"audio", media_type="audio/mpeg", format="mp3")
 

@@ -727,11 +727,14 @@ lookups; a missing cache then produces an error. Alternatively, point **Model
 directory** at a complete compatible Transformers checkpoint on the server.
 Recordings are processed by the local engine, without a transcription API call.
 
-Only one local model stays loaded per server Runtime. On the next transcription
-after an engine/model/device change, the previous model is released before the
-replacement loads. Switching to a Provider releases it before the next Provider
-transcription. Shutdown and inference failures also release the model. Model
-loading and inference run outside the server Event Loop; cancelling a request
+Local speech models stay loaded independently, so STT and TTS can remain ready
+at the same time. In **Specialized Models → Local speech memory**, each loaded
+model has its own **Unload from memory** button. Unloading STT leaves TTS loaded,
+even while TTS is generating audio. A model's button is disabled while that model
+is busy. Downloaded files stay on disk; the next use loads that model again.
+Changing an engine's model/device options replaces only its own cached model.
+Shutdown releases all models; inference failure releases only the failed engine.
+Loading and inference run outside the server Event Loop; cancelling a request
 waits for already-started inference to finish safely.
 
 All existing microphone and audio-attachment paths use the selected engine.
@@ -745,6 +748,45 @@ The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-
 [Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf) (Apache-2.0), and
 [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 (CC-BY-4.0). See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
+
+### Local speech synthesis
+
+In **Settings -> Tools & Media -> Specialized Models -> Text to speech**, search
+for **local** and select **Qwen3-TTS (local)** or **Chatterbox Multilingual V3 (local)**.
+Choose **Install** for that engine. Setup continues across navigation, reports its
+phase and offers retry on failure. TTS becomes available immediately after
+verification; its isolated environment does not require a server restart.
+
+Both engines support German and require no paid API. Qwen3-TTS offers nine preset
+voices, automatic or explicit language selection, and style instructions on its
+1.7B CustomVoice model; the smaller 0.6B CustomVoice model is also selectable.
+Chatterbox explicitly uses the multilingual **V3** checkpoint, with language,
+expressiveness and guidance controls and the upstream built-in voice/watermark.
+No voice-cloning input is exposed by this integration.
+
+After saving the binding and options, enter a short text and choose **Generate
+voice preview**. The first request downloads weights into the Hugging Face cache,
+then loads the model and generates audio. Live status and elapsed time remain
+visible; the audio player appears when the complete WAV is ready. The Agent's
+existing `text_to_speech` Tool uses the same saved engine and voice options.
+Local requests accept up to 5,000 characters and split longer passages within
+that limit at sentence/word boundaries. Only one STT or TTS model stays loaded
+per Runtime; switching engines releases its memory before the next one loads.
+
+The optional `local-tts` extra installs uv, which prepares managed Python 3.12
+and separate SDK environments under `<data-dir>/speech-engines/`. Fixed recipes
+in `pyproject.toml` install Qwen's SDK and a pinned official Chatterbox revision
+containing V3 (the PyPI 0.1.7 source predates V3). The server's STT packages are
+not downgraded. Setup installs matching Torch/torchaudio builds and verifies
+imports and, on NVIDIA systems, GPU execution. Chatterbox currently uses upstream's
+Torch 2.6 / CUDA 12.6 combination; GPUs requiring a newer Torch are not supported
+by that recipe. Qwen uses Torch 2.11 / CUDA 12.8. CPU and Apple builds are selected
+on systems without a detected NVIDIA GPU. First downloads require internet access;
+**Offline only** uses already cached files.
+
+Model sources and licenses: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
+(Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).
+See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
 
 ## Channels
 

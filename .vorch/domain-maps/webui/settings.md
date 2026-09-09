@@ -88,3 +88,19 @@ Credential values go only to the dedicated operation and are never added to conn
 ## Skill manager
 
 `components/skills/SkillsView.svelte` and `skillsView.js` present a collection index (all, shared, Identity Agent owners, global/bundled, and Projects), word search over names/descriptions/owners, status filtering, and 50-row pages. An Agent collection means owned packages, including shared originals; it is not a reconstruction of that Agent's effective runtime catalog. One selected package exposes readable instructions and exact original text, access context, diagnostics, and explicit mutations. Server-projected inventory ids distinguish same-name packages; `editable_scope` alone enables human editing/deletion. The inspection request is versioned independently of inventory refresh, and stale responses cannot replace a newer selection. Open drafts survive resource refreshes. Creation separates name, description, and instructions and serializes quoted YAML metadata; original-text editing preserves the full authored document. The sharing dialog may save an empty receiver selection to stop sharing. Skill locations remains mounted after first visit so its autosave participant survives collection changes. Mounted regression coverage lives in `components/skills/__tests__/skillsView.test.js`.
+
+Local STT/TTS setup and TTS previews are owned by `LocalSpeechSupport.svelte`,
+keyed by the selected target inside Specialized Models. Setup polling survives
+navigation through server-owned jobs; TTS installs only its selected engine and
+refreshes availability immediately. The preview waits for saved options, streams
+phases/elapsed time, offers cancellation and displays the server-owned artifact
+in an audio player. Unmount aborts its request and timers; failed generation
+releases the controls for retry. Coverage: `LocalSpeechSupport.test.js` and the
+Specialized Models/API tests. All local target labels remain searchable by `local`.
+
+Specialized Models also owns per-engine speech memory controls. It polls the
+metadata-only memory RPC without reloading option drafts; each model has its own
+loaded/busy state and targeted unload button. Unloading STT leaves TTS usable,
+including when TTS is busy. Stale polls cannot overwrite unload results, failed
+unloads permit retry, and unmount clears polling. Coverage:
+`SettingsSpecializedModelsPanel.test.js` and `lib/__tests__/api.test.js`.
