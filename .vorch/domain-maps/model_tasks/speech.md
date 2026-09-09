@@ -39,8 +39,9 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 `speech_local.py` owns engine definitions, option schemas, dependency preflight,
 audio chunking, adapters and lifecycle. Runtime passes one `LocalSpeechExecutor`
 and its target registry to SpeechService and TaskModelService. Built-ins are
-`local/qwen3-asr` (Qwen 1.7B or 0.6B, language/context options) and
-`local/parakeet` (NVIDIA TDT v3). Both use native Transformers under the optional
+`local/qwen3-asr` (Qwen 1.7B or 0.6B, language/context options),
+`local/parakeet` (NVIDIA TDT v3), and `local/nemotron3.5-asr` (NVIDIA Nemotron 3.5
+ASR Streaming 0.6B, automatic or explicit language). All use native Transformers under the optional
 `local-speech` extra. Configuration does not load weights; first non-silent use does.
 
 To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory and
@@ -69,7 +70,17 @@ revision. Native Transformers loads exclusively from the resolved local path.
 There is no offline option in the schema. Download callbacks report actual
 transfer activity; cached/local loads do not fabricate download progress.
 Coverage: `test_speech_tts.py` checks complete, absent, partial and empty-file
-caches, and `test_speech_local.py` checks both STT adapter contracts.
+caches, and `test_speech_local.py` checks all three STT adapter contracts.
+
+Nemotron uses native `AutoModelForRNNT` with language prompt ids. Within each
+recording segment, one feature extraction feeds fixed-size mel chunks into
+cache-aware generation (560 ms context); short tails are padded, never dropped.
+The output bound accounts for RNNT blank emissions. Generated locale tags are
+removed from text and exposed as language metadata when present; generation
+caches do not cross recordings. `test_speech_local.py` covers frame boundaries,
+prompt integer dtype, language projection and separate memory/setup identity.
+This internal streaming does not introduce partial-text transport or realtime
+microphone Sessions.
 
 `LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.

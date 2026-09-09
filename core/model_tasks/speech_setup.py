@@ -152,7 +152,7 @@ class LocalSpeechSetup:
                 probe = (
                     "import torch, av, librosa; "
                     "from transformers import AutoProcessor, AutoModelForMultimodalLM; "
-                    "from transformers import AutoModelForTDT; "
+                    "from transformers import AutoModelForTDT, AutoModelForRNNT; "
                     "from core.model_tasks.speech_local import _dependencies_available; "
                     "assert _dependencies_available(); "
                 )
