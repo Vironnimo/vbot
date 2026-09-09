@@ -193,11 +193,9 @@ def _sha256(path: Path, *, cancelled: Callable[[], bool] | None = None) -> str:
 
 
 def _fsync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDWR)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    # Windows text-mode opens can strip a trailing CTRL-Z from a binary snapshot.
+    with path.open("r+b") as handle:
+        os.fsync(handle.fileno())
 
 
 def _fsync_dir(path: Path) -> None:
