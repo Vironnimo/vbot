@@ -300,6 +300,14 @@
         data.params.participant_id &&
         (data.params.query === undefined || isPlainObject(data.params.query))
       ) {
+        const historyScope = JSON.stringify([
+          data.params.group_id,
+          data.params.participant_id,
+        ]);
+        if (context.historyScope !== historyScope) {
+          context.historyScope = historyScope;
+          context.allowedUrls = [];
+        }
         result = await readExtensionPageHistory(
           context.descriptor.owner,
           { id: context.descriptor.page, epoch: context.descriptor.epoch },
@@ -308,7 +316,10 @@
           data.params.query ?? {},
         );
         if (frameContext !== context) return;
-        context.allowedUrls = projectedFileUrls(result);
+        if (context.historyScope === historyScope)
+          context.allowedUrls = [
+            ...new Set([...context.allowedUrls, ...projectedFileUrls(result)]),
+          ];
       } else if (
         (data.method === 'link.open' || data.method === 'media.open') &&
         typeof data.params.url === 'string'
@@ -330,7 +341,8 @@
         const url = opened?.stream?.url;
         if (typeof url === 'string' && url.startsWith('/api/extension-runs/')) {
           const subscription = subscribeRunEvents(url, {
-            onEvent: (event) => {
+            onEvent: ({ type, data: payload }) => {
+              const event = { ...payload, type };
               if (
                 frameContext === context &&
                 valid(event, MAX_HOST_MESSAGE_BYTES)
