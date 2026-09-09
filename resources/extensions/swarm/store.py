@@ -31,6 +31,8 @@ from core.tools.availability import normalize_tool_access
 from core.utils.ids import new_id
 from core.utils.workers import BoundedWorkerPool
 
+from .agent_text import DISCUSSION_ANNOUNCEMENT
+
 Json = dict[str, Any]
 _WORKERS = BoundedWorkerPool(name="swarm-store", max_workers=2)
 _PROFILE_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
@@ -2426,7 +2428,7 @@ class SwarmStore:
             ).fetchone()
             if row is None:
                 raise SwarmStoreError("message_not_found")
-            return Page((_post(row),), False, None)
+            return Page(tuple(self._human_posts(connection, [row])), False, None)
         discussion_id = discussion_id or self._main(connection, swarm_id)
         self._discussion(connection, swarm_id, discussion_id)
         return self._human_post_page(connection, swarm_id, discussion_id, cursor, limit)
@@ -2499,7 +2501,7 @@ class SwarmStore:
             (swarm_id, discussion_id, high_water, limit + 1, offset),
         ).fetchall()
         selected = self._pending_rows_from_rows(rows, limit, batch_chars)
-        values = [_post(row) for row in reversed(selected)]
+        values = self._human_posts(connection, list(reversed(selected)))
         more = len(rows) > len(selected)
         return Page(
             tuple(values),
@@ -2508,6 +2510,35 @@ class SwarmStore:
             if more
             else None,
         )
+
+    @staticmethod
+    def _human_posts(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[Json]:
+        values = [_post(row) for row in rows]
+        if not values:
+            return values
+        # Creation receipts identify announcements independently of their body text.
+        placeholders = ",".join("?" for _ in values)
+        announcements = {
+            row["post_id"]: {
+                "discussion_id": row["discussion_id"],
+                "title": row["title"],
+                "opening_post_id": row["opening_post_id"],
+            }
+            for row in connection.execute(
+                "SELECT p.id AS post_id,d.id AS discussion_id,d.title,"
+                "json_extract(q.outcome,'$.opening_post_id') AS opening_post_id "
+                "FROM posts p JOIN requests q ON q.scope='create:'||p.swarm_id||':'||p.author_id "
+                "AND json_extract(q.outcome,'$.main_announcement_id')=p.id "
+                "JOIN discussions d ON d.id=json_extract(q.outcome,'$.discussion_id') "
+                "AND d.swarm_id=p.swarm_id "
+                f"WHERE p.id IN ({placeholders})",
+                [value["id"] for value in values],
+            )
+        }
+        for value in values:
+            if value["id"] in announcements:
+                value["discussion_announcement"] = announcements[value["id"]]
+        return values
 
     def _post(
         self,
@@ -2696,8 +2727,13 @@ class SwarmStore:
                 swarm_id,
                 participant_id,
                 self._main(connection, swarm_id),
-                _dump(
-                    {"discussion_id": discussion_id, "title": title, "opening_post_id": opening_id}
+                DISCUSSION_ANNOUNCEMENT.format(
+                    author_name=self._participant(connection, swarm_id, participant_id)[
+                        "display_name"
+                    ],
+                    title=title,
+                    discussion_id=discussion_id,
+                    opening_post_id=opening_id,
                 ),
                 None,
                 (),

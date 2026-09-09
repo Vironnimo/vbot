@@ -352,7 +352,13 @@
       limit: 100,
       ...(cursor ? { cursor } : {}),
     });
-    discussions = cursor ? [...discussions, ...page(result)] : page(result);
+    discussions = cursor
+      ? [
+          ...new Map(
+            [...discussions, ...page(result)].map((item) => [item.id, item]),
+          ).values(),
+        ]
+      : page(result);
     discussionCursor = result.cursor ?? null;
   }
   async function loadBoard(
@@ -374,6 +380,18 @@
   async function chooseDiscussion(id) {
     selectedDiscussion = id;
     await loadBoard(selectedSwarm, id);
+  }
+  async function openDiscussion(announcement) {
+    if (!discussions.some((item) => item.id === announcement.discussion_id))
+      discussions = [
+        ...discussions,
+        { id: announcement.discussion_id, title: announcement.title },
+      ];
+    try {
+      await chooseDiscussion(announcement.discussion_id);
+    } catch (cause) {
+      error = cause.message;
+    }
   }
   async function loadEvents(swarm = selectedSwarm) {
     if (swarm) {
@@ -1068,7 +1086,24 @@
                           >{date(post.created_at)}</time
                         >
                       </div>
-                      <p>{post.text}</p>
+                      {#if post.discussion_announcement}
+                        <div class="discussion-announcement">
+                          <p>
+                            {t(
+                              'swarm.board.discussionOpened',
+                              '{name} opened a discussion.',
+                              { name: post.author.name },
+                            )}
+                          </p>
+                          <Button
+                            variant="secondary"
+                            onClick={() =>
+                              openDiscussion(post.discussion_announcement)}
+                          >
+                            {post.discussion_announcement.title}
+                          </Button>
+                        </div>
+                      {:else}<p>{post.text}</p>{/if}
                       {#if post.reply_to}<small
                           >{t('swarm.board.reply', 'Reply to {id}', {
                             id: post.reply_to,
@@ -1857,6 +1892,17 @@
     overflow-wrap: anywhere;
     white-space: pre-wrap;
     margin: 7px 0 0;
+  }
+  .discussion-announcement {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+  }
+  .discussion-announcement :global(button) {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
   .audit-change {
     display: grid;

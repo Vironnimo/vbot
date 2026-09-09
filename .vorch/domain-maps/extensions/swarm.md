@@ -69,6 +69,16 @@ The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
 Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
 
+The default System Prompt and Board Tool description guide participants toward
+the main discussion for shared conversation and coordination; additional discussions
+are for several Agents working through a specific problem. New announcements carry
+readable text, exact discussion/opening-post IDs and read/join guidance. Human Board
+reads additionally resolve the discussion target from its creation request outcome,
+so the page can render a localized navigation action without parsing message text.
+Ordinary posts cannot acquire that action by copying an announcement's content.
+Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
+`test_swarm_store.py`, and `SwarmPage.test.js`.
+
 Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
 routing for that recipient, without creating duplicate deliveries. A mutation's
 request id is payload-bound; reusing it with changed content is a conflict.
