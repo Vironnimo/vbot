@@ -33,7 +33,7 @@ from core.models.models_dev import (
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderAuthError
+from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
@@ -48,7 +48,7 @@ from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.stepfun import StepFunAdapter
-from core.providers.token_getter import RejectedTokenRefresher, StaticTokenGetter, TokenGetter
+from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -56,7 +56,6 @@ from core.utils.retry import retry_async
 
 _LOGGER = get_logger("models.discovery")
 _HeaderSource = dict[str, str] | Callable[[], Awaitable[dict[str, str]]]
-_AuthRecovery = Callable[[dict[str, str]], Awaitable[None]]
 
 
 class ModelDiscoveryError(VBotError):
@@ -148,22 +147,15 @@ async def refresh_models(
                 provider_config, await token_getter(), adapter_class, credential_connection
             )
 
-        auth_recovery: _AuthRecovery | None = None
-        if (
-            isinstance(adapter_class, type)
-            and issubclass(adapter_class, ProviderAdapter)
-            and adapter_class.can_refresh_discovery_after_unauthorized(credential_connection)
-            and isinstance(token_getter, RejectedTokenRefresher)
-            and credential_connection is not None
-        ):
-            refresher = token_getter
-            auth = credential_connection.auth
+        connection = credential_connection or next(iter(provider_config.connections), None)
 
-            async def recover_auth(rejected_headers: dict[str, str]) -> None:
-                rejected_token = rejected_headers[auth.header].removeprefix(auth.prefix)
-                await refresher.refresh_after_unauthorized(rejected_token)
+        def request_auth_recovery() -> OAuthRequestRecovery | None:
+            return (
+                OAuthRequestRecovery(token_getter, connection.auth)
+                if connection is not None and connection.type == "oauth"
+                else None
+            )
 
-            auth_recovery = recover_auth
         discovery_params = await _resolve_discovery_params(adapter_class)
         url = _append_query_params(
             _join_url(base_url, models_endpoint),
@@ -171,7 +163,7 @@ async def refresh_models(
         )
 
         raw_payload, raw_models = await _fetch_raw_models(
-            url, build_headers, auth_recovery=auth_recovery
+            url, build_headers, auth_recovery=request_auth_recovery()
         )
 
         # Some providers (e.g. OpenRouter) require supplementary API calls
@@ -185,7 +177,7 @@ async def refresh_models(
                 supplementary_url = _append_query_params(url, params)
                 try:
                     _, supplementary_models = await _fetch_raw_models(
-                        supplementary_url, build_headers, auth_recovery=auth_recovery
+                        supplementary_url, build_headers, auth_recovery=request_auth_recovery()
                     )
                 except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
                     _LOGGER.warning(
@@ -272,7 +264,10 @@ async def refresh_models(
 
             async def _post_enrichment_json(endpoint: str, payload: dict[str, Any]) -> Any:
                 response_payload = await _post_json_payload(
-                    _join_url(base_url, endpoint), build_headers, payload
+                    _join_url(base_url, endpoint),
+                    build_headers,
+                    payload,
+                    auth_recovery=request_auth_recovery(),
                 )
                 raw_enrichment_responses.append(
                     {"endpoint": endpoint, "request": payload, "response": response_payload}
@@ -310,7 +305,9 @@ async def refresh_models(
 
             async def _fetch_task_json(endpoint: str) -> Any:
                 payload = await _fetch_json_payload(
-                    _join_url(base_url, endpoint), build_headers, auth_recovery=auth_recovery
+                    _join_url(base_url, endpoint),
+                    build_headers,
+                    auth_recovery=request_auth_recovery(),
                 )
                 raw_task_responses[endpoint] = payload
                 return payload
@@ -544,7 +541,7 @@ async def _fetch_raw_models(
     url: str,
     headers: _HeaderSource,
     *,
-    auth_recovery: _AuthRecovery | None = None,
+    auth_recovery: OAuthRequestRecovery | None = None,
 ) -> tuple[Any, list[Mapping[str, Any]]]:
     payload = await _fetch_json_payload(url, headers, auth_recovery=auth_recovery)
 
@@ -562,7 +559,7 @@ async def _fetch_json_payload(
     url: str,
     headers: _HeaderSource,
     *,
-    auth_recovery: _AuthRecovery | None = None,
+    auth_recovery: OAuthRequestRecovery | None = None,
 ) -> Any:
     """GET *url* and return the parsed JSON body with retry semantics.
 
@@ -573,18 +570,19 @@ async def _fetch_json_payload(
     fatal statuses propagate without another auth recovery attempt.
     """
 
-    rejected_headers: dict[str, str] | None = None
-
     async def _request() -> Any:
-        nonlocal rejected_headers
         request_headers = await headers() if callable(headers) else headers
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.get(url, headers=request_headers)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
-            if response.status_code == 401:
-                rejected_headers = request_headers
+            if auth_recovery is not None:
+                auth_recovery.record_response(
+                    response.status_code,
+                    request_headers,
+                    response.text if response.status_code >= 400 else "",
+                )
             if response.status_code >= 400:
                 error_body = response.text
                 detail = (
@@ -600,20 +598,18 @@ async def _fetch_json_payload(
                 )
             return response.json()
 
-    try:
-        return await retry_async(_request)
-    except ProviderAuthError as exc:
-        if (
-            getattr(exc, "status_code", None) != 401
-            or auth_recovery is None
-            or rejected_headers is None
-        ):
-            raise
-        await auth_recovery(rejected_headers)
-        return await retry_async(_request)
+    if auth_recovery is not None:
+        return await auth_recovery.run(lambda: retry_async(_request))
+    return await retry_async(_request)
 
 
-async def _post_json_payload(url: str, headers: _HeaderSource, payload: dict[str, Any]) -> Any:
+async def _post_json_payload(
+    url: str,
+    headers: _HeaderSource,
+    payload: dict[str, Any],
+    *,
+    auth_recovery: OAuthRequestRecovery | None = None,
+) -> Any:
     """POST *payload* to *url* and return the parsed JSON body with retry semantics.
 
     The POST twin of :func:`_fetch_json_payload`, used by adapter enrichment
@@ -629,6 +625,12 @@ async def _post_json_payload(url: str, headers: _HeaderSource, payload: dict[str
                 response = await client.post(url, headers=request_headers, json=payload)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
+            if auth_recovery is not None:
+                auth_recovery.record_response(
+                    response.status_code,
+                    request_headers,
+                    response.text if response.status_code >= 400 else "",
+                )
             if response.status_code >= 400:
                 error_body = response.text
                 detail = (
@@ -644,6 +646,8 @@ async def _post_json_payload(url: str, headers: _HeaderSource, payload: dict[str
                 )
             return response.json()
 
+    if auth_recovery is not None:
+        return await auth_recovery.run(lambda: retry_async(_request))
     return await retry_async(_request)
 
 

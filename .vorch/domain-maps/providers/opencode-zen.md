@@ -49,6 +49,7 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 ## Errors, Regions, and Privacy
 
 - Zen `AuthError` is reconnectable authentication failure. `CreditsError`, `MonthlyLimitError`, `UserLimitError`, and `ModelError` are fatal account/entitlement/Model-access failures even though Zen returns HTTP 401 for them. `RegionError` is fatal HTTP 403.
+- All four account-authenticated wires use the shared OAuth recovery in `providers/connections.md`. The Messages error-detail hook preserves the complete error body so an error `name` or `type` survives even without a human-readable message; otherwise an entitlement 401 could incorrectly trigger token renewal. `test_opencode_zen.py` verifies each entitlement code across all four wires and both request modes.
 - Stable allowance exhaustion markers such as `FreeUsageLimitError`, `GoUsageLimitError`, `BlackUsageLimitError`, monthly/weekly usage limits, and quota exhaustion make HTTP 429 fatal. A genuine burst `RateLimitError` remains retryable and honors `Retry-After` through the shared bounded retry policy.
 - OpenCode documents Zen hosting in the United States. Standard paid requests are described as zero-retention except that OpenAI- and Anthropic-routed requests may be retained for 30 days; free Models permit data collection. Treat these as product/privacy constraints, not Adapter behavior, and re-check them before making deployment or compliance promises.
 

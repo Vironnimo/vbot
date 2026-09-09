@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-09T13:09:06.349842+00:00",
+  "fetched_at": "2026-09-09T13:56:25.494889+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -3296,9 +3296,9 @@
         "name": "DeepSeek: DeepSeek V4 Pro 0813",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000031482",
-          "input_cache_read": "0.00000003498",
-          "prompt": "0.0000010494"
+          "completion": "0.00000197604",
+          "input_cache_read": "0.000000020958",
+          "prompt": "0.00000065868"
         },
         "reasoning": {
           "default_effort": "high",
@@ -3333,9 +3333,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 1024000,
+          "context_length": 1048576,
           "is_moderated": false,
-          "max_completion_tokens": 384000
+          "max_completion_tokens": 393216
         }
       },
       {
@@ -15580,9 +15580,9 @@
         "name": "DeepSeek: DeepSeek V4 Pro 0423",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000191052",
-          "input_cache_read": "0.000000079605",
-          "prompt": "0.00000095526"
+          "completion": "0.000001906344",
+          "input_cache_read": "0.000000079431",
+          "prompt": "0.000000953172"
         },
         "reasoning": {
           "default_effort": "high",
@@ -15714,9 +15714,9 @@
         "name": "DeepSeek: DeepSeek V4 Flash 0423",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000000177212",
-          "input_cache_read": "0.0000000177212",
-          "prompt": "0.000000088606"
+          "completion": "0.00000017416",
+          "input_cache_read": "0.000000017416",
+          "prompt": "0.00000008708"
         },
         "reasoning": {
           "default_effort": "high",

@@ -54,7 +54,7 @@ from core.providers.reasoning import (
     model_reasoning_levels,
     normalize_thinking_effort,
 )
-from core.providers.token_getter import TokenGetter
+from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.utils.retry import retry_async
 
@@ -253,6 +253,12 @@ def _classify_zen_status(
 
 class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
     """Zen's Anthropic Messages route with Zen error semantics."""
+
+    @staticmethod
+    def _build_error_detail(status_code: int, response_body: str = "") -> str:
+        # Zen's error name/type determines entitlement vs authentication even
+        # when the gateway omits the human-readable message.
+        return f"{status_code} {response_body}".strip()
 
     def wire_media_support(self, _model_id: str) -> frozenset[str]:
         return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
@@ -480,6 +486,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         payload = self._build_gemini_payload(messages, model_id, kwargs)
+        auth_recovery = OAuthRequestRecovery(
+            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
+        )
 
         async def _request() -> dict[str, Any]:
             headers = await self._gemini_headers()
@@ -491,6 +500,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
+            auth_recovery.record_response(
+                response.status_code, headers, response.text if response.status_code >= 400 else ""
+            )
             self._classify_http_status(
                 response.status_code,
                 detail=_response_detail(response),
@@ -498,7 +510,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             )
             return dict(decode_response_json(response, "OpenCode Zen Gemini provider"))
 
-        return await retry_async(_request)
+        return await auth_recovery.run(lambda: retry_async(_request))
 
     async def _stream_gemini(
         self,
@@ -508,6 +520,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         payload = self._build_gemini_payload(messages, model_id, kwargs)
+        auth_recovery = OAuthRequestRecovery(
+            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
+        )
 
         async def _connect() -> httpx.Response:
             headers = await self._gemini_headers()
@@ -522,9 +537,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 response = await self._client.send(request, stream=True)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
+            auth_recovery.record_response(response.status_code, headers)
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
+                auth_recovery.record_response(response.status_code, headers, body)
                 self._classify_http_status(
                     response.status_code,
                     detail=f"{response.status_code} {body}".strip(),
@@ -532,7 +549,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 )
             return response
 
-        response = await retry_async(_connect)
+        response = await auth_recovery.run(lambda: retry_async(_connect))
         replay_parts: list[dict[str, Any]] = []
         seen_finish = False
         has_tool_calls = False
