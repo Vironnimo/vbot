@@ -1781,7 +1781,7 @@ export const englishCatalog = Object.freeze({
     'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. Downloaded models are reused automatically without online checks.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',
   'settings.localSpeech.state.missing':
-    'Local speech support is not installed on this server. Installation includes support for both engines and may download several gigabytes.',
+    'Local speech support is not installed on this server. Installation supports all local speech-to-text engines and may download several gigabytes.',
   'settings.localSpeech.state.restart_required':
     'Installation complete. Restart the server to enable local speech recognition. Active Runs will be interrupted.',
   'settings.localSpeech.state.restarting':

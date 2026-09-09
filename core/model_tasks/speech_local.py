@@ -12,6 +12,7 @@ import gc
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -123,6 +124,15 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             "Leave empty to download and cache the selected model from Hugging Face.",
         ),
     )
+    language = TaskModelOptionField(
+        "language",
+        "text",
+        "Language",
+        default="",
+        description=(
+            "Leave empty for automatic detection, or enter a language code such as de or en."
+        ),
+    )
     qwen = LocalTaskTargetDescriptor(
         id="qwen3-asr",
         label="Qwen3 ASR",
@@ -141,16 +151,7 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
                     TaskModelOptionChoice("Qwen/Qwen3-ASR-0.6B-hf", "Qwen3 ASR 0.6B"),
                 ),
             ),
-            TaskModelOptionField(
-                "language",
-                "text",
-                "Language",
-                default="",
-                description=(
-                    "Leave empty for automatic detection, or enter a language code "
-                    "such as de or en."
-                ),
-            ),
+            language,
             TaskModelOptionField(
                 "prompt",
                 "textarea",
@@ -169,9 +170,18 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
         metadata={"installation_extra": "local-speech", "license": "CC-BY-4.0"},
         option_fields=common,
     )
+    nemotron = LocalTaskTargetDescriptor(
+        id="nemotron3.5-asr",
+        label="Nemotron 3.5 ASR Streaming 0.6B",
+        task_types=(TASK_SPEECH_TO_TEXT,),
+        availability=_dependencies_available,
+        metadata={"installation_extra": "local-speech", "license": "OpenMDW-1.1"},
+        option_fields=(language, *common),
+    )
     return (
         SpeechEngineDefinition(qwen, _QwenEngine, _LOAD_OPTIONS),
         SpeechEngineDefinition(parakeet, _ParakeetEngine, _LOAD_OPTIONS),
+        SpeechEngineDefinition(nemotron, _NemotronEngine, _LOAD_OPTIONS),
     )
 
 
@@ -241,7 +251,7 @@ class LocalSpeechExecutor:
         return not (setup and setup.blocks_execution) and descriptor.can_execute()
 
     def setup_for(self, target: str) -> LocalSpeechSetup:
-        if target in ("", "local/qwen3-asr", "local/parakeet"):
+        if target in ("", "local/qwen3-asr", "local/parakeet", "local/nemotron3.5-asr"):
             return self.setup
         if target.startswith("local/") and target[6:] in self.tts_setups:
             return self.tts_setups[target[6:]]
@@ -908,3 +918,52 @@ class _ParakeetEngine(_TransformersEngine):
             output = self._model.generate(**inputs, return_dict_in_generate=True)
         texts = self._processor.decode(output.sequences, skip_special_tokens=True)
         return SpeechTranscriptionResult(text=texts[0])
+
+
+class _NemotronEngine(_TransformersEngine):
+    model_class = "AutoModelForRNNT"
+    default_model = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+
+    def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+        language = (options.get("language") or "").strip() or "auto"
+        inputs = self._processor(
+            samples, sampling_rate=_SAMPLE_RATE, language=language, return_tensors="pt"
+        ).to(self._model.device, self._model.dtype)
+        # Compute features once, then let native streaming generation retain the
+        # encoder/decoder caches across fixed-size mel chunks within this recording.
+        lookahead = 6
+        self._processor.set_num_lookahead_tokens(lookahead)
+        first = self._processor.num_mel_frames_first_audio_chunk
+        subsequent = self._processor.num_mel_frames_per_audio_chunk
+        frames = int(inputs["attention_mask"].sum().item())
+        features = inputs["input_features"][:, :frames]
+        chunk_count = 1 + max(0, frames - first + subsequent - 1) // subsequent
+
+        def chunks() -> Iterator[Any]:
+            start = 0
+            for index in range(chunk_count):
+                size = first if index == 0 else subsequent
+                chunk = features[:, start : start + size]
+                # The final short chunk must be padded, never discarded. Native
+                # streaming rejects any chunk that does not have its exact size.
+                yield self._torch.nn.functional.pad(chunk, (0, 0, 0, size - chunk.shape[1]))
+                start += size
+
+        # RNNT emits blanks as well as text; bound by the maximum emissions per
+        # encoder frame so the final audio cannot be truncated by a text-token cap.
+        limit = chunk_count * (lookahead + 1) * self._model.max_symbols_per_step + 1
+        with self._torch.inference_mode():
+            output = self._model.generate(
+                input_features=chunks(),
+                prompt_ids=inputs["prompt_ids"],
+                num_lookahead_tokens=lookahead,
+                max_new_tokens=limit,
+                return_dict_in_generate=True,
+            )
+        text = self._processor.decode(output.sequences, skip_special_tokens=True)[0]
+        raw = self._processor.decode(output.sequences, skip_special_tokens=False)[0]
+        detected = re.findall(r"<([a-z]{2,3}-[A-Z]{2})>", raw)
+        return SpeechTranscriptionResult(
+            text=text,
+            language=language if language != "auto" else (detected[-1] if detected else None),
+        )
