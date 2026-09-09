@@ -42,6 +42,7 @@ from core.memory import MemoryService
 from core.model_tasks import (
     EmbeddingService,
     ImageService,
+    LocalSpeechExecutor,
     MusicService,
     SpeechService,
     TaskModelService,
@@ -529,16 +530,19 @@ class Runtime:
             resources_path=resources_path,
             logger=self.logger,
         )
+        local_speech = LocalSpeechExecutor()
         self._model_tasks = TaskModelService(
             self._providers,
             self._models,
             self._provider_credentials,
             self._storage,
+            local_targets=local_speech.targets,
         )
         self._speech = SpeechService(
             self._model_tasks,
             self,
             self._storage.data_dir,
+            local_executor=local_speech,
             transcription_audio_getter=self._storage.load_speech_settings,
         )
         self._image = ImageService(
@@ -1365,6 +1369,8 @@ class Runtime:
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
+        if self._speech is not None:
+            self._speech.close()
         self._clear_service_references()
         self._log_manager.close()
 
@@ -1391,6 +1397,8 @@ class Runtime:
             await self._session_title_service.aclose()
         if self._chat_run_manager is not None:
             await self._chat_run_manager.aclose()
+        if self._speech is not None:
+            await self._speech.aclose()
         if self._provider_usage is not None:
             await self._provider_usage.aclose()
         if self._process_manager is not None:
@@ -1416,6 +1424,7 @@ class Runtime:
         if self._calendar_service is not None:
             self._calendar_service.actions.stop()
         cleanup_actions = (
+            (self._speech, "close"),
             (self._extensions, "fire_shutdown_blocking"),
             (self._channel_service, "stop"),
             (self._cron_service, "stop"),
