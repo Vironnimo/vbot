@@ -1,5 +1,18 @@
 # Third-Party Notices
 
+## Local speech models
+
+Optional local speech recognition downloads unmodified pretrained model weights
+at first use; vBot does not bundle them in its distribution:
+
+- Qwen Team, [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf)
+  and [Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf),
+  under [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+- NVIDIA, [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
+  under [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/).
+
+The linked model cards provide upstream attribution and model documentation.
+
 ## Silero VAD model
 
 vBot includes `desktop/wakeword/models/silero_vad.onnx` from [Silero VAD](https://github.com/snakers4/silero-vad), copyright 2020-present Silero Team. The file comes from the `silero-vad` 6.2.1 PyPI package (`silero_vad/data/silero_vad.onnx`); the bundled file has SHA-256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` and is distributed under the MIT License:

@@ -83,7 +83,9 @@ _MICROPHONE_RECONNECT_INTERVAL_SECONDS = 30.0
 _POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
 _INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
 
-_HTTP_TIMEOUT = 30.0
+# Local STT may download model weights on first use. Keep connection/upload
+# failures bounded separately from the longer inference response wait.
+_HTTP_TIMEOUT = httpx.Timeout(600.0, connect=10.0, write=30.0, pool=10.0)
 _RPC_TIMEOUT = 10.0
 _MAX_RETRIES = 3
 

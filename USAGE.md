@@ -682,6 +682,61 @@ vbot task-model set text_embedding openai/text-embedding-3-small::api-key
 vbot task-model clear text_embedding
 ```
 
+### Local speech recognition
+
+Qwen3 ASR and Parakeet TDT v3 run on the **vBot server machine**, including when
+the WebUI or Desktop connects from another computer. They require no paid API
+or subscription. Install the optional runtime from your vBot installation
+directory, using the same Python environment that runs the server, then restart:
+
+```bash
+python -m pip install -e ".[local-speech]"
+```
+
+For GPU execution, install a [PyTorch build for your platform](https://pytorch.org/get-started/locally/)
+in that environment. `Automatic` uses CUDA/ROCm when available, then Apple MPS,
+otherwise CPU. CPU execution is available but can be slow. This extra is separate
+from the normal server and Desktop dependencies; it does not install NeMo, vLLM,
+or the separate `qwen-asr` package. Both engines use native Transformers adapters.
+
+In **Settings → Tools & Media → Specialized Models → Speech to text**, select
+**Qwen3 ASR** or **Parakeet TDT v3**. Expand its options to choose device, precision,
+or a model directory. Qwen defaults to the 1.7B model, also offers 0.6B, and accepts
+an optional language and vocabulary/context hint. Parakeet detects language
+automatically. You can also select an engine through the CLI:
+
+```bash
+vbot task-model set speech_to_text local/qwen3-asr
+vbot task-model set speech_to_text local/parakeet
+```
+
+The first non-silent transcription downloads the selected public checkpoint from
+Hugging Face and loads it. This can take several minutes and needs disk space for
+model weights. The server's standard Hugging Face cache is reused (`HF_HOME` can
+relocate it). After downloading, enable **Offline only** to prevent model network
+lookups; a missing cache then produces an error. Alternatively, point **Model
+directory** at a complete compatible Transformers checkpoint on the server.
+Recordings are processed by the local engine, without a transcription API call.
+
+Only one local model stays loaded per server Runtime. On the next transcription
+after an engine/model/device change, the previous model is released before the
+replacement loads. Switching to a Provider releases it before the next Provider
+transcription. Shutdown and inference failures also release the model. Model
+loading and inference run outside the server Event Loop; cancelling a request
+waits for already-started inference to finish safely.
+
+All existing microphone and audio-attachment paths use the selected engine.
+Long recordings are split into segments of at most 30 seconds, preferring a quiet
+boundary and preserving every audio sample. Returned segment times describe these
+audio chunks, not word-level alignment. The current interface returns a completed
+transcript; it does not stream partial text or distinguish speakers. Desktop Voice
+allows up to ten minutes for a transcription response, including a first download.
+
+The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf),
+[Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf) (Apache-2.0), and
+[NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+(CC-BY-4.0). See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
+
 ## Channels
 
 Telegram and Discord Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. Add bot credentials to the process environment or `<data-dir>/.env`, then configure the token variable name rather than the token itself:

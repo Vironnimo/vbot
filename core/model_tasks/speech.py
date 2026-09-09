@@ -15,7 +15,11 @@ from core.model_tasks.constants import (
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
 )
-from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
+from core.model_tasks.speech_local import (
+    LocalSpeechError,
+    LocalSpeechExecutionError,
+    LocalSpeechExecutor,
+)
 from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.model_tasks.task_execution import TaskBindingResolver
@@ -151,9 +155,12 @@ class SpeechService:
                     media_type=prepared.media_type,
                     options=options,
                 )
+            except LocalSpeechExecutionError as exc:
+                raise SpeechExecutionError(str(exc)) from exc
             except LocalSpeechError as exc:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
+        await self._local_executor.unload()
         provider_client = ProviderSpeechClient.from_runtime(self._runtime, target_ref)
         try:
             return await provider_client.transcribe(
@@ -176,6 +183,12 @@ class SpeechService:
         except Exception as exc:
             _LOGGER.error("Speech transcription failed", exc_info=True)
             raise SpeechExecutionError(str(exc)) from exc
+
+    def close(self) -> None:
+        self._local_executor.close()
+
+    async def aclose(self) -> None:
+        await self._local_executor.aclose()
 
     async def synthesize(self, text: str) -> SpeechSynthesisResult:
         """Synthesize one text string using the configured TTS binding."""

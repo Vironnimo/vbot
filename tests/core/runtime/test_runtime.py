@@ -151,6 +151,27 @@ def config(tmp_path: Path) -> Config:
     return Config(data_dir=tmp_path / "data")
 
 
+@pytest.mark.asyncio
+async def test_runtime_registers_local_speech_and_closes_its_executor(config: Config) -> None:
+    runtime = Runtime(config)
+    runtime.start()
+    speech = runtime.speech
+    try:
+        targets = runtime.model_tasks.list_targets("speech_to_text")
+        assert {target.id for target in targets if target.kind == "local"} == {
+            "local/qwen3-asr",
+            "local/parakeet",
+        }
+        runtime.model_tasks.update(
+            {"speech_to_text": {"target": "local/parakeet", "options": {"offline": True}}}
+        )
+        assert runtime.model_tasks.binding_for("speech_to_text").target == "local/parakeet"
+        assert speech._local_executor._engine is None
+    finally:
+        await runtime.aclose()
+    assert speech._local_executor._closed
+
+
 def test_detect_vbot_version_matches_pyproject_single_source() -> None:
     """The reported vBot version tracks the one source of truth in pyproject.toml.
 
