@@ -30,6 +30,7 @@
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Badge from '../ui/Badge.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import {
     createSkill as createSkillRequest,
     deleteSkill as deleteSkillRequest,
@@ -261,12 +262,15 @@
     }
   }
 
-  function scopeForEntry(entry) {
-    return entry.editable_scope;
+  function openDirectories() {
+    createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
+    showDirectories = true;
+    changeScope('directories');
   }
 
   function openCreateModal() {
-    createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
+    if (scope !== 'directories')
+      createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
     newName = '';
     newDescription = '';
     newContent = '';
@@ -436,10 +440,8 @@
   }
 
   function requestDelete(entry) {
-    if (busy) {
-      return;
-    }
-    deleteTarget = { scope: scopeForEntry(entry), name: entry.name };
+    if (busy || !entry.editable_scope) return;
+    deleteTarget = { scope: entry.editable_scope, name: entry.name };
   }
 
   function cancelDelete() {
@@ -474,6 +476,66 @@
   }
 </script>
 
+{#snippet skillActions(entry)}
+  <div
+    class="skills-actions"
+    role="group"
+    aria-label={t('skills.actionsFor', '', { name: entry.name })}
+  >
+    {#if entry.owner_id}
+      <Button
+        variant="tertiary"
+        disabled={busy || Boolean(agentError)}
+        ariaLabel={t('skills.shareNamed', '', { name: entry.name })}
+        tooltip={t('skills.sharing')}
+        onClick={() => openShareModal(entry)}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+          ><circle cx="4" cy="8" r="2" /><circle cx="12" cy="3" r="2" /><circle
+            cx="12"
+            cy="13"
+            r="2"
+          /><path d="m6 7 4-3M6 9l4 3" /></svg
+        >
+        {t('skills.shareAction')}
+      </Button>
+    {/if}
+    {#if entry.editable_scope}
+      <Button
+        variant="danger"
+        disabled={busy}
+        ariaLabel={t('skills.deleteNamed', '', { name: entry.name })}
+        onClick={() => requestDelete(entry)}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+          ><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 6v6M9 6v6" /></svg
+        >
+        {t('common.delete')}
+      </Button>
+    {/if}
+    <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
+      <Toggle
+        checked={!entry.disabled}
+        disabled={busy}
+        ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
+        onChange={() => toggleDisabled(entry)}
+      />
+    </span>
+  </div>
+{/snippet}
+
 <section class="skills-view view active" aria-labelledby="skills-title">
   <aside
     class="skills-nav secondary-pane"
@@ -504,13 +566,7 @@
       {/each}
     </nav>
     <div class="skills-nav-footer">
-      <Button
-        variant="secondary"
-        onClick={() => {
-          showDirectories = true;
-          changeScope('directories');
-        }}
-      >
+      <Button variant="secondary" onClick={openDirectories}>
         {t('skills.locations', 'Skill locations')}
       </Button>
     </div>
@@ -538,7 +594,7 @@
       <div>
         <h2 id="skills-title">
           {scope === 'directories'
-            ? t('skills.locations')
+            ? t('skills.addSkills')
             : collection?.label || t('skills.title')}
         </h2>
         <p>
@@ -561,9 +617,16 @@
           }}>{t('skills.refresh')}</Button
         >
         {#if scope !== 'directories'}
-          <Button variant="primary" disabled={busy} onClick={openCreateModal}
+          <Button variant="primary" onClick={openDirectories}
             ><span aria-hidden="true">+</span>
-            {t('settings.skills.newSkill')}</Button
+            {t('skills.addSkills')}</Button
+          >
+        {:else}
+          <Button
+            variant="secondary"
+            ariaLabel={t('skills.backToList')}
+            onClick={() => changeScope('all')}
+            >← {t('skills.backToList')}</Button
           >
         {/if}
       </div>
@@ -607,10 +670,18 @@
           >{/if}
         <SkillDirectoryEditor
           {settings}
-          onCommit={onSettingsCommit}
+          onCommit={(nextSettings) => {
+            onSettingsCommit(nextSettings);
+            void loadInventory();
+          }}
           {onToast}
           onError={(message) => (directoryError = message)}
         />
+        <div class="skills-create-secondary">
+          <Button variant="tertiary" disabled={busy} onClick={openCreateModal}
+            >{t('skills.createCustom')}</Button
+          >
+        </div>
       {/if}
     </div>
     {#if scope !== 'directories'}
@@ -679,41 +750,41 @@
               />
             {:else}
               {#each visibleSkills as entry (entry.id)}
-                <button
-                  type="button"
+                <div
                   class="skills-row"
                   class:skills-row--selected={selectedId === entry.id}
                   class:skills-row--disabled={entry.disabled}
-                  data-skill-id={entry.id}
-                  aria-pressed={selectedId === entry.id}
-                  onclick={() => openSkill(entry)}
                 >
-                  <span class="skills-row-copy">
-                    <span class="skills-row-name">{entry.name}</span>
-                    <span class="skills-row-description"
-                      >{entry.description || t('skills.noDescription')}</span
-                    >
-                    <span class="skills-row-source"
-                      >{skillSourceLabel(
-                        entry,
-                        t,
-                        agents,
-                      )}{#if entry.shared}<span aria-hidden="true"> · </span>{t(
-                          'skills.sharedBadge',
-                        )}{/if}</span
-                    >
-                  </span>
-                  <span class="skills-row-end">
-                    {#if entry.status !== 'available'}<StatusChip
-                        variant={skillStatusVariant(entry)}
-                        >{skillStatusLabel(entry, t)}</StatusChip
-                      >
-                    {:else if skillDiagnosticLines(entry).length}<Badge
-                        variant="warn">{t('skills.notes')}</Badge
-                      >{/if}
-                    <span aria-hidden="true" class="skills-row-arrow">›</span>
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    class="skills-row-open"
+                    data-skill-id={entry.id}
+                    aria-pressed={selectedId === entry.id}
+                    aria-label={entry.name}
+                    use:tooltip={entry.description || t('skills.noDescription')}
+                    onclick={() => openSkill(entry)}
+                  >
+                    <span class="skills-row-copy">
+                      <span class="skills-row-title">
+                        <span class="skills-row-name">{entry.name}</span>
+                        {#if entry.status !== 'available'}<StatusChip
+                            variant={skillStatusVariant(entry)}
+                            >{skillStatusLabel(entry, t)}</StatusChip
+                          >
+                        {:else if skillDiagnosticLines(entry).length}<Badge
+                            variant="warn">{t('skills.notes')}</Badge
+                          >{/if}
+                      </span>
+                      <span class="skills-row-source">
+                        {skillSourceLabel(entry, t, agents)}{#if entry.shared}
+                          <span class="skills-source-divider" aria-hidden="true"
+                            >·</span
+                          >{t('skills.sharedBadge')}{/if}
+                      </span>
+                    </span>
+                  </button>
+                  {@render skillActions(entry)}
+                </div>
               {/each}
             {/if}
           </div>
@@ -757,36 +828,19 @@
                 >{skillStatusLabel(selected, t)}</StatusChip
               >
             </div>
+            <header class="skills-detail-header">
+              <h3
+                id="skill-detail-name"
+                use:tooltip={selected.description || t('skills.noDescription')}
+              >
+                {selected.name}
+              </h3>
+              <p class="skills-detail-source">
+                {skillSourceLabel(selected, t, agents)}
+              </p>
+              {@render skillActions(selected)}
+            </header>
             <div class="skills-detail-scroll">
-              <header class="skills-detail-header">
-                <p class="skills-detail-source">
-                  {skillSourceLabel(selected, t, agents)}{#if selected.owner_id}
-                    · {t('skills.ownedSkill')}{/if}
-                </p>
-                <h3 id="skill-detail-name">{selected.name}</h3>
-                <p class="skills-description">
-                  {selected.description || t('skills.noDescription')}
-                </p>
-                <div class="skills-detail-actions">
-                  {#if selected.editable_scope}<Button
-                      variant="primary"
-                      disabled={busy ||
-                        inspectLoading ||
-                        inspected?.id !== selected.id}
-                      onClick={() => startEdit(selected)}
-                      >{t('skills.editInstructions')}</Button
-                    >{/if}
-                  {#if selected.owner_id}<Button
-                      variant="secondary"
-                      disabled={busy || Boolean(agentError)}
-                      onClick={() => openShareModal(selected)}
-                      >{t('skills.sharing')}</Button
-                    >{/if}
-                  {#if !selected.editable_scope}<Badge
-                      >{t('skills.readOnly')}</Badge
-                    >{/if}
-                </div>
-              </header>
               <div class="skills-access">
                 <h4>{t('skills.access')}</h4>
                 {#if selected.owner_id}
@@ -841,10 +895,20 @@
                   ariaLabel={t('skills.contentView')}
                   onChange={(next) => (contentTab = next)}
                 />
-                {#if inspected}<CopyButton
-                    text={inspected.content}
-                    label={t('skills.copyContent')}
-                  />{/if}
+                <div class="skills-content-actions">
+                  {#if selected.editable_scope}<Button
+                      variant="tertiary"
+                      disabled={busy ||
+                        inspectLoading ||
+                        inspected?.id !== selected.id}
+                      onClick={() => startEdit(selected)}
+                      >{t('skills.editInstructions')}</Button
+                    >{:else}<Badge>{t('skills.readOnly')}</Badge>{/if}
+                  {#if inspected}<CopyButton
+                      text={inspected.content}
+                      label={t('skills.copyContent')}
+                    />{/if}
+                </div>
               </div>
               <div
                 class="skills-content"
@@ -871,31 +935,6 @@
                     />{/if}
                 {/if}
               </div>
-              <details class="skills-management">
-                <summary>{t('skills.availabilityAndRemoval')}</summary>
-                <p>{t('skills.disableHelp')}</p>
-                <Button
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() => toggleDisabled(selected)}
-                  >{t(
-                    selected.disabled
-                      ? 'skills.enableEverywhere'
-                      : 'skills.disableEverywhere',
-                  )}</Button
-                >
-                {#if selected.editable_scope}
-                  <div class="skills-delete">
-                    <p>{t('skills.deleteHelp')}</p>
-                    <Button
-                      variant="danger"
-                      disabled={busy}
-                      onClick={() => requestDelete(selected)}
-                      >{t('settings.skills.deleteConfirmTitle')}</Button
-                    >
-                  </div>
-                {/if}
-              </details>
             </div>
           </section>
         {/if}
@@ -1252,10 +1291,11 @@
   }
   .skills-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    gap: 8px;
     width: 100%;
-    padding: 14px 12px;
+    padding: 8px 12px;
     text-align: left;
     border: 0;
     border-bottom: 1px solid var(--border);
@@ -1270,10 +1310,52 @@
     background: var(--accent-06);
     border-left-color: var(--accent);
   }
-  .skills-row:focus-visible {
+  .skills-row-open:focus-visible {
     outline: 1px solid var(--accent);
     outline-offset: -2px;
     background: var(--surface);
+  }
+  .skills-row-open {
+    display: flex;
+    align-items: center;
+    flex: 1 1 140px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 4px 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  .skills-row-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .skills-actions,
+  .skills-content-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .skills-enable {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 40px;
+  }
+  .skills-enable :global(.toggle::before) {
+    content: '';
+    position: absolute;
+    inset: -9px -3px;
+  }
+  .skills-create-secondary {
+    margin-top: 24px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
   }
   .skills-row-copy {
     display: grid;
@@ -1286,13 +1368,6 @@
     color: var(--text-hi);
     overflow-wrap: anywhere;
   }
-  .skills-row-description {
-    font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-    color: var(--text-med);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .skills-row-source {
     font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
     color: var(--text-med);
@@ -1300,18 +1375,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .skills-source-divider {
+    margin: 0 4px;
+  }
   .skills-row--disabled {
     border-left-style: dashed;
-  }
-  .skills-row-end {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-shrink: 0;
-  }
-  .skills-row-arrow {
-    color: var(--text-med);
-    font-size: var(--fs-heading-md);
   }
   .skills-pagination {
     display: flex;
@@ -1325,7 +1393,10 @@
     font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
   }
   .skills-workspace--selected .skills-results {
-    flex: 0 0 40%;
+    flex: 0 0 44%;
+  }
+  .skills-row .skills-actions {
+    margin-left: auto;
   }
   .skills-detail {
     display: flex;
@@ -1356,6 +1427,14 @@
     overscroll-behavior: contain;
     padding: 14px 12px 20px 0;
   }
+  .skills-detail-header {
+    padding: 8px 0 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .skills-detail-header .skills-actions {
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
   .skills-detail-header h3 {
     margin: 8px 0;
     font: 500 var(--fs-heading-md)/1.4 var(--font-mono);
@@ -1368,21 +1447,8 @@
     color: var(--text-med);
     overflow-wrap: anywhere;
   }
-  .skills-description {
-    color: var(--text-hi);
-    margin: 0;
-    font: 400 var(--fs-body-lg)/1.6 var(--font-ui);
-    overflow-wrap: anywhere;
-  }
-  .skills-detail-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 20px;
-  }
   .skills-access {
-    margin: 24px 0;
+    margin: 0 0 24px;
     padding-left: 14px;
     border-left: 2px solid var(--border-2);
   }
@@ -1392,7 +1458,6 @@
     color: var(--text-hi);
   }
   .skills-access p,
-  .skills-management p,
   .skills-notice p {
     margin: 6px 0;
     font: 400 var(--fs-body-sm)/1.6 var(--font-ui);
@@ -1407,6 +1472,7 @@
   }
   .skills-content-head {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     gap: 8px;
@@ -1430,26 +1496,12 @@
     max-width: 100%;
     overflow-x: auto;
   }
-  .skills-management {
-    margin-top: 24px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }
-  .skills-management summary,
   .skills-diagnostics summary,
   .skills-notice summary {
     cursor: pointer;
     color: var(--text-med);
     font: 500 var(--fs-body-sm)/1.5 var(--font-ui);
     padding: 8px 0;
-  }
-  .skills-management p {
-    margin: 12px 0;
-  }
-  .skills-delete {
-    border-top: 1px solid var(--border);
-    margin-top: 20px;
-    padding-top: 8px;
   }
   .skills-diagnostics {
     margin-bottom: 20px;
@@ -1596,9 +1648,7 @@
     .skills-search {
       flex-basis: 100%;
     }
-    .skills-row {
-      min-height: 76px;
-    }
+    .skills-view :global(.btn-danger),
     .skills-view :global(.btn-secondary),
     .skills-view :global(.btn-tertiary),
     .skills-view :global(.btn-primary) {
@@ -1607,7 +1657,6 @@
     .skills-detail-scroll {
       padding-right: 0;
     }
-    .skills-management summary,
     .skills-diagnostics summary {
       min-height: 40px;
     }

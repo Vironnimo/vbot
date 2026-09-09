@@ -6,13 +6,20 @@ export function agentDisplayName(agentId, agents) {
 }
 
 export function skillSourceLabel(entry, translate, agents) {
-  if (entry.owner_id) return agentDisplayName(entry.owner_id, agents);
-  if (entry.origin?.startsWith('project:')) return entry.origin.slice(8);
+  if (entry.owner_id)
+    return translate('skills.ownerLabel', 'Agent: {name}', {
+      name: agentDisplayName(entry.owner_id, agents),
+    });
+  if (entry.origin?.startsWith('project:'))
+    return translate('skills.projectLabel', 'Project: {name}', {
+      name: entry.origin.slice(8),
+    });
   if (entry.origin === 'bundled')
     return translate('skills.library.bundled', 'Included with vBot');
-  return (
-    entry.source_label || translate('skills.library.global', 'Global skills')
-  );
+  return translate('skills.sourceLabel', 'Source: {name}', {
+    name:
+      entry.source_label || translate('skills.library.global', 'Global skills'),
+  });
 }
 
 export function matchesSkillScope(entry, scope) {

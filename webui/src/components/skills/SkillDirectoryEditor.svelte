@@ -148,23 +148,6 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.skills.defaultDirectory', 'Default skill directory')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.skills.defaultDirectoryDescription',
-        'Always scanned from the vBot data directory and kept read-only here.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--input">
-    <TextField readonly value={defaultSkillDirectoryValue} />
-  </div>
-</div>
-
 <div class="s-row s-row--stacked">
   <div class="s-row-info">
     <div class="s-row-label">
@@ -176,6 +159,26 @@
         'Extra folders scanned for skills as part of the global library — their skills are available to every agent. Useful for keeping a skill collection outside the vBot data directory.',
       )}
     </div>
+  </div>
+
+  <div class="skills-directory-add">
+    <TextField
+      value={newSkillDirectory}
+      onInput={(next) => (newSkillDirectory = next)}
+      placeholder={t('settings.skills.pathPlaceholder', 'C:/path/to/skills')}
+      ariaLabel={t(
+        'settings.skills.extraDirectories',
+        'Additional skill directories',
+      )}
+      onkeydown={handleSkillDirectoryKeydown}
+    />
+    <Button
+      variant="secondary"
+      disabled={!newSkillDirectory.trim()}
+      onClick={addSkillDirectory}
+    >
+      {t('settings.skills.addDirectory', 'Add directory')}
+    </Button>
   </div>
 
   <div class="skills-directory-list">
@@ -207,26 +210,27 @@
     {/if}
   </div>
 
-  <div class="skills-directory-add">
-    <TextField
-      value={newSkillDirectory}
-      onInput={(next) => (newSkillDirectory = next)}
-      placeholder={t('settings.skills.pathPlaceholder', 'C:/path/to/skills')}
-      onkeydown={handleSkillDirectoryKeydown}
-    />
-    <Button
-      variant="secondary"
-      disabled={!newSkillDirectory.trim()}
-      onClick={addSkillDirectory}
-    >
-      {t('settings.skills.addDirectory', 'Add directory')}
-    </Button>
-  </div>
-
   <div class="skills-footer">
     <Button variant="primary" onClick={handleManualSkillDirectoriesSave}>
       {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
     </Button>
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.skills.defaultDirectory', 'Default skill directory')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.skills.defaultDirectoryDescription',
+        'Always scanned from the vBot data directory and kept read-only here.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control s-row-control--input">
+    <TextField readonly value={defaultSkillDirectoryValue} />
   </div>
 </div>
 
@@ -238,6 +242,14 @@
     gap: var(--space-sm);
   }
 
+  .skills-directory-add {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .skills-directory-add :global(input) {
+    flex: 1;
+    min-width: 180px;
+  }
   .skills-directory-item {
     display: flex;
     flex-direction: row;

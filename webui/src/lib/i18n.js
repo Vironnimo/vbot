@@ -15,6 +15,16 @@ export const englishCatalog = Object.freeze({
   'skills.descriptionPlaceholder': 'Describe the task this skill helps with.',
   'skills.instructionsPlaceholder':
     'Explain the steps, conventions, and checks.',
+  'skills.addSkills': 'Add skills',
+  'skills.createCustom': 'Create a custom skill…',
+  'skills.ownerLabel': 'Agent: {name}',
+  'skills.projectLabel': 'Project: {name}',
+  'skills.sourceLabel': 'Source: {name}',
+  'skills.actionsFor': 'Actions for {name}',
+  'skills.shareAction': 'Share',
+  'skills.shareNamed': 'Share {name}',
+  'skills.deleteNamed': 'Delete {name}',
+  'skills.enabledNamed': 'Enable {name} across all Agents and sources',
   'skills.library': 'Library',
   'skills.library.all': 'All skills',
   'skills.library.shared': 'Shared skills',
@@ -26,13 +36,13 @@ export const englishCatalog = Object.freeze({
   'skills.collections': 'Skill collections',
   'skills.locations': 'Skill locations',
   'skills.locationsSubtitle':
-    'Choose additional folders for vBot to discover skills.',
+    'Connect a folder containing Skills on the computer running vBot.',
   'skills.agentSubtitle':
     'Skills owned by {name}, including any shared with other Agents.',
   'skills.sharedSubtitle':
     'Original skills shared by their owners with other Agents.',
   'skills.librarySubtitle':
-    'Find a playbook, read its instructions, and manage who can use it.',
+    'Manage access, share Skills, or add an existing collection.',
   'skills.searchLibrary': 'Search names, descriptions, or owners…',
   'skills.filter.label': 'Filter by status',
   'skills.filter.all': 'All statuses',
@@ -46,7 +56,7 @@ export const englishCatalog = Object.freeze({
     'Try fewer words or clear the status filter. Choose All skills to search every collection.',
   'skills.noCollectionSkills': 'No skills in this collection',
   'skills.noCollectionSkillsHelp':
-    'New skills can be created globally or in an Agent’s private collection.',
+    'Add a Skill folder or share an existing Skill with this Agent.',
   'skills.notes': 'Notes',
   'skills.previousPage': 'Previous page',
   'skills.nextPage': 'Next page',
@@ -1582,7 +1592,7 @@ export const englishCatalog = Object.freeze({
     'Always scanned from the vBot data directory and kept read-only here.',
   'settings.skills.extraDirectories': 'Additional skill directories',
   'settings.skills.extraDirectoriesDescription':
-    'Extra folders scanned for skills as part of the global library — their skills are available to every agent. Useful for keeping a skill collection outside the vBot data directory.',
+    'Enter a folder on the computer running vBot that contains Skill folders with a SKILL.md file. Skills stay in that folder and join the global library; each Agent’s Skill selection still applies.',
   'settings.skills.pathPlaceholder': 'C:/path/to/skills',
   'settings.skills.addDirectory': 'Add directory',
   'settings.skills.removeDirectory': 'Remove skill directory {path}',
