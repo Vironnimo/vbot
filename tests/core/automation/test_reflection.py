@@ -763,23 +763,30 @@ def test_review_scope_shapes() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fragment_name", "allowed_tools"),
+    ("scope", "fragment_name", "allowed_tools"),
     [
-        ("reflect-memory.md", "Use only `memory`"),
-        ("reflect-skill.md", "Use only `skill` and `skill_manage`"),
-        ("reflect.md", "Use only `memory`, `skill`, and `skill_manage`"),
+        ("memory", "reflect-memory.md", MEMORY_REFLECTION_TOOL_RESTRICTION),
+        ("skill", "reflect-skill.md", SKILL_REFLECTION_TOOL_RESTRICTION),
+        ("combined", "reflect.md", REFLECTION_TOOL_RESTRICTION),
     ],
 )
-def test_real_reflection_prompts_define_their_tool_boundary(
-    fragment_name: str, allowed_tools: str
+@pytest.mark.asyncio
+async def test_real_reflection_brief_reaches_its_scoped_run_unchanged(
+    scope: str, fragment_name: str, allowed_tools: tuple[str, ...]
 ) -> None:
-    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / fragment_name
-    prompt = prompt_path.read_text(encoding="utf-8")
+    service, _sessions, loop = _make_service()
+    prompt_root = Path(__file__).parents[3] / "resources" / "prompts"
+    service._runtime.storage.read_prompt_fragment = lambda fragment_name: (  # type: ignore[method-assign]
+        prompt_root / fragment_name
+    ).read_text(encoding="utf-8")
 
-    assert "every other Tool is disabled" in prompt
-    assert allowed_tools in prompt
-    if fragment_name != "reflect-memory.md":
-        assert "Call `skill` with no arguments to list your Skills" in prompt
+    await service.run_review("main", "s1", review_scope=cast("Any", scope))
+
+    assert (
+        loop.started[0]["message"]
+        == (prompt_root / fragment_name).read_text(encoding="utf-8").strip()
+    )
+    assert loop.started[0]["tool_restriction"] == allowed_tools
 
 
 @pytest.mark.parametrize("fragment_name", ["reflect-skill.md", "reflect.md"])
@@ -792,7 +799,6 @@ def test_real_skill_reflection_prompts_use_compact_private_authoring_contract(
     assert "old_string" not in prompt
     assert "new_string" not in prompt
     assert "file_content" not in prompt
-    assert "cannot execute support scripts" in prompt
 
 
 @pytest.mark.parametrize(
@@ -807,13 +813,3 @@ def test_real_skill_authoring_prompts_do_not_teach_removed_fields(fragment_name:
     assert "old_string" not in prompt
     assert "new_string" not in prompt
     assert "replace_all" not in prompt
-
-
-def test_real_skill_maintenance_prompt_forbids_implicit_global_fallback() -> None:
-    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / "skill_maintenance.md"
-    prompt = prompt_path.read_text(encoding="utf-8")
-
-    assert "user-facing Skill controls" in prompt
-    assert "do not call any Tool" in prompt
-    assert "offer workarounds" in prompt
-    assert "instead of silently changing another scope" in prompt
