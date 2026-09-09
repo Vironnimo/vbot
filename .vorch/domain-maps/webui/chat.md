@@ -76,6 +76,13 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 - The `/model ` autocomplete opens on demand (catalog fetched only when triggered), reuses the Agent-dropdown suitability filter and show-all toggle, auto-submits the selection through the guarded path, and shares one keyboard contract with the skill/file popups. Enter/Tab selects only the visibly active row; if a list change leaves the active index out of range, selection returns false instead of falling back to an unmarked first row.
 - Speech input releases every media resource (tracks, recorder, timers, object URLs) on completion, cancellation, replacement, teardown, and failure - cleanup best effort across failing tracks. A pending browser microphone permission request cannot be aborted, so teardown invalidates it and a late recorder result must release its tracks without starting capture. The native recorder container uploads as-is; `SpeechService` converts to the server-wide Voice -> Transcription profile, so Chat and wakeword capture share one Provider-facing audio policy.
 - Drafts and completed pending Attachments are interaction state keyed by the full displayed Session address; refresh or selection transitions never silently submit or cross-address either. A pending Attachment becomes Model-visible only when that Session's send is admitted.
+- Chat microphone uploads opt into the speech endpoint's NDJSON progress stream.
+  `api.js` delivers phase snapshots before the terminal transcript and rejects an
+  interrupted stream or missing heartbeats without automatically resubmitting
+  audio. `ChatComposer` shows the server phase and elapsed time beside a spinner
+  above the composer; its microphone tooltip uses a wrapper so it remains
+  accessible while the button is disabled. Completion and errors clear busy
+  state; teardown invalidates late progress/results. Coverage: composer/API tests.
 - Composer focus follows deliberate navigation only (New Session always; user-driven selections after destination history settles, desktop only; mobile stays in reading mode with `preventScroll`) - passive changes (reconnects, invalidations, mount restoration) never steal focus.
 
 ## Usage and errors

@@ -101,7 +101,7 @@ Use the current interpreter directly - do not assume a virtual environment for i
 
 **Worktrees:** Managed with `python scripts/worktree.py create|list|merge|delete <task-name>` plus `repair-start|repair-finish`. `create` prints the worktree path, assigned ports, data dir, and URL; non-force `delete` fails closed after any Git removal error unless `git worktree list` confirms that Git already deregistered the target, while `delete --force` explicitly discards uncommitted worktree changes; `merge` lands the finished task branch on `main` and removes the worktree, serializing concurrent merges through a lock with a protected repair window for conflict resolution. The tooling never runs quality gates - green gates before merging stay with the agent. If anything fails or behaves unexpectedly, read `scripts/README-worktree.md`.
 
-**Dependencies:** Groups `server`, `cli`, `desktop`, `local-speech`, `dev` in `pyproject.toml`; the WebUI's in `webui/package.json`. Optional local STT uses native Transformers/PyTorch on the server, with Qwen3 ASR and Parakeet adapters owned by `core/model_tasks/speech_local.py`; see `USAGE.md` → Local speech recognition.
+**Dependencies:** Groups `server`, `cli`, `desktop`, `local-speech`, `dev` in `pyproject.toml`; the WebUI's in `webui/package.json`. Optional local STT uses native Transformers/PyTorch on the server, with Qwen3 ASR and Parakeet adapters and in-app dependency setup owned by `core/model_tasks/speech_local.py`. Settings installs the shipped extra into the running server's interpreter; the server extra includes the existing `psutil` lifecycle dependency for restart. See `USAGE.md` -> Local speech recognition.
 
 **Run:**
 ```bash

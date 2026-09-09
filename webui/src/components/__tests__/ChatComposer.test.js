@@ -627,6 +627,7 @@ describe('ChatComposer', () => {
 
     expect(transcribeSpeech).toHaveBeenCalledWith(expect.any(Blob), {
       filename: 'recording.webm',
+      onProgress: expect.any(Function),
     });
     expect(composerInput().value).toBe('hello world');
 
@@ -636,6 +637,69 @@ describe('ChatComposer', () => {
       inputOrigin: 'speech_transcription',
     });
   });
+
+  it.each([false, true])(
+    'shows speech phases and unlocks the microphone after completion or failure (%s)',
+    async (fail) => {
+      const recorder = {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(new Blob(['audio'])),
+        cancel: vi.fn(),
+      };
+      createAudioRecorder.mockResolvedValue(recorder);
+      let complete, reject;
+      transcribeSpeech.mockImplementation(
+        () =>
+          new Promise((resolve, rejectPromise) => {
+            complete = resolve;
+            reject = rejectPromise;
+          }),
+      );
+      mountedComponent = mount(ChatComposer, { target: document.body });
+      flushSync();
+      document.querySelector('button[aria-label="Start voice input"]').click();
+      await flushComposerAsyncWork();
+      document.querySelector('button[aria-label="Stop recording"]').click();
+      await flushComposerAsyncWork();
+      const onProgress = transcribeSpeech.mock.calls[0][1].onProgress;
+      for (const [phase, label] of [
+        [
+          'downloading',
+          'Downloading speech model. The first download can take several minutes…',
+        ],
+        ['loading', 'Loading speech model into memory…'],
+        ['transcribing', 'Transcribing recording…'],
+      ]) {
+        onProgress({ phase, elapsed_seconds: 12 });
+        flushSync();
+        const microphone = document.querySelector(
+          `button[aria-label="${label}"]`,
+        );
+        expect(microphone.disabled).toBe(true);
+        expect(microphone.getAttribute('aria-busy')).toBe('true');
+        expect(
+          microphone.parentElement.classList.contains('tooltip-anchor'),
+        ).toBe(true);
+        expect(
+          document.querySelector('.composer-voice-status[role="status"]'),
+        ).toBeTruthy();
+      }
+      if (fail) reject(new Error('test-owned failure'));
+      else complete({ text: 'test-owned transcript' });
+      for (let index = 0; index < 10; index += 1) {
+        await flushComposerAsyncWork();
+        if (document.querySelector('button[aria-label="Start voice input"]'))
+          break;
+      }
+      expect(
+        document.querySelector('button[aria-label="Start voice input"]')
+          .disabled,
+      ).toBe(false);
+      expect(document.querySelector('.composer-voice-status')).toBeNull();
+      if (!fail) expect(composerInput().value).toBe('test-owned transcript');
+      else expect(recorder.cancel).toHaveBeenCalled();
+    },
+  );
 
   it('cancels the recorder when browser recording start fails', async () => {
     const recorder = {

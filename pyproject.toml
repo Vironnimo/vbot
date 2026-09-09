@@ -38,9 +38,9 @@ Repository = "https://github.com/Vironnimo/vbot"
 Issues = "https://github.com/Vironnimo/vbot/issues"
 
 [project.optional-dependencies]
-server  = ["fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19"]
+server  = ["fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19", "psutil"]
 cli     = ["psutil"]
-local-speech = ["torch>=2.10,<3", "transformers>=5.16.1,<6", "librosa>=0.11,<1", "av>=18,<19"]
+local-speech = ["torch>=2.10,<3", "transformers>=5.16.1,<6", "huggingface-hub>=1.30,<2", "librosa>=0.11,<1", "av>=18,<19"]
 desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "webrtcvad-wheels>=2.0.14,<3", "onnxruntime>=1.16,<2"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "types-python-dateutil", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "soxr>=0.5,<2", "av>=18,<19"]
 

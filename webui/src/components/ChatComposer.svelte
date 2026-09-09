@@ -100,6 +100,25 @@
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
   let recordingState = $state('idle');
+  let transcriptionProgress = $state({
+    phase: 'uploading',
+    elapsed_seconds: 0,
+  });
+  let voiceStatus = $derived(
+    recordingState === 'requesting'
+      ? t('chat.voice.progress.microphone')
+      : t(
+          `chat.voice.progress.${transcriptionProgress.phase}`,
+          t('chat.voice.progress.transcribing'),
+        ),
+  );
+  let microphoneLabel = $derived(
+    voiceBusy
+      ? voiceStatus
+      : isRecording
+        ? t('chat.voice.stopRecording', 'Stop recording')
+        : t('chat.voice.startRecording', 'Start voice input'),
+  );
   let inputOrigin = $state('');
   let submitInFlight = $state(false);
   let activeRecorder = null;
@@ -526,6 +545,8 @@
 
     activeRecorder = null;
     recordingState = 'transcribing';
+    transcriptionProgress = { phase: 'uploading', elapsed_seconds: 0 };
+    const requestGeneration = ++recorderRequestGeneration;
     try {
       const audioBlob = await recorder.stop();
       const result = await transcribeSpeech(audioBlob, {
@@ -533,7 +554,12 @@
           typeof recorder.filename === 'function'
             ? recorder.filename()
             : 'recording.webm',
+        onProgress: (progress) => {
+          if (!destroyed && requestGeneration === recorderRequestGeneration)
+            transcriptionProgress = progress;
+        },
       });
+      if (destroyed || requestGeneration !== recorderRequestGeneration) return;
       await insertTranscript(result.text);
     } catch (error) {
       try {
@@ -1494,6 +1520,20 @@
       }}
     />
   {/if}
+  {#if voiceBusy}
+    <div
+      class="composer-voice-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span class="voice-spinner" aria-hidden="true"></span>
+      <span>{voiceStatus}</span>
+      {#if transcriptionProgress.elapsed_seconds > 0}
+        <span aria-hidden="true">{transcriptionProgress.elapsed_seconds}s</span>
+      {/if}
+    </div>
+  {/if}
   <div
     class="input-wrap"
     role="group"
@@ -1565,24 +1605,22 @@
       </span>
     {/if}
     <div class="input-btns">
-      <Button
-        variant="tertiary"
-        icon
-        class={isRecording ? 'btn-icon--active' : ''}
-        disabled={disabled || voiceBusy}
-        ariaLabel={isRecording
-          ? t('chat.voice.stopRecording', 'Stop recording')
-          : t('chat.voice.startRecording', 'Start voice input')}
-        tooltip={isRecording
-          ? t('chat.voice.stopRecording', 'Stop recording')
-          : t('chat.voice.startRecording', 'Start voice input')}
-        onClick={handleMicrophoneClick}
-      >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
-          <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
-        </svg>
-      </Button>
+      <span class="tooltip-anchor" use:tooltip={microphoneLabel}>
+        <Button
+          variant="tertiary"
+          icon
+          class={isRecording ? 'btn-icon--active' : ''}
+          disabled={disabled || voiceBusy}
+          loading={voiceBusy}
+          ariaLabel={microphoneLabel}
+          onClick={handleMicrophoneClick}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
+            <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
+          </svg>
+        </Button>
+      </span>
       <Button
         variant="tertiary"
         icon
@@ -1831,6 +1869,36 @@
     overflow: hidden;
     clip: rect(0 0 0 0);
     border: 0;
+  }
+
+  .composer-voice-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    color: var(--text-med);
+    font-size: 12px;
+  }
+
+  .voice-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: voice-spin 1s linear infinite;
+  }
+
+  @keyframes voice-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .voice-spinner {
+      animation: none;
+    }
   }
 
   .composer-toast {
