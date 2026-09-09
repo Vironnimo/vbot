@@ -34,6 +34,8 @@ Successful snapshots cache per exact Connection+Account target for 10 seconds; e
 
 Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Logs include no token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
 
+OpenAI Usage uses the same `OAuthRequestRecovery` as Chat and discovery, renewing once after an actual HTTP 401 and rebuilding both Authorization and Account routing. Repeated rejection/failed renewal remains an error snapshot within the existing timeout. Copilot Usage cannot use the Copilot bearer recovery: its request uses the original GitHub OAuth extra, while the getter renews only the exchanged Copilot API token. API-key probes have no renewal capability. Coverage: `test_usage.py`.
+
 The hourly sampler isolates each automatic attempt. An unexpected collection failure is logged at error level, then the same sampler waits for the normal interval and tries again; it does not silently terminate or spin in an immediate restart loop. An unexpected initial freshness-check failure is logged and degrades to sampling immediately.
 
 ## Supported Connections

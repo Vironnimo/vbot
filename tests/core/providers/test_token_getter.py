@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,15 @@ import httpx
 import pytest
 import respx
 
+from core.providers._http_shared import classify_http_status, post_json_with_retry
 from core.providers.errors import ProviderAuthError, ProviderError
-from core.providers.providers import OAuthConfig
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, copilot_token_extra
+from core.providers.providers import AuthConfig, OAuthConfig
+from core.providers.token_getter import (
+    OAuthRequestRecovery,
+    OAuthTokenGetter,
+    StaticTokenGetter,
+    copilot_token_extra,
+)
 from core.providers.token_store import OAuthToken, TokenStore
 
 PROVIDER_ID = "github-copilot"
@@ -144,6 +151,141 @@ def _jwt_with_account(account_id: str = "acct_vbot") -> str:
         base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
     )
     return f"header.{encoded_payload}.signature"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "device_flow", ["oauth2", "openai_codex", "minimax_oauth", "nous_oauth", "opencode_oauth"]
+)
+async def test_xai_403_vocabulary_does_not_enable_other_oauth_flows(
+    tmp_path: Path,
+    device_flow: str,
+) -> None:
+    config = replace(_xai_oauth_config(), device_flow=device_flow)
+    async with OAuthTokenGetter(TokenStore(tmp_path), "test", "oauth", config) as getter:
+        # No token exists: a non-token rejection must not even try to load one.
+        assert (
+            await getter.refresh_after_rejection(
+                "test-token",
+                status_code=403,
+                response_body='{"code":"unauthenticated:bad-credentials"}',
+            )
+            is None
+        )
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "rejection_status"),
+    [
+        ("openai", 401),
+        ("xai", 401),
+        ("xai", 403),
+        ("nous", 401),
+        ("minimax", 401),
+        ("github-copilot", 401),
+        ("opencode-zen", 401),
+    ],
+)
+async def test_concurrent_rejected_requests_share_one_account_refresh(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+    provider_id: str,
+    rejection_status: int,
+) -> None:
+    config = {
+        "openai": _openai_oauth_config(),
+        "xai": _xai_oauth_config(),
+        "nous": _nous_oauth_config(),
+        "minimax": _minimax_oauth_config(),
+        "github-copilot": oauth_config,
+        "opencode-zen": _opencode_oauth_config(),
+    }[provider_id]
+    store = TokenStore(tmp_path)
+    old_token = _jwt_with_account("old-test-account")
+    new_token = _jwt_with_account("new-test-account")
+    store.save(
+        provider_id,
+        "oauth",
+        OAuthToken(
+            access_token=old_token,
+            refresh_token="old-test-refresh",
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+            extra={"github_oauth_token": "test-github-token"}
+            if provider_id == "github-copilot"
+            else {},
+        ),
+        account_id="work",
+    )
+    exchange = (
+        respx.get(config.token_exchange_url)
+        if config.token_exchange_url
+        else respx.post(config.token_url)
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": new_token,
+                "token": new_token,
+                "refresh_token": "new-test-refresh",
+                "expires_in": 3600,
+                "expired_in": 3600,
+                "status": "success",
+                "scope": "inference:invoke",
+            },
+        )
+    )
+    barrier = asyncio.Event()
+    arrived = 0
+
+    async def serve(request: httpx.Request) -> httpx.Response:
+        nonlocal arrived
+        if request.headers["Authorization"] == f"Bearer {old_token}":
+            arrived += 1
+            if arrived == 4:
+                barrier.set()
+            await asyncio.wait_for(barrier.wait(), timeout=5)
+            return httpx.Response(
+                rejection_status, json={"code": "unauthenticated:bad-credentials"}
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        return httpx.Response(200, json={"ok": True})
+
+    route = respx.post("https://inference.example/request").mock(side_effect=serve)
+    auth = AuthConfig(header="Authorization", prefix="Bearer ")
+
+    def classify(status: int, body: str, headers: httpx.Headers) -> None:
+        classify_http_status(status, idempotent=False, detail=body, response_headers=headers)
+
+    async def invoke() -> dict[str, Any]:
+        async with (
+            OAuthTokenGetter(store, provider_id, "oauth", config, account_id="work") as getter,
+            httpx.AsyncClient(base_url="https://inference.example") as client,
+        ):
+
+            async def headers() -> dict[str, str]:
+                return {"Authorization": f"Bearer {await getter()}"}
+
+            return await post_json_with_retry(
+                client,
+                "/request",
+                {},
+                build_headers=headers,
+                handle_error_status=classify,
+                provider_context="test",
+                auth_recovery=OAuthRequestRecovery(getter, auth),
+            )
+
+    assert await asyncio.gather(*(invoke() for _ in range(4))) == [{"ok": True}] * 4
+    assert route.call_count == 8
+    assert exchange.call_count == 1
+    saved = store.load(provider_id, "oauth", account_id="work")
+    assert saved is not None and saved.access_token == new_token
+    assert saved.refresh_token == (
+        "old-test-refresh" if config.token_exchange_url else "new-test-refresh"
+    )
+    assert store.load(provider_id, "oauth") is None
 
 
 @pytest.mark.asyncio
@@ -393,7 +535,10 @@ async def test_oauth_token_getters_coalesce_forced_refresh_of_rejected_token(
     ]
 
     tokens = await asyncio.gather(
-        *(getter.refresh_after_unauthorized(stale_access_token) for getter in getters)
+        *(
+            getter.refresh_after_rejection(stale_access_token, status_code=401, response_body="")
+            for getter in getters
+        )
     )
 
     assert tokens == [refreshed_access_token, refreshed_access_token]

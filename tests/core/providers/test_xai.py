@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
+from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.errors import ProviderAuthError
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.task_client import ProviderTaskClient
+from core.providers.token_getter import OAuthTokenGetter
+from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
 
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
@@ -19,6 +26,143 @@ SUCCESS_RESPONSE = {
     "id": "response-id",
     "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
 }
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ["send", "stream", "catalog", "task_get", "task_post"])
+@pytest.mark.parametrize(
+    "outcome", ["success", "rejected_again", "permission", "unstructured", "static_key"]
+)
+async def test_xai_403_recovers_only_exact_oauth_token_rejection(
+    tmp_path: Path,
+    consumer: str,
+    outcome: str,
+) -> None:
+    provider = ProviderRegistry.load(Path("resources")).get("xai")
+    connection = provider.get_connection("subscription")
+    assert connection.oauth is not None
+    store = TokenStore(tmp_path / "data")
+    original = OAuthToken(
+        access_token="old-test-token",
+        refresh_token="old-test-refresh",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    store.save("xai", "subscription", original)
+    recover = outcome in {"success", "rejected_again"}
+    refresh = None
+    if recover:
+        refresh = respx.post(connection.oauth.token_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "new-test-token",
+                    "refresh_token": "new-test-refresh",
+                    "expires_in": 3600,
+                },
+            )
+        )
+    body = (
+        {"code": "permission_denied", "error": "test permission failure"}
+        if outcome == "permission"
+        else {"error": "unauthenticated:bad-credentials"}
+        if outcome == "unstructured"
+        else {
+            "code": "unauthenticated:bad-credentials",
+            "error": "The OAuth2 access token could not be validated.",
+        }
+    )
+    if consumer == "catalog":
+        endpoint, method, success = (
+            connection.models_endpoint or provider.models_endpoint,
+            "GET",
+            httpx.Response(200, json={"models": [{"id": "grok-4.5"}]}),
+        )
+    elif consumer.startswith("task"):
+        endpoint, method, success = (
+            "/test-task",
+            "GET" if consumer == "task_get" else "POST",
+            httpx.Response(200, json={"ok": True}),
+        )
+    elif consumer == "stream":
+        complete = {
+            "type": "response.completed",
+            "response": {**SUCCESS_RESPONSE, "status": "completed"},
+        }
+        endpoint, method, success = (
+            "/responses",
+            "POST",
+            httpx.Response(
+                200,
+                text=f"data: {json.dumps(complete)}\n\n",
+                headers={"Content-Type": "text/event-stream"},
+            ),
+        )
+    else:
+        endpoint, method, success = "/responses", "POST", httpx.Response(200, json=SUCCESS_RESPONSE)
+    route = respx.route(
+        method=method, url=(connection.base_url or provider.base_url).rstrip("/") + str(endpoint)
+    ).mock(
+        side_effect=[
+            httpx.Response(403, json=body),
+            httpx.Response(403, json=body) if outcome == "rejected_again" else success,
+        ]
+    )
+    async with OAuthTokenGetter(store, "xai", "subscription", connection.oauth) as getter:
+        token_getter = "test-key" if outcome == "static_key" else getter
+        adapter = XAIAdapter(
+            provider,
+            token_getter,
+            base_url=connection.base_url or provider.base_url,
+            auth_config=connection.auth,
+            model_lookup=lambda ident: _model(ident, reasoning=False),
+        )
+
+        async def invoke() -> Any:
+            if consumer == "catalog":
+                return await refresh_models(
+                    provider, token_getter, tmp_path / "resources", credential_connection=connection
+                )
+            if consumer.startswith("task"):
+                client = ProviderTaskClient(
+                    provider=provider,
+                    connection=connection,
+                    model_id="test-model",
+                    credential=token_getter if isinstance(token_getter, str) else None,
+                    token_getter=None if isinstance(token_getter, str) else token_getter,
+                )
+                if consumer == "task_get":
+                    return await client.get_and_parse(
+                        "/test-task", timeout=1, parse=lambda response: response.json()
+                    )
+                return await client.post_and_parse(
+                    "/test-task",
+                    timeout=1,
+                    parse=lambda response: response.json(),
+                    json={"input": "test"},
+                )
+            if consumer == "stream":
+                return [
+                    delta async for delta in adapter.stream(SAMPLE_MESSAGES, model_id="grok-4.5")
+                ]
+            return await adapter.send(SAMPLE_MESSAGES, model_id="grok-4.5")
+
+        try:
+            if outcome == "success":
+                assert await invoke()
+            else:
+                with pytest.raises((ProviderAuthError, ModelDiscoveryError)):
+                    await invoke()
+        finally:
+            await adapter.aclose()
+    assert route.call_count == (2 if recover else 1)
+    assert (refresh.call_count if refresh else 0) == (1 if recover else 0)
+    saved = store.load("xai", "subscription")
+    if recover:
+        assert saved is not None and saved.refresh_token == "new-test-refresh"
+        assert route.calls[1].request.headers["Authorization"] == "Bearer new-test-token"
+    else:
+        assert saved == original
 
 
 def _model(

@@ -48,6 +48,7 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
+from core.providers.token_getter import OAuthRequestRecovery
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
@@ -385,6 +386,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             build_headers=lambda: self._build_request_headers(messages, payload),
             handle_error_status=self._handle_error_status,
             provider_context="GitHub Copilot provider",
+            auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
 
     async def _connect_stream(
@@ -399,6 +401,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             payload,
             build_headers=lambda: self._build_request_headers(messages, payload),
             handle_error_status=self._handle_error_status,
+            auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
 
     async def _stream_responses(
