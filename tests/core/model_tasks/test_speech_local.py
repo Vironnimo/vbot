@@ -97,6 +97,7 @@ def test_builtin_catalog_is_lazy_and_reports_missing_dependencies(
     assert [engine.descriptor.public_id for engine in engines] == [
         "local/qwen3-asr",
         "local/parakeet",
+        "local/nemotron3.5-asr",
     ]
     assert not any(engine.descriptor.can_execute() for engine in engines)
     monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: object())
@@ -255,27 +256,42 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
-@pytest.mark.parametrize("engine_name", ["qwen", "parakeet"])
+@pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
-    import huggingface_hub
 
-    from core.model_tasks.speech_local import _PROGRESS, _ParakeetEngine, _QwenEngine
+    from core.model_tasks.speech_local import (
+        _PROGRESS,
+        _NemotronEngine,
+        _ParakeetEngine,
+        _QwenEngine,
+    )
 
-    engine_type = _QwenEngine if engine_name == "qwen" else _ParakeetEngine
+    engine_types: dict[str, type[_QwenEngine] | type[_ParakeetEngine] | type[_NemotronEngine]] = {
+        "qwen": _QwenEngine,
+        "parakeet": _ParakeetEngine,
+        "nemotron": _NemotronEngine,
+    }
+    engine_type = engine_types[engine_name]
     snapshot = MagicMock(return_value=engine_type.default_model)
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    monkeypatch.setattr("core.model_tasks.speech_local.resolve_snapshot", snapshot)
     # Resolve actual native auto classes: this catches unsupported extra versions.
     auto_class = getattr(transformers, engine_type.model_class)
     model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
     model.to.return_value = model
     model.eval.return_value = model
-    processor = MagicMock()
+    processor = MagicMock(num_mel_frames_first_audio_chunk=49, num_mel_frames_per_audio_chunk=56)
+    model.max_symbols_per_step = 10
     inputs = transformers.BatchFeature(
-        {"input_ids": torch.tensor([[1, 2]]), "input_features": torch.ones(1, 8)}
+        {
+            "input_ids": torch.tensor([[1, 2]]),
+            "input_features": torch.ones(1, 57, 8),
+            "attention_mask": torch.ones(1, 57, dtype=torch.long),
+            "prompt_ids": torch.tensor([9]),
+        }
     )
     processor.apply_transcription_request.return_value = inputs
     processor.return_value = inputs
@@ -291,7 +307,7 @@ def test_native_transformers_adapter_contracts_without_weights(
     load_processor = MagicMock(return_value=processor)
     monkeypatch.setattr(auto_class, "from_pretrained", load_model)
     monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", load_processor)
-    options = {"device": "cpu", "offline": True, "language": "de", "prompt": "vBot"}
+    options = {"device": "cpu", "language": "de", "prompt": "vBot"}
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
     try:
@@ -302,8 +318,8 @@ def test_native_transformers_adapter_contracts_without_weights(
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"
         assert load_model.call_args.kwargs["local_files_only"] is True
-        assert snapshot.call_args.kwargs["local_files_only"] is True
-        progress_class = snapshot.call_args.kwargs["tqdm_class"]
+        assert "model.safetensors" in snapshot.call_args.args[1]
+        progress_class = snapshot.call_args.args[2]
         with progress_class(total=10, unit="B", disable=True) as bar:
             bar.update(5)
         assert progress.snapshot()["phase"] == "downloading"
@@ -322,6 +338,70 @@ def test_native_transformers_adapter_contracts_without_weights(
     finally:
         engine.close()
     assert engine._model is None and engine._processor is None
+
+
+@pytest.mark.parametrize("frames", [1, 48, 49, 50, 104, 105, 106, 3000])
+@pytest.mark.parametrize("language", ["", "de-DE"])
+def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, language):
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    from core.model_tasks.speech_local import _NemotronEngine
+
+    engine = _NemotronEngine.__new__(_NemotronEngine)
+    engine._torch = torch
+    engine._model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
+    engine._model.max_symbols_per_step = 10
+    processor = engine._processor = MagicMock(
+        num_mel_frames_first_audio_chunk=49, num_mel_frames_per_audio_chunk=56
+    )
+    features = torch.arange((frames + 3) * 8, dtype=torch.float32).reshape(1, frames + 3, 8)
+    mask = torch.tensor([[1] * frames + [0] * 3])
+    processor.return_value = transformers.BatchFeature(
+        {"input_features": features, "attention_mask": mask, "prompt_ids": torch.tensor([9])}
+    )
+    processor.decode.side_effect = lambda _tokens, *, skip_special_tokens: [
+        "Hallo Welt." if skip_special_tokens else "Hallo Welt.<de-DE>"
+    ]
+    consumed = []
+
+    def generate(**kwargs):
+        assert kwargs["prompt_ids"].tolist() == [9]
+        assert kwargs["prompt_ids"].dtype == torch.int64
+        assert kwargs["num_lookahead_tokens"] == 6
+        assert "attention_mask" not in kwargs
+        consumed.extend(kwargs["input_features"])
+        assert kwargs["max_new_tokens"] > len(consumed) * 7 * 10
+        return SimpleNamespace(sequences=torch.tensor([[1, 2, 3]]))
+
+    engine._model.generate.side_effect = generate
+    result = engine.transcribe(np.ones(1600, dtype=np.float32), {"language": language})
+    assert result.text == "Hallo Welt."
+    assert result.language == "de-DE"
+    assert processor.call_args.kwargs["language"] == (language or "auto")
+    processor.set_num_lookahead_tokens.assert_called_once_with(6)
+    assert consumed[0].shape[1] == 49
+    assert all(chunk.shape[1] == 56 for chunk in consumed[1:])
+    joined = torch.cat(consumed, dim=1)
+    assert torch.equal(joined[:, :frames], features[:, :frames])
+    assert not joined[:, frames:].any()
+
+
+def test_nemotron_shares_stt_setup_and_has_independent_memory():
+    executor = LocalSpeechExecutor()
+    try:
+        assert executor.setup_for("local/nemotron3.5-asr") is executor.setup
+        status = {entry["target"]: entry for entry in executor.memory_status()["models"]}
+        assert set(status) == {
+            "local/nemotron3.5-asr",
+            "local/qwen3-asr",
+            "local/parakeet",
+            "local/qwen3-tts",
+            "local/chatterbox",
+        }
+        assert not status["local/nemotron3.5-asr"]["loaded"]
+        assert len({id(state.workers) for state in executor._states.values()}) == 5
+    finally:
+        executor.close()
 
 
 @pytest.mark.asyncio
@@ -678,3 +758,20 @@ async def test_shutdown_waits_for_other_engines_even_when_one_close_fails():
     finally:
         release.set()
         await asyncio.gather(closing, return_exceptions=True)
+
+
+@pytest.mark.parametrize("task_type", [TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH])
+def test_local_speech_options_do_not_expose_an_offline_switch(task_type):
+    executor = LocalSpeechExecutor()
+    try:
+        definitions = [
+            entry
+            for entry in executor._definitions.values()
+            if task_type in entry.descriptor.task_types
+        ]
+        assert len(definitions) == (3 if task_type == TASK_SPEECH_TO_TEXT else 2)
+        for entry in definitions:
+            assert "offline" not in {field.name for field in entry.descriptor.option_fields}
+            assert "offline" not in entry.load_options
+    finally:
+        executor.close()
