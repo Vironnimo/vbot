@@ -450,6 +450,7 @@
     bind:this={frame}
     title={descriptor.title}
     sandbox="allow-scripts"
+    allow="clipboard-write *"
     src={descriptor.entry_url}
     onload={onFrameLoad}
   ></iframe>
