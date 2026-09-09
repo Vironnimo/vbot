@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-09T12:36:27.864363+00:00",
+  "fetched_at": "2026-09-09T13:09:06.349842+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -47863,9 +47863,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 32000,
+          "context_length": 32768,
           "is_moderated": false,
-          "max_completion_tokens": 28800
+          "max_completion_tokens": 29491
         }
       },
       {
