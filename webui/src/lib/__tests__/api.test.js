@@ -39,6 +39,8 @@ import {
   setProject,
   showProject,
   getTaskModelOptions,
+  getLocalSpeechMemory,
+  unloadLocalSpeech,
   getSessionStoreStatus,
   inspectSubAgentWork,
   listTaskModelTargets,
@@ -54,6 +56,7 @@ import {
   removeFromQueue,
   rpc,
   transcribeSpeech,
+  previewSpeech,
   uploadAttachment,
   subscribeLogEvents,
   subscribeRunEvents,
@@ -1173,13 +1176,11 @@ describe('transcribeSpeech()', () => {
     ],
     ['{"type":"progress","phase":"loading"}\n', RPC_ERROR_RESPONSE],
   ])('rejects failed or interrupted speech streams', async (body, code) => {
-    const fetchFunction = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(body, {
-          headers: { 'Content-Type': 'application/x-ndjson' },
-        }),
-      );
+    const fetchFunction = vi.fn().mockResolvedValue(
+      new Response(body, {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      }),
+    );
     await expect(
       transcribeSpeech(new Blob(['audio']), {
         fetch: fetchFunction,
@@ -1207,6 +1208,58 @@ describe('transcribeSpeech()', () => {
     expect(fetchFunction.mock.calls[0][1].method).toBe('POST');
     expect(fetchFunction.mock.calls[0][1].body).toBeInstanceOf(FormData);
   });
+});
+
+describe('previewSpeech()', () => {
+  it('streams synthesis progress and returns a server-owned audio artifact', async () => {
+    const onProgress = vi.fn();
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          '{"type":"progress","phase":"loading","elapsed_seconds":12}\n' +
+            '{"type":"result","result":{"url":"/api/speech/artifacts/aud_test"}}\n',
+        ),
+      );
+    const result = await previewSpeech('test-owned text', {
+      fetch,
+      onProgress,
+      baseUrl: 'http://localhost:9000',
+    });
+    expect(fetch.mock.calls[0][0]).toBe(
+      'http://localhost:9000/api/speech/synthesize',
+    );
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+      text: 'test-owned text',
+    });
+    expect(onProgress).toHaveBeenCalledExactlyOnceWith({
+      type: 'progress',
+      phase: 'loading',
+      elapsed_seconds: 12,
+    });
+    expect(result.url).toBe('/api/speech/artifacts/aud_test');
+  });
+
+  it.each([
+    [
+      '{"type":"result","result":{"url":"https://external.example/audio"}}\n',
+      RPC_ERROR_RESPONSE,
+    ],
+    ['{"type":"progress","phase":"loading"}\n', RPC_ERROR_RESPONSE],
+    [
+      '{"type":"error","detail":"test-owned error","status":502}\n',
+      RPC_ERROR_HTTP,
+    ],
+  ])(
+    'rejects invalid results and incomplete synthesis streams',
+    async (body, code) => {
+      await expect(
+        previewSpeech('hello', {
+          fetch: vi.fn().mockResolvedValue(new Response(body)),
+        }),
+      ).rejects.toMatchObject({ code });
+    },
+  );
 });
 
 describe('normalizeRpcError()', () => {
@@ -1852,3 +1905,30 @@ class MockWebSocket {
     this.closeCalls.push({ code, reason });
   }
 }
+
+describe('local speech memory', () => {
+  it('reads memory without parameters and unloads only the exact target', async () => {
+    const snapshot = { models: [] };
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () =>
+          new Response(JSON.stringify({ ok: true, result: snapshot })),
+      );
+    const options = { fetch, baseUrl: 'http://speech.test' };
+    expect(await getLocalSpeechMemory(options)).toEqual(snapshot);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+      method: 'speech.local_memory_status',
+      params: {},
+    });
+    expect(await unloadLocalSpeech('local/qwen3-asr', options)).toEqual(
+      snapshot,
+    );
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      method: 'speech.local_unload',
+      params: { target: 'local/qwen3-asr' },
+    });
+    expect(() => unloadLocalSpeech('', options)).toThrow();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

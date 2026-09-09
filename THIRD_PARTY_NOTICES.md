@@ -13,6 +13,15 @@ at first use; vBot does not bundle them in its distribution:
 
 The linked model cards provide upstream attribution and model documentation.
 
+Optional local TTS downloads [Qwen3-TTS CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice)
+weights (Apache-2.0) and [Chatterbox Multilingual V3](https://huggingface.co/ResembleAI/chatterbox)
+weights (MIT). Their separately installed SDKs are [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
+(Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).
+Chatterbox's upstream PerTh watermarking remains enabled. The setup bootstrap
+[uv](https://github.com/astral-sh/uv) is available under Apache-2.0 or MIT;
+managed Python distributions are supplied by Astral's python-build-standalone.
+Weights and SDK source are downloaded on demand, not bundled in vBot.
+
 ## Silero VAD model
 
 vBot includes `desktop/wakeword/models/silero_vad.onnx` from [Silero VAD](https://github.com/snakers4/silero-vad), copyright 2020-present Silero Team. The file comes from the `silero-vad` 6.2.1 PyPI package (`silero_vad/data/silero_vad.onnx`); the bundled file has SHA-256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` and is distributed under the MIT License:
