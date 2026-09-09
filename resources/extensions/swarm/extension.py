@@ -462,7 +462,13 @@ class SwarmExtension:
     async def _swarms_start(self, arguments: Json) -> Json:
         _exact(
             arguments,
-            {"profile_id", "prompt", "request_id", "expected_profile_revision"},
+            {
+                "profile_id",
+                "prompt",
+                "request_id",
+                "expected_profile_revision",
+                "working_directory",
+            },
             required={"profile_id", "prompt", "request_id"},
         )
         return await self._start_swarm(
@@ -472,6 +478,11 @@ class SwarmExtension:
             expected_profile_revision=(
                 _integer(arguments, "expected_profile_revision", minimum=1)
                 if "expected_profile_revision" in arguments
+                else None
+            ),
+            working_directory=(
+                _string(arguments, "working_directory")
+                if "working_directory" in arguments
                 else None
             ),
         )
@@ -707,6 +718,7 @@ class SwarmExtension:
         request_id: str,
         *,
         expected_profile_revision: int | None = None,
+        working_directory: str | None = None,
     ) -> Json:
         """Prepare every bound participant before admitting any initial Run.
 
@@ -724,6 +736,11 @@ class SwarmExtension:
             and profile["revision"] != expected_profile_revision
         ):
             raise SwarmStoreError("revision_conflict")
+        if working_directory is not None:
+            profile = {
+                **profile,
+                "working_directory": {"kind": "directory", "path": working_directory},
+            }
         catalog = await host.catalog()
         cwd, project_id = await _profile_cwd(profile, catalog)
         _validate_profile_catalog(profile, catalog)
@@ -1313,6 +1330,7 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
             "prompt": {"type": "string", "minLength": 1, "maxLength": 16000},
             "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
             "expected_profile_revision": {"type": "integer", "minimum": 1},
+            "working_directory": {"type": "string", "minLength": 1},
         },
         "required": ["profile_id", "prompt", "request_id"],
         "additionalProperties": False,
