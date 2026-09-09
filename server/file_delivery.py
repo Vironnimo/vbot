@@ -380,7 +380,7 @@ class FileDelivery:
         )
         return f"{payload}.{signature}"
 
-    def _preview_root(self, token: str) -> Path:
+    def _preview_root(self, token: str, *, require_directory: bool = True) -> Path:
         try:
             if len(token) > MAX_FILE_TOKEN_LENGTH:
                 raise ValueError("Invalid preview")
@@ -388,7 +388,9 @@ class FileDelivery:
             root = Path(_urlsafe_decode(payload).decode("utf-8"))
             if not hmac.compare_digest(self._preview_token(root), token):
                 raise ValueError("Invalid preview")
-            if not root.is_absolute() or root.resolve(strict=True) != root or not root.is_dir():
+            if not root.is_absolute() or (
+                require_directory and (root.resolve(strict=True) != root or not root.is_dir())
+            ):
                 raise ValueError("Preview folder is no longer available")
             return root
         except (OSError, RuntimeError, UnicodeError, ValueError, TypeError) as exc:
@@ -466,32 +468,68 @@ class FileDelivery:
             "Referrer-Policy": "no-referrer",
         }
 
+    def preview_unavailable(self, base_url: str, token: str) -> tuple[bytes, dict[str, str]]:
+        """Keep standalone recovery alive, granting connections only to a signed scope."""
+        revision_url = None
+        headers = {
+            "Content-Security-Policy": document_csp() + "; frame-ancestors 'self'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        }
+        try:
+            # A valid capability can recover even while its directory is missing.
+            # Every subsequent asset request still validates the current tree.
+            self._preview_root(token, require_directory=False)
+        except ValueError:
+            pass
+        else:
+            revision_url = f"{PREVIEW_URL_PREFIX}{token}/.revision"
+            headers = self.preview_headers(base_url, token)
+        content = (
+            b'<!doctype html><meta charset="utf-8"><title>404</title>'
+            b'<main role="status">404</main>' + self._preview_bridge(revision_url, unavailable=True)
+        )
+        return content, headers
+
     @staticmethod
     def preview_html(path: Path, revision_url: str) -> bytes:
         with path.open("rb") as handle:
             content = handle.read(4 * 1024 * 1024 + 1)
         if len(content) > 4 * 1024 * 1024:
             raise ValueError("HTML preview exceeds 4 MiB")
-        # Tell the parent which subpage to refresh. The parent validates this
-        # against the capability prefix, never accepting an arbitrary URL.
+        return content + FileDelivery._preview_bridge(revision_url)
+
+    @staticmethod
+    def _preview_bridge(revision_url: str | None, *, unavailable: bool = False) -> bytes:
+        # Both successful and unavailable documents announce their location.
+        # Embedded views leave polling to the host's visibility and Live toggle.
         return (
-            content
-            + b"\n<script>\n(() => {\nconst revisionUrl = "
+            b"\n<script>\n(() => {\nconst revisionUrl = "
             + json.dumps(revision_url).encode()
+            + b";\nconst unavailable = "
+            + json.dumps(unavailable).encode()
             + b""";
-  const notify = () => parent.postMessage({type: 'vbot-preview-ready', url: location.href}, '*');
+  const notify = () => parent.postMessage({
+    type: unavailable ? 'vbot-preview-unavailable' : 'vbot-preview-ready',
+    url: location.href
+  }, '*');
   notify();
   addEventListener('hashchange', notify);
   addEventListener('popstate', notify);
-  // Embedded views use the host's Live toggle. Standalone browser views
-  // watch the same bounded revision without gaining access to application RPC.
-  if (parent === window) {
+  if (parent === window && revisionUrl) {
     let revision;
     const check = async () => {
       try {
         if (document.visibilityState !== 'hidden') {
-          const response = await fetch(revisionUrl, {cache: 'no-store', credentials: 'omit'});
+          // Error documents probe their own page instead of adopting the
+          // missing-file revision as a baseline and then waiting forever.
+          const response = await fetch(unavailable ? location.href : revisionUrl, {
+            method: unavailable ? 'HEAD' : 'GET',
+            cache: 'no-store', credentials: 'omit'
+          });
           if (response.ok) {
+            if (unavailable) { location.reload(); return; }
             const next = (await response.json()).revision;
             if (revision !== undefined && revision !== next) { location.reload(); return; }
             revision = next;

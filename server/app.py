@@ -665,20 +665,14 @@ def create_app(
                 return Response(content, media_type="text/html", headers=headers)
             return FileResponse(delivered.path, media_type=delivered.media_type, headers=headers)
         except (ValueError, OSError):
-            # The parent renders localized shared feedback, rather than exposing
-            # a transport error as raw JSON inside the website frame.
+            content, headers = await FILE_PREVIEW_WORKERS.run(
+                delivery.preview_unavailable, str(request.base_url), token
+            )
             return Response(
-                "<!doctype html><script>parent.postMessage("
-                '{type:"vbot-preview-unavailable",url:location.href},"*")</script>',
+                content,
                 status_code=404,
                 media_type="text/html",
-                headers={
-                    "Content-Security-Policy": "default-src 'none'; sandbox allow-scripts; "
-                    "script-src 'unsafe-inline'; frame-ancestors 'self'",
-                    "Cache-Control": "no-store",
-                    "Referrer-Policy": "no-referrer",
-                    "X-Content-Type-Options": "nosniff",
-                },
+                headers=headers,
             )
 
     @app.api_route("/api/extension-assets/{token}/{asset_path:path}", methods=["GET", "HEAD"])
