@@ -87,12 +87,21 @@ request id is payload-bound; reusing it with changed content is a conflict.
 
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
-carrier is saved. Delivery mode and idle wake permission are independent. A wake
+carrier is saved. Successful automatic and Tool delivery acknowledgments publish
+a page invalidation, so pending counts refresh during an active Run without
+waiting for another Board mutation or Run completion. Failed acknowledgments
+retain pending state; empty Tool batches do not invalidate the page. Evidence:
+`test_swarm_inbox.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.js`.
+Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
 overflow remains available through Inbox. Read pages are bounded and cursors
 cannot cross queries.
 
+Background wake scans prepare batches only for idle participants, checking state
+inside the Store transaction. Running participants select pending content at the
+next Model request, so a concurrent Inbox or Board read cannot leave a prematurely
+prepared wake batch that later repeats its delivered messages (`test_swarm_inbox.py`).
 An already prepared wake batch remains replayable while its Run is active.
 New posts on an idle-mode route wait until the participant is idle again or
 explicitly reads Inbox; the retained wake boundary does not permit automatic

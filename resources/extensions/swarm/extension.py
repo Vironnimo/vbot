@@ -928,10 +928,11 @@ class SwarmExtension:
         )
 
     async def _acknowledge_delivery(
-        self, _context: SessionRequestContext, delivery: PreparedSessionDelivery
+        self, context: SessionRequestContext, delivery: PreparedSessionDelivery
     ) -> None:
         if not await self._store().reconcile_delivery(delivery.delivery_id):
             raise SwarmStoreError("delivery_unacknowledged")
+        self._changed(context.binding.group_id, 0)
 
     async def _reconcile_tool_batch(
         self,
@@ -948,6 +949,8 @@ class SwarmExtension:
         for _, receipt_id, _, _ in receipts:
             if not await self._store().reconcile_delivery(receipt_id):
                 raise SwarmStoreError("delivery_unacknowledged")
+        if receipts:
+            self._changed(context.binding.group_id, 0)
         return ToolBatchDecision(end=turn_end_requested)
 
     async def _run_finished(self, context: SessionRequestContext, *, outcome: str) -> None:
