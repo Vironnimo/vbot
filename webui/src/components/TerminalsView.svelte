@@ -15,6 +15,7 @@
   import {
     TERMINAL_MAX_COLUMNS,
     TERMINAL_MAX_ROWS,
+    TERMINAL_STREAM_CONNECTED,
     TERMINAL_STREAM_ERROR,
     TERMINAL_STREAM_IDLE,
     clampTerminalGrid,
@@ -145,6 +146,27 @@
       pendingOutputs.delete(terminalId);
       scrolledBackByTerminal[terminalId] = false;
       tileRegistry.get(terminalId)?.xterm?.reset();
+    },
+    onTranscript: (terminalId, text) => {
+      const tile = tileRegistry.get(terminalId);
+      tile?.xterm.paste(text);
+      if (viewState.selectedTerminalId === terminalId) tile?.xterm.focus();
+    },
+    onSpeechError: (error, phase) => {
+      onToast({
+        title:
+          phase === 'requesting'
+            ? t(
+                'terminals.voice.startFailed',
+                'Microphone recording could not start.',
+              )
+            : t(
+                'terminals.voice.transcriptionFailed',
+                'Speech transcription failed.',
+              ),
+        message: error?.message ?? '',
+        variant: 'error',
+      });
     },
   });
 
@@ -528,6 +550,7 @@
     if (maximizedTerminalId === terminalId) {
       maximizedTerminalId = '';
     } else {
+      if (viewState.speechTerminalId !== terminalId) controller.cancelSpeech();
       maximizedTerminalId = terminalId;
       controller.selectTerminal(terminalId);
     }
@@ -1227,6 +1250,13 @@
           {@const isMaximized = maximizedTerminalId === item.terminal_id}
           {@const isFinished = terminalIsFinished(item)}
           {@const isFocused = item.terminal_id === viewState.selectedTerminalId}
+          {@const hasSpeech = item.terminal_id === viewState.speechTerminalId}
+          {@const isRecording =
+            hasSpeech && viewState.speechState === 'recording'}
+          {@const speechBusy = hasSpeech && !isRecording}
+          {@const speechLabel = isRecording
+            ? t('terminals.voice.stop', 'Stop recording and insert text')
+            : t('terminals.voice.start', 'Dictate into terminal')}
           {@const isDragged = draggedTerminalId === item.terminal_id}
           {@const isDropTarget = dragOverTerminalId === item.terminal_id}
           {@const gridMismatch = gridMismatchHint(item.terminal_id)}
@@ -1304,6 +1334,73 @@
                   ondblclick={(event) => event.stopPropagation()}
                   onkeydown={(event) => event.stopPropagation()}
                 >
+                  {#if !isFinished}
+                    {#if hasSpeech}
+                      <span class="terminals-view__speech-status" role="status">
+                        {viewState.speechState === 'requesting'
+                          ? t(
+                              'terminals.voice.requesting',
+                              'Opening microphone…',
+                            )
+                          : isRecording
+                            ? t('voice.state.recording', 'Recording')
+                            : t('voice.state.transcribing', 'Transcribing')}
+                      </span>
+                    {/if}
+                    <Button
+                      variant="tertiary"
+                      icon
+                      class={`terminals-view__tile-action ${isRecording ? 'btn-icon--active' : ''}`}
+                      ariaLabel={speechLabel}
+                      tooltip={speechLabel}
+                      aria-pressed={isRecording}
+                      loading={speechBusy}
+                      disabled={serverUnavailable ||
+                        stream.status !== TERMINAL_STREAM_CONNECTED ||
+                        (!!viewState.speechTerminalId && !hasSpeech) ||
+                        !tileRegistry.has(item.terminal_id)}
+                      onClick={() =>
+                        void controller.toggleSpeech(item.terminal_id)}
+                    >
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="14"
+                        height="14"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z"
+                        />
+                        <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
+                      </svg>
+                    </Button>
+                    {#if hasSpeech}
+                      <Button
+                        variant="tertiary"
+                        icon
+                        class="terminals-view__tile-action"
+                        ariaLabel={t(
+                          'terminals.voice.cancel',
+                          'Discard voice input',
+                        )}
+                        tooltip={t(
+                          'terminals.voice.cancel',
+                          'Discard voice input',
+                        )}
+                        onClick={() =>
+                          controller.cancelSpeech(item.terminal_id)}
+                      >
+                        <svg
+                          viewBox="0 0 14 14"
+                          width="14"
+                          height="14"
+                          aria-hidden="true"
+                        >
+                          <path d="m4 4 6 6m0-6-6 6" />
+                        </svg>
+                      </Button>
+                    {/if}
+                  {/if}
                   <Button
                     variant="tertiary"
                     icon
@@ -2065,6 +2162,12 @@
     align-items: center;
     gap: 4px;
     margin-left: auto;
+  }
+
+  .terminals-view__speech-status {
+    color: var(--accent);
+    font-size: var(--fs-body-sm);
+    white-space: nowrap;
   }
 
   :global(.btn-tertiary.btn-icon.terminals-view__tile-action),
