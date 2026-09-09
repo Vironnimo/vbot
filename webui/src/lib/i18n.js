@@ -1734,6 +1734,26 @@ export const englishCatalog = Object.freeze({
     'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
+  'settings.localSpeech.ready':
+    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. After downloading, enable Offline only to use cached files without network access.',
+  'settings.localSpeech.install':
+    'Install local speech support in the vBot server’s Python environment and restart it. For GPU use, PyTorch must support your graphics card. Run in the vBot installation directory:',
+  'settings.localSpeech.options.device.label': 'Device',
+  'settings.localSpeech.options.dtype.label': 'Precision',
+  'settings.localSpeech.options.model.label': 'Model',
+  'settings.localSpeech.options.model_path.label': 'Model directory',
+  'settings.localSpeech.options.model_path.help':
+    'Optional directory on the vBot server containing a Transformers model. Leave empty to download and cache the selected model from Hugging Face.',
+  'settings.localSpeech.options.offline.label': 'Offline only',
+  'settings.localSpeech.options.offline.help':
+    'Load only already downloaded model files; never contact Hugging Face.',
+  'settings.localSpeech.options.language.label': 'Language',
+  'settings.localSpeech.options.language.help':
+    'Leave empty for automatic detection, or enter a language code such as de or en.',
+  'settings.localSpeech.options.prompt.label': 'Vocabulary and context',
+  'settings.localSpeech.options.prompt.help':
+    'Optional names or terminology to help recognize your recording.',
+  'settings.localSpeech.choices.auto': 'Automatic',
   'settings.specializedModels.subtitle':
     'Task-specific model bindings for speech, images, video, music, and embeddings. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',

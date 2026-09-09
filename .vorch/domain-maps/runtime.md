@@ -15,7 +15,7 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 1. **Storage & settings** - logger + `StorageManager` + settings load. Invalid Settings never abort startup: malformed JSON or root shape falls back to defaults, schema-invalid keys omit individually while siblings stay live, the source file never rewrites, and mutations stay strict so they cannot overwrite invalid data. Data-dir creation failure is fatal.
 2. **Attachments & credentials** - AttachmentStore plus the `.env` fallback snapshot read without mutating `os.environ`.
 3. **Providers & models** - tolerant load of bundled config + Custom Provider overlay; newer complete Model DB root selected (roots never mix); OAuth token store and the central credential resolver wired.
-4. **Task services, agents, processes** - TaskModelService + per-task services; AgentStore with live defaults provider; ProcessManager. Invalid agents degrade individually.
+4. **Task services, agents, processes** - TaskModelService + per-task services; one optional LocalSpeechExecutor supplies its catalog to TaskModelService and execution to SpeechService without loading ML packages/weights; AgentStore with live defaults provider; ProcessManager. Invalid agents degrade individually.
 5. **Tools, extensions, skills** - ToolRegistry + built-in registration, then extension/skill registries and `skill`/`skill_manage`. Unreadable roots diagnose-and-omit, never fatal.
 6. **Sessions, recall & chat** - one Runtime-owned `ChatSessionManager` opens and verifies the marker-authorized `<data-dir>/sessions.db`, takes the startup snapshot, then is injected into AgentStore, ProjectStore, Recall, Statistics, and Chat. The Session-scoped `history` Tool registers immediately (**before** extension tools, preserving built-in name ownership); Project/Agent resolution and bootstrap Agent start **before** channels; recall defaults and falls back to `sqlite_fts`, whose construction failure is fatal because no lower registration fallback remains; ChatRunManager, Reflection, titles, ChatLoopDependencies, and both chat loops share one CompactionService.
 7. **Automation surface** - TriggerService (streaming loop for triggers, non-streaming for manual Compaction); TerminalManager; BootstrapService; only then the end-to-end CommandDispatcher receiving applied Extension Commands; ChannelService start + `channel_send`; `cron`/`bash` when dependencies exist. CalendarService's action owner receives TriggerService, AgentResolver, and Sessions; Runtime starts it and includes it in stop, asynchronous close, and failed-startup cleanup. Bootstrap registers no Tool and does not activate here.
@@ -25,6 +25,10 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 - `stop()` stops producers (Channels/Cron/Bootstrap), usage collector, Process/Terminal managers (killing every tracked process and Terminal tree), the temp-file sweeper, clears service references, closes logging. Safe pre-start.
 - `aclose()` is the async variant accessors in event loops should prefer: producers stop first, then Trigger completion delivery, Reflection, titles, and ChatRunManager close - rejecting new work, cancelling queued work, waiting active Runs plus cancellation cleanup - before the snapshot worker joins, Provider usage, Process/Terminal managers, and temporary files close; the final shutdown snapshot runs before canonical Sessions close. No Runtime-owned background task may outlive its services.
+
+SpeechService's local model and worker are closed in synchronous stop, async
+close (after active Chat Runs drain), and failed-startup cleanup. Coverage:
+`tests/core/runtime/test_runtime.py::test_runtime_registers_local_speech_and_closes_its_executor`.
 
 ## Service properties
 

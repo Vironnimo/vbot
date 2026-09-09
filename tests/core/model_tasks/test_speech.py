@@ -22,6 +22,7 @@ from core.model_tasks import (
     SpeechTranscriptionResult,
     TaskModelError,
 )
+from core.model_tasks.speech_local import LocalSpeechExecutionError
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
 
@@ -62,6 +63,42 @@ async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
 class _MissingModelTasks:
     def binding_for(self, _task_type: str) -> object:
         raise TaskModelError("No task model configured")
+
+
+@pytest.mark.asyncio
+async def test_local_inference_failure_is_execution_error(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock
+
+    executor = LocalSpeechExecutor(engines=[])
+    executor.transcribe = AsyncMock(side_effect=LocalSpeechExecutionError("GPU unavailable"))  # type: ignore[method-assign]
+    service = SpeechService(
+        _TtsModelTasks(), cast(Any, object()), tmp_path, local_executor=executor
+    )
+    try:
+        with pytest.raises(SpeechExecutionError, match="GPU unavailable"):
+            await service.transcribe(_wav_audio_bytes())
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_transcription_unloads_previous_local_engine(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock
+
+    executor = LocalSpeechExecutor(engines=[])
+    executor.unload = AsyncMock()  # type: ignore[method-assign]
+    service = SpeechService(
+        _ProviderSttModelTasks(), cast(Any, object()), tmp_path, local_executor=executor
+    )
+    client = _CapturingProviderSpeechClient()
+    try:
+        with patch(
+            "core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client
+        ):
+            assert (await service.transcribe(_wav_audio_bytes())).text == "hello"
+        executor.unload.assert_awaited_once()
+    finally:
+        await service.aclose()
 
 
 class _TtsModelTasks:

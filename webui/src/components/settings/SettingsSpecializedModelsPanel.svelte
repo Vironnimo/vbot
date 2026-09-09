@@ -405,7 +405,24 @@
   }
 
   function taskModelFields(taskType) {
-    return taskModelSchemasByType[taskType] ?? [];
+    const fields = taskModelSchemasByType[taskType] ?? [];
+    if (!taskModelBindings[taskType]?.target?.startsWith('local/')) {
+      return fields;
+    }
+    return fields.map((field) => ({
+      ...field,
+      label: t(`settings.localSpeech.options.${field.name}.label`, field.label),
+      description: field.description
+        ? t(
+            `settings.localSpeech.options.${field.name}.help`,
+            field.description,
+          )
+        : '',
+      options: field.options.map((option) => ({
+        ...option,
+        label: t(`settings.localSpeech.choices.${option.value}`, option.label),
+      })),
+    }));
   }
 
   function taskModelOptionValue(taskType, field) {
@@ -466,6 +483,9 @@
       options: {},
     }}
     {@const fields = taskModelFields(row.taskType)}
+    {@const selectedTarget = taskModelTargets(row.taskType).find(
+      (target) => target.id === binding.target,
+    )}
     <div class="s-row s-row--stacked s-task-model-row">
       <div class="s-task-model-head">
         <div class="s-row-info">
@@ -509,6 +529,17 @@
           {/if}
         </div>
       </div>
+
+      {#if row.taskType === 'speech_to_text' && selectedTarget?.kind === 'local'}
+        <Banner variant={selectedTarget.usable ? 'neutral' : 'warn'}>
+          {#if selectedTarget.usable}
+            {t('settings.localSpeech.ready')}
+          {:else}
+            {t('settings.localSpeech.install')}
+            <code>python -m pip install -e '.[local-speech]'</code>
+          {/if}
+        </Banner>
+      {/if}
 
       {#if binding.target && fields.length > 0}
         <div

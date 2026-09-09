@@ -92,3 +92,7 @@ class BoundedWorkerPool:
             semaphore = asyncio.Semaphore(self._max_workers)
             self._semaphores[loop] = semaphore
         return semaphore
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        """Reject new submissions and release an owner's executor on shutdown."""
+        self._executor.shutdown(wait=wait, cancel_futures=True)

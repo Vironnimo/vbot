@@ -1,17 +1,13 @@
 """Local task-model target registration hooks.
 
-Local targets bypass provider catalogs and credentials — a descriptor
-declares the option schema the Settings UI should render for the local
-engine, and the execution domain later dispatches to it. The registry
-starts empty; user-configurable local engines (Whisper, Piper, local
-video, …) will be added in a follow-up phase by constructing descriptors
-from persisted user settings. The descriptor-owned option schema seam is
-prepared here so that future engines can declare their own fields without
-touching provider option code.
+Local targets bypass Provider catalogs and credentials. Each execution owner
+supplies descriptors with option schemas and a live availability check. Runtime
+registers the speech executor's catalog; catalog entries alone cannot execute.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,13 +22,12 @@ class LocalTaskTargetError(VBotError):
 
 @dataclass(frozen=True)
 class LocalTaskTargetDescriptor:
-    """Description of a local task target such as a future Whisper backend.
+    """Description of a local task target.
 
     ``option_fields`` carries the descriptor-owned option schema the
     Settings UI should render for this local engine, in the same
     :class:`TaskModelOptionField` shape used by provider option schemas.
-    Empty by default so existing descriptors are unaffected; future
-    user-configured engines will populate this from user settings.
+    Availability checks must be inexpensive and must not load model weights.
     """
 
     id: str
@@ -41,6 +36,11 @@ class LocalTaskTargetDescriptor:
     usable: bool = True
     metadata: dict[str, Any] | None = None
     option_fields: tuple[TaskModelOptionField, ...] = ()
+    availability: Callable[[], bool] | None = None
+
+    def can_execute(self) -> bool:
+        """Require an execution owner's live preflight, not just a catalog entry."""
+        return self.usable and self.availability is not None and self.availability()
 
     def __post_init__(self) -> None:
         if not self.id or "/" in self.id or "::" in self.id:
@@ -64,8 +64,7 @@ class LocalTaskTargetDescriptor:
 class LocalTaskTargetRegistry:
     """Small registry for local task-model targets.
 
-    The default runtime starts empty. Local engines can register descriptors
-    later without being forced through provider credentials or model catalogs.
+    Execution owners supply descriptors without Provider credentials or catalogs.
     """
 
     def __init__(self, descriptors: list[LocalTaskTargetDescriptor] | None = None) -> None:

@@ -15,7 +15,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` - calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
 - `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` - accepts bounded safe opaque IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
 - `ProviderSpeechClient.transcribe(...)` / `ProviderSpeechClient.synthesize(...)` - small speech-specific HTTP clients built from runtime provider config, connection auth, credentials, and the target model ID.
-- `LocalSpeechExecutor.transcribe(...)` / `LocalSpeechExecutor.synthesize(...)` - optional extension hooks; the default executor raises `LocalSpeechError` for every target.
+- `LocalSpeechExecutor.transcribe(...)` dispatches to registered local engines; `synthesize(...)` remains unsupported. `SpeechService.close/aclose` own local worker/model cleanup.
 
 `SpeechTranscriptionResult` contains normalized `text`, optional `language`, optional `segments`, optional `usage`, and the raw response payload when available.
 
@@ -33,6 +33,37 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
   "url": "/api/speech/artifacts/f1e2d3c4..."
 }
 ```
+
+## Local engines
+
+`speech_local.py` owns engine definitions, option schemas, dependency preflight,
+audio chunking, adapters and lifecycle. Runtime passes one `LocalSpeechExecutor`
+and its target registry to SpeechService and TaskModelService. Built-ins are
+`local/qwen3-asr` (Qwen 1.7B or 0.6B, language/context options) and
+`local/parakeet` (NVIDIA TDT v3). Both use native Transformers under the optional
+`local-speech` extra. Configuration does not load weights; first non-silent use does.
+
+To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory and
+optional load-affecting option names. Its synchronous `LocalTranscriptionEngine`
+implements `transcribe` and `close`; callers and accessors remain unchanged.
+Unspecified load-option names mean every option participates in cache identity.
+One bounded worker serializes loading, inference and unloading outside the Event
+Loop. A different load configuration releases the previous model before loading
+the next; Provider STT calls `unload`, and Runtime shutdown calls `close`/`aclose`.
+Cancellation waits for already-started work before reporting cancellation.
+
+PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
+seconds, cut near a quiet point in the last second, with no discarded samples.
+Exact digital silence skips inference. Result segment times are chunk bounds,
+not word alignment. Models load from the Hugging Face cache/download or an
+explicit server directory, with remote code disabled; offline mode permits
+only cached files. See `USAGE.md` → Local speech recognition for installation.
+
+Coverage: `tests/core/model_tasks/test_speech_local.py` tests custom engine
+substitution, cache/lifecycle, cancellation, decode/resampling/chunk coverage,
+failures and native adapter calls without downloading weights. `test_speech.py`
+covers service error translation and Provider handoff; Runtime registration and
+cleanup are covered by `tests/core/runtime/test_runtime.py`.
 
 ## Provider Wire Behavior
 
@@ -87,6 +118,6 @@ Missing STT bindings and Provider request failures are logged through `vbot.spee
 - The built-in profiles are `compatibility` (WAV, mono PCM16, 16 kHz) and `high_quality` (FLAC, mono PCM16, 48 kHz); `custom` accepts WAV or FLAC at 16, 24, or 48 kHz. The server setting is live-read for every transcription, while the upload-size limit remains restart-applied.
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
-- Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.
+- Local speech imports remain dependency-free; dependency availability does not promise GPU/model readiness. Device, checkpoint and memory errors are reported during execution as `SpeechExecutionError`; missing extras remain `SpeechUnsupportedTargetError`.
 - Artifact persistence (shared `TaskArtifactStore`) exclusively reserves the sidecar name before writing the audio file and complete metadata; interrupted writes can leave invalid sidecars or orphaned audio blobs, whose names remain occupied.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.
