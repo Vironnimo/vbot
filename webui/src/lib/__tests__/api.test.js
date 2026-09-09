@@ -1129,6 +1129,65 @@ describe('task model API helpers', () => {
 });
 
 describe('transcribeSpeech()', () => {
+  it('reports streamed phases before returning the final transcript, across chunk boundaries', async () => {
+    const events = [
+      { type: 'progress', phase: 'downloading', elapsed_seconds: 1 },
+      { type: 'progress', phase: 'loading', elapsed_seconds: 2 },
+      { type: 'progress', phase: 'transcribing', elapsed_seconds: 3 },
+      { type: 'result', result: { text: 'Grüße' } },
+    ];
+    const bytes = new TextEncoder().encode(
+      events.map((item) => JSON.stringify(item)).join('\n') + '\n',
+    );
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          for (let index = 0; index < bytes.length; index += 3)
+            controller.enqueue(bytes.slice(index, index + 3));
+          controller.close();
+        },
+      }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } },
+    );
+    const onProgress = vi.fn();
+    const fetchFunction = vi.fn().mockResolvedValue(response);
+    const result = await transcribeSpeech(new Blob(['audio']), {
+      fetch: fetchFunction,
+      onProgress,
+    });
+    expect(result).toEqual({ text: 'Grüße' });
+    expect(onProgress.mock.calls.map(([event]) => event.phase)).toEqual([
+      'downloading',
+      'loading',
+      'transcribing',
+    ]);
+    expect(fetchFunction.mock.calls[0][1].headers.Accept).toBe(
+      'application/x-ndjson',
+    );
+  });
+
+  it.each([
+    [
+      '{"type":"error","detail":"test-owned sentinel","status":409}\n',
+      RPC_ERROR_HTTP,
+    ],
+    ['{"type":"progress","phase":"loading"}\n', RPC_ERROR_RESPONSE],
+  ])('rejects failed or interrupted speech streams', async (body, code) => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(body, {
+          headers: { 'Content-Type': 'application/x-ndjson' },
+        }),
+      );
+    await expect(
+      transcribeSpeech(new Blob(['audio']), {
+        fetch: fetchFunction,
+        onProgress: vi.fn(),
+      }),
+    ).rejects.toMatchObject({ code });
+  });
+
   it('uploads audio and returns the transcription payload', async () => {
     const fetchFunction = vi
       .fn()
@@ -1722,6 +1781,7 @@ function jsonResponse(body, options = {}) {
     ok: options.ok ?? true,
     status: options.status ?? 500,
     json: vi.fn().mockResolvedValue(body),
+    headers: new Headers(options.headers),
   };
 }
 

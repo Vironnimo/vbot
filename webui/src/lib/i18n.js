@@ -1742,8 +1742,48 @@ export const englishCatalog = Object.freeze({
   'settings.specializedModels.title': 'Specialized Models',
   'settings.localSpeech.ready':
     'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. After downloading, enable Offline only to use cached files without network access.',
-  'settings.localSpeech.install':
-    'Install local speech support in the vBot server’s Python environment and restart it. For GPU use, PyTorch must support your graphics card. Run in the vBot installation directory:',
+  'settings.localSpeech.state.checking': 'Checking local speech support…',
+  'settings.localSpeech.state.missing':
+    'Local speech support is not installed on this server. Installation includes support for both engines and may download several gigabytes.',
+  'settings.localSpeech.state.restart_required':
+    'Installation complete. Restart the server to enable local speech recognition. Active Runs will be interrupted.',
+  'settings.localSpeech.state.restarting':
+    'Restarting the server. Reconnecting automatically…',
+  'settings.localSpeech.installButton': 'Install',
+  'settings.localSpeech.installingButton': 'Installing…',
+  'settings.localSpeech.restartButton': 'Restart server',
+  'settings.localSpeech.restartingButton': 'Restarting…',
+  'settings.localSpeech.retry': 'Try again',
+  'settings.localSpeech.checkAgain': 'Check again',
+  'settings.localSpeech.phase.checking': 'Checking the server environment…',
+  'settings.localSpeech.phase.gpu': 'Preparing GPU support…',
+  'settings.localSpeech.phase.downloading':
+    'Downloading speech support. This can take several minutes; you can leave this page.',
+  'settings.localSpeech.phase.installing': 'Installing speech support…',
+  'settings.localSpeech.phase.verifying':
+    'Checking the installed speech engines…',
+  'settings.localSpeech.error.connection':
+    'The server could not be reached. Check the connection to see the current installation status.',
+  'settings.localSpeech.error.install_failed':
+    'Installation failed. Check the server’s internet connection, available storage and write permissions, then try again.',
+  'settings.localSpeech.error.pip_unavailable':
+    'The server’s Python package installer is unavailable. Repair the vBot installation, then try again.',
+  'settings.localSpeech.error.setup_unavailable':
+    'Setup could not access the vBot installation. Check its files and write permissions, then try again.',
+  'settings.localSpeech.error.verification_failed':
+    'The installed speech engines could not start. Try the installation again.',
+  'settings.localSpeech.error.gpu_unavailable':
+    'The GPU could not be used after installation. Update the server’s graphics driver, then try again.',
+  'settings.localSpeech.error.timeout':
+    'Installation took too long. Check the server’s internet connection, then try again; completed downloads can be reused.',
+  'settings.localSpeech.error.interrupted':
+    'Installation was interrupted. Try again to finish setup.',
+  'settings.localSpeech.error.setup_not_finished':
+    'Finish installing speech support before restarting the server.',
+  'settings.localSpeech.error.restart_unavailable':
+    'The server could not restart automatically. Restart it using the application that started it.',
+  'settings.localSpeech.error.restart_timeout':
+    'The server has not reconnected yet. Check whether it is running, then check again.',
   'settings.localSpeech.options.device.label': 'Device',
   'settings.localSpeech.options.dtype.label': 'Precision',
   'settings.localSpeech.options.model.label': 'Model',
@@ -2413,6 +2453,15 @@ export const englishCatalog = Object.freeze({
   'voice.state.wakewordDetected': 'Wakeword detected',
   'voice.state.recording': 'Recording',
   'voice.state.transcribing': 'Transcribing',
+  'chat.voice.progress.microphone': 'Waiting for microphone access…',
+  'chat.voice.progress.uploading': 'Sending recording…',
+  'chat.voice.progress.preparing': 'Preparing recording…',
+  'chat.voice.progress.queued': 'Waiting for the speech engine…',
+  'chat.voice.progress.checking_model': 'Checking model files…',
+  'chat.voice.progress.downloading':
+    'Downloading speech model. The first download can take several minutes…',
+  'chat.voice.progress.loading': 'Loading speech model into memory…',
+  'chat.voice.progress.transcribing': 'Transcribing recording…',
   'voice.state.sending': 'Sending',
   'voice.state.sent': 'Sent',
   'voice.state.cancelled': 'Cancelled',

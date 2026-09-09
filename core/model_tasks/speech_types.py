@@ -3,9 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
+from time import monotonic
 from typing import Any
 
 JsonObject = dict[str, Any]
+
+
+class SpeechProgress:
+    """One request's bounded progress snapshot, shared with its inference worker."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._phase = "preparing"
+        self._started = monotonic()
+
+    def update(self, phase: str) -> None:
+        with self._lock:
+            self._phase = phase
+
+    def snapshot(self) -> JsonObject:
+        with self._lock:
+            return {"phase": self._phase, "elapsed_seconds": int(monotonic() - self._started)}
 
 
 @dataclass(frozen=True)

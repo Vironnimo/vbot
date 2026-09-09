@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.model_tasks import (
@@ -13,7 +16,7 @@ from core.model_tasks import (
     SpeechTranscriptionResult,
 )
 from core.runs import ChatRunManager
-from server.app import create_app
+from server.app import _stream_transcription, create_app
 
 
 def test_transcribe_endpoint_returns_normalized_json(tmp_path: Path) -> None:
@@ -25,6 +28,51 @@ def test_transcribe_endpoint_returns_normalized_json(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"text": "hello"}
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_transcribe_progress_stream_has_one_terminal_event(tmp_path: Path, fail: bool) -> None:
+    with _create_client(tmp_path, fail=fail) as client:
+        response = client.post(
+            "/api/speech/transcribe",
+            headers={"Accept": "application/x-ndjson"},
+            files={"file": ("clip.webm", b"audio", "audio/webm")},
+        )
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[0]["type"] == "progress"
+    if fail:
+        assert events[-1]["type"] == "error" and events[-1]["status"] == 409
+    else:
+        assert events[-1] == {"type": "result", "result": {"text": "hello"}}
+    assert len([event for event in events if event["type"] != "progress"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_stream_reports_each_live_phase_and_reaps_disconnect() -> None:
+    advance = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class Speech:
+        async def transcribe(self, audio, *, filename, media_type, progress):
+            try:
+                for phase in ("downloading", "loading", "transcribing"):
+                    progress.update(phase)
+                    await advance.wait()
+                    advance.clear()
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    stream = _stream_transcription(Speech(), b"audio", "clip.wav", "audio/wav")
+    assert json.loads(await anext(stream))["phase"] == "preparing"
+    for phase in ("downloading", "loading", "transcribing"):
+        event = json.loads(await anext(stream))
+        assert event["phase"] == phase
+        assert event["elapsed_seconds"] >= 0
+        advance.set()
+    await stream.aclose()
+    assert cancelled.is_set()
 
 
 def test_synthesize_endpoint_returns_audio_bytes(tmp_path: Path) -> None:
@@ -151,6 +199,7 @@ class _Speech:
         *,
         filename: str,
         media_type: str,
+        progress: Any = None,
     ) -> SpeechTranscriptionResult:
         self.transcribe_calls += 1
         return SpeechTranscriptionResult(text="hello")
@@ -167,5 +216,6 @@ class _FailingSpeech(_Speech):
         *,
         filename: str,
         media_type: str,
+        progress: Any = None,
     ) -> SpeechTranscriptionResult:
         raise SpeechConfigurationError("Speech is not configured")

@@ -686,21 +686,27 @@ vbot task-model clear text_embedding
 
 Qwen3 ASR and Parakeet TDT v3 run on the **vBot server machine**, including when
 the WebUI or Desktop connects from another computer. They require no paid API
-or subscription. Install the optional runtime from your vBot installation
-directory, using the same Python environment that runs the server, then restart:
+or subscription. In **Settings -> Tools & Media -> Specialized Models**, select
+a local speech-to-text engine and choose **Install**. Setup runs on the server
+and continues if you leave Settings. Its status shows environment checks,
+downloads, installation and verification; a failed setup offers **Try again**.
+Once verification succeeds, choose **Restart server**. This interrupts active
+Runs, reconnects the interface and checks local speech availability again.
 
-```bash
-python -m pip install -e ".[local-speech]"
-```
-
-For GPU execution, install a [PyTorch build for your platform](https://pytorch.org/get-started/locally/)
-in that environment. `Automatic` uses CUDA/ROCm when available, then Apple MPS,
+Setup uses the server's Python environment and the shipped `local-speech` extra,
+without replacing the running Desktop launchers. It preserves a working compatible
+PyTorch installation, prepares CUDA 12.8 support for a detected NVIDIA GPU, or
+uses the platform's CPU/Apple build. NVIDIA drivers must support that build;
+verification runs a small GPU calculation before offering restart. Other GPU
+platforms can use a manually installed [PyTorch build](https://pytorch.org/get-started/locally/).
+`Automatic` uses CUDA/ROCm when available, then Apple MPS,
 otherwise CPU. CPU execution is available but can be slow. This extra is separate
 from the normal server and Desktop dependencies; it does not install NeMo, vLLM,
 or the separate `qwen-asr` package. Both engines use native Transformers adapters.
 
 In **Settings → Tools & Media → Specialized Models → Speech to text**, select
-**Qwen3 ASR** or **Parakeet TDT v3**. Expand its options to choose device, precision,
+**Qwen3 ASR (local)** or **Parakeet TDT v3 (local)**; searching for **local** finds
+both. Expand its options to choose device, precision,
 or a model directory. Qwen defaults to the 1.7B model, also offers 0.6B, and accepts
 an optional language and vocabulary/context hint. Parakeet detects language
 automatically. You can also select an engine through the CLI:
@@ -712,7 +718,10 @@ vbot task-model set speech_to_text local/parakeet
 
 The first non-silent transcription downloads the selected public checkpoint from
 Hugging Face and loads it. This can take several minutes and needs disk space for
-model weights. The server's standard Hugging Face cache is reused (`HF_HOME` can
+model weights. Chat shows live download, model-loading and transcription phases
+with elapsed time above the composer and in the microphone tooltip. A cached
+model skips downloads; an already loaded model skips loading. Failures release
+the microphone for another attempt. The server's standard Hugging Face cache is reused (`HF_HOME` can
 relocate it). After downloading, enable **Offline only** to prevent model network
 lookups; a missing cache then produces an error. Alternatively, point **Model
 directory** at a complete compatible Transformers checkpoint on the server.

@@ -12,6 +12,9 @@
   import Toggle from '../ui/Toggle.svelte';
   import {
     getTaskModelOptions,
+    getLocalSpeechSetup,
+    installLocalSpeechSupport,
+    restartAfterLocalSpeechSetup,
     listTaskModelTargets,
     updateTaskModelSettings,
   } from '$lib/api.js';
@@ -79,6 +82,111 @@
   let lastModelsRefreshToken = null;
   let taskModelSchemaRequestIds = {};
   let destroyed = false;
+  let localSetup = $state(null);
+  let localSetupError = $state('');
+  let localSetupAction = $state(false);
+  let restartStartedAt = 0;
+  let setupTimer = null;
+  let setupRequestId = 0;
+  let localSelected = $derived(
+    taskModelBindings.speech_to_text?.target?.startsWith('local/'),
+  );
+
+  $effect(() => {
+    if (!localSelected) return;
+    untrack(() => void refreshLocalSetup());
+    return () => {
+      clearTimeout(setupTimer);
+      setupRequestId += 1;
+    };
+  });
+
+  function scheduleSetupRefresh() {
+    clearTimeout(setupTimer);
+    if (!destroyed && localSelected) {
+      setupTimer = setTimeout(() => void refreshLocalSetup(), 1500);
+    }
+  }
+
+  async function refreshLocalSetup() {
+    const requestId = ++setupRequestId;
+    try {
+      const next = await getLocalSpeechSetup();
+      if (destroyed || requestId !== setupRequestId) return;
+      localSetupError = '';
+      if (restartStartedAt && next.state !== 'ready') {
+        localSetup = { ...next, state: 'restarting' };
+      } else {
+        localSetup = next;
+      }
+      if (next.state === 'ready') {
+        restartStartedAt = 0;
+        const targets = await listTaskModelTargets('speech_to_text');
+        if (destroyed || requestId !== setupRequestId) return;
+        taskModelTargetsByType = {
+          ...taskModelTargetsByType,
+          speech_to_text: normalizeTargets(targets),
+        };
+      }
+    } catch {
+      if (destroyed || requestId !== setupRequestId) return;
+      if (!restartStartedAt) localSetupError = 'connection';
+    }
+    if (restartStartedAt && Date.now() - restartStartedAt > 90_000) {
+      localSetupError = 'restart_timeout';
+      return;
+    }
+    if (restartStartedAt || localSetup?.state === 'installing')
+      scheduleSetupRefresh();
+  }
+
+  async function installLocalSpeech() {
+    if (localSetupAction || localSetup?.state === 'installing') return;
+    localSetupAction = true;
+    localSetupError = '';
+    clearTimeout(setupTimer);
+    setupRequestId += 1;
+    try {
+      const next = await installLocalSpeechSupport();
+      if (destroyed) return;
+      localSetup = next;
+      scheduleSetupRefresh();
+    } catch {
+      if (!destroyed) {
+        localSetupError = 'connection';
+        scheduleSetupRefresh();
+      }
+    } finally {
+      if (!destroyed) localSetupAction = false;
+    }
+  }
+
+  async function restartLocalSpeechServer() {
+    if (localSetupAction || taskSurfaceBusy) return;
+    localSetupAction = true;
+    localSetupError = '';
+    setupRequestId += 1;
+    restartStartedAt = Date.now();
+    try {
+      const result = await restartAfterLocalSpeechSetup();
+      if (destroyed) return;
+      if (result.state !== 'restarting') {
+        restartStartedAt = 0;
+        localSetupError = result.error || 'restart_unavailable';
+      } else {
+        localSetup = { ...localSetup, state: 'restarting' };
+      }
+    } catch {
+      // The response may have been interrupted by the requested restart.
+      // Inspect status, never automatically repeat the restart mutation.
+      if (!destroyed) localSetup = { ...localSetup, state: 'restarting' };
+    } finally {
+      if (!destroyed) {
+        localSetupAction = false;
+        scheduleSetupRefresh();
+      }
+    }
+  }
 
   let saveDisabled = $derived(
     taskModelSaving ||
@@ -114,6 +222,8 @@
 
   onDestroy(() => {
     destroyed = true;
+    clearTimeout(setupTimer);
+    setupRequestId += 1;
     taskModelSchemaRequestIds = {};
     unregisterTaskModelsAutosave();
     taskModelsAutosave.cancelPendingTimer();
@@ -382,8 +492,9 @@
       },
       ...targets.map((target) => ({
         value: target.id,
-        label: target.label,
-        searchText: `${target.label} ${target.id}`,
+        label:
+          target.kind === 'local' ? `${target.label} (local)` : target.label,
+        searchText: `${target.label} ${target.id} ${target.kind === 'local' ? 'local' : ''}`,
       })),
     ];
 
@@ -531,12 +642,69 @@
       </div>
 
       {#if row.taskType === 'speech_to_text' && selectedTarget?.kind === 'local'}
-        <Banner variant={selectedTarget.usable ? 'neutral' : 'warn'}>
-          {#if selectedTarget.usable}
-            {t('settings.localSpeech.ready')}
-          {:else}
-            {t('settings.localSpeech.install')}
-            <code>python -m pip install -e '.[local-speech]'</code>
+        {@const setupState = localSetup?.state ?? 'checking'}
+        <Banner
+          variant={localSetupError || setupState === 'failed'
+            ? 'warn'
+            : 'neutral'}
+        >
+          <div role="status" aria-live="polite">
+            {#if localSetupError}
+              {t(
+                `settings.localSpeech.error.${localSetupError}`,
+                t('settings.localSpeech.error.install_failed'),
+              )}
+            {:else if setupState === 'failed'}
+              {t(
+                `settings.localSpeech.error.${localSetup.error}`,
+                t('settings.localSpeech.error.install_failed'),
+              )}
+            {:else if setupState === 'installing'}
+              {t(
+                `settings.localSpeech.phase.${localSetup.phase}`,
+                t('settings.localSpeech.phase.installing'),
+              )}
+            {:else if setupState === 'ready'}
+              {t('settings.localSpeech.ready')}
+            {:else if setupState === 'restart_required' && !localSetup.restart_available}
+              {t('settings.localSpeech.error.restart_unavailable')}
+            {:else}
+              {t(`settings.localSpeech.state.${setupState}`)}
+            {/if}
+          </div>
+          {#if localSetupError === 'connection' || localSetupError === 'restart_timeout'}
+            <Button onClick={refreshLocalSetup}
+              >{t('settings.localSpeech.checkAgain')}</Button
+            >
+          {:else if setupState === 'missing' || setupState === 'failed'}
+            <Button
+              variant="primary"
+              loading={localSetupAction}
+              onClick={installLocalSpeech}
+            >
+              {t(
+                setupState === 'failed'
+                  ? 'settings.localSpeech.retry'
+                  : 'settings.localSpeech.installButton',
+              )}
+            </Button>
+          {:else if setupState === 'restart_required'}
+            <Button
+              variant="primary"
+              loading={localSetupAction}
+              disabled={taskSurfaceBusy || !localSetup.restart_available}
+              onClick={restartLocalSpeechServer}
+            >
+              {t('settings.localSpeech.restartButton')}
+            </Button>
+          {:else if setupState === 'installing' || setupState === 'restarting'}
+            <Button loading
+              >{t(
+                setupState === 'installing'
+                  ? 'settings.localSpeech.installingButton'
+                  : 'settings.localSpeech.restartingButton',
+              )}</Button
+            >
           {/if}
         </Banner>
       {/if}

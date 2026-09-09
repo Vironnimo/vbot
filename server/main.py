@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import os
 from pathlib import Path
 
 from core.tools.process_manager import activate_process_containment
@@ -70,11 +72,32 @@ def main(argv: list[str] | None = None) -> None:
             if server is not None:
                 server.should_exit = True  # type: ignore[attr-defined]
 
+        restart_scheduled = False
+
+        def request_restart() -> None:
+            nonlocal restart_scheduled
+            if restart_scheduled:
+                return
+            from cli.server_management import resolve_instance, schedule_server_restart
+
+            instance = resolve_instance(
+                host=server_bind["listen_host"],
+                port=server_bind["listen_port"],
+                data_dir=config.data_dir,
+            )
+            result = schedule_server_restart(instance, wait_pid=os.getpid())
+            if not result.ok:
+                raise RuntimeError("restart_unavailable")
+            restart_scheduled = True
+            # Let the RPC response reach the client before cooperative teardown.
+            asyncio.get_running_loop().call_later(0.5, request_shutdown)
+
         app = create_app(
             config=config,
             server_bind=server_bind,
             shutdown_token=control.token,
             request_shutdown=request_shutdown,
+            request_restart=request_restart,
         )
         uvicorn_config = uvicorn.Config(
             app,
