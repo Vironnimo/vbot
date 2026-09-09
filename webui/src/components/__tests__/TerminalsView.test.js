@@ -16,6 +16,8 @@ const renameTerminalGroupMock = vi.fn();
 const deleteTerminalGroupMock = vi.fn();
 const setTerminalGroupOrderMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
+const createAudioRecorderMock = vi.fn();
+const transcribeSpeechMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
 const fitAddons = [];
@@ -28,6 +30,7 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  transcribeSpeech: (...args) => transcribeSpeechMock(...args),
   listTerminals: (...args) => listTerminalsMock(...args),
   startTerminal: (...args) => startTerminalMock(...args),
   sendTerminalInput: (...args) => sendTerminalInputMock(...args),
@@ -39,6 +42,10 @@ vi.mock('$lib/api.js', () => ({
   deleteTerminalGroup: (...args) => deleteTerminalGroupMock(...args),
   setTerminalGroupOrder: (...args) => setTerminalGroupOrderMock(...args),
   subscribeTerminalEvents: (...args) => subscribeTerminalEventsMock(...args),
+}));
+
+vi.mock('$lib/audioRecorder.js', () => ({
+  createAudioRecorder: (...args) => createAudioRecorderMock(...args),
 }));
 
 vi.mock('@xterm/xterm', () => ({
@@ -56,6 +63,7 @@ vi.mock('@xterm/xterm', () => ({
       this.write = vi.fn((_data, callback) => callback?.());
       this.dispose = vi.fn();
       this.focus = vi.fn();
+      this.paste = vi.fn((text) => this.onDataCallback(text));
       this.scrollToBottom = vi.fn(() => {
         this.buffer.active.viewportY = this.buffer.active.baseY;
       });
@@ -165,6 +173,8 @@ describe('TerminalsView', () => {
     resizeObservers.length = 0;
     mockHostWidth = 800;
     mockHostHeight = 512;
+    createAudioRecorderMock.mockReset();
+    transcribeSpeechMock.mockReset();
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
@@ -194,6 +204,107 @@ describe('TerminalsView', () => {
       mountedComponent = null;
     }
     document.body.innerHTML = '';
+  });
+
+  it('records from the tile bar and pastes through xterm into the original terminal without Enter', async () => {
+    const recorder = {
+      start: vi.fn(),
+      cancel: vi.fn(),
+      stop: vi.fn().mockResolvedValue(new Blob(['audio'])),
+      filename: () => 'recording.webm',
+    };
+    createAudioRecorderMock.mockResolvedValue(recorder);
+    let finishTranscription;
+    transcribeSpeechMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishTranscription = resolve;
+        }),
+    );
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([terminal(), terminal({ terminal_id: 'term-2' })]),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    await waitFor(() => terminalInstances.length === 2);
+    streams.forEach((stream, index) =>
+      stream.handlers.onEvent({
+        type: 'terminal_ready',
+        sequence: 1,
+        ansi: '',
+        terminal: terminal({ terminal_id: `term-${index + 1}` }),
+      }),
+    );
+    flushSync();
+    const microphone = document.querySelector(
+      '[data-terminal-id="term-1"] button[aria-label="Dictate into terminal"]',
+    );
+    microphone.click();
+    await waitFor(() => microphone.getAttribute('aria-pressed') === 'true');
+    expect(recorder.start).toHaveBeenCalledOnce();
+    expect(
+      document.querySelector(
+        '[data-terminal-id="term-2"] button[aria-label="Dictate into terminal"]',
+      ).disabled,
+    ).toBe(true);
+    microphone.click();
+    await waitFor(() => transcribeSpeechMock.mock.calls.length === 1);
+    expect(microphone.getAttribute('aria-busy')).toBe('true');
+    document
+      .querySelector('[data-terminal-id="term-2"] .terminals-view__tile-bar')
+      .click();
+    terminalInstances.forEach((instance) => instance.focus.mockClear());
+    finishTranscription({
+      text: '  Bitte prüfen\r\nund ergänzen.\t\u001b\u0003  ',
+    });
+    await waitFor(() => terminalInstances[0].paste.mock.calls.length === 1);
+    expect(terminalInstances[0].paste).toHaveBeenCalledWith(
+      'Bitte prüfen und ergänzen.',
+    );
+    expect(terminalInstances[1].paste).not.toHaveBeenCalled();
+    expect(terminalInstances[0].focus).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sendTerminalInputMock).toHaveBeenCalledWith(
+      'term-1',
+      'Bitte prüfen und ergänzen.',
+    );
+    expect(microphone.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('discards an in-flight transcript when the view is unmounted', async () => {
+    const recorder = {
+      start: vi.fn(),
+      cancel: vi.fn(),
+      stop: vi.fn().mockResolvedValue(new Blob(['audio'])),
+      filename: () => 'recording.webm',
+    };
+    createAudioRecorderMock.mockResolvedValue(recorder);
+    let finish;
+    transcribeSpeechMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    await waitFor(() => terminalInstances.length === 1);
+    streams[0].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 1,
+      ansi: '',
+      terminal: terminal(),
+    });
+    flushSync();
+    findButtonByAriaLabel('Dictate into terminal').click();
+    await waitFor(() => recorder.start.mock.calls.length === 1);
+    findButtonByAriaLabel('Stop recording and insert text').click();
+    await waitFor(() => transcribeSpeechMock.mock.calls.length === 1);
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(transcribeSpeechMock.mock.calls[0][1].signal.aborted).toBe(true);
+    finish({ text: 'must not arrive' });
+    await Promise.resolve();
+    expect(terminalInstances[0].paste).not.toHaveBeenCalled();
   });
 
   it('shows active ownership and renders the live ANSI snapshot without owning lifetime', async () => {
@@ -724,7 +835,7 @@ describe('TerminalsView', () => {
     expect(firstBar.textContent).toContain('main@vbot');
     expect(
       firstBar.querySelectorAll('.terminals-view__tile-action'),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       firstBar
         .querySelector('.terminals-view__tile-action svg')
