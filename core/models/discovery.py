@@ -8,7 +8,7 @@ provider model file.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -33,7 +33,7 @@ from core.models.models_dev import (
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.errors import CatalogEntrySkipped, NetworkError
+from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderAuthError
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
@@ -48,12 +48,15 @@ from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.stepfun import StepFunAdapter
+from core.providers.token_getter import RejectedTokenRefresher, StaticTokenGetter, TokenGetter
 from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
 _LOGGER = get_logger("models.discovery")
+_HeaderSource = dict[str, str] | Callable[[], Awaitable[dict[str, str]]]
+_AuthRecovery = Callable[[dict[str, str]], Awaitable[None]]
 
 
 class ModelDiscoveryError(VBotError):
@@ -90,7 +93,7 @@ class PassthroughModelFilter:
 
 async def refresh_models(
     provider_config: ProviderConfig,
-    credential_value: str,
+    credential_value: str | TokenGetter,
     resources_dir: Path,
     raw_filter: RawModelFilter | None = None,
     model_filter: ModelFilter | None = None,
@@ -134,6 +137,33 @@ async def refresh_models(
     fetched_at = datetime.now(UTC).isoformat()
     try:
         adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+        token_getter = (
+            StaticTokenGetter(credential_value)
+            if isinstance(credential_value, str)
+            else credential_value
+        )
+
+        async def build_headers() -> dict[str, str]:
+            return _build_headers(
+                provider_config, await token_getter(), adapter_class, credential_connection
+            )
+
+        auth_recovery: _AuthRecovery | None = None
+        if (
+            isinstance(adapter_class, type)
+            and issubclass(adapter_class, ProviderAdapter)
+            and adapter_class.can_refresh_discovery_after_unauthorized(credential_connection)
+            and isinstance(token_getter, RejectedTokenRefresher)
+            and credential_connection is not None
+        ):
+            refresher = token_getter
+            auth = credential_connection.auth
+
+            async def recover_auth(rejected_headers: dict[str, str]) -> None:
+                rejected_token = rejected_headers[auth.header].removeprefix(auth.prefix)
+                await refresher.refresh_after_unauthorized(rejected_token)
+
+            auth_recovery = recover_auth
         discovery_params = await _resolve_discovery_params(adapter_class)
         url = _append_query_params(
             _join_url(base_url, models_endpoint),
@@ -141,11 +171,7 @@ async def refresh_models(
         )
 
         raw_payload, raw_models = await _fetch_raw_models(
-            url,
-            provider_config,
-            credential_value,
-            adapter_class,
-            credential_connection,
+            url, build_headers, auth_recovery=auth_recovery
         )
 
         # Some providers (e.g. OpenRouter) require supplementary API calls
@@ -159,11 +185,7 @@ async def refresh_models(
                 supplementary_url = _append_query_params(url, params)
                 try:
                     _, supplementary_models = await _fetch_raw_models(
-                        supplementary_url,
-                        provider_config,
-                        credential_value,
-                        adapter_class,
-                        credential_connection,
+                        supplementary_url, build_headers, auth_recovery=auth_recovery
                     )
                 except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
                     _LOGGER.warning(
@@ -247,16 +269,10 @@ async def refresh_models(
         raw_enrichment_responses: list[dict[str, Any]] = []
         enrich_discovered_models = getattr(adapter_class, "enrich_discovered_models", None)
         if callable(enrich_discovered_models):
-            enrichment_headers = _build_headers(
-                provider_config,
-                credential_value,
-                adapter_class,
-                credential_connection,
-            )
 
             async def _post_enrichment_json(endpoint: str, payload: dict[str, Any]) -> Any:
                 response_payload = await _post_json_payload(
-                    _join_url(base_url, endpoint), enrichment_headers, payload
+                    _join_url(base_url, endpoint), build_headers, payload
                 )
                 raw_enrichment_responses.append(
                     {"endpoint": endpoint, "request": payload, "response": response_payload}
@@ -291,15 +307,11 @@ async def refresh_models(
         raw_task_responses: dict[str, Any] = {}
         discover_task_models = getattr(adapter_class, "discover_task_models", None)
         if callable(discover_task_models):
-            task_headers = _build_headers(
-                provider_config,
-                credential_value,
-                adapter_class,
-                credential_connection,
-            )
 
             async def _fetch_task_json(endpoint: str) -> Any:
-                payload = await _fetch_json_payload(_join_url(base_url, endpoint), task_headers)
+                payload = await _fetch_json_payload(
+                    _join_url(base_url, endpoint), build_headers, auth_recovery=auth_recovery
+                )
                 raw_task_responses[endpoint] = payload
                 return payload
 
@@ -530,18 +542,11 @@ def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id:
 
 async def _fetch_raw_models(
     url: str,
-    provider_config: ProviderConfig,
-    credential_value: str,
-    adapter_class: Any,
-    credential_connection: ConnectionConfig | None = None,
+    headers: _HeaderSource,
+    *,
+    auth_recovery: _AuthRecovery | None = None,
 ) -> tuple[Any, list[Mapping[str, Any]]]:
-    headers = _build_headers(
-        provider_config,
-        credential_value,
-        adapter_class,
-        credential_connection,
-    )
-    payload = await _fetch_json_payload(url, headers)
+    payload = await _fetch_json_payload(url, headers, auth_recovery=auth_recovery)
 
     raw_models = _raw_models_from_payload(payload)
     if not isinstance(raw_models, list):
@@ -553,21 +558,33 @@ async def _fetch_raw_models(
     return payload, raw_models
 
 
-async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
+async def _fetch_json_payload(
+    url: str,
+    headers: _HeaderSource,
+    *,
+    auth_recovery: _AuthRecovery | None = None,
+) -> Any:
     """GET *url* and return the parsed JSON body with retry semantics.
 
     Catalog fetches share the provider path's transient-failure handling:
     transport/timeout errors and retryable statuses (429/500/502/503/504) are
-    re-issued with backoff + Retry-After; auth and other fatal statuses raise a
-    non-retryable error that aborts immediately.
+    re-issued with backoff + Retry-After. An opted-in Connection can refresh a
+    rejected token once after 401; recovery failure, a second 401, and other
+    fatal statuses propagate without another auth recovery attempt.
     """
 
+    rejected_headers: dict[str, str] | None = None
+
     async def _request() -> Any:
+        nonlocal rejected_headers
+        request_headers = await headers() if callable(headers) else headers
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
-                response = await client.get(url, headers=headers)
+                response = await client.get(url, headers=request_headers)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
+            if response.status_code == 401:
+                rejected_headers = request_headers
             if response.status_code >= 400:
                 error_body = response.text
                 detail = (
@@ -583,10 +600,20 @@ async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
                 )
             return response.json()
 
-    return await retry_async(_request)
+    try:
+        return await retry_async(_request)
+    except ProviderAuthError as exc:
+        if (
+            getattr(exc, "status_code", None) != 401
+            or auth_recovery is None
+            or rejected_headers is None
+        ):
+            raise
+        await auth_recovery(rejected_headers)
+        return await retry_async(_request)
 
 
-async def _post_json_payload(url: str, headers: dict[str, str], payload: dict[str, Any]) -> Any:
+async def _post_json_payload(url: str, headers: _HeaderSource, payload: dict[str, Any]) -> Any:
     """POST *payload* to *url* and return the parsed JSON body with retry semantics.
 
     The POST twin of :func:`_fetch_json_payload`, used by adapter enrichment
@@ -596,9 +623,10 @@ async def _post_json_payload(url: str, headers: dict[str, str], payload: dict[st
     """
 
     async def _request() -> Any:
+        request_headers = await headers() if callable(headers) else headers
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
-                response = await client.post(url, headers=headers, json=payload)
+                response = await client.post(url, headers=request_headers, json=payload)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
             if response.status_code >= 400:

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+import respx
 
+from core.providers.accounts import ConnectionRef
 from core.providers.auth_flow import DeviceFlowSession
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import OAuthToken, TokenStore
 from core.storage.layout import DataDirectoryLayout
@@ -139,6 +144,9 @@ class StubProviderCredentials:
         if self.has_credentials(provider_id, connection_id):
             return "api-key-secret"
         raise KeyError(connection_id)
+
+    def resolve_account_id(self, provider_id: str, connection_id: str) -> str:
+        return "default"
 
 
 class StubModelRegistry:
@@ -736,23 +744,43 @@ async def test_provider_connection_status_reports_per_account_state(tmp_path: An
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("account_id", ["default", "work"])
 async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
+    account_id: str,
 ) -> None:
     state = make_state(tmp_path, make_refreshable_oauth_provider())
     state.runtime.token_store.save(
         "github-copilot",
         "oauth",
         OAuthToken(access_token="stale-token", extra={"github_oauth_token": "github-secret"}),
+        account_id=account_id,
     )
     refreshed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        state.runtime.provider_credentials, "resolve_account_id", lambda *_args: account_id
+    )
+
+    def token_extra(connection: ConnectionRef) -> dict[str, str]:
+        assert connection == ConnectionRef("github-copilot", "github-copilot:oauth")
+        assert "getter_args" in refreshed
+        return {"copilot_api_endpoint": "https://api.enterprise.githubcopilot.com"}
+
+    state.runtime.get_connection_token_extra = token_extra
 
     class StubOAuthTokenGetter:
         def __init__(
-            self, token_store: Any, provider_id: str, connection_id: str, config: Any
+            self,
+            token_store: Any,
+            provider_id: str,
+            connection_id: str,
+            config: Any,
+            *,
+            account_id: str,
         ) -> None:
             self.args = (token_store, provider_id, connection_id, config)
+            refreshed["account_id"] = account_id
 
         async def __aenter__(self) -> StubOAuthTokenGetter:
             refreshed["entered"] = True
@@ -766,7 +794,9 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
             return "fresh-runtime-token"
 
     async def fake_refresh_models(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        refreshed["credential"] = _args[1]
+        assert not refreshed.get("closed")
+        assert isinstance(_args[1], StubOAuthTokenGetter)
+        refreshed["credential"] = await _args[1]()
         refreshed["connection"] = _kwargs["credential_connection"]
         return {
             "provider_id": "github-copilot",
@@ -791,7 +821,74 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
     assert refreshed["connection"].id == "oauth"
     assert refreshed["entered"] is True
     assert refreshed["closed"] is True
+    assert refreshed["account_id"] == account_id
+    assert refreshed["connection"].base_url == "https://api.enterprise.githubcopilot.com"
     assert state.runtime.provider_credentials.requested_credentials == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["global", "provider"])
+@pytest.mark.parametrize("error_kind", ["auth", "provider", "network"])
+async def test_model_refresh_continues_after_oauth_credential_failure(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+    error_kind: str,
+) -> None:
+    provider = make_refreshable_oauth_provider()
+    provider = ProviderConfig(
+        id=provider.id,
+        name=provider.name,
+        adapter=provider.adapter,
+        base_url=provider.base_url,
+        models_endpoint=provider.models_endpoint,
+        connections=[*provider.connections, make_api_key_connection()],
+    )
+    state = make_state(tmp_path, provider)
+    resources_dir = state.runtime._resolve_resources_path()
+    models_dir = resources_dir / "models"
+    models_dir.mkdir(parents=True)
+    old_model = {
+        "name": "Old OAuth Model",
+        "connections": ["oauth"],
+        "capabilities": {"reasoning": {"supported": False}},
+    }
+    (models_dir / "github-copilot.json").write_text(
+        json.dumps({"provider_id": provider.id, "models": {"old-model": old_model}}),
+        encoding="utf-8",
+    )
+    error = {
+        "auth": ProviderAuthError("test-auth-failure"),
+        "provider": ProviderError("test-provider-failure", retryable=True),
+        "network": NetworkError("test-network-failure"),
+    }[error_kind]
+
+    async def failing_getter(_self: Any) -> str:
+        raise error
+
+    monkeypatch.setattr("core.providers.token_getter.OAuthTokenGetter.__call__", failing_getter)
+    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
+    catalog_route = respx.get("https://api.githubcopilot.com/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "fresh-model"}]}),
+    )
+    params = {} if scope == "global" else {"provider_id": provider.id}
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db", "params": params})
+
+    assert response["ok"] is True, response
+    result = response["result"]
+    assert result["model_count"] == 2
+    assert result["errors"] == [
+        {"provider_id": provider.id, "connection_id": "github-copilot:oauth", "error": str(error)}
+    ]
+    assert catalog_route.call_count == 1
+    assert catalog_route.calls[0].request.headers["Authorization"] == "Bearer api-key-secret"
+    written = json.loads(
+        (state.runtime.storage.layout.models / "github-copilot.json").read_text(encoding="utf-8")
+    )
+    assert written["models"]["old-model"] == old_model
+    assert written["models"]["fresh-model"]["connections"] == ["api-key"]
 
 
 @pytest.mark.asyncio

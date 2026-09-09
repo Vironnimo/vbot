@@ -14,6 +14,7 @@ An OpenAI-compatible Custom Provider participates without a separate discovery p
 
 - Primary catalog GET accepts top-level `data` or `models` lists and passes entries through the selected Adapter class's catalog filter/normalizer.
 - `discovery_headers()`, `discovery_params()`, and `supplementary_discovery_params()` let a Provider describe catalog auth/query variants without branching generic discovery by Provider id.
+- Discovery accepts a static credential or the selected Account's live `TokenGetter`; OAuth RPC refresh keeps the getter open through discovery. Each authenticated GET/POST attempt rebuilds headers from the current token, including Adapter-derived Account routing.
 - `resolve_discovery_params(fetch_json)` may replace time-sensitive query parameters from a public JSON source; failure is logged and keeps the static `discovery_params()` fallback. OpenAI Subscription uses the stable `@openai/codex` package version because `/codex/models` gates newly available Models by `client_version`; only a strict numeric `x.y.z` version is accepted.
 - `enrich_discovered_models(normalized_models, post_json)` supports bounded Provider detail calls after primary normalization; a per-Model enrichment failure keeps the conservative baseline.
 - `finalize_discovered_model(model, connection)` applies facts known only from Connection scope after baseline normalization and before optional enrichment. Keep the default identity implementation; override it when the same Adapter serves scopes with different durable facts, such as forcing every direct Ollama Cloud catalog entry remote.
@@ -34,9 +35,11 @@ Provider-generated data can be enriched from that Provider's own models.dev sect
 
 ## Retry and failure behavior
 
-Catalog GET requests run inside `retry_async` with the shared transport/status classification. Timeouts and transport errors, plus 429/500/502/503/504, retry with exponential backoff; `Retry-After` is honored as a capped floor. Auth/other fatal statuses and malformed required bodies abort the Connection refresh as `ModelDiscoveryError`. POST-only enrichment uses the same classifier with non-idempotent policy, so HTTP 500 remains fatal there.
+Catalog GET requests run inside `retry_async` with the shared transport/status classification. Timeouts and transport errors, plus 429/500/502/503/504, retry with exponential backoff; `Retry-After` is honored as a capped floor. Adapters opt into one rejected-token recovery through `can_refresh_discovery_after_unauthorized(connection)`: only OpenAI Subscription currently does so. An actual catalog HTTP 401 invokes the getter's `refresh_after_unauthorized` once, then retries with fresh headers. A second 401, 403, missing refresh capability, or failed recovery propagates; a token-getter failure alone never triggers catalog auth recovery. Other fatal statuses and malformed required bodies abort the Connection refresh as `ModelDiscoveryError`. POST-only enrichment uses the same classifier with non-idempotent policy, so HTTP 500 remains fatal there and it does not opt into rejected-token replay.
 
 A supplementary request failure is logged and skipped. Provider enrichment and task hooks define their own documented fail-soft granularity. One failed Connection must not erase the last known generated Models for unrelated Connections.
+
+The RPC catches expected credential-resolution and OAuth-refresh failures at the same Connection boundary as discovery failures. Global and multi-Connection refreshes record them in `errors`, retain that Connection's old Models, and continue; a single-Provider refresh with no successful Connection fails without publishing its staged snapshot.
 
 ## Local auto-refresh and reachability
 
