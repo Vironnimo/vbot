@@ -18,6 +18,7 @@ from typing import Any
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
+from core.tools.process import shape_process_output
 from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
@@ -44,15 +45,8 @@ BASH_COMPLETION_STATUS_PREFIX = "### Bash process — "
 BASH_COMPLETION_PROCESS_ID_PREFIX = "Process ID: "
 CredentialResolver = Callable[[str], str]
 
-# Model-facing output cap. The complete output always lands in the process log
-# file, so the result only ever carries the newest slice; anything bigger is a
-# context bomb (500 KiB of build output is >100k tokens in one tool message).
-BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
 BASH_HANDOFF_OUTPUT_CAP_CHARS = 4_000
 BASH_HANDOFF_OUTPUT_MAX_LINES = 20
-# Failure messages (timeout, sub-agent kill) carry a shorter tail: enough to
-# diagnose, small enough not to bloat an error envelope.
-FAILURE_OUTPUT_TAIL_CHARS = 10_000
 DEFAULT_BACKGROUND_AFTER_SECONDS = 30.0
 # Inside a Sub-Agent auto mode cannot hand off, so its background_after_seconds
 # threshold doubles as the kill deadline. Default it generously there: a 30s
@@ -89,11 +83,7 @@ BASH_TOOL_DESCRIPTION = (
     "before handing off a still-running command, and background for known long-lived commands. "
     "Handed-off commands are monitored automatically: continue independent work or end the Run "
     "instead of polling or starting another copy. Never manually detach or daemonize a command "
-    "because that bypasses vBot's process ownership. Result output keeps the newest "
-    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command is handed "
-    "off, the result includes a log_file path to the complete combined stdout/stderr stream. "
-    "A non-zero exit code returns an additional `hint` "
-    "field when a well-known failure shape was recognized." + _shell_syntax_notes()
+    "because that bypasses vBot's process ownership." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
@@ -101,9 +91,7 @@ BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "file operations; process handoff is unavailable. Use foreground to wait for completion and "
     "auto only for bounded work; auto kills a command still running after "
     "background_after_seconds. Never "
-    "manually detach or daemonize a command. Result output keeps the newest "
-    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, the result includes a "
-    "log_file path to the complete combined stdout/stderr stream." + _shell_syntax_notes()
+    "manually detach or daemonize a command." + _shell_syntax_notes()
 )
 DEFAULT_EXECUTION_MODE = "foreground"
 BASH_EXECUTION_MODES = (DEFAULT_EXECUTION_MODE, "auto", "background")
@@ -1355,43 +1343,18 @@ def _handoff_note(
 def _shape_output_fields(
     tracked: TrackedProcess, output: str, *, handoff: bool = False
 ) -> JsonObject:
-    """Cap model-facing output to the newest chars and point at the full log.
-
-    ``truncated`` covers both cut points: the model cap applied here and the
-    process buffer cap that already dropped the oldest bytes in memory. Either
-    way the missing part is the beginning, and the marker says so.
-    """
-    log_file = model_path(tracked.log_file) if tracked.log_file is not None else None
-    cap_chars = BASH_HANDOFF_OUTPUT_CAP_CHARS if handoff else BASH_MODEL_OUTPUT_CAP_CHARS
-    capped = len(output) > cap_chars
-    if handoff:
-        lines = output.splitlines(keepends=True)
-        capped = capped or len(lines) > BASH_HANDOFF_OUTPUT_MAX_LINES
-        output = "".join(lines[-BASH_HANDOFF_OUTPUT_MAX_LINES:])
-    truncated = capped or tracked.truncated
-    marker = _truncation_marker(log_file) if truncated else ""
-    if handoff and truncated:
-        # The pointer normally fits easily; keep the output bounded even if a
-        # pathological log path consumes the entire snapshot budget.
-        if len(marker) >= cap_chars:
-            marker = _truncation_marker(None)
-        budget = cap_chars - len(marker)
-        output = output[-budget:] if budget > 0 else ""
-    elif capped:
-        output = output[-cap_chars:]
-    if truncated:
-        output = marker + output
-
-    fields: JsonObject = {"output": output, "truncated": truncated}
-    if truncated and log_file is not None:
-        fields["log_file"] = log_file
-    return fields
-
-
-def _truncation_marker(log_file: str | None) -> str:
-    if log_file is None:
-        return "[earlier output truncated]\n"
-    return f"[earlier output truncated — complete output in {log_file}; grep/read it]\n"
+    """Apply the shared Process output policy, with a smaller snapshot at handoff."""
+    limits = (
+        {"max_lines": BASH_HANDOFF_OUTPUT_MAX_LINES, "max_chars": BASH_HANDOFF_OUTPUT_CAP_CHARS}
+        if handoff
+        else {}
+    )
+    return shape_process_output(
+        output,
+        truncated=tracked.truncated,
+        log_file=model_path(tracked.log_file) if tracked.log_file is not None else None,
+        **limits,
+    )
 
 
 async def _failure_output_suffix(
@@ -1411,9 +1374,9 @@ async def _failure_output_suffix(
 
     parts: list[str] = []
     if output:
-        tail = output[-FAILURE_OUTPUT_TAIL_CHARS:]
-        label = "Output tail" if len(output) > len(tail) else "Output"
-        parts.append(f"\n{label}:\n{tail}")
+        fields = _shape_output_fields(tracked, output)
+        label = "Output tail" if fields["truncated"] else "Output"
+        parts.append(f"\n{label}:\n{fields['output']}")
     if tracked.log_file is not None:
         parts.append(f"\nComplete output: {model_path(tracked.log_file)}")
     return "".join(parts)
@@ -1450,13 +1413,11 @@ async def _combined_output(
 
 
 __all__ = [
-    "BASH_MODEL_OUTPUT_CAP_CHARS",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
     "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
-    "FAILURE_OUTPUT_TAIL_CHARS",
     "bash_handler",
     "format_bash_env_usage",
     "project_bash_tool_definitions",

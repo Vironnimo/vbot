@@ -193,10 +193,8 @@ async def test_status_with_process_id_returns_non_consuming_snapshot(
 async def test_status_caps_output_tail(
     manager: ProcessManager,
     context: ToolContext,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(process_module, "PROCESS_STATUS_OUTPUT_CAP_CHARS", 5)
-    process_id = await spawn_python(manager, "print('123456789')")
+    process_id = await spawn_python(manager, "print('x' * 9000 + 'END-MARKER')")
     await wait_for_terminal(manager, process_id)
 
     result = await call_process(
@@ -206,8 +204,69 @@ async def test_status_caps_output_tail(
     )
 
     data = cast(dict[str, Any], result["data"])
-    assert data["output_tail"] in {"6789\n", "789\r\n"}
+    assert len(data["output_tail"]) <= 8000
+    assert data["output_tail"].rstrip().endswith("END-MARKER")
     assert data["output_truncated"] is True
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("line_count", [0, 1, 100, 101, 200])
+@pytest.mark.parametrize("has_log", [False, True])
+def test_output_line_budget_preserves_text_and_log_reference(newline, line_count, has_log):
+    lines = [f"line-{index}{newline}" for index in range(line_count)]
+    output = "".join(lines)
+    log_file = "C:/logs/command.log" if has_log else None
+    fields = process_module.shape_process_output(output, log_file=log_file)
+    assert fields["truncated"] is (line_count > 100)
+    assert len(fields["output"]) <= 8000
+    if line_count > 100:
+        marker, tail = fields["output"].split("\n", 1)
+        assert tail == "".join(lines[-100:])
+        if has_log:
+            assert fields["log_file"] == log_file
+            assert log_file in marker
+    else:
+        assert fields["output"] == output
+
+
+@pytest.mark.parametrize("size", [0, 7999, 8000, 8001, 20000])
+@pytest.mark.parametrize("already_truncated", [False, True])
+def test_output_character_budget_includes_marker(size, already_truncated):
+    output = "x" * size
+    fields = process_module.shape_process_output(output, truncated=already_truncated)
+    assert fields["truncated"] is (already_truncated or size > 8000)
+    assert len(fields["output"]) <= 8000
+    if fields["truncated"]:
+        assert output.endswith(fields["output"].split("\n", 1)[1])
+    else:
+        assert fields["output"] == output
+
+
+@pytest.mark.asyncio
+async def test_status_line_limit_preserves_complete_log_and_is_non_consuming(tmp_path):
+    from core.storage import TemporaryFileManager
+
+    manager = ProcessManager(temporary_files=TemporaryFileManager(tmp_path))
+    try:
+        process_id = await spawn_python(
+            manager, "print('\\n'.join(f'line-{i}' for i in range(200)))"
+        )
+        await wait_for_terminal(manager, process_id)
+        context = make_context(tmp_path)
+        arguments = {"action": "status", "process_id": process_id}
+        first = await call_process(manager, context, arguments)
+        second = await call_process(manager, context, arguments)
+        assert first == second
+        data = first["data"]
+        assert data["exit_code"] == 0
+        assert data["output_truncated"] is True
+        assert data["output_tail"].splitlines()[1:] == [f"line-{i}" for i in range(100, 200)]
+        log_file = Path(data["log_file"])
+        assert log_file.read_text(encoding="utf-8").splitlines() == [
+            f"line-{i}" for i in range(200)
+        ]
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

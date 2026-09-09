@@ -27,12 +27,11 @@ from core.utils.paths import model_path
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
     "Inspect or control a `bash` command that runs in the background — not arbitrary "
-    "operating-system processes. Bash output is only a capped snapshot; when log_file "
-    "is present, it receives the complete combined stdout/stderr stream live through "
-    "exit. Input is not an interactive terminal or TTY."
+    "operating-system processes. Input is not an interactive terminal or TTY."
 )
 PROCESS_ACTIONS = ("status", "input", "kill")
-PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000
+PROCESS_OUTPUT_CAP_CHARS = 8_000
+PROCESS_OUTPUT_MAX_LINES = 100
 
 _PROCESS_ACTION_ARGUMENTS = {
     "status": frozenset({"action", "process_id"}),
@@ -221,13 +220,11 @@ def _process_summary(tracked: TrackedProcess) -> JsonObject:
 def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
     raw_output = snapshot.get("output")
     output = raw_output if isinstance(raw_output, str) else ""
-    capped = len(output) > PROCESS_STATUS_OUTPUT_CAP_CHARS
-    if capped:
-        output = output[-PROCESS_STATUS_OUTPUT_CAP_CHARS:]
-    truncated = bool(snapshot.get("truncated")) or capped
-
     raw_log_file = snapshot.get("log_file")
     log_file = model_path(raw_log_file) if isinstance(raw_log_file, Path) else None
+    fields = shape_process_output(
+        output, truncated=bool(snapshot.get("truncated")), log_file=log_file
+    )
     return {
         "process_id": snapshot["process_id"],
         "status": snapshot["status"],
@@ -236,10 +233,41 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
         "finished_at": _format_timestamp(snapshot.get("finished_at")),
         "stdin_open": snapshot["stdin_open"],
         "waiting_for_input": snapshot["waiting_for_input"],
-        "output_tail": output,
-        "output_truncated": truncated,
+        "output_tail": fields["output"],
+        "output_truncated": fields["truncated"],
         "log_file": log_file,
     }
+
+
+def shape_process_output(
+    output: str,
+    *,
+    truncated: bool = False,
+    log_file: str | None = None,
+    max_lines: int = PROCESS_OUTPUT_MAX_LINES,
+    max_chars: int = PROCESS_OUTPUT_CAP_CHARS,
+) -> JsonObject:
+    """Bound Model-facing Bash/Process output, retaining the newest text and log pointer."""
+    lines = output.splitlines(keepends=True)
+    truncated = truncated or len(lines) > max_lines or len(output) > max_chars
+    output = "".join(lines[-max_lines:])
+    if truncated:
+        marker = _truncation_marker(log_file)
+        # Keep unusually long paths in the separate field without using up the tail.
+        if len(marker) >= max_chars:
+            marker = _truncation_marker(None)
+        budget = max_chars - len(marker)
+        output = marker + (output[-budget:] if budget > 0 else "")
+    fields: JsonObject = {"output": output, "truncated": truncated}
+    if truncated and log_file is not None:
+        fields["log_file"] = log_file
+    return fields
+
+
+def _truncation_marker(log_file: str | None) -> str:
+    if log_file is None:
+        return "[earlier output truncated]\n"
+    return f"[earlier output truncated — complete output in {log_file}; grep/read it]\n"
 
 
 def _acknowledge_completion_after_persistence(
@@ -293,7 +321,7 @@ def _process_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]
 
 __all__ = [
     "PROCESS_ACTIONS",
-    "PROCESS_STATUS_OUTPUT_CAP_CHARS",
+    "shape_process_output",
     "PROCESS_TOOL_DESCRIPTION",
     "PROCESS_TOOL_NAME",
     "PROCESS_TOOL_PARAMETERS",

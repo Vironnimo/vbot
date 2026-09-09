@@ -2687,6 +2687,53 @@ def make_spool_manager(tmp_path: Path) -> ProcessManager:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["foreground", "background"])
+@pytest.mark.parametrize("exit_code", [0, 3])
+@pytest.mark.parametrize("large_line", [False, True])
+async def test_final_output_limits_preserve_exit_and_complete_log(
+    tmp_path, monkeypatch, mode, exit_code, large_line
+):
+    manager = make_spool_manager(tmp_path)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    output = "x" * 12000 if large_line else "\n".join(f"line-{i}" for i in range(200))
+    delivered = asyncio.Event()
+    notices = []
+
+    class Trigger:
+        def submit_completion(self, *args, **kwargs):
+            notices.append(kwargs["body"])
+            delivered.set()
+            return delivered_future()
+
+    try:
+        result = await bash_handler(
+            make_context(tmp_path),
+            {"command": f"import sys; print({output!r}); sys.exit({exit_code})", "mode": mode},
+            manager,
+            trigger_service=Trigger(),
+        )
+        assert result["ok"] is True
+        if mode == "background":
+            await asyncio.wait_for(delivered.wait(), 5)
+            assert len(notices) == 1
+            assert f"Exit code: {exit_code}" in notices[0]
+            tail = notices[0].split("Output:\n", 1)[1]
+        else:
+            assert result["data"]["exit_code"] == exit_code
+            assert result["data"]["truncated"] is True
+            tail = result["data"]["output"]
+        assert len(tail) <= 8000
+        if large_line:
+            assert tail.rstrip().endswith("x" * 100)
+        else:
+            assert tail.splitlines()[1:] == [f"line-{i}" for i in range(100, 200)]
+        log_file = Path(result["data"]["log_file"])
+        assert log_file.read_text(encoding="utf-8") == output + "\n"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_output_cap_keeps_tail_and_names_log_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2694,13 +2741,12 @@ async def test_output_cap_keeps_tail_and_names_log_file(
     spool_manager = make_spool_manager(tmp_path)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-        monkeypatch.setattr(bash_module, "BASH_MODEL_OUTPUT_CAP_CHARS", 50)
         context = make_context(tmp_path)
 
         result = await bash_handler(
             context,
             {
-                "command": "print('a' * 200 + 'END-MARKER')",
+                "command": "print('a' * 9000 + 'END-MARKER')",
                 "mode": "foreground",
             },
             spool_manager,
@@ -2710,12 +2756,13 @@ async def test_output_cap_keeps_tail_and_names_log_file(
         data = result["data"]
         assert data["truncated"] is True
         assert "END-MARKER" in data["output"]
+        assert len(data["output"]) <= 8000
         assert "[earlier output truncated" in data["output"]
         assert data["output"].index("truncated") < data["output"].index("END-MARKER")
 
         log_file = Path(data["log_file"])
         content = log_file.read_text(encoding="utf-8")
-        assert "a" * 200 + "END-MARKER" in content, "log file must hold the uncut output"
+        assert "a" * 9000 + "END-MARKER" in content, "log file must hold the uncut output"
     finally:
         await spool_manager.aclose()
 
@@ -2772,19 +2819,22 @@ async def test_background_result_always_names_log_file(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("large_output", [False, True])
 async def test_timeout_failure_carries_output_tail_and_log_pointer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    large_output: bool,
 ) -> None:
     spool_manager = make_spool_manager(tmp_path)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
         context = make_context(tmp_path)
+        output = "x" * 9000 + "diag-marker" if large_output else "diag-marker"
 
         result = await bash_handler(
             context,
             {
-                "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
+                "command": f"print({output!r}, flush=True); import time; time.sleep(30)",
                 "mode": "auto",
                 "timeout": 1.5,
                 "background_after_seconds": 10,
@@ -2796,6 +2846,9 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
         assert result["error"]["code"] == "process_timeout"
         message = result["error"]["message"]
         assert "diag-marker" in message, "output produced before the kill must survive"
+        if large_output:
+            tail = message.split("Output tail:\n", 1)[1].split("\nComplete output:", 1)[0]
+            assert len(tail) <= 8000
     finally:
         await spool_manager.aclose()
 
