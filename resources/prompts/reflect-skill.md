@@ -1,22 +1,19 @@
-Review this Session for durable improvements to your private Skill library. Extract reusable ways of working, not a narrative of this Run. Be active but evidence-based: a correction, a non-trivial technique, or an outdated instruction is enough reason to improve a Skill. From now on, every other Tool is disabled. Use only `skill` and `skill_manage`; do not attempt any other Tool call.
+Review this Session for supported improvements to your private Skills. A review that makes no changes is a successful outcome. From now on, every other Tool is disabled. Use only `skill` and `skill_manage`; do not attempt any other Tool call or resume the task being reviewed.
 
-Signals that warrant a Skill update include:
+First decide whether a Skill change is justified. Preserve a reusable method, task-specific convention, decision point, or pitfall that will materially prevent future errors, repeated investigation, or user steering. One difficult, verified solution can be enough; a long task, many Tool calls, or the absence of a matching Skill is not enough. Routine Tool use, general knowledge, and instructions already available to the next Session need no extra Skill.
 
-- The user corrected your style, tone, format, verbosity, or approach. Frustration such as "stop doing X" is a first-class Skill signal: put the lesson where the next relevant Session will load it.
-- A non-trivial technique, fix, workaround, verification method, or debugging path emerged that future work of the same class would benefit from.
-- A Skill used or consulted in this Session was wrong, stale, ambiguous, or missing an important step.
+General user preferences and stable environment facts belong in Memory. Memory is unavailable in this Run; do not create or expand a Skill as a substitute. A correction belongs in a Skill when it changes how a specific class of task should be performed, such as a required validation sequence. A one-off format request is not a standing convention.
 
-Prefer the smallest durable change in this order:
+For a worthwhile candidate, inspect the current relevant Skill, starting with one used in this Session. Before writing, confirm from the catalog that the target is one of your own Skills; if its origin is unclear, list the catalog with `skill`. Read the actual target file with `skill`: use `name` plus `file_path: "SKILL.md"` for the complete document, or the support file's relative path. Earlier conversation content may be stale, and activation alone may return only an already-active notice. Leave equivalent guidance unchanged.
 
-1. Update a private Skill used in this Session. Read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
-2. Update another existing private Skill. Call `skill` with no arguments to list your Skills, inspect the best candidate with `skill`, and add the lesson where it naturally belongs.
-3. Add a focused support file to an existing Skill under `references/`, `scripts/`, or `assets/`, then point to it briefly from `SKILL.md`.
-4. CREATE A NEW SKILL only when no existing Skill owns this class of work. Name it for the reusable task class, never for today's ticket, error string, or codename. Write its `description` as ONE sentence with at most 60 characters, trigger first — COUNT the characters before saving. Future Sessions decide from the description alone whether the Skill loads, and the catalog lists every Skill by description in every Session, so a long description costs context each time and buries the trigger.
+Prefer a focused patch to a fitting private Skill. Replace obsolete instructions and remove repetition in the affected passage; keep the working guidance consistent instead of appending a history of discoveries. Preserve unrelated useful content. Broaden a trigger only when the verified method actually applies to the broader task.
 
-Make only the change supported by the reviewed evidence. Do not add unrelated improvements, helper scripts, templates, or completeness work. Because this Reflection Run cannot execute support scripts, create or change a script only when that exact script or procedure already ran successfully in the reviewed Session; otherwise save instructions or a reference.
+Before creating a Skill, call `skill` with no arguments to check the current catalog and read plausible candidates. Create only when the reusable learning is not already covered and no existing Skill naturally owns it. Name the recognizable task class, not a ticket, error string, codename, or today's output. Write a concise description that tells a fresh Agent when to load it and distinguishes it from neighboring Skills. Include the supported procedure, relevant prerequisites, pitfalls, and a check of the result.
 
-If the flawed Skill is bundled, global, or Project-owned, report the issue in your final summary instead of editing a different scope.
+Add a support file only when the method needs it: condensed reference material under `references/`, text starter files under `assets/`, or verified executable helpers under `scripts/`. Point to it from `SKILL.md` with when to use it. Keep transcripts, incident identifiers, change logs, and unrelated completeness work out of the package.
 
-Do not encode environment-dependent failures, transient errors, unverified negative claims about Tools, or one-off task narratives as durable instructions. Capture the reusable fix or retry pattern, not the temporary failure.
+Store only what the user established or the reviewed evidence supports. Unresolved attempts are not a reliable workflow, whether saved as a script or prose. A verified diagnostic or prerequisite may still be useful, but state what it establishes without claiming it solves the unresolved problem. This Reflection Run cannot execute support scripts: create or change a script only when that exact executable content already ran successfully in the reviewed Session. Otherwise, preserve only the supported procedural knowledge in prose. Capture a verified setup fix or conditional recovery step, not an enduring claim that a Tool is broken.
 
-When genuinely nothing reusable was learned, reply "Nothing to save." and stop. Otherwise, finish with one or two sentences stating what you changed and why it will help. Never paste complete Skill files into the summary.
+Bundled, global, and Project Skills are read-only here. If the relevant correction belongs to one of them, report it briefly instead of creating a private copy or placing it in an unrelated Skill.
+
+If no supported change remains, reply "Nothing to save." and stop. Otherwise, use `skill_manage`, check its results, and finish with one or two sentences stating what changed and why it will help. Report failed writes accurately; do not paste complete Skill files.
