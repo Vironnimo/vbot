@@ -395,7 +395,7 @@ class TaskModelService:
         This is the live, non-mutating availability gate used by route-specific
         Tool visibility. It rejects stale model ids, unsupported task
         capabilities, missing/forbidden Connections, unusable credentials, and
-        local targets whose execution is not owned by the provider task path.
+        local targets without an available execution owner.
         """
 
         try:
@@ -403,8 +403,13 @@ class TaskModelService:
             target_ref = parse_task_model_target_id(binding.target)
         except VBotError:
             return False
-        if target_ref.kind != "provider":
-            return False
+        if target_ref.kind == "local":
+            try:
+                descriptor = self._local_targets.get(target_ref.local_id)
+                self.validate_binding(task_type, binding.to_dict())
+                return task_type in descriptor.task_types and descriptor.can_execute()
+            except (VBotError, ValueError):
+                return False
 
         model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
         if model is None:
@@ -573,7 +578,7 @@ class TaskModelService:
                 kind="local",
                 label=descriptor.label,
                 task_types=descriptor.task_types,
-                usable=descriptor.usable,
+                usable=descriptor.can_execute(),
                 metadata=descriptor.metadata or {},
             )
             for descriptor in self._local_targets.list_for_task(task_type)

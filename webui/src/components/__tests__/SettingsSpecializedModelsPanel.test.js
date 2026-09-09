@@ -69,6 +69,84 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(listTaskModelTargetsMock.mock.calls.length).toBeGreaterThan(before);
   });
 
+  it('switches local engines and explains missing support and the first download', async () => {
+    listTaskModelTargetsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        targets:
+          taskType === 'speech_to_text'
+            ? [
+                {
+                  id: 'local/qwen3-asr',
+                  label: 'Qwen3 ASR',
+                  kind: 'local',
+                  usable: false,
+                },
+                {
+                  id: 'local/parakeet',
+                  label: 'Parakeet TDT v3',
+                  kind: 'local',
+                  usable: true,
+                },
+              ]
+            : [],
+      }),
+    );
+    getTaskModelOptionsMock.mockImplementation((_task, target) =>
+      Promise.resolve({
+        fields:
+          target === 'local/qwen3-asr'
+            ? [
+                {
+                  name: 'language',
+                  label: 'Language',
+                  type: 'text',
+                  default: 'de',
+                },
+              ]
+            : [
+                {
+                  name: 'device',
+                  label: 'Device',
+                  type: 'select',
+                  default: 'auto',
+                  options: [{ value: 'auto', label: 'Automatic' }],
+                },
+              ],
+      }),
+    );
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: { settings: {}, modelsRefreshToken: 0 },
+    });
+    flushSync();
+    await waitForCondition(
+      () =>
+        !document.getElementById('settings-specialized-speech_to_text')
+          ?.disabled,
+    );
+    selectTarget('speech_to_text', 'Qwen3 ASR');
+    await waitForCondition(() =>
+      document.body.textContent.includes('Install local speech support'),
+    );
+    expect(document.body.textContent).toContain('.[local-speech]');
+    await waitForCondition(() =>
+      document.querySelector('#task-model-speech_to_text-language'),
+    );
+    selectTarget('speech_to_text', 'Parakeet TDT v3');
+    await waitForCondition(() =>
+      document.body.textContent.includes('first transcription downloads'),
+    );
+    await waitForCondition(() =>
+      document.querySelector('#task-model-speech_to_text-device'),
+    );
+    expect(
+      document.querySelector('#task-model-speech_to_text-language'),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      'Install local speech support',
+    );
+  });
+
   it('loads image-understanding targets with the other specialized models', async () => {
     const props = reactiveProps({ settings: {}, modelsRefreshToken: 0 });
     mountedComponent = mount(SettingsSpecializedModelsPanel, {

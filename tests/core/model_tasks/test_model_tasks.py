@@ -37,6 +37,35 @@ def test_parse_openrouter_target_with_nested_model_id() -> None:
     assert ref.local_connection_id == "api-key"
 
 
+def test_local_speech_binding_uses_live_engine_availability_and_options() -> None:
+    available = False
+    registry = LocalTaskTargetRegistry(
+        [
+            LocalTaskTargetDescriptor(
+                id="engine",
+                label="Engine",
+                task_types=(TASK_SPEECH_TO_TEXT,),
+                availability=lambda: available,
+                option_fields=(TaskModelOptionField("language", "text", "Language", default=""),),
+            )
+        ]
+    )
+    service = TaskModelService(
+        _Providers(), _Models([]), _Credentials(), _Storage(), local_targets=registry
+    )
+    service.update({TASK_SPEECH_TO_TEXT: {"target": "local/engine", "options": {"language": "de"}}})
+    assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+    available = True
+    assert service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+    assert service.list_targets(TASK_SPEECH_TO_TEXT)[0].usable
+    with pytest.raises(TaskModelValidationError):
+        service.update(
+            {TASK_SPEECH_TO_TEXT: {"target": "local/engine", "options": {"unknown": True}}}
+        )
+    service.update({TASK_SPEECH_TO_TEXT: {"target": ""}})
+    assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+
+
 def test_parse_provider_target_requires_connection_suffix() -> None:
     with pytest.raises(TaskModelValidationError):
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe")

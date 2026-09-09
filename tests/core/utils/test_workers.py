@@ -10,6 +10,16 @@ from core.utils.workers import BoundedWorkerPool
 
 
 @pytest.mark.asyncio
+async def test_owned_worker_pool_shutdown_rejects_new_work() -> None:
+    pool = BoundedWorkerPool(name="test-shutdown", max_workers=1)
+    assert await pool.run(lambda: 7) == 7
+    pool.shutdown()
+    pool.shutdown()
+    with pytest.raises(RuntimeError, match="shutdown"):
+        await pool.run(lambda: 8)
+
+
+@pytest.mark.asyncio
 async def test_worker_pool_applies_backpressure_before_submission() -> None:
     pool = BoundedWorkerPool(name="test-backpressure", max_workers=1)
     release_first = threading.Event()

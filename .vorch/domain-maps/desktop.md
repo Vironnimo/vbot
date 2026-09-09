@@ -114,6 +114,8 @@ All five ship in the `[desktop]` optional group (`soxr` also in `[dev]` for test
 
 ## Constraints & Gotchas
 
+- Speech HTTP responses allow ten minutes for local model download/loading and inference, with separate short connect/upload timeouts (`desktop/wakeword/worker.py`). The Worker remains interruptible before and after this bounded network call.
+
 - A healthy server may exist without `webui/dist`: the probe returns `webui_unavailable` and the connection screen shows an inline "WebUI unavailable" error - not a dead end.
 - Desktop-local preferences must never live in the shared server `data_dir` (it belongs to the selected instance); they live in the OS per-user config dir, which survives package/venv reinstalls - a real install puts the program in a non-user-writable venv.
 - pywebview is imported lazily so backend tests and non-desktop workflows never require the GUI package. Never call `Window.load_url`/`load_html` synchronously inside a `js_api` method invoked by the document being replaced - return the `PreparedConnection` payload first and let that document apply it after its Promise resolves. The native `shown` startup callback is exempt and proceeds through `ConnectionController.connect` before optional Voice startup.
