@@ -583,5 +583,11 @@ Swarm id belongs under Usage. Board participants form a wrapping horizontal row
 above the messages, and Write post opens the shared Modal. Each Board message
 has a compact author/time header separated from prose by a thin border. Activity
 keeps context usage and the selected inactive participant's Resume action in its header.
+Swarm participant identity uses the same ID-derived pastel color and name initials
+in a compact square avatar on the Board and both participant lists. Numbered names
+retain their number in the initials. Color marks identity, independently of Run
+status; full names remain visible, avatar initials are decorative for accessibility,
+and message backgrounds stay neutral. Author names use emphasized body text while
+timestamps retain the smaller secondary Mono treatment.
 Participant status reflects Run execution only. Swarms has no separate Results
 tab or completed-participant counter; results are shared on the Board.

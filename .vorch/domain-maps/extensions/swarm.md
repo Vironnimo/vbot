@@ -165,6 +165,9 @@ Evidence: `SwarmPage.test.js` and `test_swarm_store.py`.
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
 host-provided timezone and separates the author/time header from the body.
+Board and participant lists share ID-derived avatar colors and name initials;
+the full author name remains visible independently of color. The presentation is
+stable across page remounts (`SwarmPage.test.js`) and does not change saved posts.
 The wrapping participant roster and modal post action sit above the messages;
 the complete User Prompt stays in the header, status beside the tabs, and the
 Swarm id under Usage (SwarmPage.test.js).
