@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -568,3 +569,189 @@ async def test_human_post_wakes_idle_participant_with_delivery_policy(
         assert ("delivery-guidance-sentinel" in request) is reminders_enabled
         assert expected_request in request
         assert pending["entries"] == []
+
+
+class PausedSwarmAdapter(StubAdapter):
+    def __init__(self, *, pause_at: int = 2):
+        super().__init__(
+            [
+                {"content": "initial"},
+                {"tool_calls": [{"id": "review-state", "name": "swarm_state", "arguments": {}}]},
+                {"content": "wake finished"},
+                {"content": "later wake finished"},
+            ]
+        )
+        self.pause_at = pause_at
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.followed = asyncio.Event()
+
+    async def send(self, messages, *, model_id, **kwargs):
+        response = await super().send(messages, model_id=model_id, **kwargs)
+        ordinal = len(self.requests)
+        if ordinal == self.pause_at:
+            self.started.set()
+            await self.release.wait()
+        if ordinal == 3:
+            self.followed.set()
+        return response
+
+
+async def single_participant_profile(env: Any, tmp_path: Any, *, mode: str = "all"):
+    return await env.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Review",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+            "delivery": {
+                "main": {"mode": mode, "wake_idle": True},
+                "discussion": {"mode": "all", "wake_idle": True},
+                "ping": {"mode": "all", "wake_idle": True},
+                "coalesce_ms": 10,
+                "batch_messages": 20,
+                "batch_chars": 24000,
+            },
+        },
+        expected_revision=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, concurrent):
+    adapter = PausedSwarmAdapter(pause_at=1)
+    lifecycle.runtime.adapter = adapter
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    arguments = {"profile_id": profile["id"], "prompt": "review goal", "request_id": "same-start"}
+    if concurrent:
+        first, replay = await asyncio.gather(
+            lifecycle.service.operation("swarms.start", arguments),
+            lifecycle.service.operation("swarms.start", arguments),
+        )
+    else:
+        first = await lifecycle.service.operation("swarms.start", arguments)
+        replay = await lifecycle.service.operation("swarms.start", arguments)
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    run = lifecycle.runtime.chat_run_manager.get(first["runs"][0]["run_id"])
+    assert replay == {**first, "replayed": True}
+    assert run.status.value == "running"
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_wake_publishes_running_state(lifecycle, tmp_path):
+    adapter = PausedSwarmAdapter()
+    lifecycle.runtime.adapter = adapter
+    changes = []
+    lifecycle.service.host = replace(
+        lifecycle.service.host, publish_change=lambda *args: changes.append(args)
+    )
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    await lifecycle.service.operation(
+        "board.post", {"swarm_id": started["swarm_id"], "text": "wake", "request_id": "post"}
+    )
+    changes.clear()
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    assert snapshot["participants"][0]["state"] == "running"
+    async with asyncio.timeout(5):
+        while not changes:
+            await asyncio.sleep(0.01)
+    assert changes[-1][0:2] == ("swarms", [started["swarm_id"]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["all", "idle", "pull"])
+async def test_delivery_mode_after_wake(lifecycle, tmp_path, mode):
+    adapter = PausedSwarmAdapter()
+    lifecycle.runtime.adapter = adapter
+    profile = await single_participant_profile(lifecycle, tmp_path, mode=mode)
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    await lifecycle.service.operation(
+        "board.post",
+        {"swarm_id": started["swarm_id"], "text": "first-wake-sentinel", "request_id": "post-1"},
+    )
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    assert "first-wake-sentinel" in str(adapter.requests[1]["messages"])
+    await lifecycle.service.operation(
+        "board.post",
+        {"swarm_id": started["swarm_id"], "text": "deferred-sentinel", "request_id": "post-2"},
+    )
+    adapter.release.set()
+    await asyncio.wait_for(adapter.followed.wait(), timeout=5)
+    assert ("deferred-sentinel" in str(adapter.requests[2]["messages"])) is (mode == "all")
+    await wait_idle(lifecycle.service, started["swarm_id"])
+    async with asyncio.timeout(5):
+        while mode != "all" and len(adapter.requests) < 4:
+            await asyncio.sleep(0.01)
+    if mode != "all":
+        assert "deferred-sentinel" in str(adapter.requests[3]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
+    adapter = PausedSwarmAdapter()
+    lifecycle.runtime.adapter = adapter
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    stop = {"swarm_id": started["swarm_id"], "request_id": "old-stop"}
+    stopped = await lifecycle.service.operation("swarms.stop", stop)
+    resumed = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
+    )
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    run = lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"])
+    replay = await lifecycle.service.operation("swarms.stop", stop)
+    assert replay == {**stopped, "replayed": True}
+    assert run.status.value == "running"
+    replay = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
+    )
+    assert replay == {**resumed, "replayed": True}
+    assert run.status.value == "running"
+    adapter.pause_at = 3
+    adapter.started.clear()
+    await lifecycle.service.operation(
+        "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "second-stop"}
+    )
+    latest = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "latest-resume"}
+    )
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    current = lifecycle.runtime.chat_run_manager.get(latest["runs"][0]["run_id"])
+    for operation, arguments, original in [
+        ("swarms.stop", stop, stopped),
+        (
+            "swarms.resume",
+            {"swarm_id": started["swarm_id"], "request_id": "new-resume"},
+            resumed,
+        ),
+        (
+            "swarms.start",
+            {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"},
+            started,
+        ),
+    ]:
+        replay = await lifecycle.service.operation(operation, arguments)
+        assert replay == {**original, "replayed": True}
+        assert current.status.value == "running"
+    assert (
+        len(
+            lifecycle.runtime.chat_sessions.owned_runs(
+                owner_name="swarm", group_id=started["swarm_id"]
+            )
+        )
+        == 3
+    )

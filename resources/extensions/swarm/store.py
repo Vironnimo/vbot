@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from core.sessions.schema import required_journal_mode
@@ -558,6 +558,17 @@ class SwarmStore:
         if not isinstance(actor, str) or not actor:
             raise SwarmStoreError("invalid_arguments", field="actor")
         return await self._run(self._begin_resume, swarm_id, request_id, actor, participant_id)
+
+    async def finish_admission(
+        self,
+        swarm_id: str,
+        *,
+        request_id: str,
+        kind: Literal["start", "resume"],
+        runs: Sequence[Json],
+    ) -> Json:
+        """Retain the result of one admission request without replaying its effects."""
+        return await self._run(self._finish_admission, swarm_id, request_id, kind, list(runs))
 
     async def list_swarms(self, *, cursor: str | None = None, limit: int = 20) -> Page:
         return await self._run(self._list_swarms, cursor, _limit(limit))
@@ -1611,6 +1622,12 @@ class SwarmStore:
             if row["state"] == "deleting":
                 raise SwarmStoreError("swarm_closed")
             if replay is not None:
+                finished = connection.execute(
+                    "SELECT outcome FROM requests WHERE scope=? AND request_id=?",
+                    (f"stop-finish:{swarm_id}", request_id),
+                ).fetchone()
+                if finished is not None:
+                    return {**_load(finished["outcome"]), "replayed": True}
                 return replay
             epoch = connection.execute(
                 "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
@@ -1799,6 +1816,33 @@ class SwarmStore:
         value = _load(row["outcome"])
         value["replayed"] = True
         return value
+
+    def _finish_admission(
+        self, swarm_id: str, request_id: str, kind: str, runs: list[Json]
+    ) -> Json:
+        def operation(connection: sqlite3.Connection) -> Json:
+            scope = "start" if kind == "start" else f"resume:{swarm_id}"
+            row = connection.execute(
+                "SELECT outcome FROM requests WHERE scope=? AND request_id=?",
+                (scope, request_id),
+            ).fetchone()
+            if row is None:
+                raise SwarmStoreError("request_conflict")
+            outcome = _load(row["outcome"])
+            if outcome["swarm_id"] != swarm_id:
+                raise SwarmStoreError("request_conflict")
+            if "runs" not in outcome:
+                outcome["runs"] = runs
+                outcome["state"] = connection.execute(
+                    "SELECT state FROM swarms WHERE id=?", (swarm_id,)
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE requests SET outcome=? WHERE scope=? AND request_id=?",
+                    (_dump(outcome), scope, request_id),
+                )
+            return outcome
+
+        return self._write(operation)
 
     @staticmethod
     def _record_lifecycle_request(
@@ -2030,10 +2074,7 @@ class SwarmStore:
                     participant["state"] == "idle" and policy["wake_idle"]
                 ):
                     continue
-                if policy["mode"] == "idle" and (
-                    participant["state"] not in {"idle"}
-                    and resolved_boundary != participant["idle_boundary"]
-                ):
+                if policy["mode"] == "idle" and participant["state"] != "idle":
                     continue
                 eligible.append(row)
             newest = max((int(row["sequence"]) for row in pending), default=0)
