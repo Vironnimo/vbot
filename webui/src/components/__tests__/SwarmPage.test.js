@@ -1894,6 +1894,44 @@ describe('Swarm selection reconciliation', () => {
     );
   });
 
+  it('refreshes pending counts while the participant stays in the same active Run', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let pendingCount = 12;
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({
+          swarm: {
+            ...structuredClone(swarm),
+            participants: swarm.participants.map((participant) => ({
+              ...participant,
+              lifecycle_run_id: 'run-pending',
+              pending_count: participant.id === 'prt-a' ? pendingCount : 0,
+            })),
+          },
+        });
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Investigate').click();
+    const pending = () => button('Alpha')?.querySelector('small')?.textContent;
+    await vi.waitFor(() => expect(pending()).toMatch(/12\s+pending/));
+    for (const remaining of [8, 4, 0]) {
+      pendingCount = remaining;
+      bridge.invalidate();
+      await vi.waitFor(() =>
+        expect(pending()).toMatch(
+          new RegExp(`running.*${remaining}\\s+pending`),
+        ),
+      );
+    }
+    button('Alpha').click();
+    await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalled());
+    pendingCount = 2;
+    bridge.invalidate();
+    await vi.waitFor(() => expect(pending()).toMatch(/2\s+pending/));
+  });
+
   it('reloads selected Session history when invalidated with an unchanged Run id', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);

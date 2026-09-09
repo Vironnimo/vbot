@@ -8,10 +8,86 @@ from types import SimpleNamespace
 import pytest
 
 from core.chat.messages import ChatMessage
+from resources.extensions.swarm.store import SwarmStoreError
 from tests.resources.extensions.test_swarm_board import board as board_fixture
 from tests.resources.extensions.test_swarm_board import call
 
 board = board_fixture
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["automatic", "inbox", "board"])
+async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, delivery):
+    sid = board.swarm["id"]
+    sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
+    await board.store.post(sid, sender, text="receipt-sentinel", request_id="post")
+    changes = []
+    board.service.host = replace(
+        board.service.host, publish_change=lambda *args: changes.append(args)
+    )
+    binding = board.bindings[1]
+    context = replace(
+        board.contexts[1], tool_name="swarm_inbox" if delivery == "inbox" else "swarm_board"
+    )
+    request = SimpleNamespace(
+        binding=binding, execution_owner=context.execution_owner, run_id=context.run_id
+    )
+    if delivery == "automatic":
+        prepared = await board.service._before_request(request)
+        assert prepared is not None
+        message = ChatMessage.note("\n\n".join(prepared.entries))
+        receipt = (0, prepared.delivery_id, prepared.content_hash, prepared.effect_kind, "note")
+
+        async def reconcile():
+            await board.service._acknowledge_delivery(request, prepared)
+    else:
+        result = (
+            await board.service.inbox(context, {})
+            if delivery == "inbox"
+            else await board.service.board(
+                context, {"action": "read", "discussion_id": board.swarm["main_discussion_id"]}
+            )
+        )
+        assert result["ok"]
+        receipt_id, content_hash, effect = context._delivery_receipts[0]
+        receipt = (0, receipt_id, content_hash, effect, "tool")
+        message = ChatMessage.tool(
+            tool_call_id=context.tool_call_id, name=context.tool_name, content=json.dumps(result)
+        )
+
+        async def reconcile():
+            await board.service._reconcile_tool_batch(
+                request,
+                receipts=((context.tool_call_id, receipt_id, content_hash, effect),),
+                persisted_call_ids=(context.tool_call_id,),
+                turn_end_requested=False,
+            )
+
+    assert not changes
+    with pytest.raises(SwarmStoreError) as error:
+        await reconcile()
+    assert error.value.code == "delivery_unacknowledged"
+    assert not changes
+    assert (await board.store.participant_status(sid, recipient))["pending_count"] == 1
+    await board.sessions.append_messages_with_receipts_async(
+        binding.address,
+        generation_id=binding.generation_id,
+        owner_name="swarm",
+        messages=[message],
+        receipts=[receipt],
+    )
+    assert (await board.store.participant_status(sid, recipient))["pending_count"] == 1
+    await reconcile()
+    assert (await board.store.participant_status(sid, recipient))["pending_count"] == 0
+    assert [change[0:2] for change in changes] == [("swarms", [sid])]
+    changes.clear()
+    await board.service._reconcile_tool_batch(
+        request,
+        receipts=(),
+        persisted_call_ids=("state",),
+        turn_end_requested=False,
+    )
+    assert not changes
 
 
 @pytest.mark.asyncio
@@ -52,6 +128,37 @@ async def test_inbox_delivers_oldest_pending_entries_with_a_durable_receipt(boar
     assert await board.store.reconcile_delivery(receipt_id)
     next_result = await board.tools.get("swarm_inbox").handler(context, {})
     assert [entry["text"] for entry in next_result["data"]["entries"]] == ["second"]
+
+
+@pytest.mark.asyncio
+async def test_wake_scan_does_not_replay_messages_read_during_a_run(board):
+    sid = board.swarm["id"]
+    sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
+    await board.store.record_run_started(sid, recipient, run_id="active", expected_epoch=0)
+    await board.store.post(sid, sender, text="read-once-sentinel", request_id="post")
+    # The background wake scan visits every participant, including busy peers.
+    await board.store.prepare_wake(sid, recipient, expected_epoch=0)
+    context = replace(board.contexts[1], tool_name="swarm_inbox")
+    result = await board.service.inbox(context, {})
+    assert [entry["text"] for entry in result["data"]["entries"]] == ["read-once-sentinel"]
+    receipt_id, content_hash, effect = context._delivery_receipts[0]
+    binding = board.bindings[1]
+    await board.sessions.append_messages_with_receipts_async(
+        binding.address,
+        generation_id=binding.generation_id,
+        owner_name="swarm",
+        messages=[
+            ChatMessage.tool(
+                tool_call_id=context.tool_call_id, name="swarm_inbox", content=json.dumps(result)
+            )
+        ],
+        receipts=[(0, receipt_id, content_hash, effect, "tool")],
+    )
+    assert await board.store.reconcile_delivery(receipt_id)
+    assert (await board.store.participant_status(sid, recipient))["pending_count"] == 0
+    automatic = await board.store.prepare_automatic_delivery(sid, recipient, expected_epoch=0)
+    assert automatic["entries"] == []
+    assert automatic["pending_remaining"] == 0
 
 
 @pytest.mark.asyncio
