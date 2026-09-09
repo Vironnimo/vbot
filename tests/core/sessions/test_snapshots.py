@@ -26,6 +26,17 @@ from core.sessions.snapshots import (
 )
 
 
+@pytest.mark.parametrize("suffix", [b"\x1a", b"\r\n\x1a", b"\x00\xff"])
+def test_snapshot_fsync_preserves_binary_file(tmp_path: Path, suffix: bytes) -> None:
+    path = tmp_path / "sessions.db"
+    original = bytes(range(256)) + suffix
+    path.write_bytes(original)
+
+    snapshots_module._fsync_file(path)
+
+    assert path.read_bytes() == original
+
+
 def _snapshot(tmp_path: Path) -> tuple[ChatSessionManager, Path]:
     sessions = ChatSessionManager(tmp_path)
     sessions.create("agent", session_id="snapshot").append(ChatMessage.user("retained"))
