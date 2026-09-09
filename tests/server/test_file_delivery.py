@@ -143,6 +143,68 @@ def test_website_preview_serves_assets_and_subpages_with_opaque_origin(tmp_path:
         )
 
 
+@pytest.mark.parametrize("remove_directory", [False, True])
+def test_unavailable_preview_can_probe_and_recover_within_its_signed_scope(
+    tmp_path: Path, remove_directory: bool
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    entry.write_text("<h1>Before removal</h1>")
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+    with TestClient(app) as client:
+        preview = client.post(
+            "/api/rpc", json={"method": "file.preview_open", "params": {"source": str(entry)}}
+        ).json()["result"]
+        entry.unlink()
+        if remove_directory:
+            site.rmdir()
+        unavailable = client.get(preview["url"])
+        assert unavailable.status_code == 404
+        assert '<main role="status">404</main>' in unavailable.text
+        assert unavailable.headers["access-control-allow-origin"] == "null"
+        assert unavailable.headers["cache-control"] == "no-store"
+        policy = dict(
+            part.split(" ", 1)
+            for part in unavailable.headers["content-security-policy"].split("; ")
+        )
+        base = preview["url"].rsplit("/", 1)[0]
+        assert policy["connect-src"] == f"http://testserver{base}/"
+        assert "allow-same-origin" not in policy["sandbox"]
+        assert policy["frame-ancestors"] == "'self'"
+        probe = client.head(preview["url"], headers={"Origin": "null"})
+        assert probe.status_code == 404
+        assert probe.content == b""
+
+        site.mkdir(exist_ok=True)
+        entry.write_text("<h1>Restored page</h1>")
+        probe = client.head(preview["url"], headers={"Origin": "null"})
+        assert probe.status_code == 200
+        assert probe.headers["access-control-allow-origin"] == "null"
+        assert "Restored page" in client.get(preview["url"]).text
+        assert client.get("/api/rpc", headers={"Origin": "null"}).status_code == 403
+
+
+def test_unavailable_preview_grants_no_connection_scope_to_invalid_capabilities(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "index.html"
+    entry.write_text("<h1>Private sentinel</h1>")
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path / "data", StubAdapter())))
+    with TestClient(app) as client:
+        delivery = cast(Any, client.app).state.file_delivery
+        preview = delivery.open_preview(str(entry))
+        file_url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
+        for token in ["invalid", preview["token"] + "x", file_url.removeprefix(FILE_URL_PREFIX)]:
+            response = client.get(f"/api/preview-assets/{token}/index.html")
+            assert response.status_code == 404
+            assert "Private sentinel" not in response.text
+            assert "access-control-allow-origin" not in response.headers
+            policy = response.headers["content-security-policy"]
+            assert "connect-src 'none'" in policy
+            assert "allow-same-origin" not in policy
+
+
 def test_preview_changes_track_assets_additions_and_removal(tmp_path: Path) -> None:
     entry = tmp_path / "index.html"
     entry.write_text("<h1>one</h1>")

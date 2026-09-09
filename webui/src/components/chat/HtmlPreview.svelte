@@ -26,6 +26,8 @@
   );
   let autoRefresh = $state(true);
   let frame = $state(null);
+  let frameGeneration = $state(0);
+  let frameUrl = $state('');
   let refreshCount = $state(0);
   let currentUrl = '';
   let pageLabel = $state('');
@@ -52,6 +54,7 @@
       frameUnavailable = false;
       pageLabel = next.filename;
       refreshCount = 0;
+      reload();
     } catch (cause) {
       if (generation === openGeneration) openError = cause.message;
     } finally {
@@ -68,7 +71,11 @@
   });
 
   function reload() {
-    if (frame && currentUrl) frame.src = currentUrl;
+    if (!currentUrl) return;
+    // A fresh frame guarantees a document load, even for the same #fragment
+    // URL or an explicitly reopened entry whose iframe navigated elsewhere.
+    frameUrl = currentUrl;
+    frameGeneration += 1;
   }
 
   onMount(() => {
@@ -218,16 +225,18 @@
     >
   {/if}
   {#if preview}
-    <iframe
-      class:unavailable={frameUnavailable}
-      bind:this={frame}
-      src={preview.url}
-      title={t('preview.frame', 'Website preview')}
-      sandbox="allow-scripts allow-downloads"
-      referrerpolicy="no-referrer"
-      allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
-    >
-    </iframe>
+    {#key frameGeneration}
+      <iframe
+        class:unavailable={frameUnavailable}
+        bind:this={frame}
+        src={frameUrl}
+        title={t('preview.frame', 'Website preview')}
+        sandbox="allow-scripts allow-downloads"
+        referrerpolicy="no-referrer"
+        allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
+      >
+      </iframe>
+    {/key}
   {:else if !loading && !error}
     <EmptyState
       fill
