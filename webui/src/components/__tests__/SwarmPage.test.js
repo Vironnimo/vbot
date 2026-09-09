@@ -640,7 +640,7 @@ describe('SwarmPage', () => {
         : original(name, args),
     );
     await render(bridge);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     await choose('swarm-model-0', 'demo/model');
@@ -711,14 +711,16 @@ describe('SwarmPage', () => {
     await vi.advanceTimersByTimeAsync(0);
     flushSync();
     expect(document.querySelector('[role="alert"]')).toBeNull();
-    expect(button('New profile')).toBeDefined();
+    expect(button('New Swarm')).toBeDefined();
   });
 
   it('loads retained lists without requesting the profile catalog', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    expect(button('New profile')).toBeDefined();
-    expect(document.body.textContent).toContain('Retained Swarms');
+    expect(button('New Swarm')).toBeDefined();
+    expect(
+      document.querySelector('nav[aria-label="Inactive runs"]'),
+    ).not.toBeNull();
     expect(operation).toHaveBeenCalledWith('profiles.list', { limit: 100 });
     expect(operation.mock.calls.some(([name]) => name === 'catalog')).toBe(
       false,
@@ -728,7 +730,7 @@ describe('SwarmPage', () => {
     expect(
       operation.mock.calls.filter(([name]) => name === 'profiles.list'),
     ).toHaveLength(1);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     expect(
@@ -737,18 +739,191 @@ describe('SwarmPage', () => {
     expect(document.querySelector('input')).not.toBeNull();
   });
 
+  it('groups Run execution states and moves a Run to inactive after invalidation', async () => {
+    const { bridge, operation } = createBridge();
+    const base = operation.getMockImplementation();
+    const states = [
+      'preparing',
+      'running',
+      'stopping',
+      'idle',
+      'needs_attention',
+      'interrupted',
+      'stopped',
+      'failed',
+    ];
+    let entries = states.map((state) => ({
+      id: state,
+      title: `goal-${state}`,
+      state,
+    }));
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.list' ? Promise.resolve({ entries }) : base(name, args),
+    );
+    await render(bridge);
+    const active = () =>
+      document.querySelector('nav[aria-label="Active runs"]');
+    const inactive = () =>
+      document.querySelector('nav[aria-label="Inactive runs"]');
+    expect(
+      [...active().querySelectorAll('button')].map((row) =>
+        row.textContent.trim(),
+      ),
+    ).toEqual(['goal-preparing', 'goal-running', 'goal-stopping']);
+    expect(inactive().querySelectorAll('button')).toHaveLength(5);
+    const profileRow = document.querySelector(
+      'nav[aria-label="Swarms"] button',
+    );
+    expect(profileRow.textContent.trim()).toBe('Research (2)');
+    expect(profileRow.children).toHaveLength(1);
+    expect(document.querySelector('.run-group strong')).toBeNull();
+    entries = entries.map((entry) =>
+      entry.id === 'running' ? { ...entry, state: 'idle' } : entry,
+    );
+    bridge.invalidate();
+    await vi.waitFor(() =>
+      expect(active().querySelectorAll('button')).toHaveLength(2),
+    );
+    expect(inactive().textContent).toContain('goal-running');
+  });
+
+  it('prefills the Run directory, preserves edits during invalidation and submits only the override', async () => {
+    const { bridge, operation } = createBridge();
+    const base = operation.getMockImplementation();
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.start'
+        ? Promise.resolve({ swarm_id: swarm.id })
+        : base(name, args),
+    );
+    await render(bridge);
+    const directory = document.getElementById('swarm-start-directory');
+    expect(directory.value).toBe('C:/work');
+    const form = document.querySelector('.start');
+    expect(
+      [...form.querySelectorAll('[id]')]
+        .map((el) => el.id)
+        .filter((id) =>
+          [
+            'swarm-start-profile',
+            'swarm-start-directory',
+            'swarm-goal',
+          ].includes(id),
+        ),
+    ).toEqual(['swarm-start-profile', 'swarm-start-directory', 'swarm-goal']);
+    fill('swarm-start-directory', 'D:/run-only');
+    fill('swarm-goal', 'goal-sentinel');
+    await tick();
+    bridge.invalidate();
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(directory.value).toBe('D:/run-only');
+    button('Start Run').click();
+    await vi.waitFor(() =>
+      expect(operation).toHaveBeenCalledWith(
+        'swarms.start',
+        expect.objectContaining({
+          profile_id: profile.id,
+          prompt: 'goal-sentinel',
+          working_directory: 'D:/run-only',
+        }),
+      ),
+    );
+    expect(
+      operation.mock.calls.some(([name]) => name === 'profiles.save'),
+    ).toBe(false);
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    button('New run').click();
+    await tick();
+    expect(document.getElementById('swarm-start-directory').value).toBe(
+      'C:/work',
+    );
+  });
+
+  it('resolves Project defaults, preserves their Project selection and replaces the default on Swarm selection', async () => {
+    const projectProfile = {
+      ...profile,
+      working_directory: { kind: 'project', project_id: 'project-a' },
+    };
+    const directoryProfile = { ...profile, id: 'prf-b', name: 'Other' };
+    const { bridge, operation } = createBridge(projectProfile);
+    const base = operation.getMockImplementation();
+    operation.mockImplementation((name, args) => {
+      if (name === 'profiles.list')
+        return Promise.resolve({ entries: [projectProfile, directoryProfile] });
+      if (name === 'swarms.start')
+        return Promise.resolve({ swarm_id: swarm.id });
+      return base(name, args);
+    });
+    await render(bridge);
+    await vi.waitFor(() =>
+      expect(document.getElementById('swarm-start-directory').value).toBe(
+        'C:/project',
+      ),
+    );
+    fill('swarm-goal', 'project-goal');
+    await tick();
+    button('Start Run').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    const start = operation.mock.calls.find(
+      ([name]) => name === 'swarms.start',
+    )[1];
+    expect(start).not.toHaveProperty('working_directory');
+    button('New run').click();
+    await tick();
+    await choose('swarm-start-profile', 'Other');
+    expect(document.getElementById('swarm-start-directory').value).toBe(
+      'C:/work',
+    );
+  });
+
+  it('ignores stale Project lookups and prevents starting with a blank directory', async () => {
+    const projectProfile = {
+      ...profile,
+      working_directory: { kind: 'project', project_id: 'project-a' },
+    };
+    const directoryProfile = { ...profile, id: 'prf-b', name: 'Other' };
+    const { bridge, operation } = createBridge(projectProfile);
+    const base = operation.getMockImplementation();
+    let resolveCatalog;
+    operation.mockImplementation((name, args) => {
+      if (name === 'profiles.list')
+        return Promise.resolve({ entries: [projectProfile, directoryProfile] });
+      if (name === 'catalog')
+        return new Promise((resolve) => {
+          resolveCatalog = resolve;
+        });
+      return base(name, args);
+    });
+    await render(bridge);
+    expect(button('Start Run').disabled).toBe(true);
+    await choose('swarm-start-profile', 'Other');
+    resolveCatalog({
+      catalog: { projects: [{ id: 'project-a', cwd: 'C:/late' }] },
+    });
+    await tick();
+    expect(document.getElementById('swarm-start-directory').value).toBe(
+      'C:/work',
+    );
+    fill('swarm-start-directory', '  ');
+    await tick();
+    expect(button('Start Run').disabled).toBe(true);
+  });
+
   it('keeps the overview usable when the profile catalog fails and retries on request', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     operation.mockRejectedValueOnce(new Error('catalog-unavailable-test'));
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       'catalog-unavailable-test',
     );
-    expect(button('New profile').disabled).toBe(false);
-    button('New profile').click();
+    expect(button('New Swarm').disabled).toBe(false);
+    button('New Swarm').click();
     await tick();
     flushSync();
     expect(document.querySelector('input')).not.toBeNull();
@@ -757,7 +932,7 @@ describe('SwarmPage', () => {
   it('saves a new profile through the bridge', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     fill('swarm-profile-name', 'New profile');
@@ -765,7 +940,7 @@ describe('SwarmPage', () => {
     await choose('swarm-effort-0', 'high');
     fill('swarm-directory', 'C:/work');
     await tick();
-    button('Save profile').click();
+    button('Save Swarm').click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     await tick();
     expect(document.body.textContent).not.toContain('Enter a name');
@@ -788,7 +963,7 @@ describe('SwarmPage', () => {
     async (replacement) => {
       const { bridge, operation } = createBridge();
       await render(bridge);
-      button('New profile').click();
+      button('New Swarm').click();
       await tick();
       flushSync();
       const input = document.getElementById('swarm-instructions');
@@ -802,7 +977,7 @@ describe('SwarmPage', () => {
       await choose('swarm-model-0', 'demo/model');
       fill('swarm-directory', 'C:/work');
       await tick();
-      button('Save profile').click();
+      button('Save Swarm').click();
       await new Promise((resolve) => setTimeout(resolve, 20));
       await tick();
       expect(operation).toHaveBeenCalledWith(
@@ -843,7 +1018,7 @@ describe('SwarmPage', () => {
   it('filters Models and resets incompatible reasoning when the Model changes', async () => {
     const { bridge } = createBridge();
     await render(bridge);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     document.getElementById('swarm-model-0').click();
@@ -936,12 +1111,12 @@ describe('SwarmPage', () => {
   it('returns to the invalid field and keeps failed saves editable', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     button('Communication').click();
     await tick();
-    button('Save profile').click();
+    button('Save Swarm').click();
     await tick();
     expect(document.getElementById('swarm-profile-panel-overview').hidden).toBe(
       false,
@@ -955,14 +1130,14 @@ describe('SwarmPage', () => {
     fill('swarm-directory', 'C:/work');
     await choose('swarm-model-0', 'demo/model');
     operation.mockRejectedValueOnce(new Error('save-failure-test'));
-    button('Save profile').click();
+    button('Save Swarm').click();
     await tick();
     await tick();
     await vi.waitFor(() =>
       expect(document.querySelector('[role="alert"]')).not.toBeNull(),
     );
     expect(document.getElementById('swarm-profile-name').value).toBe('Retry');
-    expect(button('Save profile').disabled).toBe(false);
+    expect(button('Save Swarm').disabled).toBe(false);
   });
 
   it('autosaves after the shared debounce without closing or replacing the editor', async () => {
@@ -1067,7 +1242,7 @@ describe('SwarmPage', () => {
   it('keeps the profile navigation and draft mounted during invalidation without Refresh in the editor', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
-    button('New profile').click();
+    button('New Swarm').click();
     await tick();
     flushSync();
     const input = document.getElementById('swarm-profile-name');
@@ -1077,7 +1252,7 @@ describe('SwarmPage', () => {
     await new Promise((resolve) => setTimeout(resolve));
     expect(document.getElementById('swarm-profile-name')).toBe(input);
     expect(input.value).toBe('Draft survives');
-    expect(document.querySelector('nav[aria-label="Profiles"]')).not.toBeNull();
+    expect(document.querySelector('nav[aria-label="Swarms"]')).not.toBeNull();
     expect(button('Refresh')).toBeUndefined();
     expect(
       operation.mock.calls.some(([name]) => name === 'profiles.save'),
@@ -1119,7 +1294,7 @@ describe('SwarmPage', () => {
       expect(document.querySelector('.context-usage').textContent).toContain(
         '~2,468',
       );
-      button('New Swarm').click();
+      button('New run').click();
       await tick();
       expect(bridge.unsubscribeRun).toHaveBeenCalledWith(
         'subscription-live-test',
@@ -1483,8 +1658,8 @@ describe('SwarmPage', () => {
     await render(bridge);
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
-    expect(button('Delete Swarm').disabled).toBe(true);
-    button('Delete Swarm').click();
+    expect(button('Delete Run').disabled).toBe(true);
+    button('Delete Run').click();
     expect(
       operation.mock.calls.some(([name]) => name === 'swarms.delete'),
     ).toBe(false);
@@ -1510,7 +1685,7 @@ describe('SwarmPage', () => {
     await render(bridge);
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
-    button('Delete Swarm').click();
+    button('Delete Run').click();
     await tick();
     expect(document.querySelector('[role="dialog"]').textContent).toContain(
       'participant Sessions',
@@ -1520,7 +1695,7 @@ describe('SwarmPage', () => {
     expect(
       operation.mock.calls.some(([name]) => name === 'swarms.delete'),
     ).toBe(false);
-    button('Delete Swarm').click();
+    button('Delete Run').click();
     await tick();
     [...document.querySelectorAll('[role="dialog"] button')]
       .find((node) => node.textContent.trim() === 'Delete')
@@ -1557,7 +1732,7 @@ describe('SwarmPage', () => {
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     expect(button('Resume')).toBeUndefined();
-    button('Delete Swarm').click();
+    button('Delete Run').click();
     await tick();
     const confirm = () =>
       [...document.querySelectorAll('[role="dialog"] button')].find(

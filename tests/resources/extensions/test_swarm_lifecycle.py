@@ -301,6 +301,102 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["directory", "project"])
+async def test_run_directory_override_survives_resume_without_changing_profile(
+    lifecycle, tmp_path, source
+):
+    override = tmp_path / "run-directory"
+    override.mkdir()
+    working = (
+        {"kind": "directory", "path": str(tmp_path)}
+        if source == "directory"
+        else {"kind": "project", "project_id": "unavailable-default-project"}
+    )
+    saved = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Directory override",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": working,
+            "tool_access": {"mode": "selected", "allowed": []},
+        },
+        expected_revision=None,
+    )
+    arguments = {
+        "profile_id": saved["id"],
+        "expected_profile_revision": saved["revision"],
+        "prompt": "directory-goal-sentinel",
+        "request_id": "override-start",
+        "working_directory": str(override),
+    }
+    started = await lifecycle.service.operation("swarms.start", arguments)
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    assert snapshot["effective_configuration"] == {"cwd": str(override), "project_id": None}
+    assert snapshot["profile_snapshot"]["working_directory"] == working
+    assert await lifecycle.service.store.get_profile(saved["id"]) == saved
+    binding = (await lifecycle.groups.list(started["swarm_id"]))[0]
+    agent = lifecycle.runtime.agent_resolver.temporary_agents.resolve(
+        binding.address, generation_id=binding.generation_id
+    )
+    assert agent.cwd == override
+    assert binding.address.project_id is None
+    replayed = await lifecycle.service.operation("swarms.start", arguments)
+    assert replayed["replayed"] is True
+    assert replayed["runs"] == started["runs"]
+    with pytest.raises(ValueError, match="^request_conflict$"):
+        await lifecycle.service.operation(
+            "swarms.start", {**arguments, "working_directory": str(tmp_path)}
+        )
+    await lifecycle.service.operation(
+        "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop"}
+    )
+    resumed = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "resume"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"]).wait()
+    resumed_binding = (await lifecycle.groups.list(started["swarm_id"]))[0]
+    assert resumed_binding.address == binding.address
+    resumed_agent = lifecycle.runtime.agent_resolver.temporary_agents.resolve(
+        resumed_binding.address, generation_id=resumed_binding.generation_id
+    )
+    assert resumed_agent.cwd == override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, 42, "", "relative", "missing", "file"])
+async def test_run_rejects_invalid_directory_before_creating_sessions(lifecycle, tmp_path, value):
+    if value == "missing":
+        value = str(tmp_path / "missing")
+    elif value == "file":
+        file = tmp_path / "file.txt"
+        file.write_text("sentinel")
+        value = str(file)
+    saved = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Directory validation",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+        },
+        expected_revision=None,
+    )
+    with pytest.raises(ValueError, match="^invalid_arguments$"):
+        await lifecycle.service.operation(
+            "swarms.start",
+            {
+                "profile_id": saved["id"],
+                "prompt": "goal",
+                "request_id": "invalid-directory",
+                "working_directory": value,
+            },
+        )
+    assert not (await lifecycle.service.store.list_swarms()).entries
+    assert lifecycle.runtime.adapter.requests == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected", [[], ["core:runtime"]])
 async def test_profile_prompt_selection_reaches_model_without_hidden_orientation(
     lifecycle, tmp_path, selected
