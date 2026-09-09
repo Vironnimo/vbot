@@ -10,8 +10,7 @@ import os
 import signal
 import subprocess
 import sys
-from asyncio import StreamWriter
-from asyncio.subprocess import PIPE, Process
+from asyncio.subprocess import DEVNULL, PIPE, Process
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -35,8 +34,6 @@ PROCESS_BUFFER_CAP_BYTES = 500 * 1024
 PROCESS_TERMINAL_OUTPUT_CAP_CHARS = 30_000
 FINISHED_PROCESS_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
-INPUT_IDLE_SECONDS = 15.0
-SUBMIT_BYTES = b"\r\n" if os.name == "nt" else b"\n"
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -268,10 +265,6 @@ class ProcessNotFoundError(ProcessManagerError):
     """Raised when a process is missing or belongs to another agent."""
 
 
-class ProcessInputClosedError(ProcessManagerError):
-    """Raised when writing to a process whose stdin is unavailable."""
-
-
 class ProcessStillRunningError(ProcessManagerError):
     """Raised when an operation requires a finished process."""
 
@@ -306,8 +299,6 @@ class TrackedProcess:
     started_at: datetime
     finished_at: datetime | None
     last_poll_at: datetime | None
-    last_output_at: datetime | None
-    stdin_open: bool
     execution_owner: RunExecutionOwner | None = None
     foreground_capture_open: bool = True
     buffer_start_offset: int = 0
@@ -497,7 +488,7 @@ class ProcessManager:
 
         proc = await asyncio.create_subprocess_exec(
             *launch.argv,
-            stdin=PIPE,
+            stdin=DEVNULL,
             stdout=PIPE,
             stderr=PIPE,
             env=process_env,
@@ -524,8 +515,6 @@ class ProcessManager:
             started_at=_utc_now(),
             finished_at=None,
             last_poll_at=None,
-            last_output_at=None,
-            stdin_open=proc.stdin is not None,
             execution_owner=execution_owner,
         )
         self._open_log_file(tracked)
@@ -651,57 +640,8 @@ class ProcessManager:
                 "finished_at": tracked.finished_at,
                 "output": _decode(bytes(tracked.combined_buffer)),
                 "truncated": tracked.truncated,
-                "stdin_open": tracked.stdin_open,
-                "waiting_for_input": _is_waiting_for_input(tracked),
                 "log_file": tracked.log_file,
             }
-
-    async def send_input(
-        self,
-        process_id: str,
-        agent_id: str,
-        text: str,
-        *,
-        newline: bool,
-        eof: bool,
-        project_id: str | None = None,
-    ) -> None:
-        """Send UTF-8 text, an optional line ending, and optional EOF to stdin."""
-        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
-        stdin = tracked.proc.stdin
-        if stdin is None or not tracked.stdin_open:
-            raise ProcessInputClosedError(f"Process stdin is closed: {process_id}")
-
-        payload = text.encode("utf-8")
-        if newline:
-            payload += SUBMIT_BYTES
-        if payload:
-            await self._write_stdin(tracked, stdin, payload)
-        if eof:
-            await self._close_stdin(tracked)
-
-    @staticmethod
-    async def _write_stdin(
-        tracked: TrackedProcess,
-        stdin: StreamWriter,
-        payload: bytes,
-    ) -> None:
-        """Write bytes to stdin, mapping a raced close to ProcessInputClosedError.
-
-        The upfront ``stdin_open`` check cannot stop a kill or the process
-        exiting from closing stdin while ``drain()`` awaits, so a concurrent
-        close surfaces here as a pipe error. Translate it to the expected
-        closed-stdin error instead of leaking BrokenPipeError/
-        ConnectionResetError to callers.
-        """
-        try:
-            stdin.write(payload)
-            await stdin.drain()
-        except (BrokenPipeError, ConnectionResetError) as error:
-            tracked.stdin_open = False
-            raise ProcessInputClosedError(
-                f"Process stdin is closed: {tracked.process_id}"
-            ) from error
 
     async def kill(self, process_id: str, agent_id: str, *, project_id: str | None = None) -> None:
         """Terminate a tracked process with SIGKILL / platform equivalent."""
@@ -868,7 +808,6 @@ class ProcessManager:
                     {"stream": chunk.stream, "data": _decode(chunk.data)} for chunk in chunks
                 ],
                 "truncated": tracked.truncated,
-                "waiting_for_input": _is_waiting_for_input(tracked),
             }
 
     async def _read_stream(self, tracked: TrackedProcess, stream_name: OutputStreamName) -> None:
@@ -886,7 +825,6 @@ class ProcessManager:
 
     async def _watch_process(self, tracked: TrackedProcess) -> None:
         return_code = await tracked.proc.wait()
-        await self._close_stdin(tracked)
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
         async with tracked.lock:
@@ -894,7 +832,6 @@ class ProcessManager:
             if tracked.status == "running":
                 tracked.status = "completed" if return_code == 0 else "failed"
             tracked.finished_at = _utc_now()
-            tracked.stdin_open = False
             self._close_log_file(tracked)
         tracked.output_event.set()
         self._notify_terminal(tracked)
@@ -956,7 +893,6 @@ class ProcessManager:
             else:
                 tracked.foreground_stderr_bytes += len(chunk)
             self._enforce_foreground_capture_cap(tracked, stream_name)
-        tracked.last_output_at = _utc_now()
         self._enforce_buffer_cap(tracked)
 
     def _enforce_foreground_capture_cap(
@@ -1057,12 +993,10 @@ class ProcessManager:
     def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:
         tracked.cancelled_by_user = cancelled_by_user
         tracked.status = "killed"
-        self._close_stdin_now(tracked)
 
     @staticmethod
     def _finish_process_lookup_error(tracked: TrackedProcess) -> None:
         tracked.finished_at = _utc_now()
-        tracked.stdin_open = False
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         return any(value == owner for value in self._owned_spawns.values()) or any(
@@ -1114,35 +1048,6 @@ class ProcessManager:
             return
 
         _kill_process_tree_posix(proc)
-
-    @classmethod
-    async def _close_stdin(cls, tracked: TrackedProcess) -> None:
-        cls._close_stdin_now(tracked)
-        stdin = tracked.proc.stdin
-        if stdin is None:
-            return
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
-            await stdin.wait_closed()
-
-    @staticmethod
-    def _close_stdin_now(tracked: TrackedProcess) -> None:
-        stdin = tracked.proc.stdin
-        if stdin is None or not tracked.stdin_open:
-            tracked.stdin_open = False
-            return
-
-        try:
-            if stdin.can_write_eof():
-                stdin.write_eof()
-        except (BrokenPipeError, ConnectionResetError, RuntimeError) as error:
-            _LOGGER.warning(
-                "Process stdin EOF write failed for process=%s: %s",
-                tracked.process_id,
-                error,
-            )
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
-            stdin.close()
-        tracked.stdin_open = False
 
     @staticmethod
     def _release_process_pipe_references(tracked: TrackedProcess) -> None:
@@ -1214,14 +1119,6 @@ def _decode(data: bytes) -> str:
     return strip_ansi(data.decode("utf-8", errors="replace"))
 
 
-def _is_waiting_for_input(tracked: TrackedProcess) -> bool:
-    if not tracked.stdin_open:
-        return False
-
-    last_activity_at = tracked.last_output_at or tracked.started_at
-    return (_utc_now() - last_activity_at).total_seconds() >= INPUT_IDLE_SECONDS
-
-
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -1229,13 +1126,11 @@ def _utc_now() -> datetime:
 __all__ = [
     "FINISHED_PROCESS_TTL",
     "GuardedProcessLaunch",
-    "INPUT_IDLE_SECONDS",
     "PROCESS_BUFFER_CAP_BYTES",
     "ProcessManager",
     "ProcessManagerError",
     "TrackedProcess",
     "ProcessStatus",
-    "ProcessInputClosedError",
     "ProcessNotFoundError",
     "ProcessStillRunningError",
     "activate_process_containment",
