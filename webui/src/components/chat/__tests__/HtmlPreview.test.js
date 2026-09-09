@@ -58,14 +58,17 @@ describe('HtmlPreview', () => {
     });
     await settle();
     const frame = document.querySelector('iframe');
-    const reload = vi.spyOn(frame, 'src', 'set');
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-downloads');
     expect(document.querySelector('input, form')).toBeNull();
     await vi.advanceTimersByTimeAsync(1500);
-    expect(reload).not.toHaveBeenCalled();
+    expect(document.querySelector('iframe')).toBe(frame);
     revision.mockResolvedValue({ revision: 'two' });
     await vi.advanceTimersByTimeAsync(1500);
-    expect(reload).toHaveBeenCalledExactlyOnceWith(result.url);
+    await settle();
+    expect(frame.isConnected).toBe(false);
+    expect(document.querySelector('iframe').getAttribute('src')).toBe(
+      result.url,
+    );
     document.querySelector('[role="switch"]').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(5000);
@@ -105,12 +108,12 @@ describe('HtmlPreview', () => {
     });
     await settle();
     const frame = document.querySelector('iframe');
-    const reload = vi.spyOn(frame, 'src', 'set');
     const subpage = new URL(
       '/api/preview-assets/capability/sub/page.html#section',
       window.location.href,
     ).href;
-    const notify = (url, source = frame.contentWindow) =>
+    const originalWindow = frame.contentWindow;
+    const notify = (url, source = originalWindow) =>
       window.dispatchEvent(
         new MessageEvent('message', {
           origin: 'null',
@@ -123,10 +126,90 @@ describe('HtmlPreview', () => {
     notify(new URL('/api/rpc', window.location.href).href);
     notify(result.url, window);
     document.querySelector('button[aria-label="Reload preview"]').click();
-    flushSync();
-    expect(reload).toHaveBeenLastCalledWith(subpage);
+    await settle();
+    const replacement = document.querySelector('iframe');
+    expect(replacement).not.toBe(frame);
+    expect(replacement.src).toBe(subpage);
     const label = document.querySelector('.html-preview__filename');
     expect(label.textContent).toBe('sub/page.html');
+
+    // A queued message from a retired document must not change the new target.
+    notify(new URL(result.url, window.location.href).href);
+    revision.mockResolvedValue({ revision: 'two' });
+    await vi.advanceTimersByTimeAsync(1500);
+    await settle();
+    expect(document.querySelector('iframe')).not.toBe(replacement);
+    expect(document.querySelector('iframe').src).toBe(subpage);
+  });
+
+  it('navigates to the entry again when the same file is explicitly reopened', async () => {
+    const request = fromStore(writable({ source: '/api/files/output-token' }));
+    component = mount(HtmlPreview, {
+      target: document.body,
+      props: {
+        get request() {
+          return request.current;
+        },
+      },
+    });
+    await settle();
+    const frame = document.querySelector('iframe');
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'null',
+        source: frame.contentWindow,
+        data: {
+          type: 'vbot-preview-ready',
+          url: new URL(
+            '/api/preview-assets/capability/sub.html',
+            window.location.href,
+          ).href,
+        },
+      }),
+    );
+    await settle();
+    expect(document.querySelector('.html-preview__filename').textContent).toBe(
+      'sub.html',
+    );
+    request.current = { source: '/api/files/output-token' };
+    await settle();
+    expect(frame.isConnected).toBe(false);
+    expect(document.querySelector('iframe').getAttribute('src')).toBe(
+      result.url,
+    );
+    expect(document.querySelector('.html-preview__filename').textContent).toBe(
+      result.filename,
+    );
+  });
+
+  it('loads a fresh document when retrying an unavailable entry with Live paused', async () => {
+    component = mount(HtmlPreview, {
+      target: document.body,
+      props: { request: { source: '/api/files/output-token' } },
+    });
+    await settle();
+    document.querySelector('[role="switch"]').click();
+    const frame = document.querySelector('iframe');
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'null',
+        source: frame.contentWindow,
+        data: {
+          type: 'vbot-preview-unavailable',
+          url: new URL(result.url, window.location.href).href,
+        },
+      }),
+    );
+    await settle();
+    document.querySelector('[role="alert"] button').click();
+    await settle();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(frame.isConnected).toBe(false);
+    const replacement = document.querySelector('iframe');
+    expect(replacement.getAttribute('src')).toBe(result.url);
+    expect(replacement.classList.contains('unavailable')).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(revision).not.toHaveBeenCalled();
   });
 
   it('does not erase a failed open when the previous preview polls successfully', async () => {
