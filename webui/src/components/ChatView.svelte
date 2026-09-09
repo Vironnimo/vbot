@@ -59,7 +59,8 @@
     interactive = true,
     composerAvailable = true,
     preserveSessionSelection = false,
-    initialSessionDrawer = false,
+    initialSessionFilters = null,
+    onSessionFiltersChange = () => {},
     onDisplayedSession = () => {},
     sharedAgents = [],
     sharedSelectedAgentId = '',
@@ -133,7 +134,7 @@
   let displayedSessionGeneration = 0;
   let generationSessionKey = '';
   let transientCardSeq = 0;
-  let showSessionDrawer = $state(untrack(() => initialSessionDrawer));
+  let showSessionDrawer = $state(false);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
   // Live height of the floating composer stack over the timeline. The
@@ -158,7 +159,7 @@
     observer.observe(element);
     return () => observer.disconnect();
   });
-  let sessionFilters = $state(null);
+  let sessionFilters = $state(untrack(() => initialSessionFilters));
   let viewingSessionId = $state('');
   let viewingSessionAgentId = $state('');
   let viewingSubAgentSession = $state(false);
@@ -1428,7 +1429,6 @@
       isOwnAgent && normalizedSessionId === ownCurrentSessionId
         ? ''
         : normalizedSessionId;
-    if (preserveSessionSelection) showSessionDrawer = false;
     reportSessionNavigation();
     await loadHistoryForSession(agentAddress, normalizedSessionId);
     requestComposerFocus();
@@ -2144,6 +2144,7 @@
             initialFilters={sessionFilters}
             onFiltersChange={(next) => {
               sessionFilters = next;
+              onSessionFiltersChange(next);
             }}
             onSessionSelected={handleSessionSelected}
             onSessionDeleted={handleSessionDeleted}
