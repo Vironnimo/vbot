@@ -29,6 +29,85 @@ _PROVIDER_BASE_URL = "https://provider.example/api/v1"
 _CONNECTION_BASE_URL = "https://connection.example/api/v1"
 
 
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize(
+    "outcome", ["success", "rejected_again", "forbidden", "refresh_failure", "parse_auth_error"]
+)
+async def test_task_oauth_recovery_keeps_request_and_refresh_retry_budgets_separate(
+    method: str,
+    outcome: str,
+) -> None:
+    failure = ProviderError("test refresh unavailable", retryable=True)
+
+    class Getter:
+        token = "old-test-token"
+        refreshes = 0
+
+        async def __call__(self) -> str:
+            return self.token
+
+        async def refresh_after_rejection(
+            self, rejected: str, *, status_code: int, response_body: str
+        ) -> str | None:
+            if status_code != 401:
+                return None
+            assert rejected == "old-test-token"
+            self.refreshes += 1
+            if outcome == "refresh_failure":
+                raise failure
+            self.token = "new-test-token"
+            return self.token
+
+    getter = Getter()
+    provider = _make_provider()
+    client = ProviderTaskClient(
+        provider=provider,
+        connection=provider.connections[0],
+        model_id="test-model",
+        token_getter=getter,
+    )
+    initial_status = (
+        403 if outcome == "forbidden" else 200 if outcome == "parse_auth_error" else 401
+    )
+    route = respx.route(method=method, url=_PROVIDER_BASE_URL + "/task").mock(
+        side_effect=[
+            httpx.Response(initial_status, json={"result": "initial"}),
+            httpx.Response(401 if outcome == "rejected_again" else 200, json={"result": "done"}),
+        ]
+    )
+
+    def parse(response: httpx.Response) -> str:
+        if outcome == "parse_auth_error":
+            raise ProviderAuthError("test parser auth failure")
+        return str(response.json()["result"])
+
+    async def invoke() -> str:
+        if method == "GET":
+            return await client.get_and_parse("/task", timeout=1, parse=parse)
+        return await client.post_and_parse(
+            "/task",
+            timeout=1,
+            parse=parse,
+            json={"prompt": "same input"},
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    if outcome == "success":
+        assert await invoke() == "done"
+    else:
+        with pytest.raises(ProviderError) as caught:
+            await invoke()
+        if outcome == "refresh_failure":
+            assert caught.value is failure
+    assert getter.refreshes == (0 if outcome in {"forbidden", "parse_auth_error"} else 1)
+    assert route.call_count == (2 if outcome in {"success", "rejected_again"} else 1)
+    if route.call_count == 2:
+        assert route.calls.last.request.headers["Authorization"] == "Bearer new-test-token"
+        assert route.calls[0].request.content == route.calls[1].request.content
+
+
 def test_extra_options_add_fields_without_overriding_authored_payload() -> None:
     payload = {"model": "safe-model", "prompt": "keep me"}
 

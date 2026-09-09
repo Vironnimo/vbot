@@ -58,6 +58,59 @@ class TestRefreshModels:
     @respx.mock
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        "adapter", ["xai", "nous", "minimax", "github_copilot", "openai_compatible"]
+    )
+    async def test_catalog_recovery_is_available_to_every_oauth_adapter(
+        self,
+        tmp_path: Path,
+        adapter: str,
+    ) -> None:
+        config = _simple_compatible_config()
+        connection = replace(config.connections[0], type="oauth")
+        config = replace(config, adapter=adapter, connections=[connection])
+
+        class Getter:
+            token = "old-test-token"
+            refresh_count = 0
+
+            async def __call__(self) -> str:
+                return self.token
+
+            async def refresh_after_rejection(
+                self, rejected: str, *, status_code: int, response_body: str
+            ) -> str | None:
+                if status_code != 401:
+                    return None
+                assert rejected == "old-test-token"
+                self.refresh_count += 1
+                self.token = "new-test-token"
+                return self.token
+
+        getter = Getter()
+        raw_model = (
+            json.loads(
+                (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
+            )["data"][0]
+            if adapter == "github_copilot"
+            else {"id": "test-model"}
+        )
+        route = respx.get(_SIMPLE_MODELS_URL).mock(
+            side_effect=[
+                httpx.Response(401),
+                httpx.Response(200, json={"data": [raw_model]}),
+            ]
+        )
+        result = await refresh_models(
+            config, getter, tmp_path / "resources", credential_connection=connection
+        )
+        assert result["provider_id"] == config.id
+        assert getter.refresh_count == 1
+        assert route.call_count == 2
+        assert route.calls.last.request.headers["Authorization"] == "Bearer new-test-token"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("initial_status", "retry_status", "expected_catalog_calls", "expected_refresh_calls"),
         [(401, 200, 2, 1), (401, 401, 2, 1), (401, 403, 2, 1), (403, 200, 1, 0)],
     )
@@ -170,7 +223,11 @@ class TestRefreshModels:
             async def __call__(self) -> str:
                 return jwt_with_openai_account()
 
-            async def refresh_after_unauthorized(self, rejected_token: str) -> str:
+            async def refresh_after_rejection(
+                self, rejected_token: str, *, status_code: int, response_body: str
+            ) -> str | None:
+                if status_code != 401:
+                    return None
                 assert rejected_token == jwt_with_openai_account()
                 self.refresh_calls += 1
                 raise failure
@@ -201,7 +258,11 @@ class TestRefreshModels:
             async def __call__(self) -> str:
                 raise failure
 
-            async def refresh_after_unauthorized(self, _rejected_token: str) -> str:
+            async def refresh_after_rejection(
+                self, _rejected_token: str, *, status_code: int, response_body: str
+            ) -> str | None:
+                if status_code != 401:
+                    return None
                 raise AssertionError("Only a rejected catalog request permits recovery")
 
         with pytest.raises(ModelDiscoveryError) as caught:
@@ -219,7 +280,6 @@ class TestRefreshModels:
         ("adapter", "connection_type", "mode", "static_credential"),
         [
             ("openai", "api_key", "codex_responses", False),
-            ("xai", "oauth", None, False),
             ("openai", "oauth", "codex_responses", True),
         ],
     )
@@ -242,7 +302,11 @@ class TestRefreshModels:
             async def __call__(self) -> str:
                 return jwt_with_openai_account()
 
-            async def refresh_after_unauthorized(self, _rejected_token: str) -> str:
+            async def refresh_after_rejection(
+                self, _rejected_token: str, *, status_code: int, response_body: str
+            ) -> str | None:
+                if status_code != 401:
+                    return None
                 raise AssertionError("This Connection must not refresh on a catalog 401")
 
         with pytest.raises(ModelDiscoveryError):

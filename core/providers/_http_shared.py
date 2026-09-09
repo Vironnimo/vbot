@@ -28,6 +28,7 @@ from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.token_getter import OAuthRequestRecovery
 
 _T = TypeVar("_T")
 
@@ -382,6 +383,7 @@ async def connect_streaming_with_retry(
     *,
     build_headers: Callable[[], Awaitable[dict[str, str]]],
     handle_error_status: HttpErrorStatusHandler,
+    auth_recovery: OAuthRequestRecovery | None = None,
     wrap_transport_error: TransportErrorWrapper = wrap_network_error,
 ) -> httpx.Response:
     """Establish one streaming POST, retrying only the establishment.
@@ -407,15 +409,21 @@ async def connect_streaming_with_retry(
         except httpx.TransportError as exc:
             raise wrap_transport_error(exc) from exc
 
+        if auth_recovery is not None:
+            auth_recovery.record_response(response.status_code, headers)
         if response.status_code >= 400:
             error_body = (await response.aread()).decode("utf-8", errors="replace")
             await response.aclose()
+            if auth_recovery is not None:
+                auth_recovery.record_response(response.status_code, headers, error_body)
             handle_error_status(response.status_code, error_body, response.headers)
             # handle_error_status always raises for >= 400; unreachable but
             # satisfies type checkers.
             raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
         return response
 
+    if auth_recovery is not None:
+        return await auth_recovery.run(lambda: retry_async(_connect))
     return await retry_async(_connect)
 
 
@@ -427,6 +435,7 @@ async def post_json_with_retry(
     build_headers: Callable[[], Awaitable[dict[str, str]]],
     handle_error_status: HttpErrorStatusHandler,
     provider_context: str,
+    auth_recovery: OAuthRequestRecovery | None = None,
     wrap_transport_error: TransportErrorWrapper = wrap_network_error,
 ) -> dict[str, Any]:
     """POST one JSON payload and decode the object reply under shared retry.
@@ -443,11 +452,17 @@ async def post_json_with_retry(
         except httpx.TransportError as exc:
             raise wrap_transport_error(exc) from exc
 
+        if auth_recovery is not None:
+            auth_recovery.record_response(
+                response.status_code, headers, response.text if response.status_code >= 400 else ""
+            )
         if response.status_code >= 400:
             handle_error_status(response.status_code, response.text, response.headers)
             raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
         return decode_response_json(response, provider_context)
 
+    if auth_recovery is not None:
+        return await auth_recovery.run(lambda: retry_async(_do_request))
     return await retry_async(_do_request)
 
 

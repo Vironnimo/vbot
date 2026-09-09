@@ -27,11 +27,13 @@ from typing import Any, Protocol
 
 import httpx
 
+from core.providers._http_shared import classify_http_status
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ConnectionRef,
     compose_connection_id,
 )
+from core.providers.errors import ProviderAuthError
 from core.providers.openai import CODEX_EXTRA_HEADERS
 from core.providers.openai_subscription_auth import (
     CHATGPT_ACCOUNT_ID_EXTRA_KEY,
@@ -41,6 +43,7 @@ from core.providers.token_getter import (
     COPILOT_EDITOR_VERSION,
     COPILOT_INTEGRATION_ID,
     GITHUB_OAUTH_TOKEN_EXTRA_KEY,
+    OAuthRequestRecovery,
     TokenGetter,
 )
 from core.providers.usage_history import (
@@ -594,20 +597,26 @@ class ProviderUsageService:
         base_url = connection_config.base_url or provider.base_url
 
         token_getter = self._runtime.get_connection_token_getter(connection.ref)
-        token = await token_getter()
-        account_id = extract_chatgpt_account_id(token)
-        if not account_id:
-            extra = self._runtime.get_connection_token_extra(connection.ref)
-            account_id = extra.get(CHATGPT_ACCOUNT_ID_EXTRA_KEY) or None
-        if not account_id:
-            raise UsageFetchError("Reconnect required")
 
-        headers = {
-            connection_config.auth.header: f"{connection_config.auth.prefix}{token}",
-            "chatgpt-account-id": account_id,
-            **CODEX_EXTRA_HEADERS,
-        }
-        body = await self._get_json(_join_url(base_url, OPENAI_USAGE_PATH), headers)
+        async def headers() -> dict[str, str]:
+            token = await token_getter()
+            account_id = extract_chatgpt_account_id(token)
+            if not account_id:
+                extra = self._runtime.get_connection_token_extra(connection.ref)
+                account_id = extra.get(CHATGPT_ACCOUNT_ID_EXTRA_KEY) or None
+            if not account_id:
+                raise UsageFetchError("Reconnect required")
+            return {
+                connection_config.auth.header: f"{connection_config.auth.prefix}{token}",
+                "chatgpt-account-id": account_id,
+                **CODEX_EXTRA_HEADERS,
+            }
+
+        body = await self._get_json(
+            _join_url(base_url, OPENAI_USAGE_PATH),
+            headers,
+            auth_recovery=OAuthRequestRecovery(token_getter, connection_config.auth),
+        )
         return _parse_openai_usage(
             connection.connection_id,
             self._display_name(connection),
@@ -692,14 +701,41 @@ class ProviderUsageService:
             account=connection.account_id,
         )
 
-    async def _get_json(self, url: str, headers: Mapping[str, str]) -> Any:
-        response = await self._transport.get(url, headers=headers, timeout=self._timeout)
-        if response.status_code >= 400:
-            raise UsageFetchError(f"HTTP {response.status_code}")
+    async def _get_json(
+        self,
+        url: str,
+        headers: Mapping[str, str] | Callable[[], Awaitable[dict[str, str]]],
+        *,
+        auth_recovery: OAuthRequestRecovery | None = None,
+    ) -> Any:
+        async def request() -> Any:
+            request_headers = await headers() if callable(headers) else headers
+            response = await self._transport.get(
+                url, headers=request_headers, timeout=self._timeout
+            )
+            if auth_recovery is not None:
+                auth_recovery.record_response(
+                    response.status_code,
+                    request_headers,
+                    response.text if response.status_code >= 400 else "",
+                )
+                if response.status_code == 401:
+                    classify_http_status(401, idempotent=True)
+            if response.status_code >= 400:
+                raise UsageFetchError(f"HTTP {response.status_code}")
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise UsageFetchError("Invalid response") from exc
+
+        if auth_recovery is None:
+            return await request()
         try:
-            return response.json()
-        except ValueError as exc:
-            raise UsageFetchError("Invalid response") from exc
+            return await auth_recovery.run(request)
+        except ProviderAuthError as exc:
+            if getattr(exc, "status_code", None) == 401:
+                raise UsageFetchError("HTTP 401") from exc
+            raise UsageFetchError("Reconnect required") from exc
 
 
 # ---------------------------------------------------------------------------

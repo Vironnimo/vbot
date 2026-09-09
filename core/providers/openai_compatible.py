@@ -74,7 +74,7 @@ from core.providers.reasoning import (
     warn_effort_swallowed,
     warn_rejected_effort,
 )
-from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
@@ -738,6 +738,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # otherwise refill the key on a rebuild.
         payload = self._build_payload(messages, model_id, **kwargs)
 
+        auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
+
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_request_headers(messages, payload)
             headers.update(request_headers)
@@ -750,6 +752,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             except httpx.TransportError as exc:
                 raise self._wrap_transport_error(exc) from exc
 
+            auth_recovery.record_response(
+                response.status_code, headers, response.text if response.status_code >= 400 else ""
+            )
             reason = response.text
             detail = (
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
@@ -780,7 +785,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return parsed
 
         return await execute_with_sampling_fallback(
-            lambda: retry_async(_do_request),
+            lambda: auth_recovery.run(lambda: retry_async(_do_request)),
             payload,
             logger=_LOGGER,
             provider_label=self._config.id,
@@ -835,6 +840,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         self._prepare_stream_payload(payload)
+        auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:
             headers = await self._build_request_headers(messages, payload)
@@ -859,6 +865,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 payload,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
+                auth_recovery=auth_recovery,
                 wrap_transport_error=self._wrap_transport_error,
             ),
             payload,

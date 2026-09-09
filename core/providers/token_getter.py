@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
@@ -19,6 +21,7 @@ from core.providers.providers import (
     OPENAI_CODEX_DEVICE_FLOW,
     OPENCODE_OAUTH_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
+    AuthConfig,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
 )
@@ -62,7 +65,68 @@ class TokenGetter(Protocol):
 class RejectedTokenRefresher(Protocol):
     """Optional token-getter capability for recovering from a rejected token."""
 
-    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str: ...
+    async def refresh_after_rejection(
+        self, rejected_access_token: str, *, status_code: int, response_body: str
+    ) -> str | None:
+        """Refresh a recognized token rejection; return None for other auth errors."""
+        ...
+
+
+_RequestResult = TypeVar("_RequestResult")
+
+
+class OAuthRequestRecovery:
+    """Recover one rejected HTTP request using its exact Account token getter.
+
+    Record responses at the HTTP boundary, before Provider status classification,
+    and run the operation (including its transient retries) through ``run``.
+    Only an actual HTTP auth error recognized by the getter permits one refresh.
+    Token exchange happens outside the operation's retry loop; stream consumption
+    happens after it, so neither a failed exchange nor partial output is replayed.
+    """
+
+    def __init__(self, token_getter: TokenGetter, auth: AuthConfig) -> None:
+        self._token_getter = token_getter
+        self._auth = auth
+        self._rejection: tuple[str, int, str] | None = None
+        self._attempted = False
+
+    def record_response(
+        self, status_code: int, request_headers: Mapping[str, str], response_body: str = ""
+    ) -> None:
+        """Remember the credential and error actually returned by an HTTP request."""
+
+        self._rejection = None
+        if status_code not in {401, 403} or not self._auth.header:
+            return
+        value = httpx.Headers(request_headers).get(self._auth.header, "")
+        if value.startswith(self._auth.prefix):
+            token = value.removeprefix(self._auth.prefix)
+            if token:
+                self._rejection = (token, status_code, response_body)
+
+    async def run(self, operation: Callable[[], Awaitable[_RequestResult]]) -> _RequestResult:
+        """Run with at most one rejected-token refresh for this logical request."""
+
+        self._rejection = None
+        try:
+            return await operation()
+        except ProviderAuthError:
+            if (
+                self._attempted
+                or self._rejection is None
+                or not isinstance(self._token_getter, RejectedTokenRefresher)
+            ):
+                raise
+            self._attempted = True
+            rejected_token, status_code, response_body = self._rejection
+            self._rejection = None
+            refreshed = await self._token_getter.refresh_after_rejection(
+                rejected_token, status_code=status_code, response_body=response_body
+            )
+            if refreshed is None:
+                raise
+            return await operation()
 
 
 class StaticTokenGetter:
@@ -136,8 +200,27 @@ class OAuthTokenGetter:
                 return token.access_token
             return await self._refresh_token(token)
 
-    async def refresh_after_unauthorized(self, rejected_access_token: str) -> str:
-        """Refresh a token rejected by the Provider despite its stored expiry."""
+    async def refresh_after_rejection(
+        self, rejected_access_token: str, *, status_code: int, response_body: str
+    ) -> str | None:
+        """Renew recognized token rejections, including xAI's token-specific 403.
+
+        The OAuth flow owns its rejection vocabulary as well as its exchange.
+        An ordinary permission/entitlement error cannot mutate stored tokens.
+        """
+
+        if status_code != 401:
+            if status_code != 403 or self._oauth_config.device_flow != XAI_OAUTH_DEVICE_FLOW:
+                return None
+            try:
+                payload = json.loads(response_body)
+            except ValueError:
+                return None
+            if (
+                not isinstance(payload, dict)
+                or payload.get("code") != "unauthenticated:bad-credentials"
+            ):
+                return None
 
         async with self._lock:
             token = self._token_store.load(
