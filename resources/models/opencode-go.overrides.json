@@ -4,6 +4,17 @@
   "models": {
     "deepseek-flash": {
       "name": "DeepSeek V4.1 Flash",
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "capabilities": {
+        "vision": true,
+        "input_modalities": ["text", "image"],
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": ["low", "high", "max"]
+        }
+      },
       "metadata": {
         "opencode_go": {
           "protocol": "openai",

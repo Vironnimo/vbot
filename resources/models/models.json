@@ -9987,6 +9987,33 @@
       "release_date": "2025-11-19",
       "temperature": true
     },
+    "xai/grok-4.1-fast-reasoning": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 2000000,
+      "family": "grok",
+      "last_updated": "2025-11-19",
+      "max_output_tokens": 30000,
+      "name": "Grok 4.1 Fast (Reasoning)",
+      "release_date": "2025-11-19",
+      "temperature": true
+    },
     "xai/grok-4.20-0309-non-reasoning": {
       "capabilities": {
         "input_modalities": [

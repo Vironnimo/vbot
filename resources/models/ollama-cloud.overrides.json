@@ -2,6 +2,30 @@
     "provider_id": "ollama-cloud",
     "reasoning_replay": "full_history",
     "models": {
+        "deepseek-v4.1-flash": {
+            "max_output_tokens": 65536,
+            "recommended_temperature": 1.0,
+            "recommended_top_p": 0.95,
+            "capabilities": {
+                "reasoning": {
+                    "control": "levels",
+                    "levels": [
+                        "low",
+                        "high",
+                        "max"
+                    ],
+                    "supported": true
+                }
+            },
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
         "deepseek-v4-flash:0731": {
             "max_output_tokens": 65536,
             "recommended_temperature": 1.0,

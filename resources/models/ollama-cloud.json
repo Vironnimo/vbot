@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-10T09:46:43.503440+00:00",
+  "fetched_at": "2026-09-10T22:09:42.257975+00:00",
   "models": {
     "deepseek-v4-flash:0731": {
       "capabilities": {
@@ -73,6 +73,43 @@
         }
       },
       "name": "deepseek-v4-pro:0813"
+    },
+    "deepseek-v4.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "deepseek-v4.1-flash"
     },
     "gemma4:31b": {
       "capabilities": {
