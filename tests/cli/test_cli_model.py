@@ -431,7 +431,7 @@ def test_model_refresh_reports_failed_providers(
 
     result = model_management.model_refresh(instance)
 
-    assert result.ok is True
+    assert result.ok is False
     assert result.instance is instance
     assert "1" in result.message
     assert "25" in result.message

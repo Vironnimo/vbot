@@ -92,7 +92,7 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
 
     ok_flag = payload.get("ok")
     if ok_flag is True:
-        result = payload.get("result", {})
+        result = payload.get("result")
         if not isinstance(result, dict):
             return _transport_failure(instance, method, "RPC result must be an object")
         return RpcPayload(ok=True, instance=instance, data=result)

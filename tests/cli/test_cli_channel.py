@@ -1003,7 +1003,7 @@ def test_run_dispatches_channel_commands(
     assert output_lines[0] == f"command: channel {command}"
     assert expected_output_line in output_lines
     assert output_lines[-2] == "url: http://127.0.0.1:8765"
-    assert output_lines[-1] == f"data_dir: {tmp_path / 'data'}"
+    assert output_lines[-1] == f"local_data_dir: {tmp_path / 'data'}"
 
 
 def test_run_channel_set_token_reads_utf8_stdin_without_echoing_secret(

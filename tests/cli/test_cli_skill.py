@@ -25,6 +25,32 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
     )
 
 
+@pytest.mark.parametrize("listing", [{"ok": True, "result": {}}, {"ok": False}])
+def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
+    tmp_path, monkeypatch, listing
+):
+    calls = []
+
+    def post(url, *, json, **kwargs):
+        calls.append(json["method"])
+        if json["method"] == "skill.share":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": False,
+                    "error": {"message": "assistant owns no private skill named 'x'"},
+                },
+            )
+        return httpx.Response(200, json=listing)
+
+    monkeypatch.setattr(skill_management.httpx, "post", post)
+    result = skill_management.skill_share(make_instance(tmp_path), "assistant", "x", ["reviewer"])
+    assert not result.ok
+    assert "inventory lookup" in result.message
+    assert "assistant owns no private skills" not in result.message
+    assert calls == ["skill.share", "skill.inventory"]
+
+
 def test_parse_args_supports_skill_catalog_command() -> None:
     args = cli_main.parse_args(
         ["skill", "list", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
@@ -624,3 +650,46 @@ def test_skill_share_wrong_private_skill_lists_owned_skills(
     assert result.ok is False
     assert "owns no private skill named 'ghost'" in result.message
     assert "assistant's private skills: notes" in result.message
+
+
+def test_skill_inspect_preserves_source_id_and_full_content(tmp_path, monkeypatch):
+    from cli import skill_management as management
+
+    content = "# Skill\n" + "complete instruction\n" * 80
+
+    def post(url, **kwargs):
+        assert kwargs["json"] == {"method": "skill.inspect", "params": {"id": "source-package-id"}}
+        return httpx.Response(
+            200, json={"ok": True, "result": {"id": "source-package-id", "content": content}}
+        )
+
+    monkeypatch.setattr(management.httpx, "post", post)
+    result = management.skill_inspect(make_instance(tmp_path), "source-package-id")
+    assert result.ok
+    assert content in result.message
+    assert "source-package-id" in result.message
+
+
+def test_skill_read_filters_name_before_rendering(tmp_path, monkeypatch):
+    from cli import skill_management as management
+
+    def post(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "skills": [
+                        {"name": "wanted", "content": "wanted-content"},
+                        {"name": "other", "content": "excluded-content"},
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(management.httpx, "post", post)
+    result = management.skill_read(make_instance(tmp_path), "global", "wanted")
+    assert result.ok
+    assert "wanted-content" in result.message
+    assert "excluded-content" not in result.message
+    assert not management.skill_read(make_instance(tmp_path), "global", "absent").ok

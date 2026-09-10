@@ -39,3 +39,5 @@ Protocol extensions that the selected SDK cannot interpret must fail explicitly;
 - Connection management presentation: `webui/src/components/settings/SettingsMcpPanel.svelte` and `webui/src/lib/mcpSettings.js` reuse the same management operations as the CLI; UI ownership and tests: `webui/settings.md`.
 - Pending-input presentation: `webui/src/components/ExtensionRequests.svelte`, `webui/src/lib/extensionInputs.js` and their component/helper tests.
 - Protocol, transport, callback, task, grants, persistence, media, bounded-result, and real Chat request-prefix regressions: `tests/resources/extensions/test_mcp.py`; ownership, CLI parser, and same-Run publication tests live in the adjacent core/CLI suites.
+
+Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete unchanged argument schema through per-operation help. Source: `extension.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.

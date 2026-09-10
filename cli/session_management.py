@@ -11,15 +11,21 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 
-def session_list(instance: ServerInstance, agent_id: str) -> CommandResult:
-    """Return formatted session list output from `session.list` RPC."""
-
+def session_list(
+    instance: ServerInstance,
+    agent_id: str,
+    *,
+    limit: int = 100,
+    cursor: dict[str, object] | None = None,
+    all_pages: bool = False,
+) -> CommandResult:
+    """Read one bounded Session page, or all pages when explicitly requested."""
     sessions: list[object] = []
-    cursor: object = None
+    seen: set[str] = set()
     while True:
         params: dict[str, object] = {
             "agent_id": agent_id,
-            "limit": 100,
+            "limit": limit,
             "include_subagents": True,
             "include_memory_reflections": True,
             "include_skill_reflections": True,
@@ -36,16 +42,30 @@ def session_list(instance: ServerInstance, agent_id: str) -> CommandResult:
                 ok=False, message="RPC result missing sessions list", instance=instance
             )
         sessions.extend(page)
-        cursor = payload.data.get("next_cursor")
-        if cursor is None:
-            break
-        if not isinstance(cursor, dict):
+        next_cursor = payload.data.get("next_cursor")
+        if next_cursor is not None and not isinstance(next_cursor, dict):
             return CommandResult(
-                ok=False, message="RPC result missing sessions list", instance=instance
+                ok=False, message="RPC result has an invalid Session cursor", instance=instance
             )
-    return CommandResult(
-        ok=True, message=_format_session_rows(agent_id, sessions), instance=instance
-    )
+        cursor = next_cursor
+        if cursor is None or not all_pages:
+            break
+        key = json.dumps(cursor, sort_keys=True)
+        if key in seen:
+            return CommandResult(
+                ok=False,
+                message="Session pagination did not advance; listing stopped",
+                instance=instance,
+            )
+        seen.add(key)
+    message = _format_session_rows(agent_id, sessions)
+    if cursor is not None:
+        message += (
+            f"\nnext_cursor: {json.dumps(cursor, ensure_ascii=False)}\nMore "
+            "Sessions available: pass this JSON as --cursor, or use --all. Keep "
+            "the same Agent and target."
+        )
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def session_create(
@@ -158,7 +178,7 @@ def session_fork(
             ok=False, message="RPC result missing forked session", instance=instance
         )
     fork_id = _string_or_default(session.get("id"), "?")
-    destination = _string_or_default(session.get("agent_id"), target_agent_id or agent_id)
+    destination = target_agent_id or agent_id
     source = _json_text(session.get("fork_source"))
     return CommandResult(
         ok=True,

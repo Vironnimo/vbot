@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from cli.bootstrap_management import (
     bootstrap_disable,
     bootstrap_enable,
     bootstrap_list,
+    bootstrap_show,
     bootstrap_update,
 )
 from cli.channel_management import (
@@ -69,6 +71,7 @@ from cli.cron_management import (
     cron_disable,
     cron_enable,
     cron_list,
+    cron_show,
     cron_update,
 )
 from cli.debug_management import (
@@ -115,6 +118,7 @@ from cli.prompt_management import (
     prompt_reset,
     prompt_reset_layout,
     prompt_set_layout,
+    prompt_show,
     prompt_update,
 )
 from cli.provider_management import (
@@ -165,6 +169,7 @@ from cli.skill_management import (
     list_skills,
     skill_create,
     skill_delete,
+    skill_inspect,
     skill_inventory,
     skill_read,
     skill_remove_file,
@@ -801,6 +806,10 @@ def dispatch_session_command(
     """Dispatch one parsed session command against the server RPC client."""
 
     if args.command == "list":
+        if args.limit != 100 or args.cursor is not None or args.all:
+            return session_list(
+                instance, args.agent, limit=args.limit, cursor=args.cursor, all_pages=args.all
+            )
         return list_sessions_fn(instance, args.agent)
     if args.command == "create":
         return create_session_fn(instance, args.agent, args.id, args.make_current)
@@ -888,6 +897,8 @@ def dispatch_prompt_command(
 
     if args.command == "list":
         return list_prompts_fn(instance, args.scope)
+    if args.command == "show":
+        return prompt_show(instance, args.block_id, args.scope)
     if args.command == "update":
         try:
             content = _prompt_content_from_args(args)
@@ -933,6 +944,12 @@ def dispatch_log_command(
     if args.command == "list":
         return list_logs_fn(instance)
     if args.command == "read":
+        if args.limit < 0:
+            return CommandResult(
+                ok=False, message="--limit must be zero or positive", instance=instance
+            )
+        if args.limit != 100 or args.level is not None:
+            return log_read(instance, args.file, limit=args.limit, level=args.level)
         return read_log_fn(instance, args.file)
     raise ValueError(f"Unsupported log command: {args.command}")
 
@@ -1123,6 +1140,12 @@ def dispatch_provider_command(
     if args.command == "custom-list":
         return custom_list_fn(instance)
     if args.command == "custom-save":
+        try:
+            api_key = _read_stdin_utf8() if args.api_key_stdin else args.api_key
+        except (OSError, UnicodeError):
+            return CommandResult(
+                ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
+            )
         return custom_save_fn(
             instance,
             args.provider,
@@ -1130,7 +1153,7 @@ def dispatch_provider_command(
             adapter=args.adapter,
             base_url=args.base_url,
             auth=args.auth,
-            api_key=args.api_key,
+            api_key=api_key,
             models_endpoint=args.models_endpoint,
             model_ids=args.model,
         )
@@ -1147,10 +1170,16 @@ def dispatch_provider_command(
     if args.command in ("enable", "disable"):
         return set_enabled_fn(instance, args.provider, args.command == "enable", args.connection)
     if args.command == "set-key":
+        try:
+            value = _read_stdin_utf8() if args.stdin else args.value
+        except (OSError, UnicodeError):
+            return CommandResult(
+                ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
+            )
         return set_provider_key(
             instance,
             args.provider,
-            args.value,
+            value,
             args.connection,
             args.refresh_models,
             args.account,
@@ -1312,6 +1341,8 @@ def dispatch_skill_command(
         return list_skills_fn(instance)
     if args.command == "inventory":
         return inventory_skills_fn(instance)
+    if args.command == "inspect":
+        return skill_inspect(instance, args.id)
     if args.command in {"disable", "enable"}:
         return set_skill_disabled_fn(instance, args.name, args.command == "disable")
     if args.command == "share":
@@ -1319,6 +1350,8 @@ def dispatch_skill_command(
     if args.command == "unshare":
         return unshare_skill_fn(instance, args.agent, args.name)
     if args.command == "read":
+        if args.name is not None:
+            return skill_read(instance, args.scope, args.name)
         return read_skills_fn(instance, args.scope)
     if args.command in {"create", "update", "write-file"}:
         try:
@@ -1474,6 +1507,8 @@ def dispatch_cron_command(
 
     if args.command == "list":
         return list_cron_fn(instance)
+    if args.command == "show":
+        return cron_show(instance, args.id)
     if args.command == "create":
         return create_cron_fn(instance, _cron_create_fields_from_args(args))
     if args.command == "update":
@@ -1500,6 +1535,8 @@ def dispatch_bootstrap_command(
 ) -> CommandResult:
     if args.command == "list":
         return list_fn(instance)
+    if args.command == "show":
+        return bootstrap_show(instance, args.id)
     if args.command == "create":
         if args.current_session and (args.agent is not None or args.session is not None):
             return CommandResult(
@@ -1588,6 +1625,8 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["repeat"] = args.repeat
     if args.session is not None:
         changes["session_id"] = args.session
+    if args.clear_session:
+        changes["session_id"] = None
     if args.status is not None:
         changes["status"] = args.status
     return changes
@@ -1666,7 +1705,17 @@ def dispatch_config_command(
             return describe_config_fn(instance, args.path)
         return get_config_fn(instance, args.path)
     if args.command == "set":
-        coerced = coerce_config_value(args.value)
+        if args.stdin:
+            try:
+                coerced = json.loads(_read_stdin_utf8())
+            except (OSError, ValueError):
+                return CommandResult(
+                    ok=False,
+                    message="--stdin requires one valid UTF-8 JSON value; no setting was changed",
+                    instance=instance,
+                )
+        else:
+            coerced = coerce_config_value(args.value)
         return set_config_fn(instance, args.path, coerced)
     if args.command == "unset":
         return unset_config_fn(instance, args.path)
@@ -1863,7 +1912,7 @@ def print_channel_command_result(command: str, result: CommandResult) -> None:
         f"command: channel {command}",
         f"result: {_result_message(result)}",
         f"url: {result.instance.url}",
-        f"data_dir: {result.instance.data_dir}",
+        f"local_data_dir: {result.instance.data_dir}",
     ]
     print("\n".join(lines))
 
@@ -1949,41 +1998,18 @@ def _server_completion_message(command: str, result: CommandResult) -> str:
 
 
 def _update_completion_message(
-    result: CommandResult,
-    version_before: str,
-    version_after: str,
+    result: CommandResult, version_before: str, version_after: str
 ) -> str:
-    before_known = version_before != UNKNOWN_VBOT_VERSION
-    after_known = version_after != UNKNOWN_VBOT_VERSION
+    versions = f"checkout version: {version_before} -> {version_after}"
     if result.ok:
-        if before_known and after_known and version_before != version_after:
-            return (
-                "The vBot update completed successfully from version "
-                f"{version_before} to version {version_after}. No problems were detected."
-            )
-        if before_known and after_known:
-            return (
-                f"The vBot update completed successfully. vBot remains on version "
-                f"{version_after}. No problems were detected."
-            )
-        if after_known:
-            return (
-                f"The vBot update completed successfully on version {version_after}. "
-                "No problems were detected."
-            )
-        return "The vBot update completed successfully. No problems were detected."
-
-    if before_known and after_known and version_before != version_after:
         return (
-            "The vBot update did not complete successfully. The checkout now reports version "
-            f"{version_after}, previously {version_before}; review the details above."
+            f"Update steps succeeded ({versions}). The server restart state is "
+            "reported above; a scheduled restart still needs a health check."
         )
-    if before_known:
-        return (
-            f"The vBot update failed. vBot remains on version {version_before}; "
-            "review the details above."
-        )
-    return "The vBot update failed; review the details above."
+    return (
+        f"Update stopped with an error ({versions}). Earlier steps may already "
+        "be applied; use the recovery details above."
+    )
 
 
 def exit_code_for(command: str, result: CommandResult) -> int:

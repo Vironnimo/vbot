@@ -8,6 +8,7 @@ from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
+from cli.model_management import model_refresh
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -219,14 +220,10 @@ def provider_set_key(
     )
 
     if refresh_models:
-        refresh_payload = _rpc_call(instance, "model.refresh_db", {"provider_id": provider_id})
-        if not refresh_payload.ok:
-            return CommandResult(
-                ok=False,
-                message=f"{message}\nrefresh failed: {refresh_payload.message}",
-                instance=instance,
-            )
-        message = f"{message}\n{_format_refresh_result(refresh_payload.data, provider_id)}"
+        refresh = model_refresh(instance, provider_id)
+        return CommandResult(
+            ok=refresh.ok, message=f"{message}\n{refresh.message}", instance=instance
+        )
 
     return CommandResult(
         ok=True,
@@ -314,7 +311,9 @@ def provider_set_enabled(
             )
     if payload.data.get("enabled") and not payload.data.get("configured"):
         lines.append(
-            f"no credential configured yet; set one with: provider set-key {provider_id} <api-key>"
+            "no credential configured; inspect authentication with: vbot provider "
+            f"status {provider_id} --connection {resolved_connection_id} (keep the "
+            "same target options)"
         )
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
@@ -383,7 +382,7 @@ def provider_connect(
     expires_in = payload.data.get("expires_in")
     expires_text = str(expires_in) if isinstance(expires_in, int) else "?"
     resolved_account = _string_or_default(payload.data.get("account"), "default")
-    follow_up_command = f"provider connect-status {provider_id} --connection {connection_id}"
+    follow_up_command = f"vbot provider connect-status {provider_id} --connection {connection_id}"
     if resolved_account != "default":
         follow_up_command = f"{follow_up_command} --account {resolved_account}"
     return CommandResult(
@@ -395,7 +394,7 @@ def provider_connect(
                 f"verification_uri: {verification_uri}",
                 f"expires_in_seconds: {expires_text}",
                 "enter the user code at the verification URI in a browser; then check "
-                f"progress with: {follow_up_command}",
+                f"progress with: {follow_up_command} (keep the same target options)",
             ]
         ),
         instance=instance,
@@ -690,11 +689,3 @@ def _format_account_rows(accounts: object) -> str:
         source = _string_or_default(account.get("source"), "?")
         lines.append(f"  - id: {account_id}  usable: {usable}  source: {source}")
     return "\n".join(lines)
-
-
-def _format_refresh_result(data: Mapping[str, Any], provider_id: str) -> str:
-    resolved_provider_id = _string_or_default(data.get("provider_id"), provider_id)
-    model_count = data.get("model_count")
-    if isinstance(model_count, int) and not isinstance(model_count, bool):
-        return f"refreshed {resolved_provider_id} ({model_count} models)"
-    return f"refreshed {resolved_provider_id}"

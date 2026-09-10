@@ -36,9 +36,17 @@ def session_store_status(instance: ServerInstance) -> CommandResult:
     payload = rpc_call(instance, "session_store.status", {})
     if not payload.ok:
         health = probe_health(instance)
-        if health.reachable:
+        if health.reachable or instance.host not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "::",
+        }:
             return payload.to_command_result()
         projection = _offline_status_projection(instance)
+        projection["source"] = "local"
+        projection["data_dir"] = instance.data_dir.as_posix()
         return CommandResult(
             ok=projection["state"] != "unrecoverable",
             message=json.dumps(projection, ensure_ascii=False, indent=2, sort_keys=True),
@@ -84,6 +92,15 @@ def session_store_incident_acknowledge(instance: ServerInstance, incident_id: st
 
 def session_store_snapshot_list(instance: ServerInstance) -> CommandResult:
     """List verified snapshot summaries without opening a live Session store."""
+    if instance.host not in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"}:
+        return CommandResult(
+            ok=False,
+            message=(
+                "This snapshot command reads the local data directory. Run it on the "
+                "server machine with a loopback target and the matching --data-dir."
+            ),
+            instance=instance,
+        )
 
     marker = read_session_store_marker(instance.data_dir)
     expected_id = None if marker is None else str(marker["database_id"])
@@ -97,6 +114,15 @@ def session_store_snapshot_list(instance: ServerInstance) -> CommandResult:
 
 def session_store_snapshot_verify(instance: ServerInstance, snapshot_id: str) -> CommandResult:
     """Verify that one fixed-root snapshot is complete and identity-matched."""
+    if instance.host not in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"}:
+        return CommandResult(
+            ok=False,
+            message=(
+                "This snapshot command reads the local data directory. Run it on the "
+                "server machine with a loopback target and the matching --data-dir."
+            ),
+            instance=instance,
+        )
 
     try:
         snapshot = _snapshot_path(instance, snapshot_id)
@@ -127,6 +153,15 @@ def session_store_snapshot_restore(
     instance: ServerInstance, snapshot_id: str, confirm: bool
 ) -> CommandResult:
     """Restore one verified snapshot only while the exact target is stopped."""
+    if instance.host not in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"}:
+        return CommandResult(
+            ok=False,
+            message=(
+                "This snapshot command reads the local data directory. Run it on the "
+                "server machine with a loopback target and the matching --data-dir."
+            ),
+            instance=instance,
+        )
 
     if not confirm:
         return CommandResult(

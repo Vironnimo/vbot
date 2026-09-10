@@ -1163,3 +1163,97 @@ def test_configure_console_output_replaces_legacy_windows_encoding(
 
     assert (stdout.encoding, stdout.errors) == ("utf-8", "backslashreplace")
     assert (stderr.encoding, stderr.errors) == ("utf-8", "backslashreplace")
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        ["agent", "update", "a", "--model", "p/m", "--clear-model"],
+        ["agent", "update", "a", "--temperature", "0.4", "--clear-temperature"],
+        ["agent", "update", "a", "--thinking-effort", "none", "--clear-thinking-effort"],
+        ["agent", "update", "a", "--fallback-models", "p/m", "--clear-fallback-models"],
+        ["agent", "update", "a", "--workspace", "C:/x", "--default-workspace"],
+        ["agent", "update", "a", "--project", "p", "--clear-project"],
+        ["agent", "update", "a", "--compaction-policy", "{}", "--clear-compaction-policy"],
+        ["project", "set", "p", "--default-agent", "a", "--clear-default-agent"],
+        ["project", "set", "p", "--default-model", "p/m", "--clear-default-model"],
+        ["project", "set", "p", "--default-temperature", "0.4", "--clear-default-temperature"],
+        [
+            "project",
+            "add",
+            "C:/x",
+            "--default-thinking-effort",
+            "none",
+            "--clear-default-thinking-effort",
+        ],
+        ["provider", "set-key", "openai", "sentinel", "--stdin"],
+        ["config", "set", "debug.enabled", "true", "--stdin"],
+        ["cron", "update", "job", "--session", "s", "--clear-session"],
+        ["config", "--port", "8999", "get", "debug.enabled"],
+    ],
+)
+def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens: list[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli_main.parse_args(tokens)
+    assert error.value.code == 2
+
+
+def test_config_target_is_preserved_after_command() -> None:
+    args = cli_main.parse_args(
+        ["config", "get", "debug.enabled", "--host", "remote", "--port", "8999"]
+    )
+    assert (args.host, args.port) == ("remote", 8999)
+
+
+@pytest.mark.parametrize(
+    "tokens,method,param",
+    [
+        (["provider", "set-key", "openai", "--stdin"], "provider.set_key", "value"),
+        (["config", "set", "skills.directories", "--stdin"], "settings.patch", "operations"),
+    ],
+)
+def test_stdin_reaches_rpc_without_shell_quoting(
+    tmp_path, monkeypatch, capsys, tokens, method, param
+):
+    import io
+
+    import httpx
+
+    from cli import rpc_client
+
+    content = "credential-sentinel" if param == "value" else '["C:/skills with spaces/ä"]'
+    calls = []
+    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO(content))
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    monkeypatch.setattr(rpc_client.httpx, "post", post)
+    cli_main.run(tokens, resolve=lambda **kw: make_instance(tmp_path))
+    assert calls[0]["method"] == method
+    if param == "value":
+        assert calls[0]["params"][param] == content
+        assert content not in capsys.readouterr().out
+    else:
+        assert calls[0]["params"][param] == [
+            {"op": "set", "path": "skills.directories", "value": ["C:/skills with spaces/ä"]}
+        ]
+
+
+def test_invalid_stdin_json_never_posts(tmp_path, monkeypatch):
+    import io
+
+    from cli import rpc_client
+
+    calls = []
+    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO("{broken"))
+    monkeypatch.setattr(rpc_client.httpx, "post", lambda *a, **kw: calls.append(kw))
+    assert (
+        cli_main.run(
+            ["config", "set", "skills.directories", "--stdin"],
+            resolve=lambda **kw: make_instance(tmp_path),
+        )
+        == 1
+    )
+    assert calls == []
