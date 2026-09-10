@@ -466,6 +466,21 @@ class CuaDriver:
         background = (
             background_capture or background_input or arguments.get("delivery_mode") == "background"
         )
+        text_mode = arguments.pop("text_mode", "unicode")
+        if text_mode == "keyboard":
+            if (
+                name != "type_text"
+                or self.desktop is None
+                or background
+                or "element_token" in arguments
+            ):
+                raise ComputerUseError(
+                    "text_mode=keyboard requires foreground type on Windows without an element. "
+                    "Capture with foreground=true and focus the field, or omit "
+                    "text_mode for Unicode text.",
+                    "unsupported_capability",
+                )
+            arguments["text_mode"] = text_mode
         frame_key = (arguments.get("session"), arguments.get("pid"), arguments.get("window_id"))
         geometry = None
         foreground_before = None

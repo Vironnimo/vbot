@@ -32,3 +32,11 @@ For drawing, try one stroke or shape and inspect it before repeating. Check whic
 Check applied, completed_steps, partial, and any error before continuing. When ok=false, any recovery observation and step counts are in artifacts. Dispatched input does not prove the application changed. On partial or uncertain results, inspect the fresh observation and continue only with the remaining work. Use wait for a later image or verify for window and element conditions; do not repeat input merely because observation failed.
 
 When a dialog opens, use its returned target or find it through windows and capture it before entering text. Save through the application and verify that the dialog closed and the expected file or saved state exists before reporting success. An interrupted action may have had partial effects. Follow the user's latest instructions and capture again before further input. The computer Tool remains available. Use close when finished.
+
+## Precision and keyboard-only applications
+
+Windows display scaling is handled by the Tool. Measure coordinates in the returned image; do not multiply them by a monitor DPI scale. For a small menu row or control, zoom first and click using the crop's local coordinates and its view_id. The full-window coordinates belong to the parent view_id. A successful input returns a new full-target observation, so use that image's dimensions and reference next. An explicit resolution choice is retained for subsequent observations of that target.
+
+Use type for focused text fields and key for individual shortcuts. In Windows applications such as Blender that ignore Unicode text input, focus the text field and use type with foreground=true and text_mode=keyboard. This mode sends real key events for characters on the active keyboard layout. In a viewport those characters can invoke commands, so do not treat a command string as harmless field text. For Blender numeric transforms, send the operator and axis with key, enter digits with keyboard mode, and confirm with key. Inspect the result before repeating input.
+
+For click followed by type or key, put the view_id once on sequence. Stop and inspect when a menu or dialog changes the layout. A failed call is not evidence that the application lacks a capability: check the error and completed_steps before drawing conclusions or saving a workaround.
