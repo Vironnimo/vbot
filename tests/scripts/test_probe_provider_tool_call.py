@@ -33,6 +33,7 @@ class _PatchAdapter:
     async def send(self, messages, **kwargs):
         from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 
+        self.messages = list(messages)
         assert kwargs["tools"][0]["parameters"] == APPLY_PATCH_TOOL_PARAMETERS
         return {
             "content": "",
@@ -63,6 +64,42 @@ def test_patch_probe_executes_all_exact_cases_through_production_registry():
                 PROBE._probe_apply_patch_case(_PatchAdapter(case["arguments"]), args, case)
             )
             assert row["passed"], row
+
+
+def test_patch_natural_probe_has_no_conformance_prompt_or_expected_call():
+    args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
+    case = next(c for c in PROBE._apply_patch_cases() if c["id"] == "batch_locations")
+    adapter = _PatchAdapter(
+        {
+            "patch": "*** Update File: settings.txt\n@@\n-timeout=10\n+timeout=20\n"
+            "@@\n-retries=1\n+retries=3\n*** Update File: notes.txt\n@@\n"
+            "-Status: draft\n+Status: ready"
+        }
+    )
+    assert asyncio.run(PROBE._probe_apply_patch_case(adapter, args, case))["passed"]
+    assert adapter.messages == [
+        {
+            "role": "user",
+            "content": case["task"]
+            + "\nCurrent files and their exact contents:\n"
+            + json.dumps(case["before"]),
+        }
+    ]
+
+
+def test_patch_recovery_probe_supplies_real_result_and_rejects_replay():
+    args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
+    case = next(c for c in PROBE._apply_patch_cases() if c["id"] == "recover_without_replay")
+    patch = "*** Update File: one.txt\n@@\n-    timeout = 30\n+    timeout = 60"
+    adapter = _PatchAdapter({"patch": patch})
+    row = asyncio.run(PROBE._probe_apply_patch_case(adapter, args, case))
+    assert row["passed"] and row["recovery_ok"]
+    result = json.loads(adapter.messages[-1]["content"])
+    assert result["data"]["status"] == "partial"
+    assert result["data"]["results"][1]["error"]["candidates"]
+    replay = _PatchAdapter({"patch": "*** Update File: log.txt\n@@\n+done\n" + patch})
+    row = asyncio.run(PROBE._probe_apply_patch_case(replay, args, case))
+    assert not row["passed"] and not row["recovery_ok"] and not row["effect_ok"]
 
 
 class _ReflectionAdapter:
@@ -1824,3 +1861,16 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
     complete = asyncio.run(PROBE._probe_swarm_tool(Adapter(True), args))
     assert complete["passed"]
     assert complete["published_after_feedback"]
+
+
+def test_patch_probe_rejects_importing_a_different_checkout(monkeypatch):
+    import pytest
+
+    from core.tools import apply_patch as patch_module
+
+    args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
+    monkeypatch.setattr(
+        patch_module, "__file__", str(PROJECT_ROOT / "wrong/core/tools/apply_patch.py")
+    )
+    with pytest.raises(RuntimeError):
+        asyncio.run(PROBE._probe_apply_patch(None, args))

@@ -17,7 +17,7 @@ A single runtime-owned `FileReadState` registry remembers, per Session, the `(mt
 
 ## Constraints & Gotchas
 
-- `apply_patch` receives the same Runtime-owned registry. It locks all resolved patch paths in deterministic order, validates an ordered pending state before writes, and stamps successful surviving files including no-ops. Its Update semantics are current-content optimistic matching like `edit`; multi-file failure and byte recheck semantics belong in `apply_patch.md`.
+- `apply_patch` receives the same Runtime-owned registry. It locks all resolved patch paths in deterministic order, attempts ordered hunks/file operations independently against current bytes, rechecks writes, and stamps successful surviving files including no-ops. Its Update semantics are current-content optimistic matching like `edit`; multi-file failure and byte recheck semantics belong in `apply_patch.md`.
 
 - **Stamp key is `(session_id, str(resolved))`** - per Session, by resolved absolute path. Different Sessions (including Sub-agents, which get their own Session) never share read history. State is in-memory only, lost on restart (which forces a re-read only for a later full-file overwrite).
 - **New files are exempt at the `write` call site, not here.** `write` runs `check_stale` only when `resolved.exists()`; `edit` always operates on an existing file but never treats `NEVER_READ` as a conflict. `check_stale` itself reports `NEVER_READ` for any unstamped path regardless of existence - callers own operation-specific policy.
