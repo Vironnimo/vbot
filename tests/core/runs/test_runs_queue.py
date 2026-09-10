@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import core.runs.runs as runs_module
 from core.chat.content_blocks import FileBlock
 from core.sessions import SessionAddress
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -50,9 +51,17 @@ async def test_rejects_second_active_run_for_same_session() -> None:
     assert await first_run.wait() == first_run.id
 
 
-async def test_waiting_work_limit_rejects_the_next_queued_run() -> None:
+async def test_waiting_work_limit_rejects_the_next_queued_run(monkeypatch) -> None:
     manager = ChatRunManager(waiting_work_limit=2)
     release = asyncio.Event()
+    created_items = []
+
+    def record_item(**kwargs):
+        item = QueuedRunItem(**kwargs)
+        created_items.append(item)
+        return item
+
+    monkeypatch.setattr(runs_module, "QueuedRunItem", record_item)
 
     async def execute(_run: Run) -> str:
         await release.wait()
@@ -78,6 +87,8 @@ async def test_waiting_work_limit_rejects_the_next_queued_run() -> None:
             execute,
         )
 
+    assert created_items[-1].future.cancelled()
+    assert manager.waiting_work_count() == 2
     release.set()
     assert await active_run.wait() == "done"
     assert await (await first.future).wait() == "done"

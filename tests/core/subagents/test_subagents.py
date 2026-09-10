@@ -22,6 +22,7 @@ from core.projects import AgentResolutionError
 from core.runs import (
     DEFAULT_RUN_ADMISSION,
     ActiveRunError,
+    ChatRunManager,
     Run,
     RunAdmission,
     RunExecutionOwner,
@@ -33,6 +34,7 @@ from core.subagents.subagents import (
     SubAgentBatchTracker,
     SubAgentCoordinator,
     _handle_subagent_status,
+    _track_subagent_completion,
 )
 from core.subagents.subagents import (
     _handle_subagent as _handle_subagent_impl,
@@ -168,6 +170,43 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
     assert f"subagent:parent-run:{work_id}" not in trigger_service.completion_deliveries
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+
+
+async def test_executor_base_exception_reaches_subagent_completion_watcher(monkeypatch) -> None:
+    class ExecutorAbort(BaseException):
+        pass
+
+    manager = ChatRunManager()
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    delivered = asyncio.Event()
+    original_complete = tracker.on_sub_agent_complete
+
+    def record_completion(parent_key, run_id, result):
+        original_complete(parent_key, run_id, result)
+        delivered.set()
+
+    monkeypatch.setattr(tracker, "on_sub_agent_complete", record_completion)
+
+    async def execute(_run: Run) -> None:
+        raise ExecutorAbort()
+
+    run = await manager.start(_address("worker", "child-session"), execute)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, run.agent_id, run.session_id, run.id)
+    _track_subagent_completion(tracker, parent_key, run, None)
+    assert run._task is not None
+    with pytest.raises(ExecutorAbort):
+        await run._task
+    await asyncio.wait_for(delivered.wait(), timeout=1)
+    owned = tracker.owned_entry("parent", "parent-session", None, run.id)
+    assert owned is not None
+    _, entry = owned
+    assert entry.complete
+    assert entry.result is not None
+    assert entry.result["status"] == "cancelled"
+    assert f"subagent:parent-run:{run.id}" in trigger.completion_deliveries
+    await manager.aclose()
 
 
 async def test_parent_cancel_during_spawn_window_still_cascades_and_tracks(

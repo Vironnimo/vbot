@@ -6,6 +6,7 @@ import subprocess
 import sys
 from textwrap import dedent
 
+import core.runs.runs as runs_module
 from core.sessions import SessionAddress
 
 from .runs_test_support import (
@@ -23,6 +24,127 @@ from .runs_test_support import (
 
 pytestmark = pytest.mark.asyncio
 SUBPROCESS_TIMEOUT_SECONDS = 10
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+async def test_executor_base_exception_settles_run_before_queue_advances(grouped: bool) -> None:
+    class ExecutorAbort(BaseException):
+        pass
+
+    failure: BaseException = ExecutorAbort("test abort")
+    if grouped:
+        failure = BaseExceptionGroup("test group", [failure])
+    manager = ChatRunManager()
+    release = asyncio.Event()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
+
+    async def execute(_run: Run) -> None:
+        await release.wait()
+        raise failure
+
+    async def successor(_run: Run) -> str:
+        assert run.status == RunStatus.CANCELLED
+        assert run.events[-1].type == "run_cancelled"
+        return "successor"
+
+    run = await manager.start(address, execute)
+    queued = await manager.enqueue(address, successor)
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await asyncio.wait_for(run.wait(), timeout=1)
+    assert run._task is not None
+    with pytest.raises(type(failure)) as caught:
+        await run._task
+    assert caught.value is failure
+    assert await asyncio.wait_for(manager.cancel(run.id), timeout=1) is run
+    next_run = await asyncio.wait_for(queued.future, timeout=1)
+    assert await next_run.wait() == "successor"
+    await manager.aclose()
+
+
+@pytest.mark.parametrize("resists_cancel", [False, True])
+async def test_cleanup_deadline_releases_run_even_when_callback_never_settles(
+    monkeypatch: pytest.MonkeyPatch, caplog, resists_cancel: bool
+) -> None:
+    monkeypatch.setattr(runs_module, "_CANCEL_CLEANUP_TIMEOUT_SECONDS", 0.02)
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    cleanup_cancelled = asyncio.Event()
+    release = asyncio.Event()
+    cleanup_tasks = []
+    late_tasks = []
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
+
+    async def cleanup() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        cleanup_tasks.append(task)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_cancelled.set()
+            if resists_cancel:
+                late = asyncio.create_task(release.wait())
+                late_tasks.append(late)
+                run.add_cancel_callback(lambda: late)
+                await release.wait()
+            raise
+
+    async def execute(run: Run) -> None:
+        run.add_cancel_callback(cleanup)
+        started.set()
+        await asyncio.Event().wait()
+
+    async def successor(_run: Run) -> str:
+        return "successor"
+
+    run = await manager.start(address, execute)
+    await started.wait()
+    queued = await manager.enqueue(address, successor)
+    try:
+        await asyncio.wait_for(manager.cancel(run.id), timeout=1)
+        with pytest.raises(RunCancelledError):
+            await asyncio.wait_for(run.wait(), timeout=1)
+        await asyncio.wait_for(cleanup_cancelled.wait(), timeout=1)
+        next_run = await asyncio.wait_for(queued.future, timeout=1)
+        assert await next_run.wait() == "successor"
+        assert run.events[-1].type == "run_cancelled"
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+        await asyncio.wait_for(manager.aclose(), timeout=1)
+    finally:
+        release.set()
+        await asyncio.gather(*cleanup_tasks, *late_tasks, return_exceptions=True)
+    assert all(task.cancelled() for task in late_tasks)
+
+
+async def test_nested_cleanup_shares_the_original_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(runs_module, "_CANCEL_CLEANUP_TIMEOUT_SECONDS", 0.05)
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    nested_completed = False
+
+    async def nested() -> None:
+        nonlocal nested_completed
+        await asyncio.sleep(0.04)
+        nested_completed = True
+
+    async def cleanup() -> None:
+        await asyncio.sleep(0.04)
+        run.add_cancel_callback(nested)
+
+    async def execute(run: Run) -> None:
+        run.add_cancel_callback(cleanup)
+        started.set()
+        await asyncio.Event().wait()
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session"), execute
+    )
+    await started.wait()
+    await asyncio.wait_for(manager.cancel(run.id), timeout=1)
+    assert not nested_completed
+    assert run.status == RunStatus.CANCELLED
+    await manager.aclose()
 
 
 async def test_immediate_async_cleanup_settles_cancel_and_starts_queued_run() -> None:
