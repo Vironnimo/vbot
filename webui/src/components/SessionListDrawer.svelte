@@ -1417,15 +1417,14 @@
     width: 26px;
     height: 26px;
     padding: 0;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: var(--r-sm);
     background: transparent;
     color: var(--text-med);
     cursor: pointer;
     transition:
       background 150ms ease,
-      color 150ms ease,
-      border-color 150ms ease;
+      color 150ms ease;
   }
 
   .session-drawer__filter-trigger:hover,
@@ -1434,12 +1433,10 @@
     outline: none;
     background: var(--accent-12);
     color: var(--text-hi);
-    border-color: var(--accent-40);
   }
 
   .session-drawer__filter-trigger--active {
     color: var(--accent);
-    border-color: var(--accent-40);
   }
 
   .session-drawer__filter-trigger svg {
@@ -1509,12 +1506,12 @@
 
   .session-drawer__list {
     margin: 0;
-    padding: 12px 10px 14px;
+    padding: 8px 10px 10px;
     list-style: none;
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
   }
 
   .session-drawer__more-hint {
@@ -1526,29 +1523,40 @@
     text-align: center;
   }
 
+  /* Flat master-list rows in the shared Agents/Projects list language: no
+     per-row card chrome, a quiet hover/focus tint, and the selected row
+     marked only by the 2px accent rail with an accent-dim fill. */
   .session-row {
     position: relative;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-    box-shadow: inset 3px 0 0 transparent;
+    border-left: 2px solid transparent;
+    border-radius: 0 var(--r-md) var(--r-md) 0;
+    background: transparent;
     transition:
-      border-color 150ms ease,
-      box-shadow 150ms ease,
-      background 150ms ease;
+      background 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .session-row:hover,
+  .session-row:focus-within {
+    background: var(--surface-2);
+  }
+
+  .session-row:has(.session-row__select:focus-visible) {
+    box-shadow: inset 0 0 0 1px var(--accent-40);
   }
 
   .session-row:has(.session-row__select--active) {
-    border-color: var(--accent-40);
-    box-shadow: inset 3px 0 0 var(--accent);
+    border-left-color: var(--accent);
+    background: var(--accent-dim);
   }
 
   .session-row__select {
     width: 100%;
     border: 0;
     border-radius: inherit;
-    padding: 8px 36px 8px 14px;
+    padding: 6px 30px 6px 10px;
     text-align: left;
     background: transparent;
     color: var(--text-hi);
@@ -1557,26 +1565,16 @@
     align-items: flex-start;
     justify-content: flex-start;
     line-height: 1.35;
-    transition:
-      background 150ms ease,
-      border-color 150ms ease;
   }
 
-  .session-row__select:hover,
   .session-row__select:focus-visible {
     outline: none;
-    background: var(--accent-08);
-  }
-
-  .session-row__select--active {
-    background: var(--accent-12);
-    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   .session-row__actions {
     position: absolute;
     top: 50%;
-    right: 7px;
+    right: 6px;
     transform: translateY(-50%);
   }
 
@@ -1591,7 +1589,8 @@
     border-radius: var(--r-sm);
     background: transparent;
     color: var(--text-med);
-    opacity: 0.5;
+    /* Reserved in every row's layout, revealed only on interaction. */
+    opacity: 0;
     cursor: pointer;
     transition:
       background 150ms ease,
@@ -1600,9 +1599,16 @@
   }
 
   .session-row:hover .session-row__menu-trigger,
-  .session-row__menu-trigger:focus-visible,
+  .session-row:focus-within .session-row__menu-trigger,
   .session-row__menu-trigger--open {
     opacity: 1;
+  }
+
+  /* Pointer-coarse devices have no hover, so the row action stays visible. */
+  @media (hover: none) {
+    .session-row__menu-trigger {
+      opacity: 1;
+    }
   }
 
   .session-row__menu-trigger:hover,
@@ -1670,7 +1676,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    padding: 11px 12px;
+    padding: 8px 10px;
   }
 
   .session-row__edit-input {
