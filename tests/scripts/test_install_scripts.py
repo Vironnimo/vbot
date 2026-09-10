@@ -814,25 +814,10 @@ def test_public_installers_are_the_only_fresh_install_entrypoints() -> None:
     assert not (PROJECT_ROOT / "scripts" / "bootstrap.ps1").exists()
 
 
-@pytest.mark.parametrize("available", [True, False])
-def test_linux_browser_prerequisite_reuses_or_installs_chromium(available: bool) -> None:
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is unavailable")
-    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-    start = script.index("ensure_browser()")
-    body = script[start : script.index("\n}\n", start) + 3]
-    # Execute the real prerequisite function with inert package-manager substitutes.
-    harness = (
-        f"installed={1 if available else 0}\n"
-        'have() { [ "$1" = chromium ] && [ "$installed" -eq 1 ]; }\n'
-        'apt_install() { echo "install:$*"; installed=1; }\n'
-        'fail() { echo "$*" >&2; exit 1; }\n' + body + "\nensure_browser\n"
-    )
-    result = subprocess.run([bash, "-s"], input=harness.encode(), capture_output=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == (b"" if available else b"install:chromium")
-    assert 'if [ "$DESKTOP_CLIENT" -eq 0 ]; then\n    ensure_browser\nfi' in script
+def test_linux_installer_leaves_optional_browser_setup_to_the_skill() -> None:
+    script = (PROJECT_ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+    assert "ensure_browser" not in script
+    assert "apt_install chromium" not in script
 
 
 @pytest.mark.parametrize("doc_name", ["README.md", "USAGE.md"])

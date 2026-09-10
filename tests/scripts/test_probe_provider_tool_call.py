@@ -439,23 +439,6 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
     }
 
 
-def test_browser_workflow_probe_rejects_a_claim_without_submission_or_download():
-    class Adapter:
-        async def send(self, *args, **kwargs):
-            return {"content": "Registered and downloaded. Reference B-739251.", "tool_calls": []}
-
-        def normalize_response(self, raw, **kwargs):
-            return raw
-
-    args = PROBE._parser().parse_args(["--scenario", "browser_workflow"])
-    result = asyncio.run(PROBE._probe_browser_workflow(Adapter(), args))
-    assert result["passed"] is False
-    assert result["submission_verified"] is False
-    assert result["download_verified"] is False
-    assert result["skill_activated"] is False
-    assert result["actions"] == []
-
-
 def test_mcp_workflow_probe_rejects_an_unsupported_completion_claim():
     class Adapter:
         async def send(self, *args, **kwargs):

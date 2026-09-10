@@ -1576,7 +1576,6 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "analyze_image",
         "apply_patch",
         "bash",
-        "browser",
         "calendar",
         "computer",
         "cron",
@@ -1612,17 +1611,15 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         tool.name for tool in runtime.tools.list_tools(include_catalog_hidden=False)
     }
     assert [skill.name for skill in runtime.skills.list_all()] == [
-        "browser-use",
         "coding-agents",
         "computer-use",
         "free-models",
         "home-assistant",
         "pdf",
+        "playwright-cli",
         "teach",
         "vbot-cli",
         "weather",
     ]
-    assert runtime.tools.get("browser").requires_opt_in
-    assert not runtime.tools.get("browser").parallel_safe
     assert runtime.skills.invalid_diagnostics() == []
     assert runtime.storage.layout.sessions_db_path.is_file()
