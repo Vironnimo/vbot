@@ -2339,6 +2339,43 @@ def test_format_elapsed_duration_renders_compact_durations(seconds: float, expec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["foreground", "auto"])
+async def test_direct_process_cancel_returns_user_abort_without_run_cancel(
+    manager, tmp_path, monkeypatch, mode
+):
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    ready = asyncio.Event()
+    context = replace(
+        make_context(tmp_path), background_registration_hook=lambda _callback: ready.set()
+    )
+    task = asyncio.create_task(
+        bash_handler(
+            context,
+            {
+                "command": "import time; time.sleep(30)",
+                "mode": mode,
+                **({"background_after_seconds": 60} if mode == "auto" else {}),
+            },
+            manager,
+        )
+    )
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        processes = manager.list_processes(AGENT_ID)
+        assert len(processes) == 1
+        await manager.cancel_for_user(processes[0].process_id, AGENT_ID)
+        result = await asyncio.wait_for(task, timeout=5)
+        assert not context.is_cancelled()
+        assert not context.was_cancelled_by_user()
+        assert result["ok"] is False
+        assert result["error"]["code"] == "cancelled_by_user"
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
     manager: ProcessManager,
     tmp_path: Path,

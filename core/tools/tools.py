@@ -1596,7 +1596,17 @@ class ToolExecutor:
                 )
                 for index, tool_call in parallel_group
             ]
-            group_results = await asyncio.gather(*tasks)
+            try:
+                group_results = await asyncio.gather(*tasks)
+            except BaseException:
+                # A child failure does not make gather cancel its siblings.
+                # Keep ownership until their cancellation cleanup has settled,
+                # then preserve the original abort for the Run boundary.
+                for task in tasks:
+                    if not task.done() and not task.cancelling():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             for (index, _tool_call), result in zip(
                 parallel_group,
                 group_results,
