@@ -50,7 +50,11 @@ def extensions_reload(instance: ServerInstance) -> CommandResult:
         return CommandResult(
             ok=False, message="RPC result missing extensions list", instance=instance
         )
-    return CommandResult(ok=True, message=_format_reload_summary(extensions), instance=instance)
+    return CommandResult(
+        ok=not any(isinstance(ext, dict) and ext.get("status") == "failed" for ext in extensions),
+        message=_format_reload_summary(extensions),
+        instance=instance,
+    )
 
 
 def _format_reload_summary(extensions: Sequence[Any]) -> str:
@@ -109,9 +113,7 @@ def _set_disabled(instance: ServerInstance, name: str, *, disable: bool) -> Comm
             instance=instance,
         )
     if not disable and name not in currently_disabled:
-        return CommandResult(
-            ok=True, message=f"extension '{name}' is already enabled (no change)", instance=instance
-        )
+        return _enabled_result(instance, name)
 
     if disable:
         disabled = [*currently_disabled, name]
@@ -136,24 +138,22 @@ def _set_disabled(instance: ServerInstance, name: str, *, disable: bool) -> Comm
 
 
 def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
-    """Report a live enable, warning when the freshly-loaded extension is not loaded.
-
-    Enabling rebuilds the extension layer live, so we re-list and check the target:
-    a non-``loaded`` outcome (it failed to import, or is overridden by another copy)
-    is surfaced as a warning even though the toggle itself succeeded. If the re-list
-    fails, the enable is still reported as a plain success.
-    """
-    lines = [f"extension '{name}' enabled (applied live)"]
+    """Report the saved switch separately from observed activation."""
+    lines = [f"extension '{name}' enabled (saved)"]
     extensions = _load_extensions(instance)
-    if not isinstance(extensions, CommandResult):
-        record = _find_extension(extensions, name)
-        if record is not None and record.get("status") != "loaded":
-            status = _string_or_default(record.get("status"), "?")
-            lines.append(f"warning: '{name}' is {status}")
-            error = record.get("error")
-            if isinstance(error, str) and error:
-                lines.append(f"  error: {error}")
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    if isinstance(extensions, CommandResult):
+        lines.append(f"activation check failed: {extensions.message}")
+        lines.append(
+            "Inspect vbot extensions list with the same target; the enabled "
+            "setting is already saved."
+        )
+        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    record = _find_extension(extensions, name)
+    loaded = record is not None and record.get("status") == "loaded"
+    lines.append(f"status: {record.get('status', 'unknown') if record else 'missing'}")
+    if record and record.get("error"):
+        lines.append(f"error: {record['error']}")
+    return CommandResult(ok=loaded, message="\n".join(lines), instance=instance)
 
 
 def extensions_show(instance: ServerInstance, name: str) -> CommandResult:
@@ -342,6 +342,9 @@ def _format_settings_field(declaration: dict[str, Any], config: dict[str, Any]) 
     field_type = _string_or_default(declaration.get("type"), "?")
     label = declaration.get("label")
     suffix = f"   {label}" if isinstance(label, str) and label else ""
+    for attribute in ("description", "options", "min", "max", "step", "required"):
+        if attribute in declaration:
+            suffix += f"\n    {attribute}: {json.dumps(declaration[attribute], ensure_ascii=False)}"
 
     if field_type == "secret":
         state = "set" if declaration.get("set") else "not set"
@@ -513,8 +516,23 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
         return catalog.to_command_result()
     operations = catalog.data.get("operations", [])
     if tokens in (["operations"], ["--help"]):
+        summary = [
+            {key: item.get(key) for key in ("name", "description", "secret")} for item in operations
+        ]
         return CommandResult(
-            ok=True, message=json.dumps({"operations": operations}, indent=2), instance=instance
+            ok=True,
+            message=json.dumps(
+                {
+                    "operations": summary,
+                    "next": (
+                        f"vbot extensions {name} <operation> --help for the complete argument "
+                        "schema; keep the same target options"
+                    ),
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            instance=instance,
         )
     operation = next((item for item in operations if item["name"] == tokens[0]), None)
     if operation is None:

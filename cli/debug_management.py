@@ -99,6 +99,8 @@ def _format_probe_result(provider_id: str, data: Mapping[str, Any]) -> str:
         f"trace_id={trace_id}"
     ]
 
+    if trace_id != "-":
+        lines.append(f"full response: vbot debug trace {trace_id} (keep the same target options)")
     preview = data.get("model_preview")
     if not isinstance(preview, dict):
         return "\n".join(lines)
@@ -116,7 +118,6 @@ def _format_probe_result(provider_id: str, data: Mapping[str, Any]) -> str:
             if isinstance(model, dict):
                 model_id = _string_or_default(model.get("id"), "?")
                 lines.append(f"- {model_id}")
-    lines.append("full raw response stored in the trace; read it with: debug trace " + trace_id)
     return "\n".join(lines)
 
 

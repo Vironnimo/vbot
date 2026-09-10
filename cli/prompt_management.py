@@ -38,6 +38,39 @@ def prompt_list(instance: ServerInstance, scope: str = "default") -> CommandResu
     return CommandResult(ok=True, message=message, instance=instance)
 
 
+def prompt_show(instance: ServerInstance, block_id: str, scope: str = "default") -> CommandResult:
+    """Read one complete block in the scope that will be edited."""
+    try:
+        params = _scope_params(scope)
+    except ValueError as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance)
+    payload = _rpc_call(instance, "prompt.list", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    blocks = payload.data.get("blocks")
+    if not isinstance(blocks, list):
+        return CommandResult(
+            ok=False, message="RPC result missing prompt blocks list", instance=instance
+        )
+    block = next(
+        (item for item in blocks if isinstance(item, dict) and item.get("id") == block_id), None
+    )
+    if block is None:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"prompt block not found: {block_id}; use vbot prompt list with the "
+                "same scope and target"
+            ),
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True,
+        message=json.dumps({"scope": scope, **block}, ensure_ascii=False, indent=2),
+        instance=instance,
+    )
+
+
 def prompt_update(
     instance: ServerInstance, block_id: str, content: str, scope: str = "default"
 ) -> CommandResult:

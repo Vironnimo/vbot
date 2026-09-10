@@ -200,7 +200,7 @@ def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:
     payload = _rpc_call(instance, "project.detect", params)
     if not payload.ok:
         return payload.to_command_result()
-    target = cwd if cwd else "the current working directory"
+    target = cwd if cwd else "the server working directory"
     if payload.data.get("cwd_exists") is not True:
         return CommandResult(
             ok=True,

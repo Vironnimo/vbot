@@ -93,7 +93,6 @@ def test_log_read_posts_rpc_and_formats_entries(
     assert result.instance == instance
     for value in (
         "2026-05-11",
-        "cursor-1",
         "2026-05-11 09:00:00",
         "info",
         "vbot.server.app",
@@ -126,3 +125,30 @@ def test_run_dispatches_log_read(
     assert exit_code == 0
     assert calls == [(instance, "2026-05-11")]
     assert capsys.readouterr().out.splitlines() == ["log: 2026-05-11"]
+
+
+def test_log_filter_precedes_tail_and_preserves_multiline(tmp_path, monkeypatch):
+    from cli import log_management as management
+
+    entries = [
+        {"level": "error", "message": f"sentinel-{i}", "continuation": "traceback-sentinel"}
+        for i in range(120)
+    ]
+    entries.append({"level": "info", "message": "excluded-info"})
+    monkeypatch.setattr(
+        management.httpx,
+        "post",
+        lambda *a, **kw: httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"entries": entries, "file": "test.log", "cursor": "unused-handoff"},
+            },
+        ),
+    )
+    result = management.log_read(make_instance(tmp_path), "test.log", limit=2, level="error")
+    assert result.ok
+    assert "sentinel-118" in result.message and "sentinel-119" in result.message
+    assert "sentinel-117" not in result.message and "excluded-info" not in result.message
+    assert "traceback-sentinel" in result.message
+    assert "unused-handoff" not in result.message

@@ -300,7 +300,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_doctor_parsers(subparsers)
     tokens = list(sys.argv[1:] if argv is None else argv)
     operation_args = _extension_operation_args(tokens)
-    return operation_args if operation_args is not None else parser.parse_args(tokens)
+    args = operation_args if operation_args is not None else parser.parse_args(tokens)
+    for clear, value in (
+        ("clear_model", "model"),
+        ("clear_fallback_models", "fallback_models"),
+        ("clear_temperature", "temperature"),
+        ("clear_thinking_effort", "thinking_effort"),
+        ("clear_compaction_policy", "compaction_policy"),
+        ("default_workspace", "workspace"),
+        ("clear_project", "project"),
+        ("clear_default_agent", "default_agent"),
+        ("clear_default_model", "default_model"),
+        ("clear_default_temperature", "default_temperature"),
+        ("clear_default_thinking_effort", "default_thinking_effort"),
+    ):
+        if getattr(args, clear, False) and getattr(args, value, None) is not None:
+            parser.error(
+                f"--{clear.replace('_', '-')} cannot be combined with --{value.replace('_', '-')}"
+            )
+    return args
 
 
 def _extension_operation_args(tokens: list[str]) -> argparse.Namespace | None:
@@ -575,7 +593,14 @@ def _add_agent_change_arguments(
         nargs="*",
         help="Requires --tool-access-mode; omitted or empty clears denials in the replacement",
     )
-    parser.add_argument("--allowed-skills", nargs="*", help="Replace the full skill allowlist")
+    parser.add_argument(
+        "--allowed-skills",
+        nargs="*",
+        help=(
+            "Replace allowed shared/global/bundled Skills; private and active "
+            "Project Skills remain allowed"
+        ),
+    )
     parser.add_argument(
         "--subagent-allow",
         nargs="*",
@@ -825,7 +850,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "cwd",
         nargs="?",
         metavar="<path>",
-        help="Directory to inspect; omitted uses the current working directory",
+        help="Directory on the server; omission inspects the server working directory",
     )
 
 
@@ -865,9 +890,21 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         session_subparsers, "list", SESSION_HELP["list"], example="session list orchestrator@vbot"
     )
     list_parser.add_argument(
-        "agent", metavar="<agent>", help="Agent whose sessions to list, as agent or agent@projekt"
+        "agent", metavar="<agent>", help="Agent whose sessions to list, as agent or agent@project"
     )
 
+    list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Page size (default: 100; server validates the range)",
+    )
+    list_parser.add_argument(
+        "--cursor", type=_json_object_argument, help="Continuation JSON returned as next_cursor"
+    )
+    list_parser.add_argument(
+        "--all", action="store_true", help="Fetch every page; output may be large"
+    )
     create_parser = _add_command_parser(
         session_subparsers,
         "create",
@@ -875,7 +912,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         example="session create orchestrator@vbot --make-current",
     )
     create_parser.add_argument(
-        "agent", metavar="<agent>", help="Agent to create a session for, as agent or agent@projekt"
+        "agent", metavar="<agent>", help="Agent to create a session for, as agent or agent@project"
     )
     create_parser.add_argument(
         "--id", metavar="<session-id>", help="Explicit session id; omitted means server-generated"
@@ -893,7 +930,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         example="session delete assistant <session-id> --yes",
     )
     delete_parser.add_argument(
-        "agent", metavar="<agent>", help="Agent owning the session, as agent or agent@projekt"
+        "agent", metavar="<agent>", help="Agent owning the session, as agent or agent@project"
     )
     delete_parser.add_argument("session", metavar="<session-id>", help="Session id to delete")
     delete_parser.add_argument(
@@ -934,13 +971,19 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         session_subparsers,
         "set-compaction-policy",
         SESSION_HELP["set-compaction-policy"],
-        example='session set-compaction-policy assistant <session-id> --policy "{}"',
+        example="session set-compaction-policy assistant <session-id> --clear",
     )
     policy_parser.add_argument("agent", metavar="<agent>", help="Agent address")
     policy_parser.add_argument("session", metavar="<session-id>", help="Session id")
     policy_group = policy_parser.add_mutually_exclusive_group(required=True)
     policy_group.add_argument(
-        "--policy", type=_json_object_argument, metavar="<json-object>", help="Session Policy"
+        "--policy",
+        type=_json_object_argument,
+        metavar="<json-object>",
+        help=(
+            "Complete Session Policy with enabled, trigger, and strategy; "
+            "inspect session list first"
+        ),
     )
     policy_group.add_argument(
         "--clear", action="store_true", help="Clear the override and resume live inheritance"
@@ -1276,6 +1319,14 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         prompt_subparsers, "list", PROMPT_HELP["list"], example="prompt list"
     )
     _add_prompt_scope_argument(list_parser)
+    show = _add_command_parser(
+        prompt_subparsers,
+        "show",
+        "Read one complete prompt block before editing",
+        example="prompt show core:tools",
+    )
+    show.add_argument("block_id", metavar="<block-id>", help="Exact block id from prompt list")
+    _add_prompt_scope_argument(show)
 
     update_parser = _add_command_parser(
         prompt_subparsers,
@@ -1356,7 +1407,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     preview_parser.add_argument(
         "agent",
         metavar="<agent>",
-        help="Agent whose system prompt to render, as agent or agent@projekt",
+        help="Agent whose system prompt to render, as agent or agent@project",
     )
     _add_prompt_scope_argument(preview_parser)
 
@@ -1381,7 +1432,18 @@ def _add_log_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     read_parser = _add_command_parser(
         log_subparsers, "read", LOG_HELP["read"], example="log read 2026-06-11.log"
     )
-    read_parser.add_argument("file", metavar="<log-file>", help="Daily log file name to read")
+    read_parser.add_argument("file", metavar="<log-file>", help="Daily log file name from log list")
+    read_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Print the newest N matching entries (default: 100; 0 prints all)",
+    )
+    read_parser.add_argument(
+        "--level",
+        choices=("debug", "info", "warn", "error", "critical", "unknown"),
+        help="Show only this exact log level",
+    )
 
 
 def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1432,9 +1494,10 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         default="api_key",
         help="Connection authentication type",
     )
-    custom_save_parser.add_argument(
-        "--api-key",
-        help="Optional API key stored in the target data-dir .env",
+    key_source = custom_save_parser.add_mutually_exclusive_group()
+    key_source.add_argument("--api-key", help="Optional API key; prefer --api-key-stdin")
+    key_source.add_argument(
+        "--api-key-stdin", action="store_true", help="Read the optional API key from UTF-8 stdin"
     )
     custom_save_parser.add_argument(
         "--models-endpoint",
@@ -1503,16 +1566,25 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "set-key",
         PROVIDER_HELP["set-key"],
-        example="provider set-key openai sk-... --refresh-models",
+        example="provider set-key openai --stdin --refresh-models",
     )
     set_key_parser.description = (
         "Write an API key to the target data-dir .env through the server RPC contract. "
-        "Example: vbot provider set-key openai sk-... --refresh-models"
+        "Example: vbot provider set-key openai --stdin --refresh-models"
     )
     set_key_parser.add_argument(
         "provider", metavar="<provider-id>", help="Provider id to configure"
     )
-    set_key_parser.add_argument("value", metavar="<api-key>", help="API key value to persist")
+    key_source = set_key_parser.add_mutually_exclusive_group(required=True)
+    key_source.add_argument(
+        "value",
+        nargs="?",
+        metavar="<api-key>",
+        help="API key; prefer --stdin to keep it out of shell arguments",
+    )
+    key_source.add_argument(
+        "--stdin", action="store_true", help="Read the API key from UTF-8 stdin"
+    )
     set_key_parser.add_argument(
         "--connection",
         metavar="<provider:connection-id>",
@@ -1822,6 +1894,23 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers, "read", SKILL_HELP["read"], example="skill read --scope global"
     )
     _add_skill_scope_argument(read_parser)
+    read_parser.add_argument(
+        "name",
+        nargs="?",
+        metavar="<skill-name>",
+        help="Read only this Skill; omission reads the whole editable scope",
+    )
+    inspect = _add_command_parser(
+        skill_subparsers,
+        "inspect",
+        "Read one exact source package from the inventory",
+        example="skill inspect <inventory-id>",
+    )
+    inspect.add_argument(
+        "id",
+        metavar="<inventory-id>",
+        help="Exact id from skill inventory, including read-only sources",
+    )
 
     for command in ("create", "update"):
         command_parser = _add_command_parser(
@@ -1955,6 +2044,13 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     cron_subparsers = cron_parser.add_subparsers(dest="command", required=True)
 
     _add_command_parser(cron_subparsers, "list", CRON_HELP["list"], example="cron list")
+    show = _add_command_parser(
+        cron_subparsers,
+        "show",
+        "Show the complete saved job and prompt",
+        example="cron show <job-id>",
+    )
+    show.add_argument("id", metavar="<job-id>", help="Exact id from cron list")
 
     create_parser = _add_command_parser(
         cron_subparsers,
@@ -1966,7 +2062,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         ),
     )
     create_parser.add_argument(
-        "agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
+        "agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@project"
     )
     create_parser.add_argument(
         "--name",
@@ -1993,7 +2089,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     update_parser.add_argument("id", metavar="<job-id>", help="Cron job id to update")
     update_parser.add_argument(
-        "--agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
+        "--agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@project"
     )
     update_parser.add_argument("--name", help="Replace the human-readable job name")
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
@@ -2005,7 +2101,13 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         metavar="<count>",
         help="Replace the number of remaining fires",
     )
-    _add_cron_session_argument(update_parser)
+    session_group = update_parser.add_mutually_exclusive_group()
+    session_group.add_argument(
+        "--session", metavar="<session-id>", help="Replace the pinned Session"
+    )
+    session_group.add_argument(
+        "--clear-session", action="store_true", help="Create a fresh Session for each future fire"
+    )
     update_parser.add_argument(
         "--status", choices=CRON_STATUSES, help="Set the job status directly"
     )
@@ -2043,7 +2145,7 @@ def _add_cron_session_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--session",
         metavar="<session-id>",
-        help="Run in this existing Session; omit to create a fresh Session for every fire",
+        help="Run in this existing Session; creation defaults to a fresh Session per fire",
     )
 
 
@@ -2057,6 +2159,13 @@ def _add_bootstrap_parsers(
     )
     commands = bootstrap_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(commands, "list", BOOTSTRAP_HELP["list"], example="bootstrap list")
+    show = _add_command_parser(
+        commands,
+        "show",
+        "Show the complete saved job and prompt",
+        example="bootstrap show <job-id>",
+    )
+    show.add_argument("id", metavar="<job-id>", help="Exact id from bootstrap list")
     create = _add_command_parser(
         commands,
         "create",
@@ -2070,9 +2179,13 @@ def _add_bootstrap_parsers(
         "agent",
         nargs="?",
         metavar="<agent>",
-        help="Agent that runs the job, as agent or agent@projekt",
+        help="Agent that runs the job, as agent or agent@project",
     )
-    create.add_argument("--current-session", action="store_true")
+    create.add_argument(
+        "--current-session",
+        action="store_true",
+        help="Use the current vBot Run Agent and Session; available only inside its Bash command",
+    )
     create.add_argument("--name", help="Optional human-readable job name")
     create.add_argument("--prompt", required=True, help="Prompt injected after startup")
     create.add_argument("--mode", required=True, choices=BOOTSTRAP_MODES)
@@ -2144,7 +2257,7 @@ def _add_config_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         description=AREA_HELP["config"],
     )
     config_subparsers = config_parser.add_subparsers(dest="command")
-    _add_target_arguments(config_parser)
+    config_parser.set_defaults(host=DEFAULT_HOST, port=None, data_dir=None)
 
     _add_command_parser(
         config_subparsers,
@@ -2200,8 +2313,12 @@ def _add_config_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         example="config set web_search.provider searxng",
     )
     set_parser.add_argument("path", metavar="<path>", help="Public Settings path")
-    set_parser.add_argument(
-        "value", metavar="<value>", help="New value; parsed as JSON, falling back to plain text"
+    value_source = set_parser.add_mutually_exclusive_group(required=True)
+    value_source.add_argument(
+        "value", nargs="?", metavar="<value>", help="JSON value or plain text"
+    )
+    value_source.add_argument(
+        "--stdin", action="store_true", help="Read an exact JSON value from UTF-8 stdin"
     )
 
     unset_parser = _add_command_parser(

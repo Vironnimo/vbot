@@ -3,7 +3,8 @@
 ``vbot update`` advances the installed checkout, refreshes dependencies and the
 WebUI when they changed, and restarts the server. It is a local lifecycle
 command like the ``server`` family, not an RPC call: it operates on the repo the
-running ``vbot`` was installed from, and never touches the ``~/.vbot`` data dir.
+running ``vbot`` was installed from, preserving runtime data and creating a
+verified Session snapshot before code changes.
 
 Two tracks are auto-detected from the checkout: a branch (e.g. ``main``) is the
 *dev* track (``git pull`` + local WebUI build); a detached checkout on a release

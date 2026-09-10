@@ -254,3 +254,5 @@ transactionally removes its Board, participants, events and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
+
+Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `extension.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.

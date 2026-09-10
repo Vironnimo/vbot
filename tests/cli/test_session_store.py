@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from cli import session_store_management
@@ -22,6 +23,41 @@ def _instance(tmp_path: Path) -> ServerInstance:
         url="http://127.0.0.1:8420",
         log_path=tmp_path / "server.log",
     )
+
+
+def test_remote_store_commands_never_inspect_local_data(tmp_path: Path, monkeypatch) -> None:
+    instance = replace(_instance(tmp_path), host="remote.example", url="http://remote.example:8420")
+
+    class Payload:
+        ok = False
+
+        @staticmethod
+        def to_command_result() -> CommandResult:
+            return CommandResult(ok=False, message="remote RPC unavailable", instance=instance)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("remote target must not read or restore local state")
+
+    monkeypatch.setattr(session_store_management, "rpc_call", lambda *_args: Payload())
+    monkeypatch.setattr(
+        session_store_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    monkeypatch.setattr(session_store_management, "_offline_status_projection", forbidden)
+    monkeypatch.setattr(session_store_management, "read_session_store_marker", forbidden)
+    monkeypatch.setattr(session_store_management, "stop_server", forbidden)
+
+    status = session_store_management.session_store_status(instance)
+    assert not status.ok
+    assert status.message == "remote RPC unavailable"
+    for result in (
+        session_store_management.session_store_snapshot_list(instance),
+        session_store_management.session_store_snapshot_verify(instance, "snapshot"),
+        session_store_management.session_store_snapshot_restore(instance, "snapshot", True),
+    ):
+        assert not result.ok
+        assert "local data directory" in result.message
 
 
 def test_dispatch_routes_nested_session_store_commands(tmp_path: Path) -> None:

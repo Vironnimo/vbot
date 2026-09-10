@@ -1,6 +1,6 @@
 # Agents, Projects, Sessions
 
-Address form: a bare id (`assistant`) targets an identity agent; `agent@projekt` (e.g. `orchestrator@vbot`) targets a project agent. Accepted by `session list|create|delete`, `cron create|update`, and `prompt preview`.
+Address form: a bare id (`assistant`) targets an identity agent; `agent@project` (e.g. `orchestrator@vbot`) targets a project agent. Accepted by `session list|create|delete`, `cron create|update`, and `prompt preview`.
 
 ## Agents
 
@@ -14,16 +14,18 @@ vbot agent reorder <agent-id>...
 vbot agent delete <agent-id>
 ```
 
-Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
+Use command help for the full argument syntax. Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
+
+On update, omitted fields remain unchanged. A setter and its matching `--clear-*` flag cannot be combined.
 
 Gotchas:
 
 - `--model` takes `<provider>/<model-id>`, optionally pinned `::<connection>[:<account>]` (e.g. `openai/gpt-5.2::api-key:work`). `--fallback-models` repeats once per chain entry; list order is priority order (max 5, no duplicates).
 - An Identity Agent may be created without `--model` so onboarding can finish before Provider setup. If neither the Agent nor global defaults supply an effective Model, the saved result warns that the Agent cannot run and prints the recovery commands. Run `vbot model list --task chat`, then `vbot agent update <agent-id> --model <model-id>` using an id from that output.
 - Tool access is a complete policy replacement. Always pass `--tool-access-mode` with `--tool-allow` or `--tool-deny`. `all` selects all normally available Tools; `selected --tool-allow <name> ...` selects named Tools; `none` disables Tools. In selected mode, omitting `--tool-allow` selects no direct Tools. `--tool-deny` applies absolute denials; omitting it while replacing the policy clears existing denials. Inspect `agent show` first and repeat every selection/denial to preserve. Tool names are exact; `*` is invalid.
-- `--allowed-skills` replaces the whole Skill allowlist; no values selects none, while `'*'` allows every available Skill. Quote the wildcard in shells that expand it. Omitted Tool/Skill flags leave that configuration unchanged on update.
+- `--allowed-skills` replaces the whole Skill allowlist; no values excludes shared/global/bundled Skills, while `'*'` allows every available Skill. Quote the wildcard in shells that expand it. Private Skills and the active Project’s effective Skills remain allowed independently; the master disable policy still wins. Omitted Tool/Skill flags leave that configuration unchanged on update.
 - `--subagent-allow` replaces `tools.subagent.allowed_agents`; use bare Identity Agent ids or qualified `agent@project` addresses, and pass the flag with no values for self-delegation only. To disable delegation entirely, deny the `subagent` Tool in the Tool access policy.
-- `--compaction-policy` replaces the full Agent Policy object. Pass JSON as one shell argument. `--clear-compaction-policy` resumes live inheritance from global Compaction settings.
+- `--compaction-policy` replaces the full Agent Policy object, requiring `enabled`, `trigger`, and `strategy`. Read the current effective Policy from `agent show`, preserve its other fields, and pass JSON as one shell argument. `--clear-compaction-policy` resumes live inheritance from global Compaction settings.
 - `--clear-model` and `--clear-fallback-models` remove the Agent tier so the corresponding global default can apply.
 - `--clear-temperature`/`--clear-thinking-effort` drop the override so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear.
 - `--memory-prompt-mode` controls which Workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
@@ -62,6 +64,7 @@ vbot project detect [<path>]
 vbot project rm <project-id> [--copy-rooted-agent-files]
 ```
 
+- Paths refer to the server machine; prefer absolute paths when it differs from the CLI machine. `detect` without a path inspects the server working directory.
 - `add` needs only the repo path; everything else is optional. An empty folder is a valid project (empty team, clean report) — not an error.
 - Prefer the minimal `project add <path> [--name ...]`. Do not inspect the repo first just to choose `--format`; omission uses vBot's own auto-detection. Inspect or specify the Source Format only when the user asks for it or the reported scan needs correction.
 - `add` and `show` print the scan preview: the team plus a report of anything unclean (bad or unconfigured model, slug collision, unslugifiable name). `show` re-scans the repo live; `set --cwd` re-points and re-scans.
@@ -85,9 +88,9 @@ vbot session delete <agent> <session-id> --yes
 vbot session link-channel <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
 ```
 
-- `list` shows Session ids, titles, created/last-active timestamps, the linked source Channel, and own/effective Session Policy when present.
+- `list` returns at most 100 Sessions by default. Use `--limit <count>` and the returned `--cursor <json-object>` for the next page, or `--all` for every page. Keep the same Agent and server target. It shows Session ids, titles, created/last-active timestamps, the linked source Channel, and own/effective Session Policy when present.
 - `create` without `--id` lets the server generate the id; `--make-current` switches the agent's active session.
 - `fork` copies the complete Session into a fresh id. `--target-agent` may re-home it to another Identity or Project Agent; the result prints the new id and fork provenance.
-- `rename --clear-title` restores automatic display. `set-compaction-policy --clear` resumes live Agent/global inheritance; a set result prints override, effective Policy, and source.
+- `rename --clear-title` restores automatic display. `set-compaction-policy --clear` resumes live Agent/global inheritance. Setting requires the complete `enabled`, `trigger`, and `strategy` object; read and preserve the relevant Policy from `list` before editing. The result prints override, effective Policy, and source.
 - `delete` requires `--yes`; the session is archived (recoverable), not erased.
 - `link-channel` routes the session's outbound replies to a platform conversation (e.g. a Telegram chat id).

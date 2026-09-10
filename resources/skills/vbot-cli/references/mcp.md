@@ -4,6 +4,8 @@ All installation commands, application add-ons, processes, working directories, 
 
 ## Configure and grant
 
+All abbreviated commands in this reference start with `vbot extensions mcp`; for example, `status <id>` means `vbot extensions mcp status <id>`. Repeat the same host/port target options.
+
 Discover the installed interface with `vbot extensions mcp operations` and `vbot extensions mcp <operation> --help`. Inspect `list` and `status` before changing an existing connection. Enable the Extension with `vbot extensions enable mcp` if needed.
 
 `save --stdin` replaces a complete record using `{"connection":{...}}`. Preserve existing fields and grants when editing. Use `stdio` with `command`, exact `args`, and optional absolute `cwd`; use `http` for Streamable HTTP or `sse` for legacy HTTP/SSE, with `url`. Configure OAuth with `oauth: true` and any required `oauth_redirect_uri`.

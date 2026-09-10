@@ -589,6 +589,20 @@ async def test_bundled_package_entrypoint_registers_management(tmp_path):
 
     assert {"save", "grant", "test", "invoke", "respond", "cancel-job"} <= names
 
+    for extension in ("mcp", "swarm"):
+        descriptions = registry.management(extension).describe()
+        assert descriptions
+        assert all(item["description"] != item["name"] for item in descriptions)
+        assert len({item["description"] for item in descriptions}) == len(descriptions)
+
+    from resources.extensions.swarm.store import _validate_profile
+
+    profile_save = next(
+        item for item in registry.management("swarm").describe() if item["name"] == "profiles.save"
+    )
+    for example in profile_save["parameters"]["properties"]["profile"]["examples"]:
+        assert _validate_profile(example)["participants"]
+
 
 @pytest.mark.asyncio
 async def test_task_payload_survives_the_real_wire(host, tmp_path):

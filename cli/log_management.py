@@ -26,7 +26,9 @@ def log_list(instance: ServerInstance) -> CommandResult:
     )
 
 
-def log_read(instance: ServerInstance, file_name: str) -> CommandResult:
+def log_read(
+    instance: ServerInstance, file_name: str, *, limit: int = 100, level: str | None = None
+) -> CommandResult:
     """Read one log file via `log.read` RPC."""
 
     payload = _rpc_call(instance, "log.read", {"file": file_name})
@@ -36,10 +38,19 @@ def log_read(instance: ServerInstance, file_name: str) -> CommandResult:
     if not isinstance(entries, list):
         return CommandResult(ok=False, message="RPC result missing log entries", instance=instance)
     resolved_file = _string_or_default(payload.data.get("file"), file_name)
-    cursor = _string_or_default(payload.data.get("cursor"), "-")
+    if level is not None:
+        entries = [
+            entry for entry in entries if isinstance(entry, dict) and entry.get("level") == level
+        ]
+    total = len(entries)
+    selected = entries[-limit:] if limit > 0 else entries
     return CommandResult(
         ok=True,
-        message=_format_log_entries(resolved_file, entries, cursor),
+        message=_format_log_entries(
+            resolved_file,
+            selected,
+            f"showing {len(selected)} of {total} matching entries; --limit 0 reads all",
+        ),
         instance=instance,
     )
 
@@ -56,7 +67,7 @@ def _format_log_files(files: Sequence[object], default_file: object) -> str:
 
 
 def _format_log_entries(file_name: str, entries: Sequence[object], cursor: str) -> str:
-    lines = [f"log: {file_name}", f"cursor: {cursor}"]
+    lines = [f"log: {file_name}", cursor]
     if not entries:
         lines.append("no entries")
         return "\n".join(lines)
