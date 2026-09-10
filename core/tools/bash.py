@@ -1296,6 +1296,11 @@ async def _completion_result(
     tracked = process_manager.get_process(
         process_id, context.agent_id, project_id=context.project_id
     )
+    if tracked.cancelled_by_user:
+        return tool_failure(
+            USER_CANCELLED_FAILURE_CODE,
+            _user_cancelled_failure_message(process_manager, context, process_id),
+        )
     output = await _combined_output(process_manager, context, process_id)
     result: JsonObject = {
         "status": "completed",

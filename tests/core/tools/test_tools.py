@@ -1639,6 +1639,59 @@ class TestToolExecutor:
         assert "not JSON-serializable" in results[0]["error"]["message"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("abort_kind", ["base_exception", "child_cancel", "parent_cancel"])
+    async def test_parallel_abort_drains_siblings_before_propagating(self, abort_kind) -> None:
+        class ToolAbort(BaseException):
+            pass
+
+        registry = ToolRegistry()
+        sibling_started = asyncio.Event()
+        sibling_settled = asyncio.Event()
+        cleanup_started = asyncio.Event()
+        cleanup_release = asyncio.Event()
+        abort = asyncio.CancelledError() if abort_kind != "base_exception" else ToolAbort()
+        side_effects = []
+
+        async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            if context.tool_call_id == "abort":
+                await sibling_started.wait()
+                if abort_kind == "parent_cancel":
+                    await asyncio.Event().wait()
+                raise abort
+            sibling_started.set()
+            try:
+                await asyncio.Event().wait()
+                side_effects.append("unexpected")
+            finally:
+                cleanup_started.set()
+                await cleanup_release.wait()
+                sibling_settled.set()
+            return tool_success({})
+
+        registry.register("abort_probe", "Test probe.", {"type": "object"}, handler)
+        task = asyncio.create_task(
+            ToolExecutor(registry).execute_many(
+                [
+                    ToolCall(id="abort", name="abort_probe", arguments={}),
+                    ToolCall(id="sibling", name="abort_probe", arguments={}),
+                ],
+                make_execution_config(allowed_tools=["*"]),
+            )
+        )
+        await asyncio.wait_for(sibling_started.wait(), timeout=1)
+        if abort_kind == "parent_cancel":
+            task.cancel()
+        try:
+            await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+            assert not task.done()
+        finally:
+            cleanup_release.set()
+        with pytest.raises(type(abort)):
+            await asyncio.wait_for(task, timeout=1)
+        assert sibling_settled.is_set()
+        assert side_effects == []
+
+    @pytest.mark.asyncio
     async def test_parallel_execution_overlaps_and_preserves_order(self) -> None:
         registry = ToolRegistry()
         started: list[str] = []
