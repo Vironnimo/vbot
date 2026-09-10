@@ -15,7 +15,7 @@ vbot cron delete|enable|disable <job-id>
 - `--name` is the human-readable job name shown before the technical id. Names do not need to be unique.
 - `create`, `update`, `enable`, and `disable` return the saved Cron job with its id, target, schedule, status, and projected next fire time; use that output as the immediate verification result.
 - `--session` pins the job to an existing Session owned by the target. Without it, every fire creates a fresh Session.
-- Cron expressions and offset-free timestamps passed to `--at` use the server's current IANA system timezone. A missed one-time job does not catch up after a restart and is recorded as `missed`.
+- Cron expressions and offset-free timestamps passed to `--at` use the application timezone (`vbot config get server.timezone`). A missed one-time job does not catch up after a restart and is recorded as `missed`.
 - A recurring job waits for its Run to finish before scheduling its next occurrence, so fires never overlap for the same job. Repeated Run failures are recorded and eventually stop the job as `failed`.
 - A cron job targeting a project agent blocks `project rm` for that project (`project_in_use`) — retarget or delete the job first.
 

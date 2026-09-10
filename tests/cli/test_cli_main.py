@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import shlex
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -136,6 +138,36 @@ def test_cli_area_and_subcommand_help_is_informative(
         cli_main.parse_args([*argv, "--help"])
 
     assert exc_info.value.code == 0
+
+
+def test_published_help_examples_parse_without_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots: list[argparse.ArgumentParser] = []
+
+    def capture_parser(
+        self: argparse.ArgumentParser, *args: Any, **kwargs: Any
+    ) -> argparse.Namespace:
+        roots.append(self)
+        return argparse.Namespace()
+
+    with monkeypatch.context() as capture:
+        capture.setattr(argparse.ArgumentParser, "parse_args", capture_parser)
+        cli_main.parse_args([])
+
+    def check_examples(parser: argparse.ArgumentParser) -> None:
+        description = parser.description or ""
+        if "Example: " in description:
+            example = description.split("Example: ", 1)[1]
+            tokens = shlex.split(example)
+            if tokens[0] == "vbot":
+                tokens = tokens[1:]
+            # Exercise the actual published arguments, without executing their effects.
+            cli_main.parse_args(tokens)
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child in action.choices.values():
+                    check_examples(child)
+
+    check_examples(roots[0])
 
 
 def test_parse_args_supports_server_command_options() -> None:
