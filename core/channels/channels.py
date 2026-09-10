@@ -676,6 +676,8 @@ class ChannelStorage:
             "last_update_id": int(update_id),
         }
         with self._update_offset_lock:
+            if update_id <= self.load_update_offset(normalized_id):
+                return
             try:
                 atomic_write_text(
                     path,

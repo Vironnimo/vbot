@@ -251,11 +251,13 @@ async def test_send_wraps_telegram_error_as_channel_error(
 
 
 @pytest.mark.asyncio
-async def test_boundary_marks_network_errors_retryable(
+async def test_text_send_exhausts_network_retries_before_returning_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from telegram.error import NetworkError, TimedOut
+
+    monkeypatch.setattr("core.utils.retry.compute_retry_delay", lambda *a, **kw: (0, False))
 
     adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
         tmp_path,
@@ -267,7 +269,9 @@ async def test_boundary_marks_network_errors_retryable(
     with pytest.raises(ChannelError) as excinfo:
         await adapter.send("hi", "12345")
 
-    assert excinfo.value.retryable is True
+    assert bot.send_message.await_count == 4
+    assert excinfo.value.attempts_made == 4
+    assert excinfo.value.retryable is False
     assert excinfo.value.retry_after is None
     # TimedOut subclasses NetworkError, so it inherits the same classification.
     assert issubclass(TimedOut, NetworkError)
@@ -275,11 +279,19 @@ async def test_boundary_marks_network_errors_retryable(
 
 
 @pytest.mark.asyncio
-async def test_boundary_marks_rate_limit_retryable_with_retry_hint(
+async def test_text_send_exhausts_rate_limit_retries_with_retry_hint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from telegram.error import RetryAfter
+
+    delays = []
+
+    def record_delay(attempt, *, initial_delay, retry_after):
+        delays.append(retry_after)
+        return 0, True
+
+    monkeypatch.setattr("core.utils.retry.compute_retry_delay", record_delay)
 
     adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
         tmp_path,
@@ -291,6 +303,8 @@ async def test_boundary_marks_rate_limit_retryable_with_retry_hint(
     with pytest.raises(ChannelError) as excinfo:
         await adapter.send("hi", "12345")
 
-    assert excinfo.value.retryable is True
+    assert bot.send_message.await_count == 4
+    assert delays == [7.0, 7.0, 7.0]
+    assert excinfo.value.retryable is False
     assert excinfo.value.retry_after == 7.0
     await adapter.stop()
