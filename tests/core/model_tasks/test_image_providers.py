@@ -1174,3 +1174,43 @@ async def test_custom_openai_compatible_provider_uses_standard_image_wire() -> N
 
     assert route.called
     assert result.images == (b"custom-image",)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "output_format,media_type,extension",
+    [
+        ("svg", "image/svg+xml", ".svg"),
+        ("png", "image/png", ".png"),
+        ("webp", "image/webp", ".webp"),
+    ],
+)
+async def test_image_output_format_survives_artifact_storage(
+    tmp_path,
+    monkeypatch,
+    output_format,
+    media_type,
+    extension,
+) -> None:
+    from typing import Any, cast
+
+    from core.model_tasks.image import ImageService
+
+    image_bytes = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+    respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json=_unified_image_response(image_bytes))
+    )
+    client = _openrouter_image_client("recraft/recraft-v4-vector")
+    result = await client.generate("a cat", options={"output_format": output_format})
+    assert result.media_type == media_type
+    service = ImageService(cast(Any, object()), cast(Any, object()))
+
+    async def generate(*args, **kwargs):
+        return result
+
+    monkeypatch.setattr(service, "generate", generate)
+    (artifact,) = await service.generate_artifacts("a cat", output_dir=tmp_path)
+    assert artifact.media_type == media_type
+    assert artifact.file_path.suffix == extension
+    assert artifact.file_path.read_bytes() == image_bytes
