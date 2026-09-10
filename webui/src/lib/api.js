@@ -835,8 +835,8 @@ export function setExtensionSecret(params = {}, options = {}) {
   return rpc('extensions.set_secret', params, options);
 }
 
-export function getStatisticsReport(options = {}) {
-  return rpc('statistics.report', {}, options);
+export function getStatisticsReport(params = {}, options = {}) {
+  return rpc('statistics.report', params, options);
 }
 
 export function getStatisticsRunActivity(params, options = {}) {

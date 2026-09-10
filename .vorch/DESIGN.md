@@ -568,6 +568,19 @@ Compact Working blocks: when Appearance selects Compact work details, a contiguo
 
 Code blocks: `bg` fill, `border` border, `surface-2` header bar with language label + copy button. Mono 12px / `text-med`.
 
+Statistics places its shared time-range controls below the content tabs. Overview
+leads with four equally sized primary metrics, followed by an activity chart and
+Run outcomes side by side; current inventory and supporting activity facts follow.
+Human labels use Sans and readable secondary text, numbers use tabular Mono, and
+large token values wrap inside their card. Usage separates measured and estimated
+input/output into named groups. Its stacked token bars share one scale, use blue
+for measured and amber for estimated values, and keep cache percentages in the
+separate cache summary and expandable data table. Run metrics are grouped by
+outcome, duration, and work per Run. Technical records and derived execution
+details use disclosures. Tables scroll within their own focusable regions;
+dashboard columns stack at tablet width, primary metrics become two columns,
+and mobile range controls and disclosures retain 40px targets.
+
 ## Do's and Don'ts
 
 - Do use sentence case for buttons, modal titles, action labels, and table headers ("Create agent", "New session") — title case is reserved for nav/view names that are proper nouns of the app (Chat, Agents, System Prompt). Mono-caps section labels are uppercased by CSS, not in the string.
