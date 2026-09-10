@@ -12,6 +12,7 @@ from core.tools.arguments import (
     required_int,
     required_string,
 )
+from core.tools.bash import get_shell_env
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_GROUP_NAME_MAX_CHARS,
@@ -351,7 +352,7 @@ async def _handle_start(
     if raw_command in (None, ""):
         if args:
             raise ValueError("args requires command to be set")
-        argv = default_terminal_argv()
+        argv = default_terminal_argv(await get_shell_env())
     else:
         argv = [required_string(raw_command, field_name="command")]
         argv.extend(args)

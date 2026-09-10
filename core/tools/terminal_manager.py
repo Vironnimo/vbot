@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +20,7 @@ from typing import Any, Literal, TextIO
 from core.event_stream import ReplayEventStream
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.tools.bash import get_shell_env, reset_shell_env_cache
 from core.tools.process_manager import log_background_task_result
 from core.tools.terminal_backend import (
     TerminalAdapter,
@@ -82,6 +83,7 @@ TERMINAL_RESIZE_GRACE_SECONDS = 4.0
 TERMINAL_RESIZE_GRACE_MAX_SECONDS = 15.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
+TERMINAL_STREAM_BYTE_LIMIT = 4 * 1024 * 1024
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
 TERMINAL_INPUT_MAX_CHARS = 65_536
 TERMINAL_BRACKETED_PASTE_START = "\x1b[200~"
@@ -128,10 +130,24 @@ TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 
 
+def _stream_event_size(value: Any) -> int:
+    """Conservative retained Python payload size, including Unicode storage."""
+    size = sys.getsizeof(value)
+    if isinstance(value, dict):
+        size += sum(
+            _stream_event_size(key) + _stream_event_size(item) for key, item in value.items()
+        )
+    elif isinstance(value, (list, tuple)):
+        size += sum(_stream_event_size(item) for item in value)
+    return size
+
+
 def _new_terminal_stream() -> ReplayEventStream[TerminalStreamEvent]:
     return ReplayEventStream(
         event_retention_limit=TERMINAL_STREAM_RETENTION_EVENTS,
         subscriber_queue_limit=TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS,
+        byte_limit=TERMINAL_STREAM_BYTE_LIMIT,
+        size_of=_stream_event_size,
         sequence_of=lambda event: int(event.get("sequence", 0)),
         terminal_when=lambda event: (
             event.get("type") == "terminal_state"
@@ -364,6 +380,7 @@ class TerminalManager:
             self._cancel_delivery(session)
             if session.state not in {"exited", "error"}:
                 terminate_process_tree(session.adapter)
+            session.adapter.close()
             for task in (
                 session.reader_task,
                 session.initial_input_task,
@@ -448,13 +465,14 @@ class TerminalManager:
         available as metadata and the Agent-owned spawn path (exact argv) is
         untouched.
         """
+        environment = await get_shell_env()
         if command is None:
-            argv = default_terminal_argv()
+            argv = default_terminal_argv(environment)
             argv.extend(arguments)
             launch_command = None
             launch_arguments: tuple[str, ...] = ()
         else:
-            argv = default_terminal_argv()
+            argv = default_terminal_argv(environment)
             launch_command = command
             launch_arguments = tuple(arguments)
         session = await self._spawn(
@@ -569,7 +587,7 @@ class TerminalManager:
         log_path: Path | None = None
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
-        process_env = dict(os.environ)
+        process_env = await get_shell_env()
         # A service or pipe-based parent may advertise no terminal. The child
         # has a real VT here; preserve only an explicit caller override.
         if process_env.get("TERM") in {None, "", "dumb"}:
@@ -579,14 +597,21 @@ class TerminalManager:
 
         try:
             log_path, log_handle, log_lease = self._open_raw_log()
-            adapter = await asyncio.to_thread(
-                self._adapter_factory,
-                list(argv),
-                cwd,
-                process_env,
-                rows,
-                columns,
-            )
+            for attempt in range(2):
+                try:
+                    adapter = await asyncio.to_thread(
+                        self._adapter_factory, list(argv), cwd, process_env, rows, columns
+                    )
+                    break
+                except FileNotFoundError:
+                    if attempt:
+                        raise
+                    reset_shell_env_cache()
+                    process_env = await get_shell_env()
+                    if process_env.get("TERM") in {None, "", "dumb"}:
+                        process_env["TERM"] = "xterm-256color"
+                    if env is not None:
+                        process_env.update(env)
             if self._closed:
                 await asyncio.to_thread(terminate_process_tree, adapter)
                 raise TerminalClosedError("Terminal Session is no longer running")
@@ -1442,12 +1467,15 @@ class TerminalManager:
         error: BaseException | None = None
         try:
             while True:
-                text = await asyncio.get_running_loop().run_in_executor(
-                    self._reader_executor, session.adapter.read, 4096
-                )
-                if not text:
+                try:
+                    text = await asyncio.get_running_loop().run_in_executor(
+                        self._reader_executor, session.adapter.read, 4096
+                    )
+                except TimeoutError:
                     if not await asyncio.to_thread(session.adapter.is_alive):
                         break
+                    continue
+                if not text:
                     continue
                 async with session.lock:
                     if session.log_handle is not None:
@@ -1750,6 +1778,7 @@ class TerminalManager:
             settle_task.cancel()
         if session.state not in {"exited", "error"}:
             await asyncio.to_thread(terminate_process_tree, session.adapter)
+        await asyncio.to_thread(session.adapter.close)
         reader = session.reader_task
         if reader is not None and reader is not asyncio.current_task() and not reader.done():
             try:

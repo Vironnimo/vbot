@@ -8,8 +8,10 @@ import copy
 import hashlib
 import os
 import re
+import select
 import shutil
 import signal
+import socket
 import subprocess
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -27,6 +29,7 @@ _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_TITLE_MAX_CHARS = 160
+TERMINAL_READ_TIMEOUT_SECONDS = 0.2
 _APPLICATION_CURSOR_MODE = 1
 _PRIVATE_MODE_SEQUENCE_MIN = 1000
 # pyte ignores the ``<``/``>``/``=`` CSI prefixes and dispatches the payload
@@ -95,6 +98,8 @@ class TerminalAdapter(Protocol):
     def exit_code(self) -> int | None: ...
 
     def terminate(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 TerminalAdapterFactory = Callable[
@@ -492,13 +497,27 @@ class TerminalRenderer:
 class _WindowsTerminalAdapter:
     def __init__(self, process: Any) -> None:
         self._process = process
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._process.fileobj.setblocking(False)
 
     @property
     def pid(self) -> int:
         return int(self._process.pid)
 
     def read(self, size: int) -> str:
-        return str(self._process.read(size))
+        # Read pywinpty's socket directly: its read() waits indefinitely for
+        # both output and the remainder of a split UTF-8 character.
+        if not select.select([self._process.fileobj], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]:
+            raise TimeoutError
+        try:
+            data = self._process.fileobj.recv(size)
+        except BlockingIOError:
+            raise TimeoutError from None
+        if not data:
+            raise EOFError
+        if data == b"0011Ignore":
+            return ""
+        return self._decoder.decode(data, final=False)
 
     def write(self, text: str) -> None:
         self._process.write(text)
@@ -516,21 +535,44 @@ class _WindowsTerminalAdapter:
     def terminate(self) -> None:
         self._process.terminate(force=True)
 
+    def close(self) -> None:
+        with contextlib.suppress(OSError):
+            self._process.fileobj.shutdown(socket.SHUT_RDWR)
+        self._process.close(force=True)
+
 
 class _PosixTerminalAdapter:
     def __init__(self, process: Any) -> None:
         self._process = process
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        os.set_blocking(self._process.fd, False)
 
     @property
     def pid(self) -> int:
         return int(self._process.pid)
 
     def read(self, size: int) -> str:
-        return self._decoder.decode(self._process.read(size), final=False)
+        if not select.select([self._process.fd], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]:
+            raise TimeoutError
+        try:
+            data = os.read(self._process.fd, size)
+        except BlockingIOError:
+            raise TimeoutError from None
+        if not data:
+            raise EOFError
+        return self._decoder.decode(data, final=False)
 
     def write(self, text: str) -> None:
-        self._process.write(text.encode("utf-8"))
+        remaining = memoryview(text.encode("utf-8"))
+        while remaining:
+            try:
+                written = os.write(self._process.fd, remaining)
+            except BlockingIOError:
+                select.select([], [self._process.fd], [], TERMINAL_READ_TIMEOUT_SECONDS)
+                continue
+            if not written:
+                raise EOFError
+            remaining = remaining[written:]
 
     def resize(self, rows: int, columns: int) -> None:
         self._process.setwinsize(rows, columns)
@@ -547,6 +589,9 @@ class _PosixTerminalAdapter:
 
     def terminate(self) -> None:
         self._process.terminate(force=True)
+
+    def close(self) -> None:
+        self._process.close(force=True)
 
 
 def spawn_terminal_adapter(

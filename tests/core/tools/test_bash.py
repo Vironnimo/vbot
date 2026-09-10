@@ -1825,8 +1825,8 @@ async def test_concurrent_shell_env_requests_share_one_probe(
     monkeypatch.setattr(bash_module, "_cached_shell_env", None)
     monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
 
-    first = asyncio.create_task(bash_module._get_shell_env())
-    second = asyncio.create_task(bash_module._get_shell_env())
+    first = asyncio.create_task(bash_module.get_shell_env())
+    second = asyncio.create_task(bash_module.get_shell_env())
     await asyncio.wait_for(probe_started.wait(), timeout=1)
     await asyncio.sleep(0)
 
@@ -1860,9 +1860,9 @@ async def test_cancelling_shell_env_waiter_keeps_shared_probe_running(
     monkeypatch.setattr(bash_module, "_cached_shell_env", None)
     monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
 
-    cancelled_waiter = asyncio.create_task(bash_module._get_shell_env())
+    cancelled_waiter = asyncio.create_task(bash_module.get_shell_env())
     await asyncio.wait_for(probe_started.wait(), timeout=1)
-    surviving_waiter = asyncio.create_task(bash_module._get_shell_env())
+    surviving_waiter = asyncio.create_task(bash_module.get_shell_env())
     await asyncio.sleep(0)
 
     cancelled_waiter.cancel()
@@ -1897,13 +1897,13 @@ async def test_shell_env_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "old"})
     monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
 
-    env_first = await bash_module._get_shell_env()
+    env_first = await bash_module.get_shell_env()
     assert env_first == {"PATH": "old"}
     assert probe_calls == 0  # cache still fresh
 
     await asyncio.sleep(0.02)  # exceed TTL
 
-    env_second = await bash_module._get_shell_env()
+    env_second = await bash_module.get_shell_env()
     assert env_second == {"PATH": "probe-1"}
     assert probe_calls == 1  # re-probed after expiry
 
@@ -1923,7 +1923,7 @@ async def test_shell_env_cache_ttl_zero_never_expires(monkeypatch: pytest.Monkey
     monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "cached"})
     monkeypatch.setattr(bash_module, "_shell_env_cache_time", 0.0)
 
-    env = await bash_module._get_shell_env()
+    env = await bash_module.get_shell_env()
     assert env == {"PATH": "cached"}
     assert probe_calls == 0
 
@@ -1943,7 +1943,7 @@ def test_reset_shell_env_cache_clears_cache(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_reset_shell_env_cache_forces_reprobe_on_next_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """After reset, the next _get_shell_env call re-probes even if TTL hasn't elapsed."""
+    """After reset, the next get_shell_env call re-probes even if TTL hasn't elapsed."""
     probe_calls = 0
 
     async def probe_shell_env() -> dict[str, str]:
@@ -1955,17 +1955,17 @@ async def test_reset_shell_env_cache_forces_reprobe_on_next_call(
     monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 999.0)
     monkeypatch.setattr(bash_module, "_cached_shell_env", None)
 
-    env_first = await bash_module._get_shell_env()
+    env_first = await bash_module.get_shell_env()
     assert env_first == {"PATH": "probe-1"}
     assert probe_calls == 1
 
     # Without reset, the cache is fresh (TTL=999) so no re-probe.
-    env_cached = await bash_module._get_shell_env()
+    env_cached = await bash_module.get_shell_env()
     assert env_cached == {"PATH": "probe-1"}
     assert probe_calls == 1
 
     bash_module.reset_shell_env_cache()
-    env_after_reset = await bash_module._get_shell_env()
+    env_after_reset = await bash_module.get_shell_env()
     assert env_after_reset == {"PATH": "probe-2"}
     assert probe_calls == 2
 
@@ -2934,3 +2934,66 @@ def test_spawn_failure_message_explains_pwsh_requirement() -> None:
     )
 
     assert "PowerShell 7" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 7])
+async def test_real_timeout_kill_during_reader_drain_keeps_exit(
+    manager, tmp_path, monkeypatch, code
+):
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    original = manager._await_reader_tasks
+
+    async def delayed_readers(tracked):
+        # The real timeout task must reach ProcessManager.kill while the OS
+        # process is dead but the watcher still reports running.
+        await asyncio.sleep(0.3)
+        await original(tracked)
+
+    monkeypatch.setattr(manager, "_await_reader_tasks", delayed_readers)
+    result = await bash_handler(
+        make_context(tmp_path),
+        {
+            "command": f"print('test-owned output'); raise SystemExit({code})",
+            "mode": "foreground",
+            "timeout": 0.2,
+        },
+        manager,
+    )
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == code
+    assert result["data"]["status"] == "completed"
+    assert "test-owned output" in result["data"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_failed_timeout_kill_returns_error_without_losing_process(
+    manager, tmp_path, monkeypatch
+):
+    import core.tools.process_manager as manager_module
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    async def denied(proc, **kwargs):
+        raise PermissionError("test-owned denied timeout kill")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager_module, "kill_process_tree_async", denied)
+        result = await asyncio.wait_for(
+            bash_handler(
+                make_context(tmp_path),
+                {
+                    "command": "import time; time.sleep(30)",
+                    "timeout": 0.05,
+                },
+                manager,
+            ),
+            3,
+        )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "process_kill_failed"
+    tracked = manager.list_processes(AGENT_ID)[0]
+    assert tracked.status == "running"
+    assert tracked.process_id in result["error"]["message"]
+    await manager.kill(tracked.process_id, AGENT_ID)
+    assert tracked.status == "killed"

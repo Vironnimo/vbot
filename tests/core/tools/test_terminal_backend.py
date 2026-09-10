@@ -92,6 +92,7 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
 
 
 def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
+    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda fd, blocking: None)
     inherited: list[int] = []
     spawned: dict[str, object] = {}
     workdir = Path("/work")
@@ -101,7 +102,7 @@ def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) 
         def spawn(argv, **kwargs):
             spawned["argv"] = argv
             spawned["kwargs"] = kwargs
-            return SimpleNamespace(pid=123)
+            return SimpleNamespace(pid=123, fd=99)
 
     monkeypatch.setattr(
         terminal_backend,
@@ -356,3 +357,67 @@ def test_cursor_page_carries_absolute_buffer_metrics() -> None:
     assert page["cursor_row"] == 6
     assert page["viewport_rows"] == 3
     assert page["next_start_line"] is not None
+
+
+@pytest.mark.parametrize("platform_name", ["nt", "posix"])
+def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name):
+    import os
+    import socket
+    import time
+
+    if platform_name == "posix" and os.name == "nt":
+        pytest.skip("POSIX descriptor readiness requires POSIX")
+    if platform_name == "nt":
+        receiver, sender = socket.socketpair()
+        process = SimpleNamespace(fileobj=receiver)
+        adapter = terminal_backend._WindowsTerminalAdapter(process)
+        send = sender.sendall
+
+        def close():
+            receiver.close()
+            sender.close()
+    else:
+        read_fd, write_fd = os.pipe()
+        adapter = terminal_backend._PosixTerminalAdapter(SimpleNamespace(fd=read_fd))
+
+        def send(value):
+            os.write(write_fd, value)
+
+        def close():
+            os.close(read_fd)
+            os.close(write_fd)
+
+    try:
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            adapter.read(4096)
+        assert time.monotonic() - start < 1
+        encoded = "😀".encode()
+        send(encoded[:2])
+        assert adapter.read(4096) == ""
+        with pytest.raises(TimeoutError):
+            adapter.read(4096)
+        send(encoded[2:])
+        assert adapter.read(4096) == "😀"
+    finally:
+        close()
+
+
+def test_posix_nonblocking_write_preserves_partial_unicode_input(monkeypatch):
+    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda *args: None)
+    monkeypatch.setattr(terminal_backend.select, "select", lambda *args: ([], [99], []))
+    adapter = terminal_backend._PosixTerminalAdapter(SimpleNamespace(fd=99))
+    written = bytearray()
+    calls = 0
+
+    def partial_write(fd, data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BlockingIOError
+        written.extend(data[:2])
+        return len(data[:2])
+
+    monkeypatch.setattr(terminal_backend.os, "write", partial_write)
+    adapter.write("😀xyz")
+    assert written == "😀xyz".encode()
