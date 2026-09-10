@@ -45,6 +45,7 @@ def _authorize_session_store(data_dir: Path) -> None:
 
 CANONICAL_BUILTIN_TOOLS = [
     "analyze_image",
+    "apply_patch",
     "bash",
     "calendar",
     "cron",

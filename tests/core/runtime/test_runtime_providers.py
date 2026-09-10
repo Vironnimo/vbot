@@ -1574,6 +1574,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         tool.name for tool in runtime.tools.list_tools() if tool.name not in hidden_session_tools
     ] == [
         "analyze_image",
+        "apply_patch",
         "bash",
         "browser",
         "calendar",

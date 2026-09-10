@@ -153,16 +153,18 @@ def _stamp(resolved: Path) -> tuple[float, int] | None:
     return (info.st_mtime, info.st_size)
 
 
-def atomic_write_bytes(resolved: Path, payload: bytes) -> None:
+def atomic_write_bytes(resolved: Path, payload: bytes, *, mode: int | None = None) -> None:
     """Replace ``resolved`` atomically with ``payload``.
 
     The temporary file lives beside the target so ``os.replace`` stays on one
     filesystem. Existing permission bits are copied before the replace. Any
     failure removes the temporary file and leaves the original target intact.
+    An explicit mode carries source permissions to a patch move's destination.
     """
-    existing_mode: int | None = None
-    with suppress(OSError):
-        existing_mode = stat.S_IMODE(resolved.stat().st_mode)
+    existing_mode = mode
+    if existing_mode is None:
+        with suppress(OSError):
+            existing_mode = stat.S_IMODE(resolved.stat().st_mode)
 
     descriptor = -1
     temporary: Path | None = None

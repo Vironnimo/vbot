@@ -26,6 +26,11 @@ blocks where git reports a minimal diff).
 
 `read` takes no part in change statistics (no baselines are stored anymore); it only stamps `FileReadState` for the read-before-write guard.
 
+`apply_patch` uses the same `record_write` seam for each actually committed
+text-file delta, including source deletion and destination creation for moves.
+Validation-only plans and verified no-ops record no changes; a partial write
+records only completed paths. Binary moves/deletions remain untracked.
+
 ## Wiring
 
 - One runtime-owned instance (`Runtime._change_tracker`), exposed as `Runtime.change_tracker`, injected into `ChatLoopDependencies.change_tracker`.
