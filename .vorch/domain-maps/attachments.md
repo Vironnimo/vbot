@@ -20,6 +20,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Sniffing & conventions
 
+- BMP sniffing additionally requires zero reserved fields, a recognized DIB header size, and a pixel offset after that header and within the supplied bytes; ordinary UTF-8 text starting with `BM` stays text (`test_attachments.py`).
 - Accepted raster originals are JPEG, PNG, GIF, WebP, BMP, TIFF, and AVIF; AVIF brands are checked before the shared ISO-BMFF video fallback.
 - MIME comes from bounded magic-bytes only - never client-supplied content types, no libmagic. Signature matches: images, PDF, OOXML, Ogg/MP3/WAVE/FLAC/M4A, MP4/QuickTime/WebM/AVI; UTF-8-decodable input becomes `text/plain`; everything else `application/octet-stream` then allowlist-rejected. Known simplifications: Ogg always classifies audio, EBML always webm.
 - Every accepted type has one canonical storage extension; blobs always carry it so filesystem consumers get typed paths even without source filenames, while meaningful original display suffixes survive.
