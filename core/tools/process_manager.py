@@ -202,15 +202,40 @@ def subprocess_creation_flags(
 TASKKILL_TREE_TIMEOUT_SECONDS = 5
 
 
-def windows_taskkill_tree(pid: int) -> bool:
+def windows_taskkill_tree(pid: int, *, targets: list[Any] | None = None) -> bool:
     """Best-effort blocking ``taskkill`` of a whole Windows process tree.
 
-    Returns True only when taskkill confirmed the tree was terminated. This
-    call can block for up to ``TASKKILL_TREE_TIMEOUT_SECONDS``, so event-loop
+    Returns True only after the captured tree has terminated. ``targets``
+    retains process identities across failed attempts, including orphaned
+    children. Each blocking phase has ``TASKKILL_TREE_TIMEOUT_SECONDS``, so event-loop
     contexts must run it through :func:`kill_process_tree_async` (worker
     thread) instead of calling it directly.
     """
+    import psutil  # type: ignore[import-untyped]
+
     try:
+        processes = targets if targets is not None else []
+        root = processes[-1] if processes else psutil.Process(pid)
+        root_alive = root.is_running()
+        if root_alive:
+            descendants = root.children(recursive=True)
+            processes[:] = (
+                [
+                    *[child for child in descendants if child not in processes],
+                    *processes,
+                ]
+                if processes
+                else [*descendants, root]
+            )
+    except psutil.NoSuchProcess:
+        if not processes:
+            return True
+        root_alive = False
+    except psutil.Error:
+        return False
+    try:
+        if not root_alive:
+            raise ProcessLookupError
         completed = subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
             stdout=subprocess.DEVNULL,
@@ -219,12 +244,25 @@ def windows_taskkill_tree(pid: int) -> bool:
             check=False,
             creationflags=subprocess_creation_flags(),
         )
-        return completed.returncode == 0
+        taskkill_succeeded = completed.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        taskkill_succeeded = False
+    if not taskkill_succeeded:
+        _LOGGER.warning("taskkill failed for pid=%s; terminating the captured process tree", pid)
+        # Capture identity-bearing Process objects before root exit can orphan
+        # its children. Process.kill also protects against PID reuse.
+        for process in reversed(processes):
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.Error:
+                return False
+    _gone, alive = psutil.wait_procs(processes, timeout=TASKKILL_TREE_TIMEOUT_SECONDS)
+    return not alive
 
 
-async def kill_process_tree_async(proc: Process) -> None:
+async def kill_process_tree_async(proc: Process, *, targets: list[Any] | None = None) -> None:
     """Kill a whole process tree without blocking the event loop.
 
     Same contract as ``ProcessManager._kill_process_tree`` - including
@@ -232,14 +270,9 @@ async def kill_process_tree_async(proc: Process) -> None:
     subprocess runs in a worker thread so the loop never stalls behind it.
     """
     if os.name == "nt":
-        killed = await asyncio.to_thread(windows_taskkill_tree, proc.pid)
+        killed = await asyncio.to_thread(windows_taskkill_tree, proc.pid, targets=targets)
         if not killed:
-            _LOGGER.warning(
-                "taskkill failed for pid=%s, falling back to direct kill",
-                proc.pid,
-            )
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            raise OSError("taskkill could not confirm process-tree termination")
         return
 
     _kill_process_tree_posix(proc)
@@ -247,14 +280,8 @@ async def kill_process_tree_async(proc: Process) -> None:
 
 def _kill_process_tree_posix(proc: Process) -> None:
     """Kill a POSIX process group; re-raises ProcessLookupError."""
-    try:
-        kill_process_group = cast(Any, os).__dict__["killpg"]
-        kill_process_group(proc.pid, HARD_KILL_SIGNAL)
-    except ProcessLookupError:
-        raise
-    except OSError:
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
+    kill_process_group = cast(Any, os).__dict__["killpg"]
+    kill_process_group(proc.pid, HARD_KILL_SIGNAL)
 
 
 class ProcessManagerError(VBotError):
@@ -267,6 +294,16 @@ class ProcessNotFoundError(ProcessManagerError):
 
 class ProcessStillRunningError(ProcessManagerError):
     """Raised when an operation requires a finished process."""
+
+
+class ProcessTerminationError(ProcessManagerError):
+    """A tree kill failed; the tracked process remains available for retry."""
+
+    def __init__(self, process_id: str) -> None:
+        super().__init__(
+            f"Could not terminate process {process_id}. Its process tree may still be running. "
+            "Retry the process Tool with action 'kill' and this process_id."
+        )
 
 
 @dataclass(frozen=True)
@@ -309,6 +346,9 @@ class TrackedProcess:
     log_lease: TemporaryFileLease | None = field(default=None, repr=False)
     output_chunks: list[OutputChunk] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    kill_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    termination_failed: bool = False
+    termination_targets: list[Any] = field(default_factory=list, repr=False)
     output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     stdout_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stderr_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -377,12 +417,18 @@ class ProcessManager:
             self._sweeper_task.cancel()
             self._sweeper_task = None
 
+        failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             notification_task = tracked.completion_notification_task
             if notification_task is not None and not notification_task.done():
                 notification_task.cancel()
             if tracked.status == "running":
-                self._kill_process_now(tracked)
+                try:
+                    self._kill_process_now(tracked)
+                except ProcessTerminationError as error:
+                    failures.append(error)
+        if failures:
+            raise failures[0]
 
     async def aclose(self) -> None:
         """Stop the manager and await tracked task cleanup."""
@@ -704,9 +750,15 @@ class ProcessManager:
         if not scope_key:
             return
 
+        failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             if tracked.scope_key == scope_key and tracked.status == "running":
-                self._kill_process_now(tracked)
+                try:
+                    self._kill_process_now(tracked)
+                except ProcessTerminationError as error:
+                    failures.append(error)
+        if failures:
+            raise failures[0]
 
     async def sweep_finished(self) -> None:
         """Remove finished processes older than the configured TTL."""
@@ -827,8 +879,10 @@ class ProcessManager:
         return_code = await tracked.proc.wait()
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
-        async with tracked.lock:
+        async with tracked.kill_lock, tracked.lock:
             tracked.exit_code = return_code
+            if tracked.termination_failed:
+                return
             if tracked.status == "running":
                 tracked.status = "completed" if return_code == 0 else "failed"
             tracked.finished_at = _utc_now()
@@ -961,17 +1015,26 @@ class ProcessManager:
         *,
         cancelled_by_user: bool = False,
     ) -> None:
-        if tracked.status != "running":
-            return
-
-        self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
-        try:
-            await kill_process_tree_async(tracked.proc)
-        except ProcessLookupError:
-            self._finish_process_lookup_error(tracked)
+        async with tracked.kill_lock:
+            if tracked.status != "running":
+                return
+            if tracked.proc.returncode is None or tracked.termination_failed:
+                try:
+                    await kill_process_tree_async(tracked.proc, targets=tracked.termination_targets)
+                except ProcessLookupError:
+                    if tracked.termination_failed:
+                        self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
+                except OSError as error:
+                    self._kill_failed(tracked, error)
+                else:
+                    self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
         tracked.output_event.set()
         if tracked.wait_task is not None:
             await asyncio.gather(tracked.wait_task, return_exceptions=True)
+        if tracked.status == "killed" and tracked.finished_at is None:
+            tracked.finished_at = _utc_now()
+            self._close_log_file(tracked)
+            self._notify_terminal(tracked)
 
     def _kill_process_now(
         self,
@@ -983,20 +1046,38 @@ class ProcessManager:
         if tracked.status != "running":
             return
 
-        self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
+        if tracked.proc.returncode is not None and not tracked.termination_failed:
+            return
         try:
-            self._kill_process_tree(tracked.proc)
+            self._kill_process_tree(tracked.proc, targets=tracked.termination_targets)
         except ProcessLookupError:
-            self._finish_process_lookup_error(tracked)
+            if tracked.termination_failed:
+                self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
+        except OSError as error:
+            self._kill_failed(tracked, error)
+        else:
+            self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
         tracked.output_event.set()
+        if (
+            tracked.status == "killed"
+            and tracked.wait_task is not None
+            and tracked.wait_task.done()
+        ):
+            tracked.finished_at = _utc_now()
+            self._close_log_file(tracked)
+            self._notify_terminal(tracked)
 
     def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:
         tracked.cancelled_by_user = cancelled_by_user
+        tracked.termination_failed = False
         tracked.status = "killed"
 
     @staticmethod
-    def _finish_process_lookup_error(tracked: TrackedProcess) -> None:
-        tracked.finished_at = _utc_now()
+    def _kill_failed(tracked: TrackedProcess, error: OSError) -> None:
+        tracked.termination_failed = True
+        _LOGGER.warning("Process tree kill failed for process=%s: %s", tracked.process_id, error)
+        tracked.output_event.set()
+        raise ProcessTerminationError(tracked.process_id) from error
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         return any(value == owner for value in self._owned_spawns.values()) or any(
@@ -1015,37 +1096,43 @@ class ProcessManager:
         ]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             owner = tracked.execution_owner
             if owner is not None and (owner.extension, owner.group_id, owner.epoch) == key:
                 watcher = tracked.completion_notification_task
                 if watcher is not None:
                     watcher.cancel()
-                await self._kill_process(tracked)
+                try:
+                    await self._kill_process(tracked)
+                except ProcessTerminationError as error:
+                    failures.append(error)
                 if watcher is not None:
                     await asyncio.gather(watcher, return_exceptions=True)
+        if failures:
+            raise failures[0]
 
     async def cancel_scope_async(self, scope_key: str) -> None:
         """Kill active processes in a run scope without blocking the loop."""
         if not scope_key:
             return
 
+        failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             if tracked.scope_key == scope_key and tracked.status == "running":
-                await self._kill_process(tracked)
+                try:
+                    await self._kill_process(tracked)
+                except ProcessTerminationError as error:
+                    failures.append(error)
+        if failures:
+            raise failures[0]
 
     @staticmethod
-    def _kill_process_tree(proc: Process) -> None:
+    def _kill_process_tree(proc: Process, *, targets: list[Any] | None = None) -> None:
         if os.name == "nt":
-            if windows_taskkill_tree(proc.pid):
+            if windows_taskkill_tree(proc.pid, targets=targets):
                 return
-            _LOGGER.warning(
-                "taskkill failed for pid=%s, falling back to direct kill",
-                proc.pid,
-            )
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            return
+            raise OSError("taskkill could not confirm process-tree termination")
 
         _kill_process_tree_posix(proc)
 

@@ -22,6 +22,7 @@ from core.tools.process import shape_process_output
 from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
+    ProcessTerminationError,
     TrackedProcess,
     log_background_task_result,
     subprocess_creation_flags,
@@ -367,7 +368,7 @@ async def bash_handler(
             "invalid_arguments",
             f"env_keys contains key(s) not granted to this Agent: {names}",
         )
-    env = await _get_shell_env()
+    env = await get_shell_env()
     resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
     for key in requested_env_keys:
         env[key] = resolve_credential(key)
@@ -399,7 +400,7 @@ async def bash_handler(
             "environment cache and retrying once.",
         )
         reset_shell_env_cache()
-        env = await _get_shell_env()
+        env = await get_shell_env()
         for key in requested_env_keys:
             env[key] = resolve_credential(key)
         env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
@@ -823,7 +824,7 @@ def _shell_argv(command: str) -> list[str]:
     return ["bash", "-c", command]
 
 
-async def _get_shell_env() -> dict[str, str]:
+async def get_shell_env() -> dict[str, str]:
     global _cached_shell_env, _shell_env_cache_time, _shell_env_probe_task
 
     if _cached_shell_env is not None and _is_shell_env_cache_fresh():
@@ -1031,7 +1032,12 @@ def _schedule_timeout(
     async def kill_after_timeout() -> None:
         await asyncio.sleep(timeout)
         state["timed_out"] = True
-        await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
+        try:
+            await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
+        except ProcessTerminationError:
+            # The manager retains the failure for the foreground result and
+            # subsequent explicit kills, and already logs the OS failure.
+            return
 
     return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{process_id}"), state
 
@@ -1090,6 +1096,14 @@ async def _run_foreground_phase(
             process_id, context.agent_id, timeout_ms=0, project_id=context.project_id
         )
         await _emit_output_chunks(context, process_id, poll_result)
+
+        tracked = process_manager.get_process(
+            process_id, context.agent_id, project_id=context.project_id
+        )
+        if tracked.termination_failed:
+            return tool_failure(
+                "process_kill_failed", str(ProcessTerminationError(process_id)), retryable=True
+            )
 
         if poll_result["status"] != "running":
             return await _completion_result(

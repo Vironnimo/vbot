@@ -421,3 +421,27 @@ async def test_same_agent_process_access_returns_not_found_across_project_scopes
     await manager.kill(process_id, AGENT_A, project_id="project-a")
 
     assert result == tool_failure("process_not_found", "Process not found", retryable=False)
+
+
+@pytest.mark.asyncio
+async def test_failed_kill_returns_retryable_error_and_allows_retry(manager, context, monkeypatch):
+    import core.tools.process_manager as manager_module
+
+    process_id = await manager.spawn(
+        RUN_A, AGENT_A, [sys.executable, "-c", "import time; time.sleep(30)"], env=None, cwd=None
+    )
+
+    async def denied(proc, **kwargs):
+        raise PermissionError("test-owned denied tree")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager_module, "kill_process_tree_async", denied)
+        result = await call_process(manager, context, {"action": "kill", "process_id": process_id})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "process_kill_failed"
+        assert result["error"]["retryable"] is True
+        assert process_id in result["error"]["message"]
+        assert manager.get_process(process_id, AGENT_A).status == "running"
+    result = await call_process(manager, context, {"action": "kill", "process_id": process_id})
+    assert result["ok"] is True
+    assert result["data"]["status"] == "killed"

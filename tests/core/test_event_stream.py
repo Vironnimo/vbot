@@ -174,3 +174,42 @@ async def test_events_published_during_historical_replay_are_not_lost() -> None:
 
     await consumer()
     assert received == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_byte_budget_evicts_old_replay_and_oversized_events():
+    stream = ReplayEventStream(
+        event_retention_limit=10,
+        subscriber_queue_limit=10,
+        sequence_of=_sequence_of,
+        byte_limit=10,
+        size_of=lambda event: event["size"],
+    )
+    for sequence in range(1, 5):
+        stream.publish({"sequence": sequence, "size": 4})
+    assert [event["sequence"] for event in stream.events] == [3, 4]
+    stream.publish({"sequence": 5, "size": 11})
+    assert stream.events == []
+    stream.publish({"sequence": 6, "size": 2})
+    assert [event["sequence"] async for event in stream.subscribe(live=False)] == [6]
+
+
+@pytest.mark.asyncio
+async def test_byte_budget_evicts_slow_live_subscriber_below_count_limit():
+    stream = ReplayEventStream(
+        event_retention_limit=100,
+        subscriber_queue_limit=100,
+        sequence_of=_sequence_of,
+        byte_limit=10,
+        size_of=lambda event: event["size"],
+    )
+    iterator = stream.subscribe()
+    first = asyncio.create_task(anext(iterator))
+    await asyncio.sleep(0)
+    stream.publish({"sequence": 1, "size": 4})
+    assert (await first)["sequence"] == 1
+    for sequence in range(2, 5):
+        stream.publish({"sequence": sequence, "size": 4})
+    assert stream.subscriber_count == 0
+    with pytest.raises(StopAsyncIteration):
+        await anext(iterator)
