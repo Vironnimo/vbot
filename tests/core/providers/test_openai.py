@@ -23,7 +23,7 @@ import respx
 
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderTimeoutError
 from core.providers.openai import (
@@ -58,6 +58,59 @@ def _subscription_model_lookup(levels: tuple[str, ...]):
         )
 
     return model_lookup
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        (None, None),
+        ("none", "low"),
+        ("minimal", "low"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "xhigh"),
+        ("max", "max"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_gpt6_subscription_uses_catalog_efforts_and_verified_minimum(effort, expected):
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+
+    def lookup(model_id):
+        return registry.get("openai", model_id)
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        "test-token",
+        model_lookup=lookup,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    try:
+        payload = adapter._build_responses_payload(
+            SAMPLE_MESSAGES,
+            model_id="gpt-6-astra",
+            thinking_effort=effort,
+            max_output_tokens=1234,
+            top_p=0.9,
+            tools=_CODEX_TOOLS,
+        )
+        assert payload.get("reasoning", {}).get("effort") == expected
+        assert "context" not in payload.get("reasoning", {})
+        assert payload["include"] == ["reasoning.encrypted_content"]
+        assert payload["store"] is False
+        assert "max_output_tokens" not in payload
+        assert "top_p" not in payload
+        assert all(tool["strict"] is False for tool in payload["tools"])
+        assert adapter.reasoning_replay_policy("gpt-6-astra") == "full_history"
+        intent = adapter.describe_reasoning_render(
+            model_lookup=lookup,
+            model_id="gpt-6-astra",
+            effort=effort,
+        )
+        assert intent.effort_level == expected
+    finally:
+        await adapter.aclose()
 
 
 OPENAI_API_KEY_URL = f"https://api.openai.com/v1{CHAT_COMPLETIONS_ENDPOINT}"

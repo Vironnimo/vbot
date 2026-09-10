@@ -1,6 +1,47 @@
 {
-  "fetched_at": "2026-09-09T13:56:24.837512+00:00",
+  "fetched_at": "2026-09-10T09:46:49.633370+00:00",
   "models": {
+    "deepseek-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "deepseek-flash"
+    },
     "deepseek-v4-flash": {
       "capabilities": {
         "input_modalities": [

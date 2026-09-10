@@ -99,7 +99,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 
 ## Reasoning
 
-- vBot `thinking_effort` and raw `reasoning_effort` map to the nearest safe OpenAI effort: `minimal -> low`, `low/medium/high` stay exact, `xhigh/max -> high`.
+- vBot `thinking_effort` and raw `reasoning_effort` use the selected Model's catalog ladder. The conservative fallback is `low/medium/high`; a richer catalog preserves higher supported levels rather than clamping them globally.
 - Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms reasoning support.
 - If injected `model_lookup` says reasoning is unsupported, reasoning request controls are stripped.
 - Replay scope follows the shared Model -> Provider -> system hierarchy and defaults to `full_history` for the current reasoning Models on their allowed Connections. `metadata.openai.wire_policies.<connection>` carries wire-only facts such as Responses protocol and public `reasoning_context`; it does not hide replay scope. Assistant `phase` remains semantic history and is preserved across Runs.
@@ -107,8 +107,16 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 - On public Platform Responses, GPT-5.6 sends `reasoning.context: "all_turns"` so prior output items are available as Session-wide reasoning context. The private subscription `/codex/responses` contract is also full-history replay for those Models, but vBot does not send the public `reasoning.context` field there because support is not documented or live-verified.
 - Opaque reasoning fields such as `encrypted_content` and the complete Responses `output` array stay in `reasoning_meta` for exact round-tripping. A GPT-5.6 full-history context therefore depends on both the all-turns request control where supported and the prior output items actually being present.
 - Live exact Adapter/history probes on 2026-09-02 verified complete output-item and encrypted-reasoning replay across later Runs plus Tool continuations for subscription GPT-5.3 Codex Spark, GPT-5.4, GPT-5.4 Mini, GPT-5.5, GPT-5.6 Luna/Sol/Terra, and the upstream `gpt-reserve` and `codex-auto-review` slugs. The last two remain excluded from the selectable catalog because `/codex/models` marks them `visibility: hide`.
-- On the Codex Responses path, supported reasoning efforts are `low`, `medium`, `high`, and `xhigh`; `max` maps to `xhigh`.
+- On the Codex Responses path, the selected Model's catalog ladder controls effort rendering. GPT-6 Astra supports `low/medium/high/xhigh/max`; `minimal` maps to `low`. Its subscription wire policy declares `minimum_reasoning_effort: "low"`, so `none` sends `low` and the displayed Reasoning intent agrees. Omitting effort remains the Provider default. Other Models retain their own ladders and policies.
 - Shared OpenAI wire ids do not imply shared Context limits. The public Platform values are GPT-5.2 and GPT-5.4 Mini at 400,000 and GPT-5.4, GPT-5.5, and GPT-5.6 Luna/Sol/Terra at 1,050,000; the subscription Codex catalog reports 272,000 for its shared ids. `connection_context_windows` preserves both facts, and both Chat compaction and Adapter output budgeting resolve the active Connection instead of globally choosing either the unsafe larger value or the capability-reducing smaller value.
+
+### GPT-6 Astra verification (2026-09-10)
+
+- The refreshed subscription catalog exposes `gpt-6-astra`, with a 272,000-token Context window, 128,000-token output fact, Tools, and all five effort levels. It remains subscription-only in the bundled Model DB. The public Model page's larger Context window does not replace the subscription limit.
+- Live raw `/codex/responses` accepted each published effort. Explicit `none` returned HTTP 400; omission selected `medium`. The Adapter now maps `none` to `low`. Streaming exposed text, Reasoning metadata, Tool Call deltas, and terminal Usage. Requests include `reasoning.encrypted_content` and `store: false`; the private wire receives no public `reasoning.context` field, although responses reported `all_turns` themselves.
+- Real streamed output was saved to SQLite, reopened, shaped by Chat, and serialized by the Adapter. Encrypted Reasoning items, Tool items, ids, order, and phase survived exactly. Controlled input-token comparisons matched independent raw HTTP: absent/exact carrier was 76/89 for later-Run history without Tools, 114/127 with Tools, and 138/160 for a Tool continuation. Visible-content controls increased input too; opaque and readable representations need not cost the same tokens. These positive replay observations support `full_history`.
+- Additional live Adapter checks accepted canonical PNG/JPEG/GIF/WebP media and identified the generated solid-color fixtures correctly. A strict Responses JSON schema returned the required integer object. The lowest-effort request produced two correctly correlated parallel Tool Calls. The exact replay probe also passed through normal conversation-context transport, in addition to the SSE/raw accounting checks.
+- Regression anchors: the GPT-6 catalog/effort cases in `tests/core/models/test_models.py` and `tests/core/providers/test_openai.py`, plus `tests/core/providers/test_reasoning_route_switch_conformance.py` for persisted exact output and Provider/Model/Connection/Account isolation. `scripts/probe_reasoning_replay_exact.py` uses the active checkout and Adapter request context, so its live calls carry the same conversation-routing contract as Chat.
 
 ## Response And Catalog Normalization
 
@@ -181,4 +189,5 @@ The subscription usage fetcher in `core/providers/usage.py` (see `providers/usag
 
 Read only when your task matches - not by default.
 
+- Re-validating GPT-6 Astra Reasoning or stateless replay -> `https://developers.openai.com/api/docs/models/gpt-6-astra` and `https://developers.openai.com/api/docs/guides/reasoning` (read 2026-09-10)
 - Building on or debugging subscription image generation -> `providers/openai/codex-image.md`

@@ -76,18 +76,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.chat.messages import ChatMessage
-from core.chat.wire_shaping import _assemble_request_history, _assistant_continuation_dict
-from core.models.models import ModelRegistry
-from core.providers.ollama import OllamaCloudAdapter
-from core.providers.openai import OpenAIAdapter
-from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
-from core.providers.reasoning import model_reasoning_supported
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
-from core.providers.token_store import TokenStore
-from core.providers.xai import XAIAdapter
-
+# Direct script execution must use this checkout, not an editable installation
+# pointing at another worktree.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.chat.messages import ChatMessage  # noqa: E402
+from core.chat.wire_shaping import (  # noqa: E402
+    _assemble_request_history,
+    _assistant_continuation_dict,
+)
+from core.models.models import ModelRegistry  # noqa: E402
+from core.providers.ollama import OllamaCloudAdapter  # noqa: E402
+from core.providers.openai import OpenAIAdapter  # noqa: E402
+from core.providers.providers import (  # noqa: E402
+    ConnectionConfig,
+    ProviderConfig,
+    ProviderRegistry,
+)
+from core.providers.reasoning import model_reasoning_supported  # noqa: E402
+from core.providers.token_getter import (  # noqa: E402
+    OAuthTokenGetter,
+    StaticTokenGetter,
+    TokenGetter,
+)
+from core.providers.token_store import TokenStore  # noqa: E402
+from core.providers.xai import XAIAdapter  # noqa: E402
+
 RESOURCES_DIR = PROJECT_ROOT / "resources"
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 API_KEY_ENV_BY_PROVIDER = {
@@ -243,6 +259,7 @@ async def _run_turn(
         model_id=model_id,
         temperature=1.0,
         thinking_effort=effort,
+        **adapter.request_context_kwargs(agent_id="model-audit", session_id="reasoning-replay"),
         **kwargs,
     )
     normalized = adapter.normalize_response(raw, model_id=model_id)
@@ -406,11 +423,15 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
     continuation for both normal and Tool-loop requests.
     """
 
+    request_context = adapter.request_context_kwargs(
+        agent_id="model-audit", session_id="reasoning-replay"
+    )
     plain_prompt = "Solve 17 * 19 carefully, then reply with only the number."
     first_raw = await adapter.send(
         [{"role": "user", "content": plain_prompt}],
         model_id=model_id,
         thinking_effort="high",
+        **request_context,
     )
     first = adapter.normalize_response(first_raw, model_id=model_id)
     plain_output = _responses_output_items(first)
@@ -443,6 +464,7 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         plain_history,
         model_id=model_id,
         thinking_effort="high",
+        **request_context,
     )
     plain_second = adapter.normalize_response(plain_second_raw, model_id=model_id)
 
@@ -475,6 +497,7 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         model_id=model_id,
         thinking_effort="high",
         tools=[TOOL_DEFINITION],
+        **request_context,
     )
     tool_first = adapter.normalize_response(tool_first_raw, model_id=model_id)
     tool_output = _responses_output_items(tool_first)
@@ -510,6 +533,7 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         model_id=model_id,
         thinking_effort="high",
         tools=[TOOL_DEFINITION],
+        **request_context,
     )
     tool_second = adapter.normalize_response(tool_second_raw, model_id=model_id)
 
