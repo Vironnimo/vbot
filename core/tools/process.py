@@ -29,9 +29,12 @@ PROCESS_TOOL_DESCRIPTION = "Inspect or stop a `bash` command that runs in the ba
 PROCESS_ACTIONS = ("status", "kill")
 PROCESS_OUTPUT_CAP_CHARS = 8_000
 PROCESS_OUTPUT_MAX_LINES = 100
+PROCESS_LIST_FILTERS = ("running", "finished", "all")
+PROCESS_LIST_DEFAULT_LIMIT = 20
+PROCESS_LIST_MAX_LIMIT = 100
 
 _PROCESS_ACTION_ARGUMENTS = {
-    "status": frozenset({"action", "process_id"}),
+    "status": frozenset({"action", "process_id", "filter", "limit", "before"}),
     "kill": frozenset({"action", "process_id"}),
 }
 
@@ -48,7 +51,30 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "description": (
                 "Id of the background `bash` command to act on. Required for kill; "
-                "omit for status to list all."
+                "omit for status to list running commands, newest first."
+            ),
+        },
+        "filter": {
+            "type": "string",
+            "enum": list(PROCESS_LIST_FILTERS),
+            "description": (
+                "Commands to list for status without process_id. Omit for running commands; "
+                "finished includes completed, failed, and killed commands; all includes both."
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": PROCESS_LIST_MAX_LIMIT,
+            "default": PROCESS_LIST_DEFAULT_LIMIT,
+            "description": "Maximum commands per list page. Omit for 20.",
+        },
+        "before": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Process id marking the exclusive page boundary in newest-first order. "
+                "Omit for the first page; use the returned next_call to continue."
             ),
         },
     },
@@ -113,16 +139,9 @@ async def _handle_status(
 ) -> JsonObject:
     process_id = optional_string(arguments.get("process_id"), field_name="process_id")
     if process_id is None:
-        return tool_success(
-            {
-                "processes": [
-                    _process_summary(tracked)
-                    for tracked in process_manager.list_processes(
-                        context.agent_id, project_id=context.project_id
-                    )
-                ]
-            }
-        )
+        return _list_processes(process_manager, context, arguments)
+    if {"filter", "limit", "before"} & arguments.keys():
+        raise ValueError("filter, limit, and before apply only to status without process_id.")
 
     snapshot = await process_manager.snapshot(
         process_id, context.agent_id, project_id=context.project_id
@@ -130,6 +149,60 @@ async def _handle_status(
     if snapshot["status"] != "running":
         _acknowledge_completion_after_persistence(process_manager, context, process_id)
     return tool_success(_status_snapshot_data(snapshot))
+
+
+def _list_processes(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    selection = arguments.get("filter", "running")
+    if not isinstance(selection, str) or selection not in PROCESS_LIST_FILTERS:
+        raise ValueError("filter must be one of: running, finished, all")
+    limit = arguments.get("limit", PROCESS_LIST_DEFAULT_LIMIT)
+    if type(limit) is not int or not 1 <= limit <= PROCESS_LIST_MAX_LIMIT:
+        raise ValueError("limit must be an integer from 1 to 100")
+    before = optional_string(arguments.get("before"), field_name="before")
+    boundary = None
+    if before is not None:
+        try:
+            anchor = process_manager.get_process(
+                before, context.agent_id, project_id=context.project_id
+            )
+        except ProcessNotFoundError:
+            return tool_failure(
+                "process_not_found",
+                "Page boundary process is no longer available. Omit before to restart the list.",
+                retryable=False,
+            )
+        boundary = (anchor.started_at, anchor.process_id)
+    owned = process_manager.list_processes(context.agent_id, project_id=context.project_id)
+    running = sum(tracked.status == "running" for tracked in owned)
+    finished = len(owned) - running
+    matches = sorted(
+        (
+            tracked
+            for tracked in owned
+            if (selection == "all" or (tracked.status == "running") == (selection == "running"))
+            and (boundary is None or (tracked.started_at, tracked.process_id) < boundary)
+        ),
+        key=lambda tracked: (tracked.started_at, tracked.process_id),
+        reverse=True,
+    )
+    page = matches[:limit]
+    data: JsonObject = {
+        "processes": [_process_summary(tracked) for tracked in page],
+        "filter": selection,
+        "counts": {"running": running, "finished": finished},
+        "next_call": (
+            {"action": "status", "filter": selection, "limit": limit, "before": page[-1].process_id}
+            if len(matches) > limit
+            else None
+        ),
+    }
+    if selection == "running" and finished:
+        data["history_call"] = {"action": "status", "filter": "finished"}
+    return tool_success(data)
 
 
 async def _handle_kill(
