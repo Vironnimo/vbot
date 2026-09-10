@@ -757,9 +757,32 @@ async def test_deferred_catalog_keeps_definitions_identical(context_service, hos
     assert after == before
     assert [entry["name"] for entry in after] == ["mcp_example"]
     assert len(registry.list_tools()) == 502
+    assert [tool.name for tool in registry.list_tools(include_catalog_hidden=False)] == [
+        "mcp_example"
+    ]
+    assert service.api.operations.catalog_visible_tool_names == ("mcp_example",)
     assert registry.prompt_definitions(profile_context=profile) == [
         {"name": before[0]["name"], "description": before[0]["description"]}
     ]
+
+
+@pytest.mark.asyncio
+async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(context_service):
+    from server.rpc.catalog_methods import _list_tools
+
+    service, registry, runner, calls = context_service
+    remote_name = "get_blendfile_object_materials"
+    runner.catalog["tools"][0]["name"] = remote_name
+    service._publish(runner, runner.catalog)
+
+    selection = _list_tools(SimpleNamespace(runtime=SimpleNamespace(tools=registry)), {})
+    assert [tool["name"] for tool in selection["tools"]] == ["mcp_example"]
+    assert registry.get(remote_tool_name("example", remote_name)) is not None
+
+    inspection = await service.manage("inspect", {"id": "example"})
+    assert [tool["name"] for tool in inspection["tools"]] == [remote_name]
+    assert inspection["agent_access"] == [{"agent": "alice", "access": "allowed", "tool_count": 1}]
+    assert calls == []
 
 
 @pytest.mark.asyncio

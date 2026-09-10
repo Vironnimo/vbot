@@ -261,6 +261,7 @@ class MCPService:
                     "parallel_safe": False,
                     "open_input_schema": True,
                     "deferred": True,
+                    "catalog_visible": False,
                     "activation": "follows",
                     "activation_source": parent,
                     "definition_profile_resolver": self._profile(
