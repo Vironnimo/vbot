@@ -695,10 +695,23 @@ class ConnectionRunner:
         self._record("progress", {"progress": progress, "total": total, "message": message})
 
     def _record(self, kind: str, payload: Any) -> None:
+        secrets = sorted(self._secrets(), key=len, reverse=True)
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, str):
+                for secret in secrets:
+                    value = value.replace(secret, "[redacted]")
+                return value
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            if isinstance(value, dict):
+                return {redact(key): redact(item) for key, item in value.items()}
+            return value
+
+        # Redact decoded strings: replacing inside serialized JSON misses escaped
+        # credentials and can corrupt escape sequences for short credentials.
+        safe_payload = redact(json.loads(json.dumps(payload, ensure_ascii=False, default=dump)))
         self._sequence += 1
-        safe_payload = json.loads(
-            self._redact(json.dumps(payload, ensure_ascii=False, default=dump))
-        )
         self._events.append({"sequence": self._sequence, "kind": kind, "payload": safe_payload})
 
     async def _watch_catalog(self) -> None:

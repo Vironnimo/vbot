@@ -32,7 +32,7 @@ from core.utils.ids import new_id
 
 from .client import ConnectionRunner, operation_schema
 from .config import CONNECTION_SCHEMA, ConnectionStore, validate_connection
-from .content import RESULT_VIEW_CHARACTERS, ContentStore
+from .content import RESULT_VIEW_CHARACTERS, ContentStore, pointer_part
 from .interactions import InputRequests
 
 MCP_DESCRIPTION = (
@@ -142,6 +142,15 @@ MCP_OPERATION_DESCRIPTIONS = {
 }
 MCP_MESSAGES = {
     "invalid": "Invalid MCP arguments: {fields}.",
+    "target_invalid": (
+        "Invalid MCP target arguments at {pointer}: {detail}. Describe this target "
+        "and correct the arguments before calling again."
+    ),
+    "result_unavailable": (
+        "The MCP server returned a result, but vBot could not save or prepare it: {detail}. "
+        "The operation may already have completed. Inspect the remote application "
+        "before repeating a modifying call."
+    ),
     "unknown_target": "MCP target is unavailable. Search again for a current target.",
     "access_denied": "This Agent cannot access this MCP target.",
     "call_invalid": "This target cannot be called. Describe it for its available content.",
@@ -317,15 +326,13 @@ class MCPService:
                     "mcp_tool_changed",
                     "The MCP Tool changed; refresh its definition before calling it",
                 )
-            try:
-                payload = await runner.invoke(
-                    "tools/call", {"name": remote, "arguments": arguments}, context
-                )
-                return await self._present(runner, context, payload, source=remote)
-            except ValueError as error:
-                return tool_failure(
-                    "mcp_call_unconfirmed", f"{error}. {MCP_MESSAGES['unconfirmed']}"
-                )
+            return await self._call(
+                runner,
+                context,
+                "tools/call",
+                {"name": remote, "arguments": arguments},
+                source=remote,
+            )
 
         return invoke
 
@@ -592,9 +599,19 @@ class MCPService:
                 payload["call"] = {"action": "call", "target": entry["target"]}
             return await self._present(runner, context, payload, source=source)
         inputs = arguments.get("arguments", {})
-        errors = list(Draft202012Validator(schema).iter_errors(inputs))
-        if errors:
-            raise ValueError(MCP_MESSAGES["invalid"].format(fields="arguments"))
+        error = next(Draft202012Validator(schema).iter_errors(inputs), None)
+        if error is not None:
+            pointer = "/arguments" + "".join(
+                "/" + pointer_part(str(part)) for part in error.absolute_path
+            )
+            requirement = json.dumps(error.validator_value, ensure_ascii=False)
+            return tool_failure(
+                "mcp_invalid_arguments",
+                MCP_MESSAGES["target_invalid"].format(
+                    pointer=pointer,
+                    detail=runner._redact(f"{error.validator} = {requirement}")[:500],
+                ),
+            )
         if source is not None:
             registry = self.api.operations.tool_registry
             if registry is None:
@@ -616,8 +633,31 @@ class MCPService:
             operation = entry["name"]
         else:
             raise ValueError(MCP_MESSAGES["call_invalid"])
-        payload = await runner.invoke(operation, inputs, context)
-        return await self._present(runner, context, payload)
+        return await self._call(runner, context, operation, inputs)
+
+    async def _call(
+        self,
+        runner: ConnectionRunner,
+        context: ToolContext,
+        operation: str,
+        arguments: dict[str, Any],
+        *,
+        source: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            payload = await runner.invoke(operation, arguments, context)
+        except ValueError as error:
+            return tool_failure("mcp_call_unconfirmed", f"{error}. {MCP_MESSAGES['unconfirmed']}")
+        try:
+            return await self._present(runner, context, payload, source=source)
+        except (ValueError, OSError) as error:
+            detail = runner._safe_error(error)
+            self.api.logger.warning(
+                "MCP result preparation failed (connection=%s): %s", runner.id, detail
+            )
+            return tool_failure(
+                "mcp_result_unavailable", MCP_MESSAGES["result_unavailable"].format(detail=detail)
+            )
 
     async def _present(
         self,
