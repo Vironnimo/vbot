@@ -5,7 +5,8 @@
 ```bash
 vbot skill list
 vbot skill inventory
-vbot skill read --scope global|agent:<id>
+vbot skill inspect <inventory-id>
+vbot skill read [<name>] --scope global|agent:<id>
 vbot skill create <name> --scope <scope> (--content <skill-md> | --file <path>) [--source <label>]
 vbot skill update <name> --scope <scope> (--content <skill-md> | --file <path>) [--source <label>]
 vbot skill delete <name> --scope <scope> --yes
@@ -17,11 +18,12 @@ vbot skill share <agent-id> <name> --to <receiver-agent-id> [--to <receiver>...]
 vbot skill unshare <agent-id> <name>
 ```
 
-- `read` returns each editable Skill's complete `SKILL.md`, not the layered effective catalog.
+- `inventory` exposes exact source-package ids and `editable_scope` (`read-only` when unavailable). `inspect <inventory-id>` reads that package’s original full `SKILL.md`, including bundled and Project sources, without activating it.
+- Prefer `read <name> --scope ...` for a single editable Skill; omitting the name returns every complete `SKILL.md` in that scope. Neither read proves an Agent’s effective availability.
 - `create` and `update` validate the full `SKILL.md` through the shared Skill authoring service and apply the change live. Prefer `--file` for multiline content.
 - `write-file` and `remove-file` manage supporting files such as `references/schema.md`; paths are relative to the named Skill and traversal is rejected server-side.
 - `delete` and `remove-file` require `--yes`. Their operations are destructive within the editable scope, though deleting an Identity Agent later archives its complete private Skill home with the Agent.
-- Mutation output includes the normalized Skill name, operation, scope, and validation warnings. Run `skill read --scope ...` to verify content and `skill list` to verify effective availability.
+- Mutation output includes the normalized Skill name, operation, scope, and validation warnings. Run `skill read <name> --scope ...` to verify content and `skill list` to verify effective availability.
 
 ## Disable and share policy
 

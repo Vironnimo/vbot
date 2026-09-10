@@ -29,7 +29,7 @@ def list_skills(instance: ServerInstance) -> CommandResult:
     )
 
 
-def skill_read(instance: ServerInstance, scope: str) -> CommandResult:
+def skill_read(instance: ServerInstance, scope: str, name: str | None = None) -> CommandResult:
     """Read editable Skills and their complete SKILL.md content in one scope."""
 
     payload = _rpc_call(instance, "skill.read", {"scope": scope})
@@ -38,7 +38,28 @@ def skill_read(instance: ServerInstance, scope: str) -> CommandResult:
     skills = payload.data.get("skills")
     if not isinstance(skills, list):
         return CommandResult(ok=False, message="RPC result missing skills list", instance=instance)
+    if name is not None:
+        skills = [item for item in skills if isinstance(item, dict) and item.get("name") == name]
+        if not skills:
+            return CommandResult(
+                ok=False,
+                message=f"skill not found in {scope}: {name}; use vbot skill inventory",
+                instance=instance,
+            )
     return CommandResult(ok=True, message=_format_editable_skills(scope, skills), instance=instance)
+
+
+def skill_inspect(instance: ServerInstance, entry_id: str) -> CommandResult:
+    """Read an exact source package from the inventory without activating it."""
+    payload = _rpc_call(instance, "skill.inspect", {"id": entry_id})
+    if not payload.ok:
+        return payload.to_command_result()
+    content = payload.data.get("content")
+    if not isinstance(content, str):
+        return CommandResult(
+            ok=False, message="RPC result missing Skill content", instance=instance
+        )
+    return CommandResult(ok=True, message=f"id: {entry_id}\n{content}", instance=instance)
 
 
 def skill_create(
@@ -238,21 +259,30 @@ def _share_failure_result(
         return _agent_id_suggestions(instance, failed)
     if f"owns no private skill named {name!r}" in failed.message:
         inventory_payload = _rpc_call(instance, "skill.inventory", {})
-        owned: list[str] = []
-        if inventory_payload.ok:
-            skills = inventory_payload.data.get("skills")
-            if isinstance(skills, list):
-                owned = sorted(
-                    set(
-                        _string_list(
-                            [
-                                skill.get("name")
-                                for skill in skills
-                                if isinstance(skill, dict) and skill.get("owner_id") == agent_id
-                            ]
-                        )
-                    )
+        if not inventory_payload.ok:
+            return CommandResult(
+                ok=False,
+                message=f"{failed.message}\ninventory lookup failed: {inventory_payload.message}",
+                instance=instance,
+            )
+        skills = inventory_payload.data.get("skills")
+        if not isinstance(skills, list):
+            return CommandResult(
+                ok=False,
+                message=f"{failed.message}\ninventory lookup returned no valid Skill list",
+                instance=instance,
+            )
+        owned = sorted(
+            set(
+                _string_list(
+                    [
+                        skill.get("name")
+                        for skill in skills
+                        if isinstance(skill, dict) and skill.get("owner_id") == agent_id
+                    ]
                 )
+            )
+        )
         lines = [failed.message]
         if owned:
             lines.append(f"{agent_id}'s private skills: {', '.join(owned)}")
@@ -340,7 +370,13 @@ def _format_inventory_row(skill: object) -> str:
     owner_id = _string_or_default(skill.get("owner_id"), "-")
     status = _string_or_default(skill.get("status"), "?")
     shared_with = ", ".join(_string_list(skill.get("shared_with"))) or "-"
-    details = [f"status: {status}", f"owner: {owner_id}", f"shared_with: {shared_with}"]
+    details = [
+        f"id: {skill.get('id', '?')}",
+        f"editable_scope: {skill.get('editable_scope') or 'read-only'}",
+        f"status: {status}",
+        f"owner: {owner_id}",
+        f"shared_with: {shared_with}",
+    ]
     missing = _string_list(skill.get("missing"))
     optional_missing = _string_list(skill.get("optional_missing"))
     if status == "unavailable" and missing:

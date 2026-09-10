@@ -988,6 +988,34 @@ def register(api: ExtensionAPI) -> None:
     api.operations.input_response_operation = "respond"
     api.on_shutdown(service.close)
     base = {"id": {"type": "string"}}
+    descriptions = {
+        "list": "List saved connections, live connection state, and effective Agent access.",
+        "requests": (
+            "List pending server inputs, including OAuth and elicitation; answer with respond."
+        ),
+        "status": "Read one connection's saved configuration, live state, and Agent access.",
+        "remove": "Remove a saved connection and stop its client and published Tools.",
+        "enable": "Enable a saved connection and start connecting; inspect status for readiness.",
+        "disable": "Disable a saved connection and stop its client and published Tools.",
+        "connect": "Start connecting an enabled connection; inspect status for readiness.",
+        "disconnect": "Close the current client without disabling the saved connection.",
+        "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
+        "grant": "Allow one Agent address to use this connection, subject to its Tool policy.",
+        "revoke": "Remove one Agent address from this connection's saved grants.",
+        "save": "Create or replace a complete connection; read status before replacing one.",
+        "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
+        "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
+        "credential": "Set or clear a referenced credential and reset the client; use JSON stdin.",
+        "respond": "Answer one pending input from requests using JSON stdin.",
+        "job": "Read a management job's running, completed, failed, or cancelled state and result.",
+        "cancel-job": "Cancel a management job; remote effects already performed are not undone.",
+        "explore": (
+            "Search, describe, call, or read as an Agent; inspect the returned job_id with job."
+        ),
+        "invoke": (
+            "Invoke an exact MCP operation as an Agent; inspect the returned job_id with job."
+        ),
+    }
     schemas: dict[str, dict[str, Any]] = {
         **{name: {} for name in ("list", "requests")},
         **dict.fromkeys(
@@ -1026,7 +1054,7 @@ def register(api: ExtensionAPI) -> None:
 
         api.operations.register(
             name,
-            name,
+            descriptions[name],
             {
                 "type": "object",
                 "properties": properties,

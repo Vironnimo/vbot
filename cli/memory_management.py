@@ -189,7 +189,13 @@ def _with_available_entry_ids(
     """Show the scope's existing entry ids after a failed entry mutation."""
 
     listing = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
-    scopes = listing.data.get("scopes") if listing.ok else None
+    if not listing.ok:
+        return CommandResult(
+            ok=False,
+            message=f"{failed.message}\nentry lookup failed: {listing.message}",
+            instance=instance,
+        )
+    scopes = listing.data.get("scopes")
     entries = scopes.get(scope) if isinstance(scopes, dict) else None
     ids = (
         [entry.get("id") for entry in entries if isinstance(entry, dict)]
@@ -197,7 +203,9 @@ def _with_available_entry_ids(
         else []
     )
     lines = [failed.message]
-    if ids:
+    if not isinstance(entries, list):
+        lines.append("entry lookup returned no valid scope; existing entries are unknown")
+    elif ids:
         lines.append(f"existing {scope}-scope entries: {', '.join(str(i) for i in ids)}")
     else:
         lines.append(f"{agent_id} has no {scope}-scope entries")

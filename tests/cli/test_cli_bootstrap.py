@@ -164,3 +164,32 @@ def test_bootstrap_list_formats_health_fields(
         "- name=Verify update id=job-one agent=main mode=once status=completed "
         "session=session-one last_outcome=success last_error=- prompt=Check status and logs",
     ]
+
+
+@pytest.mark.parametrize(
+    "jobs,expected",
+    [
+        ([], False),
+        ([{"id": "another"}], False),
+        ([{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}], True),
+    ],
+)
+def test_bootstrap_show_reads_exact_full_job(tmp_path, monkeypatch, jobs, expected):
+    import json
+
+    from cli import bootstrap_management as management
+    from cli.server_management import resolve_instance
+
+    instance = resolve_instance(data_dir=tmp_path)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(200, json={"ok": True, "result": {"jobs": jobs}})
+
+    monkeypatch.setattr(management.httpx, "post", post)
+    result = management.bootstrap_show(instance, "wanted")
+    assert result.ok is expected
+    assert calls == [{"method": "bootstrap.list", "params": {}}]
+    if expected:
+        assert json.loads(result.message) == jobs[0]

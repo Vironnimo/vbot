@@ -187,7 +187,7 @@ def test_session_list_follows_server_pages(
 
     monkeypatch.setattr(session_management.httpx, "post", fake_post)
 
-    result = session_management.session_list(instance, "assistant")
+    result = session_management.session_list(instance, "assistant", all_pages=True)
 
     assert result.ok is True
     assert "id=session-one" in result.message
@@ -514,3 +514,58 @@ def test_parse_args_supports_session_policy_clear() -> None:
     assert args.command == "set-compaction-policy"
     assert args.policy is None
     assert args.clear is True
+
+
+def test_session_pagination_is_bounded_and_explicit(tmp_path, monkeypatch):
+    calls = []
+    cursor = {"last_active_at": "2026-01-01", "id": "s1"}
+
+    def post(url, **kwargs):
+        params = kwargs["json"]["params"]
+        calls.append(params)
+        data = (
+            {"sessions": [{"id": "s2"}]}
+            if params.get("cursor")
+            else {"sessions": [{"id": "s1"}], "next_cursor": cursor}
+        )
+        return httpx.Response(200, json={"ok": True, "result": data})
+
+    monkeypatch.setattr(session_management.httpx, "post", post)
+    result = session_management.session_list(make_instance(tmp_path), "builder@project")
+    assert result.ok and len(calls) == 1
+    assert '"id": "s1"' in result.message
+    assert "s2" not in result.message
+    result = session_management.session_list(
+        make_instance(tmp_path), "builder@project", all_pages=True
+    )
+    assert result.ok and len(calls) == 3
+    assert calls[-1]["cursor"] == cursor
+    assert "s1" in result.message and "s2" in result.message
+
+
+def test_session_all_stops_repeated_cursor(tmp_path, monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(
+            200, json={"ok": True, "result": {"sessions": [], "next_cursor": {"id": "same"}}}
+        )
+
+    monkeypatch.setattr(session_management.httpx, "post", post)
+    assert not session_management.session_list(make_instance(tmp_path), "a", all_pages=True).ok
+    assert len(calls) == 2
+
+
+def test_session_fork_keeps_qualified_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        session_management.httpx,
+        "post",
+        lambda *a, **kw: httpx.Response(
+            200, json={"ok": True, "result": {"session": {"id": "copy", "agent_id": "builder"}}}
+        ),
+    )
+    result = session_management.session_fork(
+        make_instance(tmp_path), "source", "s", "builder@project"
+    )
+    assert result.ok and "builder@project" in result.message

@@ -10,21 +10,21 @@ vbot provider usage-history [--since <iso>] [--until <iso>]
 vbot provider usage-history-clear --yes
 ```
 
-`provider list` shows every connection with its enabled/usable state, accounts, credential source, and — for local endpoints — reachability. Run it before model or agent configuration work.
+`provider list` shows every connection with its enabled/usable state, accounts, credential source, and — for local endpoints — reachability. Use it when selecting a Connection or diagnosing missing Models.
 
-`provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider usage-history [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider usage-history-clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token/cost totals.
+`provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider usage-history [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider usage-history-clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token totals.
 
 ## Custom Providers
 
 ```bash
 vbot provider custom-list
-vbot provider custom-save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key <value>] [--models-endpoint /models] [--model <wire-id>]...
+vbot provider custom-save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key-stdin] [--models-endpoint /models] [--model <wire-id>]...
 vbot provider custom-delete <provider-id>
 ```
 
 - Custom Providers are secret-free Settings records with one implicit `default` Connection. The current Adapter is `openai_compatible`.
 - `custom-save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
-- `--api-key` is write-only and stored under the generated data-dir `.env` key. Never echo it. Prefer the WebUI for a real secret because a CLI argument may remain in shell history.
+- `--api-key-stdin` reads the key from UTF-8 stdin and stores it under the generated data-dir `.env` key. Never echo it. Omission preserves the stored key; changing the Provider record still replaces its complete non-secret configuration.
 - `custom-delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
 
 ## Enable / disable a connection
@@ -42,13 +42,13 @@ vbot provider disable <provider-id> [--connection <provider:connection-id>]
 ## API-key credentials
 
 ```bash
-vbot provider set-key <provider-id> <api-key> [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
+vbot provider set-key <provider-id> --stdin [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
 vbot provider unset-key <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
-- `set-key` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
+- Supply the key through UTF-8 stdin. `set-key` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
 - `--connection` is required only when the provider has more than one API-key connection.
-- Add `--refresh-models` when the user wants the provider's models usable right away.
+- Add `--refresh-models` to discover Models after saving the key. If discovery fails, the command exits nonzero and reports both the saved key and failed refresh. Correct the connection, then retry `model refresh`; do not resend the key just to retry discovery.
 - `unset-key` removes only data-dir `.env` keys; a credential set in the process environment is out of its reach and stays usable.
 
 ## OAuth device flow
@@ -61,7 +61,7 @@ vbot provider connect-status <provider-id> --connection <provider:connection-id>
 vbot provider disconnect <provider-id> --connection <provider:connection-id> [--account <account-id>]
 ```
 
-`connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connect-status` until it reports `connected=yes`.
+`connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connect-status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
 
 ## Accounts — multiple credentials per connection
 
@@ -77,9 +77,9 @@ vbot model show <provider>/<model-id>
 vbot model refresh [<provider-id>]
 ```
 
-- `model list` returns only Models served by at least one enabled, credentialed Connection. Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
+- `model list` returns only Models served by at least one usable Connection (enabled and authenticated when required). Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
 - `model show` returns the complete public Model record, including modalities, task types, supported parameters and voices, typed task options, reasoning controls, context/output limits, connection restrictions, usable Connections, family, and metadata. Use it instead of web search when the question is about the Model data currently loaded by vBot.
-- `refresh` fetches provider model catalogs from the network (needs a credential for provider catalogs); omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never writes the installed checkout.
+- `refresh` fetches Provider model catalogs using the selected Connections’ authentication; omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never writes the installed checkout.
 
 ## Task models
 
@@ -87,6 +87,7 @@ Bind a specialized task to a model target. Task types: `image_generation`, `imag
 
 ```bash
 vbot task-model list
+vbot task-model status <task-type>
 vbot task-model targets <task-type>
 vbot task-model options <task-type> [<target-id>]
 vbot task-model set <task-type> <target-id> [--option <name> <value>]...

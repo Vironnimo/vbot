@@ -140,6 +140,7 @@ def test_transport_failure_reports_delivery_state_without_replay_or_secret(
     [
         httpx.Response(502, text="sk-test-secret"),
         httpx.Response(200, json=["sk-test-secret"]),
+        httpx.Response(200, json={"ok": True}),
         httpx.Response(200, json={"ok": True, "result": ["sk-test-secret"]}),
         httpx.Response(200, json={"ok": "true", "secret": "sk-test-secret"}),
     ],

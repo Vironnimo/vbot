@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -55,6 +56,28 @@ def bootstrap_list(instance: ServerInstance) -> CommandResult:
     if not isinstance(jobs, list):
         return CommandResult(ok=False, message="RPC result missing jobs list", instance=instance)
     return CommandResult(ok=True, message=_format_rows(jobs), instance=instance)
+
+
+def bootstrap_show(instance: ServerInstance, job_id: str) -> CommandResult:
+    """Read the complete saved job, including its prompt and execution state."""
+    payload = _rpc_call(instance, "bootstrap.list", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    jobs = payload.data.get("jobs")
+    if not isinstance(jobs, list):
+        return CommandResult(ok=False, message="RPC result missing jobs list", instance=instance)
+    job = next((item for item in jobs if isinstance(item, dict) and item.get("id") == job_id), None)
+    if job is None:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"bootstrap job not found: {job_id}; use vbot bootstrap list with the same target"
+            ),
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True, message=json.dumps(job, ensure_ascii=False, indent=2), instance=instance
+    )
 
 
 def bootstrap_update(
