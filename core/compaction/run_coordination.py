@@ -277,7 +277,11 @@ class CompactionRunCoordinator:
                 )
                 checkpoint = await compaction_service.compact(
                     messages,
-                    agent=agent,
+                    session_address=session.address,
+                    prompt_cache_affinity_id=await self._host.run_transform(
+                        self._host.sessions.prompt_cache_affinity_id,
+                        session.address,
+                    ),
                     summary_adapter=request.summary_adapter,
                     summary_model_id=request.summary_model_id,
                     storage=self._host.storage,
@@ -533,7 +537,8 @@ class CompactionRunCoordinator:
         try:
             checkpoint = await self._host.compaction_service.compact(
                 session_messages,
-                agent=agent,
+                session_address=session.address,
+                prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
                 storage=self._host.storage,

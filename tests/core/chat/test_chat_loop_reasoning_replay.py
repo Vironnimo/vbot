@@ -328,14 +328,14 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
             self,
             messages: list[ChatMessage],
             *,
-            agent: Any,
+            session_address: Any,
             summary_adapter: Any,
             summary_model_id: str,
             storage: Any,
             settings: Any,
             **kwargs: Any,
         ) -> ChatMessage:
-            del agent, summary_adapter, summary_model_id, storage, settings
+            del session_address, summary_adapter, summary_model_id, storage, settings
 
             self.compacted = True
             tail_user = next(
