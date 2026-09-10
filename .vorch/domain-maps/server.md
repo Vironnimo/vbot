@@ -10,6 +10,7 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 ## Transport contracts
 
+- Unexpected dispatch failures are logged with traceback and rethrown internally; the HTTP edge returns status 500 with the normal error envelope, code `internal_error`, and a generic message that withholds exception details (`tests/server/test_app.py`).
 - `POST /api/rpc` accepts `{method, params?}` JSON, returns `{ok:true,result}` or `{ok:false,error:{code,message}}`; non-JSON media types fail 415 before dispatch.
 - `GET /api/runs/{id}/events` is the per-Run SSE stream (complete events plus deltas). The shared `/ws` socket is server-push only: lifecycle summaries, reconnect state, presence, `resource_changed`. Both preserve explicit `contributes_to_agent_activity: false` while omitting the default true - transport never decides attention. Reflection Runs carry resolved `source_session_id` for attribution.
 - `/ws/logs` (handoff in `logs.md`) and `/ws/terminals/{id}` (ANSI snapshot then ordered PTY events; control via `terminal.*` RPCs) are dedicated streams outside the shared bus.

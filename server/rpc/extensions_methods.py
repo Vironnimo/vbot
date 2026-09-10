@@ -332,6 +332,8 @@ async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
         return result
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
 
 
 async def _extension_pages(state: Any, params: JsonObject) -> JsonObject:
@@ -405,6 +407,8 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         }
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
 
 
 async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
@@ -443,6 +447,8 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         return projection
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
 
 
 def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:

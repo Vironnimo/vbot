@@ -8,6 +8,8 @@ JsonObject = dict[str, Any]
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
+RPC_ERROR_INTERNAL = "internal_error"
+RPC_ERROR_SESSION_CAPABILITY_EXPIRED = "session_capability_expired"
 RPC_ERROR_DOMAIN = "domain_error"
 RPC_ERROR_ACTIVE_RUN = "active_run"
 RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
