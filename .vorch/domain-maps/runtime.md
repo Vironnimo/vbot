@@ -10,7 +10,7 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 ## Bootstrap
 
-`start()` is idempotent and runs dependency-ordered phases. Any exception after startup work begins synchronously stops every started lifecycle service, temporary-file sweeper, tracked process/terminal manager, Session store, and logging before clearing references and reraising. Ordering constraints worth knowing before touching bootstrap:
+`start()` is idempotent and runs dependency-ordered phases. Any exception after startup work begins synchronously stops every started lifecycle service, temporary-file sweeper, tracked process/terminal manager, Session store, and logging before clearing references and reraising. The cleanup guard starts before Storage construction and clears startup identity and readiness so the same Runtime can retry after failure (`tests/core/runtime/test_runtime.py`). Ordering constraints worth knowing before touching bootstrap:
 
 1. **Storage & settings** - logger + `StorageManager` + settings load. Invalid Settings never abort startup: malformed JSON or root shape falls back to defaults, schema-invalid keys omit individually while siblings stay live, the source file never rewrites, and mutations stay strict so they cannot overwrite invalid data. Data-dir creation failure is fatal.
 2. **Attachments & credentials** - AttachmentStore plus the `.env` fallback snapshot read without mutating `os.environ`.
@@ -45,6 +45,7 @@ All reload methods keep registry/service identity stable so already-wired consum
 
 - `reload_custom_providers()` - Settings-owned Providers + manual Models into existing registries.
 - `maybe_refresh_local_catalogs(force=False)` - staged copy refresh for auto-refresh Connections, published atomically after validation; failures never raise and leave the last database untouched.
+- `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers use it instead of the synchronous variant.
 - `reload_skills()` - asks `core/skills/runtime.py::SkillRuntime` for a replacement global registry, then re-registers Skill Tools and updates prompts. `SkillRuntime` owns scan-layer resolution, Project/Agent/shared scoping, inventory, and both scoped registry caches; Runtime preserves the existing public facade methods.
 - `reload_recall_backend()` re-registers both Recall Tools from settings without restart.
 - `reload_keep_awake()` holds/releases the Windows power request per persisted setting (no-op elsewhere).

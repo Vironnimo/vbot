@@ -863,3 +863,36 @@ def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
         "provider_output_tokens": 30,
     }
     assert result["messages"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["expired", "domain", "unexpected", "cancelled"])
+async def test_extension_operation_error_boundary(kind: str) -> None:
+    import asyncio
+
+    from core.extensions.extensions import SessionCapabilityExpiredError
+    from core.utils.errors import ConfigError
+
+    errors: dict[str, BaseException] = {
+        "expired": SessionCapabilityExpiredError("test-owned-expiry"),
+        "domain": ConfigError("test-owned-domain"),
+        "unexpected": RuntimeError("test-owned-bug"),
+        "cancelled": asyncio.CancelledError(),
+    }
+    error = errors[kind]
+
+    async def invoke(_operation: str, _arguments: JsonObject) -> JsonObject:
+        raise error
+
+    registry = SimpleNamespace(management=lambda _name: SimpleNamespace(invoke=invoke))
+    state = SimpleNamespace(runtime=SimpleNamespace(extensions=registry))
+    request = {"method": "extensions.operation", "params": {"name": "test", "operation": "run"}}
+    if kind in {"unexpected", "cancelled"}:
+        with pytest.raises(type(error)):
+            await dispatch_rpc(state, request)
+    else:
+        result = await dispatch_rpc(state, request)
+        assert result["ok"] is False
+        assert result["error"]["code"] == (
+            "session_capability_expired" if kind == "expired" else "domain_error"
+        )

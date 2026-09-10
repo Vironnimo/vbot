@@ -678,3 +678,50 @@ async def test_preview_rejects_non_boolean_tool_inspection(value: Any) -> None:
     with pytest.raises(RpcError) as raised:
         await _preview_prompt(SimpleNamespace(), {"agent_id": "coder", "include_tools": value})
     assert raised.value.code == RPC_ERROR_INVALID_REQUEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("prompt.list", {}),
+        ("prompt.update", {"id": "core:tools", "content": "test-owned text"}),
+        ("prompt.reset", {"id": "core:tools"}),
+        ("prompt.set_layout", {"layout": [{"id": "core:tools", "enabled": False}]}),
+        ("prompt.create_block", {"slug": "new-block", "content": "test-owned text"}),
+        ("prompt.remove_block", {"id": "user:existing"}),
+        ("prompt.reset_layout", {}),
+    ],
+)
+async def test_prompt_editor_rpc_keeps_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, params: JsonObject
+) -> None:
+    import asyncio
+    import threading
+
+    import server.rpc.operations_methods as methods
+    from server.rpc.methods import dispatch_rpc
+
+    manager = _manager(tmp_path)
+    manager.create_block("existing", "test-owned text")
+    state = _state(manager)
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def slow_manager(_state: Any) -> SystemPromptManager:
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return manager
+
+    monkeypatch.setattr(methods, "_prompt_manager", slow_manager)
+    task = asyncio.create_task(dispatch_rpc(state, {"method": method, "params": params}))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not task.done()
+    finally:
+        release.set()
+    result = await task
+    assert result["ok"] is True, result

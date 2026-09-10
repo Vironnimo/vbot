@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from typing import Any, cast
 
 from core.projects import (
@@ -28,7 +29,7 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.prompts")
-_PROMPT_RPC_WORKERS = BoundedWorkerPool(name="prompt-rpc", max_workers=4)
+_PROMPT_RPC_WORKERS = BoundedWorkerPool(name="prompt-rpc", max_workers=1)
 FILE_PREVIEW_WORKERS = BoundedWorkerPool(name="file-preview", max_workers=2)
 
 
@@ -387,6 +388,15 @@ def _prompt_manager(state: Any) -> SystemPromptManager:
     return cast(SystemPromptManager, state.runtime.system_prompts)
 
 
+def _offload_prompt_rpc(handler: Callable[[Any, JsonObject], JsonObject]) -> RpcMethodHandler:
+    """Keep each block-edit read/write/projection together in the named pool."""
+
+    async def run(state: Any, params: JsonObject) -> JsonObject:
+        return await _PROMPT_RPC_WORKERS.run(handler, state, params)
+
+    return run
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return file preview, log and prompt RPC handlers."""
 
@@ -395,12 +405,12 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "file.preview_revision": _file_preview_revision,
         "log.list": _list_logs,
         "log.read": _read_log,
-        "prompt.list": _list_prompts,
-        "prompt.update": _update_prompt,
-        "prompt.reset": _reset_prompt,
-        "prompt.set_layout": _set_prompt_layout,
-        "prompt.create_block": _create_prompt_block,
-        "prompt.remove_block": _remove_prompt_block,
-        "prompt.reset_layout": _reset_prompt_layout,
+        "prompt.list": _offload_prompt_rpc(_list_prompts),
+        "prompt.update": _offload_prompt_rpc(_update_prompt),
+        "prompt.reset": _offload_prompt_rpc(_reset_prompt),
+        "prompt.set_layout": _offload_prompt_rpc(_set_prompt_layout),
+        "prompt.create_block": _offload_prompt_rpc(_create_prompt_block),
+        "prompt.remove_block": _offload_prompt_rpc(_remove_prompt_block),
+        "prompt.reset_layout": _offload_prompt_rpc(_reset_prompt_layout),
         "prompt.preview": _preview_prompt,
     }
