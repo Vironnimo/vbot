@@ -26,19 +26,20 @@ vbot debug clear
 
 ## Statistics — usage aggregated from persisted sessions
 
-Read-only reports computed on demand from stored chat history. One section per command; nothing is written.
+Reports summarize persisted Session activity. The server maintains a disposable statistics index; reporting does not change Session history. Request the section relevant to the question.
 
 ```bash
 vbot statistics overview [--since <iso>] [--until <iso>]
 vbot statistics usage    [--since <iso>] [--until <iso>]
 vbot statistics runs     [--since <iso>] [--until <iso>]
+vbot statistics compactions [--since <iso>] [--until <iso>]
 vbot statistics errors   [--since <iso>] [--until <iso>]
 vbot statistics tools    [--since <iso>] [--until <iso>]
 vbot statistics skills   [--since <iso>] [--until <iso>]
 ```
 
 - `--since`/`--until` take ISO-8601 UTC timestamps (e.g. `2026-06-01T00:00:00Z`); omit both for all time. The server rejects malformed or inverted windows.
-- `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `errors` = failures by kind/provider/model; `tools` = per-tool call counts and error rates.
+- `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `compactions` = checkpoints, reclaimed context, and per-Session breakdowns; `errors` = failures by kind/provider/model; `tools` = per-tool call counts and error rates.
 - `skills` reports Skill usage for delete/improve decisions: it separates Skills whose recorded offers produced no conversion from Skills with no offer data, then per Skill shows origins, `offered` (Sessions whose catalog recorded it), `activated` (all Sessions that loaded it), `activated_after_offer`, `offer_conversion`, and last activation.
 
 Reading `skills` numbers correctly:

@@ -89,3 +89,96 @@ def test_rpc_call_uses_unbounded_read_timeout_for_long_running_method(
     assert timeout.connect == rpc_client.RPC_TIMEOUT_SECONDS
     assert timeout.write == rpc_client.RPC_TIMEOUT_SECONDS
     assert timeout.pool == rpc_client.RPC_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("error_type", "request_state"),
+    [
+        (httpx.ConnectError, "not_sent"),
+        (httpx.ConnectTimeout, "not_sent"),
+        (httpx.PoolTimeout, "not_sent"),
+        (httpx.ReadTimeout, "unknown"),
+        (httpx.ReadError, "unknown"),
+        (httpx.WriteTimeout, "unknown"),
+        (httpx.WriteError, "unknown"),
+        (httpx.RemoteProtocolError, "unknown"),
+    ],
+)
+def test_transport_failure_reports_delivery_state_without_replay_or_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[httpx.RequestError],
+    request_state: str,
+) -> None:
+    instance = make_instance(tmp_path, host="::1", port=9876)
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(url: str, **kwargs: Any) -> httpx.Response:
+        requests.append(kwargs["json"])
+        # Exception text can contain request data and must never be rendered.
+        raise error_type("sk-test-secret", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    result = rpc_client.rpc_call(instance, "provider.set_key", {"value": "sk-test-secret"})
+
+    assert not result.ok
+    assert result.instance is instance
+    assert len(requests) == 1
+    assert requests[0]["params"]["value"] == "sk-test-secret"
+    assert f"request_state: {request_state}" in result.message
+    assert "rpc_method: provider.set_key" in result.message
+    assert f"server: {instance.url}" in result.message
+    assert error_type.__name__ in result.message
+    assert "sk-test-secret" not in result.message
+    command_result = result.to_command_result()
+    assert not command_result.ok
+    assert command_result.message == result.message
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(502, text="sk-test-secret"),
+        httpx.Response(200, json=["sk-test-secret"]),
+        httpx.Response(200, json={"ok": True, "result": ["sk-test-secret"]}),
+        httpx.Response(200, json={"ok": "true", "secret": "sk-test-secret"}),
+    ],
+)
+def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response: httpx.Response,
+) -> None:
+    saved: list[dict[str, Any]] = []
+
+    def fake_post(url: str, **kwargs: Any) -> httpx.Response:
+        del url
+        # The receiver applied the write before its unusable response arrived.
+        saved.append(kwargs["json"]["params"])
+        return response
+
+    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    result = rpc_client.rpc_call(make_instance(tmp_path), "agent.create", {"id": "demo"})
+
+    assert saved == [{"id": "demo"}]
+    assert not result.ok
+    assert "request_state: unknown" in result.message
+    assert "rpc_method: agent.create" in result.message
+    assert "sk-test-secret" not in result.message
+
+
+@pytest.mark.parametrize("status_code", [200, 400, 500])
+def test_server_error_code_and_message_are_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            json={"ok": False, "error": {"code": "test_code", "message": "test sentinel"}},
+        )
+
+    monkeypatch.setattr(rpc_client.httpx, "post", fake_post)
+    result = rpc_client.rpc_call(make_instance(tmp_path), "agent.update", {})
+
+    assert not result.ok
+    assert result.message == "test_code: test sentinel"

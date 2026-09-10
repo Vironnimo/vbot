@@ -62,23 +62,23 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             trust_env=False,
         )
     except httpx.RequestError as exc:
-        return RpcPayload(
-            ok=False,
-            instance=instance,
-            message=f"RPC request failed: {exc.__class__.__name__}",
+        not_sent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+        return _transport_failure(
+            instance,
+            method,
+            f"RPC request failed: {exc.__class__.__name__}",
+            request_state="not_sent" if not_sent else "unknown",
         )
 
     try:
         payload = response.json()
     except ValueError:
-        return RpcPayload(
-            ok=False,
-            instance=instance,
-            message=f"RPC response was not JSON (HTTP {response.status_code})",
+        return _transport_failure(
+            instance, method, f"RPC response was not JSON (HTTP {response.status_code})"
         )
 
     if not isinstance(payload, dict):
-        return RpcPayload(ok=False, instance=instance, message="RPC response must be an object")
+        return _transport_failure(instance, method, "RPC response must be an object")
 
     if response.status_code != httpx.codes.OK:
         return RpcPayload(
@@ -94,7 +94,7 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
     if ok_flag is True:
         result = payload.get("result", {})
         if not isinstance(result, dict):
-            return RpcPayload(ok=False, instance=instance, message="RPC result must be an object")
+            return _transport_failure(instance, method, "RPC result must be an object")
         return RpcPayload(ok=True, instance=instance, data=result)
     if ok_flag is False:
         return RpcPayload(
@@ -103,7 +103,32 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             message=_rpc_error_message(payload.get("error"), fallback="RPC request failed"),
         )
 
-    return RpcPayload(ok=False, instance=instance, message="RPC response missing boolean ok flag")
+    return _transport_failure(instance, method, "RPC response missing boolean ok flag")
+
+
+def _transport_failure(
+    instance: ServerInstance,
+    method: str,
+    reason: str,
+    *,
+    request_state: str = "unknown",
+) -> RpcPayload:
+    """Preserve delivery uncertainty without exposing request or response bodies."""
+    recovery = (
+        "This RPC was not sent. Check connectivity and server status with the same target "
+        "options before retrying."
+        if request_state == "not_sent"
+        else "No valid result was received. The operation may have taken effect. Inspect the "
+        "same target's current state before retrying a mutation; do not repeat completed steps."
+    )
+    return RpcPayload(
+        ok=False,
+        instance=instance,
+        message=(
+            f"{reason}\nrpc_method: {method}\nserver: {instance.url}\n"
+            f"request_state: {request_state}\n{recovery}"
+        ),
+    )
 
 
 def _rpc_error_message(error: object, *, fallback: str) -> str:
