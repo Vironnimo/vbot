@@ -13,6 +13,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import {
     STATISTICS_SUB_VIEWS,
+    STATISTICS_RANGES,
     DAILY_GRANULARITIES,
     activitySummary,
     agentDisplay,
@@ -33,9 +34,11 @@
     formatUsageRate,
     groupModelsByProvider,
     parseOrigin,
-    rollupDaily,
     rollupSkillActivationsByAgent,
-    sparklinePoints,
+    statisticsWindow,
+    statisticsInsights,
+    timelineTicks,
+    tokenTimeline,
     tokenSplit,
     topN,
     usageSeverity,
@@ -52,6 +55,7 @@
     'system',
     'compaction_checkpoint',
     'agent_takeover',
+    'history_edit',
   ];
   const STATUS_KEYS = ['completed', 'failed', 'cancelled', 'interrupted'];
   const USAGE_REFRESH_INTERVAL_MS = 10_000;
@@ -60,6 +64,8 @@
   let loading = $state(false);
   let errorMessage = $state('');
   let activeSubView = $state('overview');
+  let reportRange = $state('all');
+  let requestedRange = 'all';
   let granularity = $state('day');
   let destroyed = false;
   let pageVisible = $state(true);
@@ -82,6 +88,7 @@
   const errors = $derived(report?.errors ?? null);
   const tools = $derived(report?.tools ?? null);
   const skills = $derived(report?.skills ?? null);
+  const insights = $derived(statisticsInsights(report));
   const usageProviders = $derived(usageReport?.providers ?? []);
   const statisticsTabs = $derived(
     STATISTICS_SUB_VIEWS.map((id) => ({ id, label: subViewLabel(id) })),
@@ -133,22 +140,23 @@
           overview.daily_trend,
           granularity,
           report.generated_at,
+          report.window,
         )
       : [],
   );
   const activityMetrics = $derived(activitySummary(dailyTrend));
-  const activityTicks = $derived(
-    dailyTrend.length
-      ? [
-          dailyTrend[0],
-          dailyTrend[Math.floor((dailyTrend.length - 1) / 2)],
-          dailyTrend[dailyTrend.length - 1],
-        ]
+  const activityTicks = $derived(timelineTicks(dailyTrend));
+  const usageDaily = $derived(
+    usage
+      ? buildActivityTimeline(
+          usage.daily,
+          granularity,
+          report.generated_at,
+          report.window,
+        )
       : [],
   );
-  const usageDaily = $derived(
-    usage ? rollupDaily(usage.daily, granularity) : [],
-  );
+  const usageChart = $derived(tokenTimeline(usageDaily));
   const providerGroups = $derived(
     usage ? groupModelsByProvider(usage.models) : [],
   );
@@ -183,15 +191,18 @@
     };
   });
 
-  async function loadReport() {
+  async function loadReport(range = requestedRange) {
+    if (loading) return;
+    requestedRange = range;
     loading = true;
     errorMessage = '';
     try {
-      const result = await getStatisticsReport();
+      const result = await getStatisticsReport(statisticsWindow(range));
       if (destroyed) {
         return;
       }
       report = result;
+      reportRange = range;
     } catch (error) {
       if (destroyed) {
         return;
@@ -290,6 +301,7 @@
   }
 
   function activityWindowLabel() {
+    if (reportRange !== 'all') return rangeLabel(reportRange);
     return t(
       `statistics.overview.activityWindow.${granularity}`,
       granularity === 'month'
@@ -298,6 +310,14 @@
           ? 'Last 16 weeks'
           : 'Last 30 days',
     );
+  }
+
+  function rangeLabel(range) {
+    return t(`statistics.range.${range}`, range);
+  }
+
+  function tokenTooltip(point) {
+    return `${activityPeriodLabel(point.date, true)} · ${t('statistics.legend.measured', 'Measured tokens')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated', 'Estimated tokens')}: ${formatTokens(point.estimated, locale)}`;
   }
 
   function activityPeriodLabel(dateKey, long = false) {
@@ -359,7 +379,7 @@
       <p class="stats-view__subtitle view-header__subtitle">
         {t(
           'statistics.subtitle',
-          'Session activity is aggregated on demand; subscription limits keep one automatic local snapshot per hour.',
+          'Explore activity, token usage and reliability across your Sessions.',
         )}
       </p>
     </div>
@@ -368,7 +388,11 @@
   {#if errorMessage}
     <Banner variant="error" aria-live="polite">
       <span>{errorMessage}</span>
-      <Button variant="secondary" onClick={loadReport}>
+      <Button
+        variant="secondary"
+        disabled={loading}
+        onClick={() => loadReport()}
+      >
         {t('common.retry', 'Retry')}
       </Button>
     </Banner>
@@ -388,7 +412,39 @@
         idPrefix="statistics-subviews"
         onChange={(value) => (activeSubView = value)}
       />
-      {#if activeSubView !== 'limits'}
+    </div>
+    {#if activeSubView !== 'limits'}
+      <div class="stats-scope view-toolbar">
+        <div class="stats-scope__range">
+          <span>{t('statistics.range.label', 'Time range')}</span>
+          <div
+            class="stats-toggle"
+            role="group"
+            aria-label={t('statistics.range.label', 'Time range')}
+          >
+            {#each STATISTICS_RANGES as range (range)}
+              <button
+                type="button"
+                class="stats-toggle__option"
+                class:stats-toggle__option--active={reportRange === range}
+                aria-pressed={reportRange === range}
+                aria-label={rangeLabel(range)}
+                disabled={loading}
+                onclick={() => loadReport(range)}
+                >{t(
+                  `statistics.range.short.${range}`,
+                  rangeLabel(range),
+                )}</button
+              >
+            {/each}
+          </div>
+          <InfoHint
+            text={t(
+              'statistics.range.hint',
+              'Activity uses UTC calendar days, including today so far. Agent, Session and Skill inventory totals describe the current collection. Skill offers use the offering Session’s creation date.',
+            )}
+          />
+        </div>
         <div class="stats-view__header-actions view-toolbar__actions">
           {#if report?.generated_at}
             <span class="stats-view__generated view-toolbar__meta">
@@ -397,17 +453,24 @@
               })}
             </span>
           {/if}
-          <Button variant="secondary" onClick={loadReport}>
-            {t('common.refresh', 'Refresh')}
+          <Button
+            variant="secondary"
+            disabled={loading}
+            onClick={() => loadReport(reportRange)}
+          >
+            {loading
+              ? t('statistics.refreshing', 'Refreshing…')
+              : t('common.refresh', 'Refresh')}
           </Button>
         </div>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <div
       role="tabpanel"
       id={`statistics-subviews-panel-${activeSubView}`}
       aria-labelledby={`statistics-subviews-tab-${activeSubView}`}
+      aria-busy={activeSubView !== 'limits' && loading}
     >
       {#if activeSubView === 'overview'}
         {@render overviewPanel()}
@@ -428,7 +491,7 @@
   {/if}
 </section>
 
-{#snippet statCard(label, value, hint)}
+{#snippet statCard(label, value, hint, detail)}
   <div class="stats-card">
     <span class="stats-card__label">
       {label}
@@ -437,6 +500,7 @@
       {/if}
     </span>
     <span class="stats-card__value">{value}</span>
+    {#if detail}<span class="stats-card__detail">{detail}</span>{/if}
   </div>
 {/snippet}
 
@@ -479,7 +543,9 @@
   <ul class="stats-bars">
     {#each entries as entry (entry.label)}
       <li class="stats-bars__row">
-        <span class="stats-bars__label">{entry.label}</span>
+        <span class="stats-bars__label" use:tooltip={entry.label}
+          >{entry.label}</span
+        >
         <span class="stats-bars__track">
           <span
             class="stats-bars__fill"
@@ -554,7 +620,7 @@
 
     <div
       class="stats-activity"
-      role="img"
+      role="group"
       aria-label={t(
         'statistics.overview.activityAria',
         '{runs} Runs in this period; {completion} completed.',
@@ -573,7 +639,7 @@
         </span>
         <span>0</span>
       </div>
-      <div class="stats-activity__plot" aria-hidden="true">
+      <div class="stats-activity__plot">
         <div class="stats-activity__grid">
           <span></span>
           <span></span>
@@ -581,8 +647,10 @@
         </div>
         <div class="stats-activity__bars">
           {#each dailyTrend as point (point.date)}
-            <div
+            <button
+              type="button"
               class="stats-activity__col"
+              aria-label={activityTooltip(point)}
               use:tooltip={activityTooltip(point)}
             >
               <div
@@ -597,7 +665,7 @@
                   ></span>
                 {/each}
               </div>
-            </div>
+            </button>
           {/each}
         </div>
       </div>
@@ -626,42 +694,54 @@
 
 {#snippet overviewPanel()}
   <div class="stats-panel">
-    <div class="stats-grid">
-      {@render statCard(
-        t('statistics.overview.agents', 'Agents'),
-        formatInteger(overview.total_agents, locale),
-      )}
-      {@render statCard(
-        t('statistics.overview.sessions', 'Sessions'),
-        formatInteger(overview.total_sessions, locale),
-      )}
+    <div class="stats-grid stats-grid--hero">
       {@render statCard(
         t('statistics.overview.runs', 'Runs'),
         formatInteger(overview.total_runs, locale),
+        null,
+        rangeLabel(reportRange),
       )}
       {@render statCard(
-        t('statistics.overview.chatMessages', 'Chat messages'),
-        formatInteger(overview.total_chat_messages, locale),
-        t(
-          'statistics.overview.chatMessagesHint',
-          'Visible User messages and Assistant text. Thinking-only and Tool-call-only Model steps are excluded.',
-        ),
-      )}
-      {@render statCard(
-        t('statistics.overview.modelSteps', 'Model steps'),
-        formatInteger(usage.totals.assistant_messages, locale),
-        t(
-          'statistics.overview.modelStepsHint',
-          'Every persisted Assistant response from a Model, including steps that only contain Thinking or request Tools.',
-        ),
+        t('statistics.usage.measuredTokens', 'Measured tokens'),
+        formatTokens(tokenSplit(usage.totals).measured, locale),
+        null,
+        t('statistics.overview.estimatedExtra', '+ {count} estimated', {
+          count: formatTokens(tokenSplit(usage.totals).estimated, locale),
+        }),
       )}
       {@render statCard(
         t('statistics.overview.toolCalls', 'Tool calls'),
-        formatInteger(overview.total_tool_calls, locale),
+        formatInteger(tools.total_calls, locale),
+        null,
+        t('statistics.overview.toolKinds', '{count} Tools used', {
+          count: formatInteger(tools.tools.length, locale),
+        }),
+      )}
+      {@render statCard(
+        t('statistics.errors.total', 'Total errors'),
+        formatInteger(errors.total_errors, locale),
+        null,
+        t('statistics.overview.failedRuns', '{count} failed Runs', {
+          count: formatInteger(overview.run_status.failed, locale),
+        }),
       )}
     </div>
-
-    <div class="stats-columns">
+    <div class="stats-dashboard">
+      <div class="stats-block">
+        <div class="stats-block__head">
+          <div class="stats-block__heading">
+            <h3 class="stats-block__title">
+              {t(
+                'statistics.overview.activityReliability',
+                'Activity & reliability',
+              )}
+            </h3>
+            <p>{activityWindowLabel()} · UTC</p>
+          </div>
+          {@render granularityToggle()}
+        </div>
+        {@render activityChart()}
+      </div>
       <div class="stats-block">
         <div class="stats-health__head">
           <h3 class="stats-block__title">
@@ -745,7 +825,57 @@
           </p>
         {/if}
       </div>
-
+    </div>
+    <div class="stats-inventory">
+      <span>{t('statistics.overview.inventory', 'Current collection')}</span>
+      <span
+        >{t('statistics.overview.inventoryAgents', '{count} Agents', {
+          count: formatInteger(overview.total_agents, locale),
+        })}</span
+      >
+      <span
+        >{t('statistics.overview.inventorySessions', '{count} Sessions', {
+          count: formatInteger(overview.total_sessions, locale),
+        })}</span
+      >
+      <span
+        >{t('statistics.overview.inventorySkills', '{count} Skills', {
+          count: formatInteger(skills.total_skills, locale),
+        })}</span
+      >
+    </div>
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.overview.activityDetails', 'Activity details')}
+      </h3>
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.overview.activeDays', 'Days with Runs (UTC)'),
+          formatInteger(insights.activeDays, locale),
+        )}
+        {@render statCard(
+          t('statistics.overview.chatMessages', 'Chat messages'),
+          formatInteger(overview.total_chat_messages, locale),
+          t(
+            'statistics.overview.chatMessagesHint',
+            'Visible User messages and Assistant text. Thinking-only and Tool-call-only Model steps are excluded.',
+          ),
+        )}
+        {@render statCard(
+          t('statistics.overview.modelSteps', 'Model steps'),
+          formatInteger(usage.totals.assistant_messages, locale),
+          t(
+            'statistics.overview.modelStepsHint',
+            'Every persisted Assistant response from a Model, including steps that only contain Thinking or request Tools.',
+          ),
+        )}
+        {@render statCard(
+          t('statistics.overview.toolRunShare', 'Runs using Tools'),
+          formatPercent(insights.toolRunShare),
+        )}
+      </div>
+    </div>
+    <div class="stats-columns">
       <div class="stats-block">
         <h3 class="stats-block__title">
           {t('statistics.overview.facts', 'At a glance')}
@@ -784,76 +914,118 @@
           overview.total_chat_messages,
         )}
       </div>
-    </div>
-
-    <div class="stats-block">
-      <h3 class="stats-block__title">
-        {t('statistics.overview.sessionRecords', 'Stored Session records')}
-        <InfoHint
-          text={t(
-            'statistics.overview.sessionRecordsHint',
-            'Every persisted Session entry, including Chat messages and internal execution or context records.',
-          )}
-        />
-      </h3>
-      {@render barRows(
-        SESSION_RECORD_ROLES.filter(
-          (role) => overview.session_records_by_role[role] > 0,
-        ).map((role) => ({
-          label: roleLabel(role),
-          value: overview.session_records_by_role[role],
-          fraction: overview.total_session_records
-            ? overview.session_records_by_role[role] /
-              overview.total_session_records
-            : 0,
-        })),
-        overview.total_session_records,
-      )}
-    </div>
-
-    <div class="stats-block">
-      <div class="stats-block__head">
-        <div class="stats-block__heading">
-          <h3 class="stats-block__title">
-            {t(
-              'statistics.overview.activityReliability',
-              'Activity & reliability',
-            )}
-          </h3>
-          <p>{activityWindowLabel()}</p>
+      <div class="stats-block">
+        <h3 class="stats-block__title">
+          {t('statistics.overview.context', 'Context & Skills')}
+        </h3>
+        <dl class="stats-facts">
+          <div>
+            <dt>{t('statistics.compactions.total', 'Compactions')}</dt>
+            <dd>{formatInteger(compactions.total_compactions, locale)}</dd>
+          </div>
+          <div>
+            <dt>
+              {t(
+                'statistics.overview.contextReclaimed',
+                'Estimated context reclaimed',
+              )}
+            </dt>
+            <dd>{formatTokens(compactions.reclaim.total_tokens, locale)}</dd>
+          </div>
+          <div>
+            <dt>
+              {t('statistics.overview.usedSkills', 'Distinct Skills activated')}
+            </dt>
+            <dd>{formatInteger(skills.used_skills, locale)}</dd>
+          </div>
+          <div>
+            <dt>
+              {t('statistics.skills.offeredUnactivated', 'No offer conversion')}
+            </dt>
+            <dd>{formatInteger(skills.offered_unactivated_skills, locale)}</dd>
+          </div>
+        </dl>
+        <div class="stats-links">
+          <Button
+            variant="tertiary"
+            onClick={() => (activeSubView = 'compactions')}
+            >{t('statistics.subview.compactions', 'Compactions')} →</Button
+          ><Button variant="tertiary" onClick={() => (activeSubView = 'skills')}
+            >{t('statistics.subview.skills', 'Skills')} →</Button
+          >
         </div>
-        {@render granularityToggle()}
       </div>
-      {@render activityChart()}
     </div>
-
     <div class="stats-block">
       <h3 class="stats-block__title">
         {t('statistics.overview.agentsTable', 'Per agent')}
       </h3>
-      <table class="stats-table">
-        <thead>
-          <tr>
-            <th>{t('statistics.col.agent', 'Agent')}</th>
-            <th>{t('statistics.col.sessions', 'Sessions')}</th>
-            <th>{t('statistics.col.runs', 'Runs')}</th>
-            <th>{t('statistics.col.errors', 'Errors')}</th>
-            <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each overview.agents as agent (agent.agent_id)}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+      <div
+        class="stats-table-scroll"
+        role="region"
+        tabindex="0"
+        aria-label={t(
+          'statistics.table.scroll',
+          'Statistics table; scroll for more columns',
+        )}
+      >
+        <table class="stats-table">
+          <thead>
             <tr>
-              <td class="stats-mono">{@render agentName(agent.agent_id)}</td>
-              <td>{formatInteger(agent.sessions, locale)}</td>
-              <td>{formatInteger(agent.runs, locale)}</td>
-              <td>{formatInteger(agent.errors, locale)}</td>
-              <td>{formatDateTime(agent.last_activity, locale)}</td>
+              <th>{t('statistics.col.agent', 'Agent')}</th>
+              <th>{t('statistics.col.sessions', 'Sessions')}</th>
+              <th>{t('statistics.col.runs', 'Runs')}</th>
+              <th>{t('statistics.col.errors', 'Errors')}</th>
+              <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
             </tr>
-          {/each}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {#each overview.agents as agent (agent.agent_id)}
+              <tr>
+                <td class="stats-mono">{@render agentName(agent.agent_id)}</td>
+                <td>{formatInteger(agent.sessions, locale)}</td>
+                <td>{formatInteger(agent.runs, locale)}</td>
+                <td>{formatInteger(agent.errors, locale)}</td>
+                <td>{formatDateTime(agent.last_activity, locale)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     </div>
+    <details class="stats-details">
+      <summary
+        >{t(
+          'statistics.overview.sessionRecords',
+          'Stored Session records',
+        )}</summary
+      >
+      <div class="stats-block">
+        <h3 class="stats-block__title">
+          {t('statistics.overview.sessionRecords', 'Stored Session records')}
+          <InfoHint
+            text={t(
+              'statistics.overview.sessionRecordsHint',
+              'Every persisted Session entry, including Chat messages and internal execution or context records.',
+            )}
+          />
+        </h3>
+        {@render barRows(
+          SESSION_RECORD_ROLES.filter(
+            (role) => overview.session_records_by_role[role] > 0,
+          ).map((role) => ({
+            label: roleLabel(role),
+            value: overview.session_records_by_role[role],
+            fraction: overview.total_session_records
+              ? overview.session_records_by_role[role] /
+                overview.total_session_records
+              : 0,
+          })),
+          overview.total_session_records,
+        )}
+      </div>
+    </details>
   </div>
 {/snippet}
 
@@ -872,67 +1044,205 @@
 
 {#snippet usagePanel()}
   <div class="stats-panel">
-    <div class="stats-grid">
-      {@render statCard(
-        t('statistics.usage.measuredTokens', 'Measured tokens'),
-        `${formatTokens(usage.totals.measured_input_tokens, locale)} / ${formatTokens(usage.totals.measured_output_tokens, locale)}`,
-      )}
-      {@render statCard(
-        t('statistics.usage.estimatedTokens', 'Estimated tokens'),
-        `${formatTokens(usage.totals.estimated_input_tokens, locale)} / ${formatTokens(usage.totals.estimated_output_tokens, locale)}`,
-      )}
-      {@render statCard(
-        t('statistics.usage.measuredTurns', 'Measured Model steps'),
-        formatInteger(usage.totals.measured_turns, locale),
-      )}
-      {@render statCard(
-        t('statistics.usage.estimatedTurns', 'Estimated Model steps'),
-        formatInteger(usage.totals.estimated_turns, locale),
-      )}
-      {@render statCard(
-        t('statistics.usage.cacheHitRate', 'Cache hit rate'),
-        formatPercent(cacheHitRate(usage.totals)),
-      )}
-      {@render statCard(
-        t('statistics.usage.cacheRead', 'Cache read'),
-        formatTokens(usage.totals.cache_read_tokens, locale),
-      )}
-      {@render statCard(
-        t('statistics.usage.cacheWrite', 'Cache write'),
-        formatTokens(usage.totals.cache_write_tokens, locale),
-      )}
-      {@render statCard(
-        t('statistics.usage.reasoning', 'Reasoning (output subset)'),
-        formatReasoningTokens(usage.totals),
-      )}
+    <div class="stats-columns">
+      <div class="stats-block">
+        <h3 class="stats-block__title">
+          {t('statistics.usage.measuredTokens', 'Measured tokens')}
+        </h3>
+        <div class="stats-grid stats-grid--three">
+          {@render statCard(
+            t('statistics.col.input', 'Input'),
+            formatTokens(usage.totals.measured_input_tokens, locale),
+          )}{@render statCard(
+            t('statistics.col.output', 'Output'),
+            formatTokens(usage.totals.measured_output_tokens, locale),
+          )}{@render statCard(
+            t('statistics.usage.measuredTurns', 'Measured Model steps'),
+            formatInteger(usage.totals.measured_turns, locale),
+          )}
+        </div>
+      </div>
+      <div class="stats-block">
+        <h3 class="stats-block__title">
+          {t('statistics.usage.estimatedTokens', 'Estimated tokens')}<InfoHint
+            text={t(
+              'statistics.estimatedHint',
+              'Estimated tokens are approximated, not provider-reported.',
+            )}
+          />
+        </h3>
+        <div class="stats-grid stats-grid--three">
+          {@render statCard(
+            t('statistics.col.input', 'Input'),
+            formatTokens(usage.totals.estimated_input_tokens, locale),
+          )}{@render statCard(
+            t('statistics.col.output', 'Output'),
+            formatTokens(usage.totals.estimated_output_tokens, locale),
+          )}{@render statCard(
+            t('statistics.usage.estimatedTurns', 'Estimated Model steps'),
+            formatInteger(usage.totals.estimated_turns, locale),
+          )}
+        </div>
+      </div>
     </div>
-    <p class="stats-note">
-      {t(
-        'statistics.usage.cacheIntro',
-        'Cache metrics track provider-side prompt caching. A higher hit rate can reduce billed input where the Provider discounts cache reads.',
-      )}
-    </p>
-    <p class="stats-note">
-      {t(
-        'statistics.estimatedHint',
-        'Estimated tokens are approximated, not provider-reported.',
-      )}
-      {t(
-        'statistics.usage.reasoningHint',
-        'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
-      )}
-      {t(
-        'statistics.usage.cacheHitHint',
-        'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
-      )}
-    </p>
-    <p class="stats-note">
-      {t(
-        'statistics.usage.runAttributionHint',
-        'Provider and Model Run counts mean “involved in this Run.” A fallback Run can appear in multiple rows, and Model duration is the full Run duration.',
-      )}
-    </p>
-
+    <div class="stats-block">
+      <div class="stats-block__head">
+        <div class="stats-block__heading">
+          <h3 class="stats-block__title">
+            {t('statistics.usage.dailyTokens', 'Tokens per period')}
+          </h3>
+          <p>{activityWindowLabel()} · UTC</p>
+        </div>
+        {@render granularityToggle()}
+      </div>
+      {#if usageChart.scaleMax === 0}<EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />
+      {:else}
+        <div
+          class="stats-activity stats-token-chart"
+          role="group"
+          aria-label={t('statistics.usage.dailyTokens', 'Tokens per period')}
+        >
+          <div class="stats-activity__y-axis" aria-hidden="true">
+            <span
+              >{formatChartTick(usageChart.scaleMax, locale, {
+                compact: true,
+              })}</span
+            ><span
+              >{formatChartTick(usageChart.scaleMax / 2, locale, {
+                compact: true,
+              })}</span
+            ><span>0</span>
+          </div>
+          <div class="stats-activity__plot">
+            <div class="stats-activity__grid" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="stats-activity__bars">
+              {#each usageChart.points as point (point.date)}
+                <button
+                  type="button"
+                  class="stats-activity__col"
+                  aria-label={tokenTooltip(point)}
+                  use:tooltip={tokenTooltip(point)}
+                >
+                  <span
+                    class="stats-activity__bar"
+                    class:stats-activity__bar--visible={point.total > 0}
+                    style={`height: ${activityHeight(point.total, usageChart.scaleMax)}`}
+                  >
+                    <span
+                      class="stats-activity__segment stats-token-chart__measured"
+                      style={`height: ${activityHeight(point.measured, point.total)}`}
+                    ></span>
+                    <span
+                      class="stats-activity__segment stats-token-chart__estimated"
+                      style={`height: ${activityHeight(point.estimated, point.total)}`}
+                    ></span>
+                  </span>
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="stats-activity__x-axis" aria-hidden="true">
+            {#each timelineTicks(usageDaily) as point (point.date)}<span
+                >{activityPeriodLabel(point.date)}</span
+              >{/each}
+          </div>
+        </div>
+        <div class="stats-activity__legend">
+          <span class="stats-legend stats-legend--measured"
+            >{t('statistics.legend.measured', 'Measured tokens')}</span
+          ><span class="stats-legend stats-legend--estimated"
+            >{t('statistics.legend.estimated', 'Estimated tokens')}</span
+          >
+        </div>
+        <details class="stats-details">
+          <summary>{t('statistics.chart.data', 'View chart data')}</summary>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+          <div
+            class="stats-table-scroll"
+            role="region"
+            tabindex="0"
+            aria-label={t(
+              'statistics.table.scroll',
+              'Statistics table; scroll for more columns',
+            )}
+          >
+            <table class="stats-table">
+              <caption class="sr-only"
+                >{t(
+                  'statistics.usage.dailyTokens',
+                  'Tokens per period',
+                )}</caption
+              ><thead
+                ><tr
+                  ><th>{t('statistics.granularity.label', 'Period')} (UTC)</th
+                  ><th>{t('statistics.legend.measured', 'Measured tokens')}</th
+                  ><th
+                    >{t('statistics.legend.estimated', 'Estimated tokens')}</th
+                  ><th>{t('statistics.col.cacheHit', 'Cache hit')}</th></tr
+                ></thead
+              ><tbody
+                >{#each usageChart.points as point (point.date)}<tr
+                    ><td>{activityPeriodLabel(point.date, true)}</td><td
+                      >{formatTokens(point.measured, locale)}</td
+                    ><td>{formatTokens(point.estimated, locale)}</td><td
+                      >{formatPercent(cacheHitRate(point))}</td
+                    ></tr
+                  >{/each}</tbody
+              >
+            </table>
+          </div>
+        </details>
+      {/if}
+    </div>
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.usage.cacheAndReasoning', 'Cache & Reasoning')}<InfoHint
+          text={t(
+            'statistics.usage.reasoningHint',
+            'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
+          )}
+        />
+      </h3>
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.usage.cacheHitRate', 'Cache hit rate'),
+          formatPercent(cacheHitRate(usage.totals)),
+          t(
+            'statistics.usage.cacheHitHint',
+            'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
+          ),
+        )}{@render statCard(
+          t('statistics.usage.cacheRead', 'Cache read'),
+          usage.totals.cache_turns > 0
+            ? formatTokens(usage.totals.cache_read_tokens, locale)
+            : '—',
+        )}{@render statCard(
+          t('statistics.usage.cacheWrite', 'Cache write'),
+          usage.totals.cache_turns > 0
+            ? formatTokens(usage.totals.cache_write_tokens, locale)
+            : '—',
+        )}{@render statCard(
+          t('statistics.usage.reasoning', 'Reasoning (output subset)'),
+          formatReasoningTokens(usage.totals),
+        )}
+      </div>
+    </div>
+    <div class="stats-block__head">
+      <h3 class="stats-section-title">
+        {t('statistics.usage.breakdown', 'Usage by Provider & Model')}
+      </h3>
+      <InfoHint
+        text={t(
+          'statistics.usage.runAttributionHint',
+          'Provider and Model Run counts mean “involved in this Run.” A fallback Run can appear in multiple rows, and Model duration is the full Run duration.',
+        )}
+      />
+    </div>
     <div class="stats-block">
       <h3 class="stats-block__title">
         {t('statistics.usage.providers', 'Providers')}
@@ -943,32 +1253,44 @@
           description={t('statistics.empty', 'No activity recorded yet.')}
         />
       {:else}
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.provider', 'Provider')}</th>
-              <th>{t('statistics.col.runs', 'Runs')}</th>
-              <th>{t('statistics.col.tokens', 'Tokens')}</th>
-              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
-              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
-              <th>{t('statistics.col.share', 'Share')}</th>
-              <th>{t('statistics.col.errors', 'Errors')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each usage.providers as provider (provider.provider)}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead>
               <tr>
-                <td class="stats-mono">{provider.provider}</td>
-                <td>{formatInteger(provider.runs, locale)}</td>
-                <td>{@render tokenCell(provider)}</td>
-                <td>{formatReasoningTokens(provider)}</td>
-                <td>{formatPercent(cacheHitRate(provider))}</td>
-                <td>{formatShare(provider.total_tokens, usageTotalTokens)}</td>
-                <td>{formatInteger(provider.errors, locale)}</td>
+                <th>{t('statistics.col.provider', 'Provider')}</th>
+                <th>{t('statistics.col.runs', 'Runs')}</th>
+                <th>{t('statistics.col.tokens', 'Tokens')}</th>
+                <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
+                <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
+                <th>{t('statistics.col.share', 'Share')}</th>
+                <th>{t('statistics.col.errors', 'Errors')}</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each usage.providers as provider (provider.provider)}
+                <tr>
+                  <td class="stats-mono">{provider.provider}</td>
+                  <td>{formatInteger(provider.runs, locale)}</td>
+                  <td>{@render tokenCell(provider)}</td>
+                  <td>{formatReasoningTokens(provider)}</td>
+                  <td>{formatPercent(cacheHitRate(provider))}</td>
+                  <td>{formatShare(provider.total_tokens, usageTotalTokens)}</td
+                  >
+                  <td>{formatInteger(provider.errors, locale)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
 
@@ -978,99 +1300,44 @@
       </h3>
       {#each providerGroups as group (group.provider)}
         <h4 class="stats-subheading stats-mono">{group.provider}</h4>
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.model', 'Model')}</th>
-              <th>{t('statistics.col.runs', 'Runs')}</th>
-              <th>{t('statistics.col.tokens', 'Tokens')}</th>
-              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
-              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
-              <th>{t('statistics.col.avgDuration', 'Avg')}</th>
-              <th>{t('statistics.col.errors', 'Errors')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each group.models as model (model.model)}
-              <tr>
-                <td class="stats-mono">{model.model}</td>
-                <td>{formatInteger(model.runs, locale)}</td>
-                <td>{@render tokenCell(model)}</td>
-                <td>{formatReasoningTokens(model)}</td>
-                <td>{formatPercent(cacheHitRate(model))}</td>
-                <td>{formatDurationMs(model.average_run_duration_ms)}</td>
-                <td>{formatInteger(model.errors, locale)}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/each}
-    </div>
-
-    <div class="stats-block">
-      <div class="stats-block__head">
-        <h3 class="stats-block__title">
-          {t('statistics.usage.dailyTokens', 'Tokens per period')}
-        </h3>
-        {@render granularityToggle()}
-      </div>
-      {#if usageDaily.length === 0}
-        <EmptyState
-          density="compact"
-          description={t('statistics.empty', 'No activity recorded yet.')}
-        />
-      {:else}
-        <svg
-          class="stats-spark"
-          viewBox="0 0 200 40"
-          preserveAspectRatio="none"
-          role="img"
-          aria-label={t('statistics.usage.dailyTokens', 'Tokens per period')}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
         >
-          <polyline
-            class="stats-spark__line"
-            points={sparklinePoints(
-              usageDaily.map(
-                (point) =>
-                  point.measured_input_tokens + point.measured_output_tokens,
-              ),
-              200,
-              40,
-            )}
-          />
-          <polyline
-            class="stats-spark__line stats-spark__line--est"
-            points={sparklinePoints(
-              usageDaily.map(
-                (point) =>
-                  point.estimated_input_tokens + point.estimated_output_tokens,
-              ),
-              200,
-              40,
-            )}
-          />
-          <polyline
-            class="stats-spark__line stats-spark__line--cache"
-            points={sparklinePoints(
-              usageDaily.map((point) => cacheHitRate(point) ?? 0),
-              200,
-              40,
-              { max: 1 },
-            )}
-          />
-        </svg>
-        <div class="stats-trend__legend">
-          <span class="stats-legend stats-legend--measured"
-            >{t('statistics.legend.measured', 'Measured tokens')}</span
-          >
-          <span class="stats-legend stats-legend--estimated"
-            >{t('statistics.legend.estimated', 'Estimated tokens')}</span
-          >
-          <span class="stats-legend stats-legend--cache"
-            >{t('statistics.legend.cacheHit', 'Cache hit % (0–100)')}</span
-          >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>{t('statistics.col.model', 'Model')}</th>
+                <th>{t('statistics.col.runs', 'Runs')}</th>
+                <th>{t('statistics.col.tokens', 'Tokens')}</th>
+                <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
+                <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
+                <th>{t('statistics.col.avgDuration', 'Avg')}</th>
+                <th>{t('statistics.col.errors', 'Errors')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each group.models as model (model.model)}
+                <tr>
+                  <td class="stats-mono">{model.model}</td>
+                  <td>{formatInteger(model.runs, locale)}</td>
+                  <td>{@render tokenCell(model)}</td>
+                  <td>{formatReasoningTokens(model)}</td>
+                  <td>{formatPercent(cacheHitRate(model))}</td>
+                  <td>{formatDurationMs(model.average_run_duration_ms)}</td>
+                  <td>{formatInteger(model.errors, locale)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
-      {/if}
+      {/each}
     </div>
 
     <div class="stats-block">
@@ -1089,32 +1356,45 @@
           )}
         />
       {:else}
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.agent', 'Agent')}</th>
-              <th>{t('statistics.col.session', 'Session')}</th>
-              <th>{t('statistics.col.turns', 'Turns')}</th>
-              <th>{t('statistics.col.input', 'Input')}</th>
-              <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
-              <th>{t('statistics.col.hitRate', 'Hit rate')}</th>
-              <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each cacheSessions as record (`${record.agent_id}:${record.session_id}`)}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead>
               <tr>
-                <td class="stats-mono">{@render agentName(record.agent_id)}</td>
-                <td class="stats-mono stats-truncate">{record.session_id}</td>
-                <td>{formatInteger(record.cache_turns, locale)}</td>
-                <td>{formatTokens(record.input_tokens, locale)}</td>
-                <td>{formatTokens(record.cache_read_tokens, locale)}</td>
-                <td>{formatPercent(record.hit_rate)}</td>
-                <td>{formatDateTime(record.last_activity, locale)}</td>
+                <th>{t('statistics.col.agent', 'Agent')}</th>
+                <th>{t('statistics.col.session', 'Session')}</th>
+                <th>{t('statistics.col.turns', 'Turns')}</th>
+                <th>{t('statistics.col.input', 'Input')}</th>
+                <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
+                <th>{t('statistics.col.hitRate', 'Hit rate')}</th>
+                <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each cacheSessions as record (`${record.agent_id}:${record.session_id}`)}
+                <tr>
+                  <td class="stats-mono"
+                    >{@render agentName(record.agent_id)}</td
+                  >
+                  <td class="stats-mono stats-truncate">{record.session_id}</td>
+                  <td>{formatInteger(record.cache_turns, locale)}</td>
+                  <td>{formatTokens(record.input_tokens, locale)}</td>
+                  <td>{formatTokens(record.cache_read_tokens, locale)}</td>
+                  <td>{formatPercent(record.hit_rate)}</td>
+                  <td>{formatDateTime(record.last_activity, locale)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
 
@@ -1141,35 +1421,50 @@
           )}
         </p>
         {#if cacheBreaks.incidents.length > 0}
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th>{t('statistics.col.time', 'Time')}</th>
-                <th>{t('statistics.col.agent', 'Agent')}</th>
-                <th>{t('statistics.col.session', 'Session')}</th>
-                <th>{t('statistics.col.model', 'Model')}</th>
-                <th>{t('statistics.col.previousInput', 'Prev. input')}</th>
-                <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each cacheBreaks.incidents as incident (`${incident.session_id}:${incident.timestamp}`)}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+          <div
+            class="stats-table-scroll"
+            role="region"
+            tabindex="0"
+            aria-label={t(
+              'statistics.table.scroll',
+              'Statistics table; scroll for more columns',
+            )}
+          >
+            <table class="stats-table">
+              <thead>
                 <tr>
-                  <td>{formatDateTime(incident.timestamp, locale)}</td>
-                  <td class="stats-mono"
-                    >{@render agentName(incident.agent_id)}</td
-                  >
-                  <td class="stats-mono stats-truncate"
-                    >{incident.session_id}</td
-                  >
-                  <td class="stats-mono">{incident.model}</td>
-                  <td>{formatTokens(incident.previous_input_tokens, locale)}</td
-                  >
-                  <td>{formatTokens(incident.cache_read_tokens, locale)}</td>
+                  <th>{t('statistics.col.time', 'Time')}</th>
+                  <th>{t('statistics.col.agent', 'Agent')}</th>
+                  <th>{t('statistics.col.session', 'Session')}</th>
+                  <th>{t('statistics.col.model', 'Model')}</th>
+                  <th>{t('statistics.col.previousInput', 'Prev. input')}</th>
+                  <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {#each cacheBreaks.incidents as incident (`${incident.session_id}:${incident.timestamp}`)}
+                  <tr>
+                    <td>{formatDateTime(incident.timestamp, locale)}</td>
+                    <td class="stats-mono"
+                      >{@render agentName(incident.agent_id)}</td
+                    >
+                    <td class="stats-mono stats-truncate"
+                      >{incident.session_id}</td
+                    >
+                    <td class="stats-mono">{incident.model}</td>
+                    <td
+                      >{formatTokens(
+                        incident.previous_input_tokens,
+                        locale,
+                      )}</td
+                    >
+                    <td>{formatTokens(incident.cache_read_tokens, locale)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </div>
     {/if}
@@ -1193,6 +1488,20 @@
         })),
         null,
       )}
+      {#if entries.length > 8}<details class="stats-details">
+          <summary
+            >{t('statistics.ranking.more', '{count} more', {
+              count: formatInteger(entries.length - 8, locale),
+            })}</summary
+          >{@render barRows(
+            entries.slice(8).map((entry) => ({
+              label: entry.key,
+              value: entry.count,
+              fraction: entries[0].count ? entry.count / entries[0].count : 0,
+            })),
+            null,
+          )}
+        </details>{/if}
     {/if}
   </div>
 {/snippet}
@@ -1229,100 +1538,134 @@
 
 {#snippet runsPanel()}
   <div class="stats-panel">
-    <div class="stats-grid">
-      {@render statCard(
-        t('statistics.runs.count', 'Runs'),
-        formatInteger(runs.total_runs, locale),
-      )}
-      {@render statCard(
-        t('statistics.runs.average', 'Average'),
-        formatDurationMs(runs.duration.average_ms),
-      )}
-      {@render statCard(
-        'P50',
-        formatDurationMs(runs.duration.p50_ms),
-        t(
-          'statistics.runs.p50Hint',
-          'Median — half of all runs finished within this time.',
-        ),
-      )}
-      {@render statCard(
-        'P90',
-        formatDurationMs(runs.duration.p90_ms),
-        t('statistics.runs.p90Hint', '90% of runs finished within this time.'),
-      )}
-      {@render statCard(
-        'P95',
-        formatDurationMs(runs.duration.p95_ms),
-        t('statistics.runs.p95Hint', '95% of runs finished within this time.'),
-      )}
-      {@render statCard(
-        t('statistics.runs.withTools', 'Runs with tools'),
-        formatInteger(runs.runs_with_tool_calls, locale),
-      )}
-      {@render statCard(
-        t('statistics.runs.openGroups', 'Open run groups'),
-        formatInteger(overview.open_run_groups, locale),
-      )}
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.runs.outcomes', 'Run outcomes')}
+      </h3>
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.runs.count', 'Runs'),
+          formatInteger(runs.total_runs, locale),
+        )}
+        {@render statCard(
+          t('statistics.runs.cancelRate', 'Cancel rate'),
+          formatPercent(runs.cancel_rate),
+        )}
+        {@render statCard(
+          t('statistics.runs.failureRate', 'Failure rate'),
+          formatPercent(runs.failure_rate),
+        )}
+        {@render statCard(
+          t('statistics.runs.interruptionRate', 'Interruption rate'),
+          formatPercent(runs.interruption_rate),
+        )}
+      </div>
     </div>
-    <p class="stats-note">
-      {t(
-        'statistics.runs.openGroupsHint',
-        'Trailing turns with no completion record yet — interrupted, crashed, or still running. Best-effort, and counted apart from the finished runs above.',
-      )}
-    </p>
-
-    <div class="stats-grid">
-      {@render statCard(
-        t('statistics.runs.cancelRate', 'Cancel rate'),
-        formatPercent(runs.cancel_rate),
-      )}
-      {@render statCard(
-        t('statistics.runs.failureRate', 'Failure rate'),
-        formatPercent(runs.failure_rate),
-      )}
-      {@render statCard(
-        t('statistics.runs.interruptionRate', 'Interruption rate'),
-        formatPercent(runs.interruption_rate),
-      )}
-      {@render statCard(
-        t('statistics.runs.fallbackRuns', 'Fallback runs (derived)'),
-        formatInteger(runs.derived_fallback_runs, locale),
-      )}
-      {@render statCard(
-        t('statistics.runs.avgToolsPerRun', 'Avg Tool calls / Run'),
-        runs.average_tool_calls_per_run == null
-          ? '—'
-          : formatChartTick(runs.average_tool_calls_per_run, locale),
-      )}
-      {@render statCard(
-        t('statistics.runs.avgAgentMessagesPerRun', 'Avg Agent messages / Run'),
-        runs.average_agent_messages_per_run == null
-          ? '—'
-          : formatChartTick(runs.average_agent_messages_per_run, locale),
-        t(
-          'statistics.runs.avgAgentMessagesHint',
-          'Visible Assistant text per recorded Run, including intermediate status updates. Open Run groups are excluded.',
-        ),
-      )}
-      {@render statCard(
-        t('statistics.runs.avgModelStepsPerRun', 'Avg Model steps / Run'),
-        runs.average_model_steps_per_run == null
-          ? '—'
-          : formatChartTick(runs.average_model_steps_per_run, locale),
-        t(
-          'statistics.runs.avgModelStepsHint',
-          'All Assistant Model responses per recorded Run, including Thinking-only and Tool-call-only steps. Open Run groups are excluded.',
-        ),
-      )}
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.runs.duration', 'Run duration')}
+      </h3>
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.runs.average', 'Average'),
+          formatDurationMs(runs.duration.average_ms),
+        )}
+        {@render statCard(
+          'P50',
+          formatDurationMs(runs.duration.p50_ms),
+          t(
+            'statistics.runs.p50Hint',
+            'Median — half of all runs finished within this time.',
+          ),
+        )}
+        {@render statCard(
+          'P90',
+          formatDurationMs(runs.duration.p90_ms),
+          t(
+            'statistics.runs.p90Hint',
+            '90% of runs finished within this time.',
+          ),
+        )}
+        {@render statCard(
+          'P95',
+          formatDurationMs(runs.duration.p95_ms),
+          t(
+            'statistics.runs.p95Hint',
+            '95% of runs finished within this time.',
+          ),
+        )}
+      </div>
     </div>
-    <p class="stats-note">
-      {t(
-        'statistics.derivedHint',
-        'Derived from an in-run model change — not an authoritative fallback signal.',
-      )}
-    </p>
-
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.runs.loopDepth', 'Work per Run')}
+      </h3>
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.runs.withTools', 'Runs with tools'),
+          formatInteger(runs.runs_with_tool_calls, locale),
+        )}
+        {@render statCard(
+          t('statistics.runs.avgToolsPerRun', 'Avg Tool calls / Run'),
+          runs.average_tool_calls_per_run == null
+            ? '—'
+            : formatChartTick(runs.average_tool_calls_per_run, locale),
+        )}
+        {@render statCard(
+          t(
+            'statistics.runs.avgAgentMessagesPerRun',
+            'Avg Agent messages / Run',
+          ),
+          runs.average_agent_messages_per_run == null
+            ? '—'
+            : formatChartTick(runs.average_agent_messages_per_run, locale),
+          t(
+            'statistics.runs.avgAgentMessagesHint',
+            'Visible Assistant text per recorded Run, including intermediate status updates. Open Run groups are excluded.',
+          ),
+        )}
+        {@render statCard(
+          t('statistics.runs.avgModelStepsPerRun', 'Avg Model steps / Run'),
+          runs.average_model_steps_per_run == null
+            ? '—'
+            : formatChartTick(runs.average_model_steps_per_run, locale),
+          t(
+            'statistics.runs.avgModelStepsHint',
+            'All Assistant Model responses per recorded Run, including Thinking-only and Tool-call-only steps. Open Run groups are excluded.',
+          ),
+        )}
+      </div>
+    </div>
+    <details class="stats-details">
+      <summary
+        >{t(
+          'statistics.runs.executionDetails',
+          'Unfinished activity & derived fallbacks',
+        )}</summary
+      >
+      <div class="stats-grid">
+        {@render statCard(
+          t('statistics.runs.openGroups', 'Open run groups'),
+          formatInteger(overview.open_run_groups, locale),
+        )}
+        {@render statCard(
+          t('statistics.runs.fallbackRuns', 'Fallback runs (derived)'),
+          formatInteger(runs.derived_fallback_runs, locale),
+        )}
+      </div>
+      <p class="stats-note">
+        {t(
+          'statistics.runs.openGroupsHint',
+          'Trailing turns with no completion record yet — interrupted, crashed, or still running. Best-effort, and counted apart from the finished runs above.',
+        )}
+      </p>
+      <p class="stats-note">
+        {t(
+          'statistics.derivedHint',
+          'Derived from an in-run model change — not an authoritative fallback signal.',
+        )}
+      </p>
+    </details>
     <div class="stats-block">
       <h3 class="stats-block__title">
         {t('statistics.runs.longest', 'Longest runs')}
@@ -1333,29 +1676,75 @@
           description={t('statistics.empty', 'No activity recorded yet.')}
         />
       {:else}
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.agent', 'Agent')}</th>
-              <th>{t('statistics.col.duration', 'Duration')}</th>
-              <th>{t('statistics.col.status', 'Status')}</th>
-              <th>{t('statistics.col.models', 'Models')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each runs.longest_runs as run (run.run_id)}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead>
               <tr>
-                <td class="stats-mono">{@render agentName(run.agent_id)}</td>
-                <td>{formatDurationMs(run.duration_ms)}</td>
-                <td>{statusLabel(run.status)}</td>
-                <td class="stats-mono">{run.models.join(', ')}</td>
+                <th>{t('statistics.col.agent', 'Agent')}</th>
+                <th>{t('statistics.col.duration', 'Duration')}</th>
+                <th>{t('statistics.col.status', 'Status')}</th>
+                <th>{t('statistics.col.models', 'Models')}</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each runs.longest_runs as run (`${run.agent_id}:${run.session_id}:${run.run_id}`)}
+                <tr>
+                  <td class="stats-mono">{@render agentName(run.agent_id)}</td>
+                  <td>{formatDurationMs(run.duration_ms)}</td>
+                  <td>{statusLabel(run.status)}</td>
+                  <td class="stats-mono">{run.models.join(', ')}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
 
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.runs.topSessions', 'Sessions with the most Runs')}
+      </h3>
+      {#if runs.top_sessions_by_runs.length === 0}<EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />{:else}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead
+              ><tr
+                ><th>{t('statistics.col.agent', 'Agent')}</th><th
+                  >{t('statistics.col.session', 'Session')}</th
+                ><th>{t('statistics.col.runs', 'Runs')}</th></tr
+              ></thead
+            ><tbody
+              >{#each runs.top_sessions_by_runs as session (`${session.agent_id}:${session.session_id}`)}<tr
+                  ><td>{@render agentName(session.agent_id)}</td><td
+                    class="stats-mono">{session.session_id}</td
+                  ><td>{formatInteger(session.runs, locale)}</td></tr
+                >{/each}</tbody
+            >
+          </table>
+        </div>{/if}
+    </div>
     <h3 class="stats-section-title">
       {t('statistics.errors.title', 'Errors')}
     </h3>
@@ -1379,6 +1768,10 @@
       {@render countTable(
         t('statistics.errors.byProvider', 'By provider'),
         errors.by_provider,
+      )}
+      {@render countTable(
+        t('statistics.errors.byModel', 'By Model'),
+        errors.by_model,
       )}
       {@render agentCountTable(
         t('statistics.errors.byAgent', 'By agent'),
@@ -1523,45 +1916,57 @@
             description={t('statistics.empty', 'No activity recorded yet.')}
           />
         {:else}
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th>{t('statistics.col.agent', 'Agent')}</th>
-                <th>{t('statistics.col.session', 'Session')}</th>
-                <th>
-                  {t('statistics.compactions.total', 'Compactions')}
-                </th>
-                <th>
-                  {t(
-                    'statistics.compactions.estimatedReclaimed',
-                    'Est. reclaimed',
-                  )}
-                </th>
-                <th>
-                  {t(
-                    'statistics.compactions.lastCompaction',
-                    'Last compaction',
-                  )}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each compactions.top_sessions as session (`${session.agent_id}:${session.session_id}`)}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+          <div
+            class="stats-table-scroll"
+            role="region"
+            tabindex="0"
+            aria-label={t(
+              'statistics.table.scroll',
+              'Statistics table; scroll for more columns',
+            )}
+          >
+            <table class="stats-table">
+              <thead>
                 <tr>
-                  <td class="stats-mono"
-                    >{@render agentName(session.agent_id)}</td
-                  >
-                  <td class="stats-mono stats-truncate">{session.session_id}</td
-                  >
-                  <td>{formatInteger(session.compactions, locale)}</td>
-                  <td>
-                    {formatTokens(session.estimated_reclaimed_tokens, locale)}
-                  </td>
-                  <td>{formatDateTime(session.last_compaction, locale)}</td>
+                  <th>{t('statistics.col.agent', 'Agent')}</th>
+                  <th>{t('statistics.col.session', 'Session')}</th>
+                  <th>
+                    {t('statistics.compactions.total', 'Compactions')}
+                  </th>
+                  <th>
+                    {t(
+                      'statistics.compactions.estimatedReclaimed',
+                      'Est. reclaimed',
+                    )}
+                  </th>
+                  <th>
+                    {t(
+                      'statistics.compactions.lastCompaction',
+                      'Last compaction',
+                    )}
+                  </th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {#each compactions.top_sessions as session (`${session.agent_id}:${session.session_id}`)}
+                  <tr>
+                    <td class="stats-mono"
+                      >{@render agentName(session.agent_id)}</td
+                    >
+                    <td class="stats-mono stats-truncate"
+                      >{session.session_id}</td
+                    >
+                    <td>{formatInteger(session.compactions, locale)}</td>
+                    <td>
+                      {formatTokens(session.estimated_reclaimed_tokens, locale)}
+                    </td>
+                    <td>{formatDateTime(session.last_compaction, locale)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </div>
     </div>
@@ -1574,6 +1979,22 @@
       {@render statCard(
         t('statistics.tools.totalCalls', 'Tool calls'),
         formatInteger(tools.total_calls, locale),
+      )}
+      {@render statCard(
+        t('statistics.tools.accepted', 'Accepted'),
+        formatInteger(insights.accepted, locale),
+      )}
+      {@render statCard(
+        t('statistics.tools.rejected', 'Rejected'),
+        formatInteger(insights.rejected, locale),
+      )}
+      {@render statCard(
+        t('statistics.tools.unknown', 'Unknown outcome'),
+        formatInteger(insights.unknown, locale),
+        t(
+          'statistics.tools.unknownHint',
+          'Recorded Tool results without an accepted or rejected outcome.',
+        ),
       )}
     </div>
     <p class="stats-note">
@@ -1593,35 +2014,50 @@
           description={t('statistics.empty', 'No activity recorded yet.')}
         />
       {:else}
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.tool', 'Tool')}</th>
-              <th>{t('statistics.col.calls', 'Calls')}</th>
-              <th>{t('statistics.col.acceptedRate', 'Accepted')}</th>
-              <th>{t('statistics.col.rejectedRate', 'Rejected')}</th>
-              <th>{t('statistics.col.avgDuration', 'Avg')}</th>
-              <th>P95</th>
-              <th>{t('statistics.col.topRejection', 'Top rejection')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each tools.tools as tool (tool.name)}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead>
               <tr>
-                <td class="stats-mono">{tool.name}</td>
-                <td>{formatInteger(tool.calls, locale)}</td>
-                <td>{formatPercent(tool.success_rate)}</td>
-                <td>{formatPercent(tool.error_rate)}</td>
-                <td>{formatDurationMs(tool.average_duration_ms)}</td>
-                <td>{formatDurationMs(tool.p95_duration_ms)}</td>
-                <td class="stats-mono">{tool.top_error_code ?? '—'}</td>
+                <th>{t('statistics.col.tool', 'Tool')}</th>
+                <th>{t('statistics.col.calls', 'Calls')}</th>
+                <th>{t('statistics.col.acceptedRate', 'Accepted')}</th>
+                <th>{t('statistics.col.rejectedRate', 'Rejected')}</th>
+                <th>{t('statistics.col.avgDuration', 'Avg')}</th>
+                <th>P95</th>
+                <th>{t('statistics.col.topRejection', 'Top rejection')}</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each tools.tools as tool (tool.name)}
+                <tr>
+                  <td class="stats-mono">{tool.name}</td>
+                  <td>{formatInteger(tool.calls, locale)}</td>
+                  <td>{formatPercent(tool.success_rate)}</td>
+                  <td>{formatPercent(tool.error_rate)}</td>
+                  <td>{formatDurationMs(tool.average_duration_ms)}</td>
+                  <td>{formatDurationMs(tool.p95_duration_ms)}</td>
+                  <td class="stats-mono">{tool.top_error_code ?? '—'}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
 
+    {@render countTable(
+      t('statistics.tools.rejectionCodes', 'Rejection codes across Tools'),
+      insights.rejectionCodes,
+    )}
     <div class="stats-columns">
       {@render agentCountTable(
         t('statistics.tools.byAgent', 'Calls per agent'),
@@ -1637,27 +2073,39 @@
             description={t('statistics.none', 'None')}
           />
         {:else}
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th>{t('statistics.col.agent', 'Agent')}</th>
-                <th>{t('statistics.col.session', 'Session')}</th>
-                <th>{t('statistics.col.calls', 'Calls')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each tools.top_sessions as session (session.session_id)}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+          <div
+            class="stats-table-scroll"
+            role="region"
+            tabindex="0"
+            aria-label={t(
+              'statistics.table.scroll',
+              'Statistics table; scroll for more columns',
+            )}
+          >
+            <table class="stats-table">
+              <thead>
                 <tr>
-                  <td class="stats-mono"
-                    >{@render agentName(session.agent_id)}</td
-                  >
-                  <td class="stats-mono stats-truncate">{session.session_id}</td
-                  >
-                  <td>{formatInteger(session.calls, locale)}</td>
+                  <th>{t('statistics.col.agent', 'Agent')}</th>
+                  <th>{t('statistics.col.session', 'Session')}</th>
+                  <th>{t('statistics.col.calls', 'Calls')}</th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {#each tools.top_sessions as session (`${session.agent_id}:${session.session_id}`)}
+                  <tr>
+                    <td class="stats-mono"
+                      >{@render agentName(session.agent_id)}</td
+                    >
+                    <td class="stats-mono stats-truncate"
+                      >{session.session_id}</td
+                    >
+                    <td>{formatInteger(session.calls, locale)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </div>
     </div>
@@ -1712,68 +2160,79 @@
           )}
         />
       {:else}
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>{t('statistics.col.skill', 'Skill')}</th>
-              <th>{t('statistics.col.origins', 'Origins')}</th>
-              <th>{t('statistics.col.offered', 'Offered')}</th>
-              <th>{t('statistics.col.activated', 'Activated')}</th>
-              <th>{t('statistics.col.usageRate', 'Offer conversion')}</th>
-              <th>{t('statistics.col.firstActivated', 'First activated')}</th>
-              <th>{t('statistics.col.lastActivated', 'Last activated')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each skills.skills as skill (skill.name)}
-              {@const offeredUnactivated =
-                skill.offered_sessions > 0 &&
-                skill.activated_offered_sessions === 0}
-              {@const withoutOfferData = skill.offered_sessions === 0}
-              <tr
-                class:stats-skill-row--candidate={offeredUnactivated}
-                use:tooltip={offeredUnactivated
-                  ? t(
-                      'statistics.skills.neverUsedRowTitle',
-                      'No Session with recorded offer data also recorded an activation — a candidate to delete or improve.',
-                    )
-                  : withoutOfferData
-                    ? t(
-                        'statistics.skills.noOfferDataRowTitle',
-                        'No Session has recorded this Skill in its offered catalog yet, so there is not enough evidence to judge it.',
-                      )
-                    : ''}
-              >
-                <td class="stats-mono">
-                  <span class="stats-skill-name">
-                    <span>{skill.name}</span>
-                    {#if offeredUnactivated}
-                      <Badge variant="warn">
-                        {t(
-                          'statistics.skills.neverUsedBadge',
-                          'No offer conversion',
-                        )}
-                      </Badge>
-                    {:else if withoutOfferData}
-                      <Badge variant="neutral">
-                        {t(
-                          'statistics.skills.noOfferDataBadge',
-                          'No offer data',
-                        )}
-                      </Badge>
-                    {/if}
-                  </span>
-                </td>
-                <td>{@render skillOrigins(skill.origins)}</td>
-                <td>{formatInteger(skill.offered_sessions, locale)}</td>
-                <td>{formatInteger(skill.activated_sessions, locale)}</td>
-                <td>{formatUsageRate(skill.usage_rate)}</td>
-                <td>{formatDateTime(skill.first_activated, locale)}</td>
-                <td>{formatDateTime(skill.last_activated, locale)}</td>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
+        <div
+          class="stats-table-scroll"
+          role="region"
+          tabindex="0"
+          aria-label={t(
+            'statistics.table.scroll',
+            'Statistics table; scroll for more columns',
+          )}
+        >
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>{t('statistics.col.skill', 'Skill')}</th>
+                <th>{t('statistics.col.origins', 'Origins')}</th>
+                <th>{t('statistics.col.offered', 'Offered')}</th>
+                <th>{t('statistics.col.activated', 'Activated')}</th>
+                <th>{t('statistics.col.usageRate', 'Offer conversion')}</th>
+                <th>{t('statistics.col.firstActivated', 'First activated')}</th>
+                <th>{t('statistics.col.lastActivated', 'Last activated')}</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each skills.skills as skill (skill.name)}
+                {@const offeredUnactivated =
+                  skill.offered_sessions > 0 &&
+                  skill.activated_offered_sessions === 0}
+                {@const withoutOfferData = skill.offered_sessions === 0}
+                <tr
+                  class:stats-skill-row--candidate={offeredUnactivated}
+                  use:tooltip={offeredUnactivated
+                    ? t(
+                        'statistics.skills.neverUsedRowTitle',
+                        'No Session with recorded offer data also recorded an activation — a candidate to delete or improve.',
+                      )
+                    : withoutOfferData
+                      ? t(
+                          'statistics.skills.noOfferDataRowTitle',
+                          'No Session has recorded this Skill in its offered catalog yet, so there is not enough evidence to judge it.',
+                        )
+                      : ''}
+                >
+                  <td class="stats-mono">
+                    <span class="stats-skill-name">
+                      <span>{skill.name}</span>
+                      {#if offeredUnactivated}
+                        <Badge variant="warn">
+                          {t(
+                            'statistics.skills.neverUsedBadge',
+                            'No offer conversion',
+                          )}
+                        </Badge>
+                      {:else if withoutOfferData}
+                        <Badge variant="neutral">
+                          {t(
+                            'statistics.skills.noOfferDataBadge',
+                            'No offer data',
+                          )}
+                        </Badge>
+                      {/if}
+                    </span>
+                  </td>
+                  <td>{@render skillOrigins(skill.origins)}</td>
+                  <td>{formatInteger(skill.offered_sessions, locale)}</td>
+                  <td>{formatInteger(skill.activated_sessions, locale)}</td>
+                  <td>{formatUsageRate(skill.usage_rate)}</td>
+                  <td>{formatDateTime(skill.first_activated, locale)}</td>
+                  <td>{formatDateTime(skill.last_activated, locale)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
 
@@ -1932,6 +2391,7 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
     height: 100%;
     color: var(--text-hi);
   }
@@ -1944,15 +2404,75 @@
     max-width: var(--content-max-wide);
     margin-inline: auto;
   }
+  .stats-scope,
+  .stats-scope__range {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+  }
+  .stats-scope {
+    justify-content: space-between;
+  }
+  .stats-scope__range > span {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
+  .stats-dashboard {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: var(--space-md);
+    align-items: start;
+  }
+  .stats-inventory {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm) var(--space-lg);
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    padding: 0 var(--space-xs);
+  }
+  .stats-inventory span:first-child {
+    font-weight: 600;
+  }
+  .stats-details {
+    min-width: 0;
+    margin-top: var(--space-sm);
+  }
+  .stats-details > summary {
+    padding: var(--space-sm) 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+  }
+  .stats-details > summary:focus-visible,
+  .stats-table-scroll:focus-visible,
+  .stats-toggle__option:focus-visible,
+  .stats-activity__col:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .stats-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .stats-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    margin-top: var(--space-md);
+  }
   .stats-view__placeholder,
   .stats-note {
     color: var(--text-med);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     margin: 0;
   }
   .stats-note {
-    color: var(--text-lo);
-    font-style: italic;
+    color: var(--text-med);
+    max-width: 85ch;
+    line-height: 1.5;
   }
   .stats-panel {
     display: flex;
@@ -1961,43 +2481,64 @@
   }
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px;
   }
+  .stats-grid--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .stats-grid--hero .stats-card {
+    padding: var(--space-lg);
+    background: var(--surface);
+    border-radius: var(--r-lg);
+  }
+  .stats-grid--hero .stats-card__value {
+    font-size: var(--fs-display);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+  }
+  .stats-card__detail {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
   .stats-card {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 12px 14px;
+    padding: var(--space-md);
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
   }
   .stats-card__label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-lo);
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
   }
   .stats-card__value {
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
     font-family: var(--font-mono);
-    font-size: 18px;
+    font-size: var(--fs-heading-md);
     color: var(--text-hi);
   }
   .stats-columns {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
   }
   .stats-columns--three {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .stats-block {
+    min-width: 0;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
-    padding: 14px 16px;
+    padding: var(--space-lg);
   }
   .stats-block__head {
     display: flex;
@@ -2010,13 +2551,13 @@
   }
   .stats-block__heading p {
     margin: 0;
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
   }
   .stats-block__title,
   .stats-section-title {
-    font-size: 13px;
+    font-size: var(--fs-label-md);
     font-weight: 600;
     margin: 0 0 10px;
     color: var(--text-hi);
@@ -2025,29 +2566,41 @@
     margin-top: 8px;
   }
   .stats-subheading {
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     color: var(--text-med);
     margin: 12px 0 6px;
   }
   .stats-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
   }
   .stats-table th {
     text-align: left;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: var(--fs-mono-xs);
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--text-lo);
-    padding: 4px 8px;
+    color: var(--text-med);
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border);
   }
   .stats-table td {
-    padding: 5px 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border);
-    color: var(--text-med);
+    color: var(--text-hi);
+    font-variant-numeric: tabular-nums;
+    vertical-align: top;
+  }
+  .stats-table tr:last-child td {
+    border-bottom: 0;
+  }
+  .stats-table tbody tr:hover {
+    background: var(--surface-2);
+  }
+  .stats-table th:not(:first-child),
+  .stats-table td:not(:first-child) {
+    text-align: right;
   }
   .stats-mono {
     font-family: var(--font-mono);
@@ -2120,7 +2673,7 @@
     grid-template-columns: minmax(60px, 120px) 1fr auto auto;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
   }
   .stats-bars__label {
     color: var(--text-med);
@@ -2137,7 +2690,7 @@
   .stats-bars__fill {
     display: block;
     height: 100%;
-    background: var(--accent);
+    background: var(--blue);
   }
   .stats-bars__value {
     font-family: var(--font-mono);
@@ -2145,7 +2698,7 @@
   }
   .stats-bars__share {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     color: var(--text-lo);
   }
   .stats-health__head {
@@ -2158,7 +2711,7 @@
     margin-bottom: 0;
   }
   .stats-health__total {
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
   }
@@ -2216,7 +2769,7 @@
     margin: 0;
     padding: 0;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
   .stats-health__outcomes li {
@@ -2252,7 +2805,7 @@
   }
   .stats-health__share {
     grid-column: 3;
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-sm);
   }
@@ -2272,7 +2825,7 @@
   .stats-facts div {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
   }
   .stats-facts dt {
     color: var(--text-med);
@@ -2299,7 +2852,7 @@
   }
   .stats-activity-summary dt {
     margin-bottom: 6px;
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     letter-spacing: 0.07em;
@@ -2323,7 +2876,7 @@
   .stats-activity {
     display: grid;
     grid-template-columns: 34px minmax(0, 1fr);
-    grid-template-rows: 132px auto;
+    grid-template-rows: 180px auto;
     gap: 6px 8px;
     margin-top: 4px;
   }
@@ -2332,7 +2885,7 @@
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-end;
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
   }
@@ -2362,12 +2915,21 @@
     gap: 3px;
   }
   .stats-activity__col {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
     display: flex;
     flex: 1 1 0;
     align-items: flex-end;
     justify-content: center;
     height: 100%;
     min-width: 0;
+  }
+  .stats-activity__col:hover,
+  .stats-activity__col:focus-visible {
+    background: var(--surface-2);
   }
   .stats-activity__bar {
     display: flex;
@@ -2388,7 +2950,7 @@
     grid-column: 2;
     display: flex;
     justify-content: space-between;
-    color: var(--text-lo);
+    color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
   }
@@ -2398,14 +2960,13 @@
     gap: 10px;
     margin: 12px 0 0 42px;
   }
-  .stats-trend__legend,
   .stats-toggle {
     display: flex;
     gap: 10px;
     margin-top: 8px;
   }
   .stats-legend {
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     color: var(--text-med);
     display: inline-flex;
     align-items: center;
@@ -2431,13 +2992,10 @@
     background: var(--amber);
   }
   .stats-legend--measured::before {
-    background: var(--accent);
+    background: var(--blue);
   }
   .stats-legend--estimated::before {
     background: var(--amber);
-  }
-  .stats-legend--cache::before {
-    background: var(--green);
   }
   .stats-toggle {
     margin-top: 0;
@@ -2447,34 +3005,32 @@
     overflow: hidden;
   }
   .stats-toggle__option {
+    min-height: 32px;
+    white-space: nowrap;
     appearance: none;
     background: transparent;
     border: none;
     color: var(--text-med);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     padding: 4px 10px;
     cursor: pointer;
+  }
+  .stats-toggle__option:disabled {
+    cursor: wait;
+  }
+  .stats-token-chart__measured {
+    background: var(--blue);
+  }
+  .stats-token-chart {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+  .stats-token-chart__estimated {
+    background: var(--amber);
   }
   .stats-toggle__option--active {
     background: var(--accent-dim);
     color: var(--accent);
-  }
-  .stats-spark {
-    width: 100%;
-    height: 48px;
-  }
-  .stats-spark__line {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 1.5;
-  }
-  .stats-spark__line--est {
-    stroke: var(--amber);
-    stroke-dasharray: 3 3;
-  }
-  .stats-spark__line--cache {
-    stroke: var(--green);
   }
   .stats-hours {
     display: flex;
@@ -2495,7 +3051,7 @@
     min-height: 1px;
   }
   .stats-block--narrow .stats-table {
-    font-size: 11.5px;
+    font-size: var(--fs-mono-sm);
   }
   .stats-limits {
     display: grid;
@@ -2518,7 +3074,7 @@
     gap: 10px;
   }
   .stats-limit-card__name {
-    font-size: 13px;
+    font-size: var(--fs-label-md);
     font-weight: 600;
     color: var(--text-hi);
   }
@@ -2537,7 +3093,7 @@
   }
   .stats-limit-card__plan {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: var(--fs-mono-xs);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-med);
@@ -2552,7 +3108,7 @@
   }
   .stats-limit-card__unavailable {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
     color: var(--text-lo);
     font-style: italic;
   }
@@ -2574,7 +3130,7 @@
     justify-content: space-between;
     align-items: baseline;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--fs-mono-body);
   }
   .stats-limit-window__label {
     color: var(--text-med);
@@ -2602,7 +3158,7 @@
   }
   .stats-limit-window__reset {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
     color: var(--text-lo);
   }
   .stats-limit-window__units {
@@ -2611,7 +3167,48 @@
     font-size: var(--fs-mono-xs);
   }
 
+  @media (max-width: 960px) {
+    .stats-dashboard,
+    .stats-columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .stats-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stats-grid--three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
   @media (max-width: 640px) {
+    .stats-grid--three {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stats-grid--three .stats-card:last-child {
+      grid-column: 1 / -1;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .stats-grid--three .stats-card__value {
+      font-size: var(--fs-heading-sm);
+    }
+    .stats-grid--hero .stats-card,
+    .stats-block {
+      padding: var(--space-md);
+    }
+    .stats-grid--hero .stats-card__value {
+      font-size: var(--fs-heading-md);
+    }
+    .stats-scope__range {
+      width: 100%;
+    }
+    .stats-scope__range > span {
+      display: none;
+    }
+    .stats-toggle__option,
+    .stats-details > summary {
+      min-height: 40px;
+    }
     .stats-block__head {
       align-items: flex-start;
       flex-wrap: wrap;
@@ -2631,6 +3228,9 @@
       grid-template-columns: 28px minmax(0, 1fr);
       grid-template-rows: 120px auto;
       gap: 6px;
+    }
+    .stats-token-chart {
+      grid-template-columns: 52px minmax(0, 1fr);
     }
     .stats-activity__bars {
       gap: 2px;
