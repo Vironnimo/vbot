@@ -17,6 +17,7 @@ from cli.install_state import (
     INSTALL_STATE_SCHEMA_VERSION,
     InstallState,
     file_digest,
+    read_install_state,
     write_install_state,
 )
 from cli.main import dispatch_update_command
@@ -549,6 +550,104 @@ def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
     assert result.ok, result.message
     assert runner.ran("-m", "pip", "install", "-e", ".[server,cli]")
     assert any("npm" in call for call in runner.calls)
+    assert events == ["stop", "start"]
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "change", "rebuild"),
+    [
+        ("resources/extensions/swarm/ui/ProfileEditor.svelte", "edit", True),
+        ("resources/extensions/other/ui/nested/component.js", "edit", True),
+        ("resources/extensions/new/ui/page.html", "add", True),
+        ("resources/extensions/old/ui/page.html", "delete", True),
+        ("webui/src/lib/shared.js", "edit", True),
+        ("tests/fixtures/extension-pages/alpha/ui/page.html", "edit", True),
+        ("resources/extensions/swarm/backend.py", "edit", False),
+        ("core/example.py", "edit", False),
+    ],
+)
+def test_dev_webui_detects_build_inputs_with_git(
+    tmp_path: Path, changed_path: str, change: str, rebuild: bool
+) -> None:
+    def git(*args: str) -> str:
+        result = _default_runner(["git", *args], tmp_path)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    git("init", "--quiet")
+    (tmp_path / "README.md").write_text("test repository", encoding="utf-8")
+    source = tmp_path / changed_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    if change != "add":
+        source.write_text("before", encoding="utf-8")
+    git("add", ".")
+    before = git("write-tree")
+    if change == "delete":
+        source.unlink()
+    else:
+        source.write_text("after", encoding="utf-8")
+    git("add", "--all")
+    after = git("write-tree")
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing build", encoding="utf-8")
+    builds: list[list[str]] = []
+
+    def runner(command: list[str], cwd: Path) -> CommandRun:
+        if command[0] == "git":
+            return _default_runner(command, cwd)
+        assert cwd == tmp_path / "webui"
+        builds.append(command)
+        return _ok()
+
+    result = update_management._refresh_dev_webui(runner, tmp_path, before, after)
+
+    assert result.ok
+    assert builds == (
+        [update_management._npm_command(["ci"]), update_management._npm_command(["run", "build"])]
+        if rebuild
+        else []
+    )
+
+
+def test_dev_webui_build_failure_preserves_revision_for_retry(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("unchanged", encoding="utf-8")
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing build", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+    revisions = iter(["old", "new", "new", "new"])
+    build_results = iter([_err("build failed"), _ok()])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        if command[:3] == ["git", "diff", "--quiet"]:
+            assert command[3:5] == ["old", "new"]
+            return _err()
+        if command == update_management._npm_command(["run", "build"]):
+            return next(build_results)
+        return _ok()
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    failed = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert not failed.ok
+    state = read_install_state(tmp_path)
+    assert state is not None
+    assert state.webui_revision == "old"
+    assert events == []
+
+    retried = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert retried.ok, retried.message
+    state = read_install_state(tmp_path)
+    assert state is not None
+    assert state.webui_revision == "new"
     assert events == ["stop", "start"]
 
 
