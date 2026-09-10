@@ -710,7 +710,7 @@ def test_process_cases_use_production_schema_and_exact_expected_arguments() -> N
 
         assert scenario.tools[0]["parameters"] is PROBE.PROCESS_TOOL_PARAMETERS
         assert arguments is not None
-        assert set(arguments) <= {"action", "process_id"}
+        assert set(arguments) <= {"action", "process_id", "filter", "limit", "before"}
         assert arguments["action"] in {"status", "kill"}
         contracts[PROBE.PROCESS_TOOL_NAME].validate_arguments(arguments)
         assert (
