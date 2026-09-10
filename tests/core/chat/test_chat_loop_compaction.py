@@ -224,6 +224,82 @@ class _RealCompactionStorage(StubStorage):
         return "Summarize the earlier Context and preserve unfinished work."
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("separate_summary", [False, True])
+async def test_compaction_routes_session_context_through_selected_adapter(
+    tmp_path: Path, strategy: str, manual: bool, separate_summary: bool
+) -> None:
+    class ContextAdapter(_RealCompactionAdapter):
+        def request_context_kwargs(self, **context: Any) -> JsonObject:
+            return {"_test_context": {**context, "adapter": id(self)}}
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    active = ContextAdapter(
+        [{"content": "finished", "tool_calls": None}], summaries=["ACTIVE SUMMARY"]
+    )
+    summary = ContextAdapter([], summaries=["SEPARATE SUMMARY"])
+    storage = _RealCompactionStorage(
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 10_000},
+            "strategy": {
+                "type": strategy,
+                **(
+                    {
+                        "tail_tokens": 100,
+                        "summary_model": "other/summary" if separate_summary else None,
+                    }
+                    if strategy == "summary_tail"
+                    else {}
+                ),
+            },
+        },
+        data_dir=tmp_path,
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=active,
+        provider_ids={"openai", "other"},
+        adapters_by_connection={"other:api-key": summary},
+        storage=storage,
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000, ("other", "summary"): 1_000_000}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="child-session")
+    session.append(ChatMessage.user("old context " * 8_000))
+    session.append(ChatMessage.assistant(model=agent.model, content="old response " * 8_000))
+    session.append(ChatMessage.user("recent request"))
+    session.append(ChatMessage.assistant(model=agent.model, content="recent answer"))
+    affinity = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
+    loop = build_chat_loop(runtime, compaction_service=CompactionService()).child_loop(
+        nesting_depth=1
+    )
+
+    if manual:
+        run = await loop.start_compaction_run("coder", session.id)
+        await run.wait()
+    else:
+        await loop.send("coder", "Continue", session_id=session.id)
+
+    selected = summary if separate_summary and strategy == "summary_tail" else active
+    assert len(selected.stream_requests) == 1
+    assert selected.stream_requests[0]["kwargs"]["_test_context"] == {
+        "agent_id": "coder",
+        "session_id": session.id,
+        "project_id": None,
+        "prompt_cache_affinity_id": affinity,
+        "adapter": id(selected),
+    }
+    assert (active if selected is summary else summary).stream_requests == []
+    assert sum(message.role == "compaction_checkpoint" for message in session.load()) == 1
+    rotated = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
+    assert rotated != affinity
+    if not manual:
+        assert active.requests[0]["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == rotated
+
+
 def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) -> None:
     model_key = ("openai", "gpt-5.4")
     models = StubModels(
