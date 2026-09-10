@@ -22,6 +22,7 @@ _LAGGED_SUBSCRIBER = _LaggedSubscriberSentinel()
 class _Subscriber(Generic[EventT]):
     queue: asyncio.Queue[EventT | _LaggedSubscriberSentinel]
     closed: bool = False
+    queued_bytes: int = 0
     # While True, publish drops on a full queue instead of evicting. Catch-up
     # re-reads the retention buffer, so live traffic during a slow historical
     # replay must not silently kill the subscriber mid-stream.
@@ -45,12 +46,20 @@ class ReplayEventStream(Generic[EventT]):
         sequence_of: Callable[[EventT], int],
         terminal_when: Callable[[EventT], bool] | None = None,
         on_lagged: Callable[[], None] | None = None,
+        byte_limit: int | None = None,
+        size_of: Callable[[EventT], int] | None = None,
     ) -> None:
         if event_retention_limit < 1:
             raise ValueError("event_retention_limit must be positive")
         if subscriber_queue_limit < 1:
             raise ValueError("subscriber_queue_limit must be positive")
-        self._events: deque[EventT] = deque(maxlen=event_retention_limit)
+        if byte_limit is not None and (byte_limit < 1 or size_of is None):
+            raise ValueError("byte_limit requires a positive limit and size_of")
+        self._events: deque[tuple[EventT, int]] = deque()
+        self._event_retention_limit = event_retention_limit
+        self._retained_bytes = 0
+        self._byte_limit = byte_limit
+        self._size_of = size_of or (lambda event: 0)
         self._subscribers: list[_Subscriber[EventT]] = []
         self._subscriber_queue_limit = subscriber_queue_limit
         self._sequence_of = sequence_of
@@ -61,7 +70,7 @@ class ReplayEventStream(Generic[EventT]):
     def events(self) -> list[EventT]:
         """Return the currently retained replay window."""
 
-        return list(self._events)
+        return [event for event, _size in self._events]
 
     @property
     def subscriber_count(self) -> int:
@@ -72,7 +81,14 @@ class ReplayEventStream(Generic[EventT]):
     def publish(self, event: EventT) -> None:
         """Retain one event and fan it out to every live subscriber."""
 
-        self._events.append(event)
+        size = self._size_of(event)
+        self._events.append((event, size))
+        self._retained_bytes += size
+        while len(self._events) > self._event_retention_limit or (
+            self._byte_limit is not None and self._retained_bytes > self._byte_limit
+        ):
+            _old, old_size = self._events.popleft()
+            self._retained_bytes -= old_size
         for subscriber in list(self._subscribers):
             self._publish_to_subscriber(subscriber, event)
 
@@ -140,6 +156,7 @@ class ReplayEventStream(Generic[EventT]):
                 if item is _LAGGED_SUBSCRIBER:
                     return
                 event = cast(EventT, item)
+                subscriber.queued_bytes -= self._size_of(event)
                 sequence = self._sequence_of(event)
                 if sequence <= after_sequence:
                     continue
@@ -157,7 +174,7 @@ class ReplayEventStream(Generic[EventT]):
         after_sequence: int,
         subscriber: _Subscriber[EventT] | None = None,
     ) -> AsyncGenerator[EventT, None]:
-        for event in list(self._events):
+        for event, _size in list(self._events):
             if subscriber is not None and subscriber.closed:
                 return
             sequence = self._sequence_of(event)
@@ -176,11 +193,12 @@ class ReplayEventStream(Generic[EventT]):
             except asyncio.QueueEmpty:
                 return drained
             if item is _LAGGED_SUBSCRIBER:
-                # Lag eviction is disabled during catch-up; treat a sentinel as
-                # a closed subscriber if it ever appears.
+                # A byte-budget eviction can also close a catch-up subscriber.
                 subscriber.closed = True
                 return drained
-            drained.append(cast(EventT, item))
+            event = cast(EventT, item)
+            subscriber.queued_bytes -= self._size_of(event)
+            drained.append(event)
 
     def _is_terminal(self, event: EventT) -> bool:
         return self._terminal_when is not None and self._terminal_when(event)
@@ -188,8 +206,13 @@ class ReplayEventStream(Generic[EventT]):
     def _publish_to_subscriber(self, subscriber: _Subscriber[EventT], event: EventT) -> None:
         if subscriber.closed:
             return
+        size = self._size_of(event)
+        if self._byte_limit is not None and subscriber.queued_bytes + size > self._byte_limit:
+            self._evict_lagging_subscriber(subscriber)
+            return
         try:
             subscriber.queue.put_nowait(event)
+            subscriber.queued_bytes += size
         except asyncio.QueueFull:
             if subscriber.catching_up:
                 # Retention still holds the event for the catch-up rescan.
@@ -201,6 +224,7 @@ class ReplayEventStream(Generic[EventT]):
             return
         self._remove_subscriber(subscriber)
         _drain_queue(subscriber.queue)
+        subscriber.queued_bytes = 0
         subscriber.queue.put_nowait(_LAGGED_SUBSCRIBER)
         if self._on_lagged is not None:
             self._on_lagged()
