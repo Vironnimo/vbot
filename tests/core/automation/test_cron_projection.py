@@ -19,6 +19,26 @@ def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
 
 
 class TestProjectOccurrences:
+    @pytest.mark.parametrize("day", ["2026-09-10", "2026-03-29", "2026-10-25"])
+    def test_cron_midnight_includes_start_and_excludes_end(self, service, day):
+        service.set_timezone("Europe/Berlin")
+        service.create_job(
+            agent_id="joel",
+            prompt="midnight",
+            schedule_type="cron",
+            cron_expression="0 0 * * *",
+        )
+        start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo("Europe/Berlin"))
+        end = start + timedelta(days=1)
+        rows = service.project_occurrences(start.astimezone(UTC), end.astimezone(UTC))
+        assert [row.fire_at_utc for row in rows] == [start.astimezone(UTC)]
+        assert (
+            service.project_occurrences(
+                start.astimezone(UTC) + timedelta(microseconds=1), end.astimezone(UTC)
+            )
+            == []
+        )
+
     def test_once_job_projects_within_window(self, service: CronService) -> None:
         service.create_job(
             agent_id="joel",

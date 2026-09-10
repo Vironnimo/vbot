@@ -332,6 +332,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         message_thread_id: int | None = None,
         reply_markup: Any = None,
+        reply_parameters: Any = None,
     ) -> None:
         # A keyboard belongs on the final visible message, so it rides only on the
         # last chunk of a split reply.
@@ -343,7 +344,20 @@ class TelegramChannelAdapter(ChannelAdapter):
                 payload["message_thread_id"] = message_thread_id
             if reply_markup is not None and index == last_index:
                 payload["reply_markup"] = reply_markup
-            await bot.send_message(**payload)
+            if reply_parameters is not None and index == 0:
+                payload["reply_parameters"] = reply_parameters
+
+            async def send_chunk(payload: dict[str, Any] = payload) -> None:
+                with _telegram_error_boundary(self._config.id):
+                    await bot.send_message(**payload)
+
+            try:
+                await retry_async(send_chunk)
+            except ChannelError as error:
+                # This chunk exhausted its retries. Retrying the whole transport
+                # call would duplicate all earlier, acknowledged chunks.
+                error.retryable = False
+                raise
 
     async def _send_with_files(
         self,
@@ -506,18 +520,13 @@ class TelegramChannelAdapter(ChannelAdapter):
             raise ChannelConfigError("at least one of message or files must be provided")
 
         with _telegram_error_boundary(self._config.id):
-            # Only the first chunk references the replied-to message; every chunk
-            # carries the topic, so a multi-part reply stays in the forum topic
-            # instead of falling into the General topic.
-            for index, chunk in enumerate(
-                split_telegram_message(normalized_message, TELEGRAM_MESSAGE_LIMIT)
-            ):
-                payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
-                if message_thread_id is not None:
-                    payload["message_thread_id"] = message_thread_id
-                if index == 0:
-                    payload["reply_parameters"] = reply_parameters
-                await bot.send_message(**payload)
+            await self._send_text_chunks(
+                bot,
+                chat_id,
+                normalized_message,
+                message_thread_id=message_thread_id,
+                reply_parameters=reply_parameters,
+            )
 
     def _build_reply_parameters(self, reply_to_message_id: str | None) -> Any | None:
         if reply_to_message_id is None:

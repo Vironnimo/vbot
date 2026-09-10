@@ -115,6 +115,88 @@ async def test_fires_once_and_reloads_without_duplicate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_completed_single_action_rearms_only_after_event_moves(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    old = service.actions.project(window(service, now))[0]
+    assert old["status"] == "completed"
+    service.update_event(event.id, title="Renamed")
+    await service.actions.tick(now)
+    assert trigger.trigger_run.await_count == 1
+    moved_start = now + timedelta(minutes=45)
+    service.update_event(event.id, start=moved_start.isoformat())
+    projected = service.actions.project(window(service, now))[0]
+    assert projected["status"] == "pending"
+    assert datetime.fromisoformat(projected["scheduled_at"]) == moved_start - timedelta(hours=1)
+    await service.actions.tick(now)
+    await drain(service)
+    assert trigger.trigger_run.await_count == 2
+    reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
+    reloaded.actions.configure(trigger, Mock(), Mock())
+    await reloaded.actions.tick(now)
+    assert trigger.trigger_run.await_count == 2
+    row = reloaded.actions.project(window(reloaded, now))[0]
+    assert row["status"] == "completed"
+    assert row["scheduled_at"] == projected["scheduled_at"]
+
+
+@pytest.mark.asyncio
+async def test_timezone_change_does_not_rearm_unchanged_single_instant(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    initial = service.actions.project(window(service, now))[0]
+    service.set_timezone("America/New_York")
+    await service.actions.tick(now)
+    assert trigger.trigger_run.await_count == 1
+    projected = service.actions.project(window(service, now))[0]
+    assert projected["status"] == "completed"
+    assert projected["scheduled_at"] == initial["scheduled_at"]
+    # An explicit change of the action's due time does rearm it.
+    service.actions.update(action["id"], when="start - 45m")
+    await service.actions.tick(now)
+    await drain(service)
+    assert trigger.trigger_run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_move_during_admitted_run_keeps_claim_until_completion(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def wait_for_finish():
+        entered.set()
+        await finish.wait()
+
+    trigger.trigger_run.side_effect = None
+    trigger.trigger_run.return_value = SimpleNamespace(
+        id="run-1", session_id="new-session", wait=wait_for_finish
+    )
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    # Reconciliation before the scheduled worker starts must retain its pending row.
+    await service.actions.tick(now)
+    assert len(service.actions._executions) == 1
+    await entered.wait()
+    original = next(iter(service.actions._executions.values())).copy()
+    service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
+    await service.actions.tick(now)
+    assert next(iter(service.actions._executions.values())) == original
+    assert trigger.trigger_run.await_count == 1
+    assert service.actions.project(window(service, now))[0]["status"] == "pending"
+    finish.set()
+    await drain(service)
+    await service.actions.tick(now)
+    await drain(service)
+    assert trigger.trigger_run.await_count == 2
+    await service.actions.tick(now)
+    assert trigger.trigger_run.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_expired_and_excluded_occurrences_never_fire(tmp_path):
     service, event, trigger, now = setup(
         tmp_path, start=datetime.now(UTC) - timedelta(hours=2), recurring=True

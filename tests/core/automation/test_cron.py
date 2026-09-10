@@ -44,6 +44,48 @@ def make_service(
     return service, trigger_service
 
 
+@pytest.mark.parametrize("expression", ["0 0 30 2 *", "0 0 31 4 *"])
+def test_impossible_cron_is_rejected_before_mutation(tmp_path, expression):
+    service, _ = make_service(tmp_path, tz="Europe/Berlin")
+    with pytest.raises(CronJobValidationError):
+        service.parse_schedule(expression)
+    with pytest.raises(CronJobValidationError):
+        service.create_job(
+            agent_id="main", prompt="test", schedule_type="cron", cron_expression=expression
+        )
+    assert service.list_jobs() == []
+    assert json.loads((tmp_path / "cron" / "jobs.json").read_text()) == []
+    job = service.create_job(
+        agent_id="main", prompt="test", schedule_type="cron", cron_expression="0 0 29 2 *"
+    )
+    path = tmp_path / "cron" / "jobs.json"
+    before = path.read_bytes()
+    with pytest.raises(CronJobValidationError):
+        service.update_job(job.id, cron_expression=expression)
+    assert path.read_bytes() == before
+    assert service.get_job(job.id) == job
+    assert service.next_fire_at(job) is not None
+
+
+def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_path):
+    service, _ = make_service(tmp_path, tz="Europe/Berlin")
+    job = service.create_job(
+        agent_id="main", prompt="test", schedule_type="cron", cron_expression="0 0 * * *"
+    )
+    path = tmp_path / "cron" / "jobs.json"
+    stored = json.loads(path.read_text())
+    invalid = {**stored[0], "id": "broken", "cron_expression": "0 0 30 2 *"}
+    path.write_text(json.dumps([*stored, invalid]))
+    reloaded, _ = make_service(tmp_path, tz="Europe/Berlin")
+    assert [item.id for item in reloaded.list_jobs()] == [job.id]
+    assert reloaded.next_fire_at(reloaded.get_job(job.id)) is not None
+    assert reloaded.project_occurrences(
+        datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
+    )
+    reloaded.update_job(job.id, name="changed")
+    assert invalid in json.loads(path.read_text())
+
+
 def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # Arrange
     service, _trigger_service = make_service(tmp_path)

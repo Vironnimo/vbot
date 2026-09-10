@@ -322,11 +322,11 @@ class CalendarActions:
 
     @staticmethod
     def _consumed(previous: dict[str, Any], row: dict[str, Any]) -> bool:
+        # Claims consume a scheduled instant, not the slot forever. Compare UTC
+        # instants rather than display anchors: a timezone-only change must not rearm.
         if previous["status"] == "pending":
             return False
-        return not (
-            previous["status"] == "missed" and previous["scheduled_at"] != row["scheduled_at"]
-        )
+        return _instant(previous["scheduled_at"]) == _instant(row["scheduled_at"])
 
     def _execution(
         self, action: dict[str, Any], event: CalendarEvent, occurrence: EventOccurrence
@@ -433,6 +433,10 @@ class CalendarActions:
                     previous = self._executions.get(key)
                     if previous and self._consumed(previous, row):
                         continue
+                    # An admitted Run keeps its row until completion even when
+                    # the event moves. Reconcile the new occurrence on the next tick.
+                    if key in self._workers:
+                        continue
                     if expires <= now:
                         row["status"] = "missed"
                     else:
@@ -445,7 +449,7 @@ class CalendarActions:
                 action["scanned_until"] = now.isoformat()
                 changed = True
         for key, row in list(self._executions.items()):
-            if row["status"] == "pending" and key not in desired:
+            if row["status"] == "pending" and key not in desired and key not in self._workers:
                 del self._executions[key]
                 changed = True
         if changed:

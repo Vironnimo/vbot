@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.channels.adapter import ReplyPlanFacts
+from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT
 from core.chat.commands import CommandFeedback, CommandOutcome
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
@@ -18,6 +21,68 @@ from tests.core.channels.telegram_test_support import (
     make_failed_run,
     make_update,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply_to", [None, "42"])
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_multipart_reply_retries_only_failed_chunk(
+    tmp_path, monkeypatch, reply_to, exhausted
+):
+    from telegram.error import NetworkError
+
+    adapter, _, _, bot = make_adapter(tmp_path, monkeypatch, allowed_chat_ids=[12345])
+    monkeypatch.setattr("core.utils.retry.compute_retry_delay", lambda *a, **kw: (0, False))
+    chunks = [letter * TELEGRAM_MESSAGE_LIMIT for letter in "abc"]
+    failures = 0
+
+    async def send(**payload):
+        nonlocal failures
+        if payload["text"] == chunks[1] and (exhausted or failures == 0):
+            failures += 1
+            raise NetworkError("test transport fault")
+
+    bot.send_message.side_effect = send
+    plan = ReplyPlanFacts(
+        channel_id="tg-assistant",
+        platform_target="12345",
+        reply_to_message_id=reply_to,
+        thread_id="17",
+    )
+    await adapter._engine._send_reply(plan, "".join(chunks))
+    payloads = [call.kwargs for call in bot.send_message.await_args_list]
+    assert [payload["text"] for payload in payloads] == (
+        [chunks[0], *([chunks[1]] * 4)]
+        if exhausted
+        else [chunks[0], chunks[1], chunks[1], chunks[2]]
+    )
+    assert all(payload["message_thread_id"] == 17 for payload in payloads)
+    assert all("reply_parameters" not in payload for payload in payloads[1:])
+    assert ("reply_parameters" in payloads[0]) == (reply_to is not None)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_path):
+    import threading
+
+    from core.channels.channels import ChannelStorage
+
+    storage = ChannelStorage(tmp_path)
+    higher_saved = threading.Event()
+
+    def save_lower():
+        assert higher_saved.wait(timeout=5)
+        storage.save_update_offset("tg-assistant", 7)
+
+    def save_higher():
+        try:
+            storage.save_update_offset("tg-assistant", 8)
+        finally:
+            higher_saved.set()
+
+    await asyncio.gather(asyncio.to_thread(save_lower), asyncio.to_thread(save_higher))
+    assert ChannelStorage(tmp_path).load_update_offset("tg-assistant") == 8
 
 
 @pytest.mark.asyncio
