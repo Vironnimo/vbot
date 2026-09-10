@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import { fromStore, writable } from 'svelte/store';
+import { toolDetailImages } from '../../lib/chatToolDetails.js';
 
 import {
   appendRunEvent,
@@ -16,6 +18,9 @@ import {
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
+});
+vi.mock('svelte/store', async () => {
+  return import('../../../node_modules/svelte/src/store/index-client.js');
 });
 
 const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
@@ -49,12 +54,12 @@ describe('ChatTimeline', () => {
       );
       const images = [
         {
-          attachment_id: 'a1234567-1234-4234-8234-123456789abc',
+          attachment_id: 'att_0123456789ab',
           filename: 'first.png',
           media_type: 'image/png',
         },
         {
-          attachment_id: 'b1234567-1234-4234-8234-123456789abc',
+          attachment_id: 'att_bcdefghjkmnp',
           filename: 'second.png',
           media_type: 'image/png',
         },
@@ -178,6 +183,119 @@ describe('ChatTimeline', () => {
       }
     },
   );
+
+  it('replaces an unavailable thumbnail when history supplies the current file revision', () => {
+    const state = ensureSessionState(createChatState(), 'alpha', 'revisions');
+    const result = {
+      id: 'read-result',
+      role: 'tool',
+      name: 'read',
+      tool_call_id: 'read-call',
+      timestamp: '2026-09-05T10:00:01Z',
+      content: JSON.stringify({
+        ok: true,
+        data: { content: 'loaded' },
+        artifacts: [],
+      }),
+      tool_display: {
+        version: 1,
+        images: [{ filename: 'front.png', url: '/api/files/first.signature' }],
+      },
+    };
+    state.messages = [
+      {
+        id: 'assistant',
+        role: 'assistant',
+        content: '',
+        timestamp: '2026-09-05T10:00:00Z',
+        tool_calls: [
+          { id: 'read-call', name: 'read', arguments: { path: 'front.png' } },
+        ],
+      },
+      result,
+    ];
+    const session = fromStore(writable(state));
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        get sessionState() {
+          return session.current;
+        },
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+    const original = document.querySelector('.tool-image-preview img');
+    original.dispatchEvent(new Event('error'));
+    expect(original.hidden).toBe(true);
+    session.current = {
+      ...state,
+      messages: [
+        state.messages[0],
+        {
+          ...result,
+          tool_display: {
+            version: 1,
+            images: [
+              { filename: 'front.png', url: '/api/files/second.signature' },
+            ],
+          },
+        },
+      ],
+    };
+    flushSync();
+    const updated = document.querySelector('.tool-image-preview img');
+    expect(updated).not.toBe(original);
+    expect(updated.hidden).toBe(false);
+    expect(updated.getAttribute('src')).toBe('/api/files/second.signature');
+    updated.closest('a').click();
+    flushSync();
+    expect(
+      document.querySelector('.image-lightbox__image').getAttribute('src'),
+    ).toContain('/api/files/second.signature');
+  });
+
+  it.each(['att_0123456789ab', 'a1234567-1234-4234-8234-123456789abc'])(
+    'accepts the opaque Attachment identity %s',
+    (id) => {
+      expect(
+        toolDetailImages(
+          {
+            artifacts: [
+              {
+                kind: 'read_media',
+                attachment_id: id,
+                media_type: 'image/png',
+              },
+            ],
+          },
+          { preferPayload: true },
+        ),
+      ).toEqual([
+        { src: `/api/attachments/${id}`, filename: 'Preview attachment' },
+      ]);
+    },
+  );
+
+  it.each([
+    '../private',
+    'https://example.com/image',
+    'att_valid?x=1',
+    'att_valid#x',
+    'att_valid/other',
+    'x'.repeat(129),
+  ])('rejects unsafe Attachment identity %s', (id) => {
+    expect(
+      toolDetailImages(
+        {
+          artifacts: [
+            { kind: 'read_media', attachment_id: id, media_type: 'image/png' },
+          ],
+        },
+        { preferPayload: true },
+      ),
+    ).toEqual([]);
+  });
 
   it('rejects path and remote URL image candidates and leaves text read results plain', () => {
     const state = ensureSessionState(

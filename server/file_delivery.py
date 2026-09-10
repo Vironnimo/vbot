@@ -106,7 +106,7 @@ class DeliveredFile:
     @property
     def response_headers(self) -> dict[str, str]:
         headers = {
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
         }
@@ -610,7 +610,7 @@ class FileDelivery:
         return projected
 
     def _project_image_files(self, references: list[Any]) -> list[JsonObject]:
-        """Expose original Tool image paths without probing or copying their bytes.
+        """Expose revision-aware original Tool image URLs without copying bytes.
 
         Missing originals still get URLs: the ordinary 404 lets the UI render
         its unavailable-image placeholder, including after a server restart.
@@ -647,8 +647,10 @@ class FileDelivery:
         if not hmac.compare_digest(signature, expected_signature):
             return None
         try:
-            path_text = _urlsafe_decode(payload).decode("utf-8")
-            path = Path(path_text)
+            claims = json.loads(_urlsafe_decode(payload).decode("utf-8"))
+            if not isinstance(claims, dict) or not isinstance(claims.get("path"), str):
+                return None
+            path = Path(claims["path"])
             if not path.is_absolute():
                 return None
             resolved = path.resolve(strict=True)
@@ -657,7 +659,20 @@ class FileDelivery:
         return self._presentation_for_path(str(resolved))
 
     def _mint_token(self, path: Path) -> str:
-        payload = _urlsafe_encode(str(path).encode("utf-8"))
+        # Browsers may reuse an already-decoded image at the same URL even with
+        # revalidation headers. Give each observed file revision a distinct URL.
+        # The revision changes cache identity only: old links still serve the
+        # current original, and missing files retain an address for UI recovery.
+        try:
+            stat = path.stat()
+            revision = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+        except OSError:
+            revision = None
+        payload = _urlsafe_encode(
+            json.dumps({"path": str(path), "revision": revision}, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
         signature = _urlsafe_encode(
             hmac.digest(self._secret, payload.encode("ascii"), hashlib.sha256)
         )
