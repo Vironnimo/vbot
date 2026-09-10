@@ -77,6 +77,8 @@ Run-local rich Tool Results retain their persisted JSON-string envelope and carr
 - `retry_async()` stamps every caught `VBotError` with this retry loop's one-based `attempts_made` count before either retrying or rethrowing it. Provider-backed Tools may preserve that metadata in their failure envelope; a nested retry boundary reports its own operation-attempt count rather than an aggregate of lower-level HTTP attempts.
 - Authorization headers are rebuilt inside every retry attempt so OAuth refresh remains effective.
 
+The shared Responses SSE framer uses Provider-neutral error wording and includes the malformed/non-object data frame in the exception message so persisted failures retain the evidence (`test_responses_bad_frames_preserve_evidence_without_foreign_provider`).
+
 ## Provider-backed task clients
 
 `ProviderTaskClient` is the shared HTTP base for speech, image, and embedding Provider clients. Its local structural Runtime/target Protocols avoid importing Runtime or `core/model_tasks/`. `from_runtime()` resolves the Connection and refresh-capable token getter; `post_and_parse()` puts request, status classification, and parsing inside `retry_async`, rebuilding headers per attempt. Keyed Connections contribute their configured auth header; a keyless `none` Connection contributes no auth header while still preserving Provider `extra_headers`.
@@ -87,7 +89,7 @@ Task-specific payload/response semantics remain in `model_tasks.md` and its task
 
 ## Usage normalization
 
-Across Adapters, `input_tokens` means total prompt tokens including cached tokens. Optional `cache_read_tokens` and `cache_write_tokens` preserve Provider counters, while optional `reasoning_tokens` preserves a reported subset of output and never changes `output_tokens`. OpenAI Chat reads prompt/completion detail blocks, Responses-shaped wires read input/output detail blocks, and Anthropic Messages reads cache fields from input Usage plus `output_tokens_details.thinking_tokens` from final output Usage. OpenAI-compatible input and output counters are preserved independently: if either primary counter is absent or malformed, that field remains absent rather than becoming a measured zero. Adapters omit unsupported or malformed optional counters rather than inventing zero; canonical Session aggregation and display semantics live in `chat/usage.md`.
+Across Adapters, `input_tokens` means total prompt tokens including cached tokens. Optional `cache_read_tokens` and `cache_write_tokens` preserve Provider counters, while optional `reasoning_tokens` preserves a reported subset of output and never changes `output_tokens`. OpenAI Chat reads prompt/completion detail blocks, Responses-shaped wires read input/output detail blocks, and Anthropic Messages reads cache fields from input Usage plus `output_tokens_details.thinking_tokens` from final output Usage. OpenAI-compatible and Responses input and output counters are preserved independently: if either primary counter is absent or malformed, that field remains absent rather than becoming a measured zero. Adapters omit unsupported or malformed optional counters rather than inventing zero; canonical Session aggregation and display semantics live in `chat/usage.md`.
 
 ## Source and tests
 

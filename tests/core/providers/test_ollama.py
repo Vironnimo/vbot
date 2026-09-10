@@ -2167,3 +2167,38 @@ class TestCloudOutputLimitDefault:
         assert isinstance(bundled.get("defaults"), dict)
         assert isinstance(bundled["defaults"].get("max_tokens"), int)
         assert bundled["defaults"]["max_tokens"] > 0
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batched", [False, True])
+async def test_native_stream_idless_calls_survive_chat_accumulation(
+    adapter: OllamaAdapter, batched: bool
+) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    calls = [
+        {"function": {"name": "read", "arguments": {"path": "a"}}},
+        {"function": {"name": "search", "arguments": {"q": "b"}}},
+        {"id": "real_call", "function": {"name": "read", "arguments": {"path": "c"}}},
+    ]
+    chunks = [
+        {"message": {"tool_calls": group}, "done": False}
+        for group in ([calls] if batched else [[call] for call in calls])
+    ]
+    chunks.append({"message": {}, "done": True, "done_reason": "stop"})
+    respx.post(OLLAMA_CHAT_URL).mock(return_value=httpx.Response(200, text=_ndjson(*chunks)))
+    accumulator = StreamingAccumulator()
+    async for delta in adapter.stream(SAMPLE_MESSAGES, model_id="ministral-3:8b"):
+        accumulator.add_delta(delta)
+    fields = accumulator.finalize_assistant_fields()
+    normalized = fields.tool_calls
+    assert normalized is not None
+    assert len({call["id"] for call in normalized}) == 3
+    assert [(call["name"], call["arguments"]) for call in normalized] == [
+        ("read", {"path": "a"}),
+        ("search", {"q": "b"}),
+        ("read", {"path": "c"}),
+    ]
+    assert normalized[-1]["id"] == "real_call"
+    assert fields.finish_reason == "tool_calls"

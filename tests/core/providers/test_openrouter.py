@@ -1718,3 +1718,80 @@ def test_normalize_response_collapses_reasoning_newline_runs(
 
     # Assert
     assert response["reasoning"] == "why\n\nbecause"
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "error,retryable",
+    [
+        ({"code": 400, "message": "test upstream failure"}, True),
+        ({"code": "context_length_exceeded", "message": "test limit"}, False),
+    ],
+)
+async def test_responses_http_uses_router_error_policy(
+    openrouter_adapter, streaming, error, retryable
+):
+    route = respx.post(OPENROUTER_RESPONSES_URL).mock(
+        return_value=httpx.Response(400, json={"error": error})
+    )
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(ProviderError) as caught,
+    ):
+        if streaming:
+            async for _ in openrouter_adapter.stream(
+                SAMPLE_MESSAGES, model_id="openai/gpt-5.6-sol"
+            ):
+                pass
+        else:
+            await openrouter_adapter.send(SAMPLE_MESSAGES, model_id="openai/gpt-5.6-sol")
+    assert caught.value.retryable is retryable
+    assert (route.call_count > 1) is retryable
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ["error", "response.error", "response.failed"])
+@pytest.mark.parametrize(
+    "error,retryable,retry_after",
+    [
+        ({"error": {"code": "unrecognized", "message": "test unknown"}}, True, None),
+        (
+            {"error": {"code": "context_length_exceeded"}, "availability": {"retryable": True}},
+            False,
+            None,
+        ),
+        (
+            {
+                "error": {"code": "unrecognized"},
+                "availability": {"retryable": True, "retry_after": 7},
+            },
+            True,
+            7,
+        ),
+        (
+            {"error_type": "provider_unavailable", "error": {"code": "context_length_exceeded"}},
+            True,
+            None,
+        ),
+        ({"error_type": "permission_denied", "error": {"code": "server_error"}}, False, None),
+    ],
+)
+async def test_responses_stream_uses_router_error_policy(
+    openrouter_adapter, event_type, error, retryable, retry_after
+):
+    event = {
+        "type": event_type,
+        **({"response": error} if event_type == "response.failed" else error),
+    }
+    respx.post(OPENROUTER_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, text=f"data: {json.dumps(event)}\n\n")
+    )
+    with pytest.raises(ProviderError) as caught:
+        async for _ in openrouter_adapter.stream(SAMPLE_MESSAGES, model_id="openai/gpt-5.6-sol"):
+            pass
+    assert caught.value.retryable is retryable
+    assert getattr(caught.value, "retry_after", None) == retry_after
+    assert error["error"]["code"] in str(caught.value)

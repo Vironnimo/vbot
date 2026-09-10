@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from typing import Any
 
 import httpx
 import pytest
@@ -370,7 +371,7 @@ def test_gemini_response_normalizes_signature_tools_cache_usage_and_outcome(
     ]
     assert normalized["terminal_outcome"] == "tool_calls"
     assert normalized["usage"] == {
-        "input_tokens": 100,
+        "input_tokens": 120,
         "output_tokens": 20,
         "reasoning_tokens": 12,
         "cache_read_tokens": 20,
@@ -661,3 +662,56 @@ def test_error_policy_distinguishes_auth_entitlement_region_and_retryable_rate_l
         )
 
     assert exc_info.value.retryable is retryable
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", [None, "same_response"])
+@pytest.mark.parametrize("batched", [False, True])
+async def test_gemini_stream_idless_calls_survive_chat_accumulation(
+    adapter: OpenCodeZenAdapter, response_id: str | None, batched: bool
+) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    parts = [
+        {"functionCall": {"name": "read", "args": {"path": "a"}}},
+        {"functionCall": {"name": "search", "args": {"q": "b"}}},
+        {"functionCall": {"id": "real_call", "name": "read", "args": {"path": "c"}}},
+    ]
+    chunks: list[dict[str, Any]] = [
+        {"responseId": response_id, "candidates": [{"content": {"parts": group}}]}
+        for group in ([parts] if batched else [[part] for part in parts])
+    ]
+    chunks.append(
+        {
+            "candidates": [{"finishReason": "STOP"}],
+            "usageMetadata": {
+                "promptTokenCount": 100000,
+                "cachedContentTokenCount": 95000,
+                "candidatesTokenCount": 10,
+            },
+        }
+    )
+    respx.post(GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(
+            200, text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        )
+    )
+    accumulator = StreamingAccumulator()
+    async for delta in adapter.stream(
+        [{"role": "user", "content": "test"}], model_id="gemini-3.5-flash"
+    ):
+        accumulator.add_delta(delta)
+    fields = accumulator.finalize_assistant_fields()
+    calls = fields.tool_calls
+    assert calls is not None
+    assert len({call["id"] for call in calls}) == 3
+    assert [(call["name"], call["arguments"]) for call in calls] == [
+        ("read", {"path": "a"}),
+        ("search", {"q": "b"}),
+        ("read", {"path": "c"}),
+    ]
+    assert calls[-1]["id"] == "real_call"
+    assert fields.finish_reason == "tool_calls"
+    assert fields.usage == {"input_tokens": 100000, "output_tokens": 10, "cache_read_tokens": 95000}
+    assert fields.reasoning_meta == {"gemini_parts": parts}
