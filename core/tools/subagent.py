@@ -61,7 +61,10 @@ NESTED_EXECUTION_GUIDANCE = (
 _SUBAGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Stable id returned by run. Required for status and cancel.",
+    "description": (
+        "Stable id returned by run. Required for cancel. Omit for status to inspect all "
+        "Sub-Agent work still tracked for this Session."
+    ),
 }
 _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
     "type": "string",

@@ -115,6 +115,32 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     ]
 
 
+async def test_registered_status_all_returns_empty_or_owned_snapshots() -> None:
+    registry = ToolRegistry()
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    coordinator = SubAgentCoordinator(SimpleNamespace(), trigger_service, batch_tracker=tracker)
+    register_subagent_tools(registry, coordinator)
+    context = make_context(tool_name=SUBAGENT_TOOL_NAME)
+
+    empty = await registry.dispatch(context, {"action": "status"})
+    assert empty["ok"] is True
+    assert empty["data"] == {"subagents": []}
+    tracker.register_queued(
+        (context.agent_id, context.session_id, context.run_id),
+        "worker",
+        "child-session",
+        "internal-queue",
+        work_id="sub_child",
+    )
+    listed = await registry.dispatch(context, {"action": "status"})
+    single = await registry.dispatch(context, {"action": "status", "id": "sub_child"})
+    assert listed["ok"] is True
+    assert listed["data"] == {"subagents": [single["data"]]}
+    display = registry.get(SUBAGENT_TOOL_NAME).display.to_payload({"action": "status"})
+    assert [part["value"] for part in display["primary"]] == ["status"]
+
+
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
