@@ -228,6 +228,56 @@ async def test_unknown_metadata_and_media_are_preserved(host):
     assert "data" in payload["content"][0]
 
 
+@pytest.mark.asyncio
+async def test_media_shaped_application_data_and_metadata_are_not_rewritten(host):
+    media_shape = {"type": "image", "data": "not base64", "mimeType": "image/png"}
+    resource_shape = {"uri": "app://item", "blob": "ordinary application data"}
+    payload = {
+        "structuredContent": {"rows": [media_shape, resource_shape]},
+        "_meta": media_shape,
+        "content": [{"type": "text", "text": "sentinel", "_meta": resource_shape}],
+        "tools": [{"name": "example", "inputSchema": {"examples": [media_shape]}}],
+    }
+    result, artifacts = await ContentStore(host, host.data_dir).preserve(payload)
+    assert result == payload
+    assert artifacts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", ["content", "contents", "messages", "message_list"])
+async def test_protocol_resource_and_prompt_media_positions_are_preserved(host, position):
+    raw = b"test-owned-media"
+    resource = {
+        "uri": "test://blob",
+        "mimeType": "image/png",
+        "blob": base64.b64encode(raw).decode(),
+    }
+    block = {"type": "resource", "resource": resource}
+    if position == "contents":
+        payload = {"contents": [resource]}
+    elif position == "content":
+        payload = {"content": [block]}
+    else:
+        payload = {
+            "messages": [
+                {"role": "user", "content": [block] if position == "message_list" else block}
+            ]
+        }
+    result, artifacts = await ContentStore(host, host.data_dir).preserve(payload)
+    if position == "contents":
+        preserved = result["contents"][0]
+    elif position == "content":
+        preserved = result["content"][0]["resource"]
+    else:
+        content = result["messages"][0]["content"]
+        preserved = (content[0] if isinstance(content, list) else content)["resource"]
+    assert preserved["size_bytes"] == len(raw)
+    assert "path" in preserved
+    assert "blob" not in preserved
+    assert "blob" in resource
+    assert artifacts == []
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -611,6 +661,30 @@ async def test_oauth_tokens_use_the_host_store_and_are_redacted(host):
     assert "secret-access-sentinel" not in json.dumps(runner.status())
 
 
+@pytest.mark.parametrize(
+    "secret", ['quoted"credential', "slash\\credential", "line\ncredential", "n"]
+)
+def test_event_redaction_handles_json_escaping_without_corrupting_events(host, secret):
+    host.set_credential("TEST_CREDENTIAL", secret)
+    runner = ConnectionRunner(
+        validate_connection(
+            {
+                "id": "example",
+                "transport": "stdio",
+                "command": "unused",
+                "credential_environment": {"TOKEN": "TEST_CREDENTIAL"},
+            }
+        ),
+        host,
+        InputRequests(),
+        lambda *args: None,
+    )
+    runner._record("log", {secret: [secret], "payload": {"text": "\n" + secret}})
+    payload = runner.events()["events"][0]["payload"]
+    assert payload["[redacted]"] == ["[redacted]"]
+    assert payload["payload"]["text"] == "\n[redacted]"
+
+
 @pytest.mark.asyncio
 async def test_cancelled_oauth_does_not_leave_a_pending_request(host):
     runner = ConnectionRunner(
@@ -935,8 +1009,9 @@ async def test_no_match_fallback_does_not_reveal_denied_tools(context_service, h
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tool", "operation"])
 async def test_transport_failure_does_not_claim_remote_call_was_undone(
-    context_service, host, monkeypatch
+    context_service, host, monkeypatch, kind
 ):
     service, registry, runner, calls = context_service
 
@@ -945,12 +1020,96 @@ async def test_transport_failure_does_not_claim_remote_call_was_undone(
         raise ValueError("test-owned-timeout")
 
     monkeypatch.setattr(runner, "invoke", fail)
-    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    target = (
+        service._entries(runner, service._allowed(context(host)))[-1]["target"]
+        if kind == "tool"
+        else service._operation_target("logging/setLevel")
+    )
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+        context(host),
+        {
+            "action": "call",
+            "target": target,
+            "arguments": {"value": "sentinel"} if kind == "tool" else {"level": "debug"},
+        },
     )
     assert result["error"]["code"] == "mcp_call_unconfirmed"
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tool", "operation"])
+@pytest.mark.parametrize("failure", ["storage", "media"])
+async def test_result_preparation_failure_preserves_completed_call_state(
+    context_service, host, monkeypatch, kind, failure
+):
+    service, registry, runner, calls = context_service
+    if failure == "storage":
+
+        async def unavailable(*args, **kwargs):
+            raise OSError("test-owned-storage-failure")
+
+        monkeypatch.setattr(service.content, "present", unavailable)
+    else:
+
+        async def malformed(operation, arguments, invocation_context=None):
+            calls.append((operation, arguments))
+            return {
+                "content": [{"type": "image", "mimeType": "image/png", "data": "invalid base64"}]
+            }
+
+        monkeypatch.setattr(runner, "invoke", malformed)
+    target = (
+        service._entries(runner, service._allowed(context(host)))[-1]["target"]
+        if kind == "tool"
+        else service._operation_target("logging/setLevel")
+    )
+    result = await registry.dispatch(
+        context(host),
+        {
+            "action": "call",
+            "target": target,
+            "arguments": {"value": "sentinel"} if kind == "tool" else {"level": "debug"},
+        },
+    )
+    assert result["error"]["code"] == "mcp_result_unavailable"
+    assert result["data"] is None
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs,pointer",
+    [
+        ({}, "/arguments"),
+        ({"value": []}, "/arguments/value"),
+        ({"value": "valid", "extra": True}, "/arguments"),
+    ],
+)
+async def test_target_validation_identifies_error_before_remote_effects(
+    context_service, host, inputs, pointer
+):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": inputs}
+    )
+    assert result["error"]["code"] == "mcp_invalid_arguments"
+    assert pointer in result["error"]["message"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_target_validation_does_not_echo_rejected_argument_values(context_service, host):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    value = {"private": 'test-owned-secret\\with"escapes\nand-newlines'}
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": {"value": value}}
+    )
+    assert result["error"]["code"] == "mcp_invalid_arguments"
+    assert "test-owned-secret" not in json.dumps(result)
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -1069,6 +1228,25 @@ async def test_result_reader_filters_rows_and_paginates_without_losing_values(ho
         {"id": index} for index in range(31)
     ]
     assert "next" not in second
+
+
+@pytest.mark.asyncio
+async def test_large_projected_row_expansion_keeps_requested_fields(host):
+    store = ContentStore(host, host.data_dir / "content")
+    receipt, _ = await store.present(
+        {"rows": [{"selected": "sentinel " * 100, "unrequested": "do not include"}]},
+        context(host),
+        "example",
+    )
+    document = await store.load_result(receipt["result_id"], context(host), "example")
+    page = store.read_result(
+        document, {**receipt["read"], "pointer": "/rows", "fields": ["selected"]}
+    )
+    expansion = page["entries"][0]["read"]
+    assert expansion["fields"] == ["selected"]
+    expanded = store.read_result(document, expansion)
+    assert [entry["pointer"] for entry in expanded["entries"]] == ["/rows/0/selected"]
+    assert "unrequested" not in json.dumps(expanded)
 
 
 @pytest.mark.asyncio
