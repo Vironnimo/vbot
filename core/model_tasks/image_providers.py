@@ -635,6 +635,8 @@ def _openai_codex_usage(completed_response: Mapping[str, Any] | None) -> JsonObj
 
 
 def _media_type_from_output_format(requested_output_format: Any) -> str:
+    if requested_output_format == "svg":
+        return "image/svg+xml"
     if isinstance(requested_output_format, str) and requested_output_format:
         return "image/" + requested_output_format
     return "image/png"

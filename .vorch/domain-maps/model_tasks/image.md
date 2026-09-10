@@ -60,7 +60,7 @@ OpenAI subscription image execution is selected by provider `openai` plus connec
 
 ## Generated Files
 
-`generate_artifacts()` persists each returned image directly into its explicit `output_dir`:
+`generate_artifacts()` persists each returned image directly into its explicit `output_dir`. An `output_format` of `svg` maps to `image/svg+xml` and a `.svg` filename when response entries omit MIME metadata; explicit response MIME still takes precedence (`test_image_providers.py`):
 
 ```text
 <caller-owned-root>/image-gen/
@@ -77,7 +77,7 @@ Artifact ids use `img_` plus 12 lowercase base32 characters, and exclusive file 
 - `image_understanding` targets are discovered from the direct `text` + `image` input and `text` output modality contract, not from the redundant derived task tag. The route-gated Tool owns when the Main Model needs this path; `ImageService` validates the same modality contract and separately checks Adapter wire MIME support before executing the selected binding.
 - Per-model image option **facts** (allowed values, ranges, passthrough keys) live in the model DB (`capabilities.task_options` - auto-projected from the OpenRouter image API at refresh, hand-authored in `resources/models/openai.overrides.json` for OpenAI native). Only render hints belong in `core/model_tasks/options.py`. The agent-facing `image_generation` tool exposes `prompt`, optional runtime `source_images`, and the two curated per-call intent knobs (`aspect_ratio`, `resolution`) - routed value-aware against the same `task_options` facts (see Per-Call Option Routing); every other image option stays Settings-only.
 - **Unrefreshed catalog under-uses native params:** a model with no `task_options` (e.g. an OpenRouter image model before a DB refresh) routes every knob to a prompt hint even if the provider natively supports it. Always safe (never errors); refresh the model DB to regain native routing.
-- A stored binding option the wire does not know (e.g. the legacy `image_size` key from before the unified-API migration) is silently dropped at request build - re-saving the binding options in Settings clears it.
+- A stored binding option the wire does not know (e.g. the legacy `image_size` key from before the unified-API migration) is silently dropped at request build - Reset options in Settings clears stored keys, including those absent from the live schema.
 - New provider execution belongs in `ProviderImageClient` and should keep returning normalized `ImageGenerationResult`; do not route image generation through chat adapters or attachment storage.
 - Debug trace capture is not wired through `ProviderImageClient`; the shared `ProviderTaskClient.post_and_parse` constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()` (deliberate).
 - `ImageError` derives from the shared `TaskError` base in `core/utils/errors.py`; the image Tools map expected execution failures into their stable Tool-result error codes.
