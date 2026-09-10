@@ -54,9 +54,7 @@ export function toolDetailImages(
     const id = item?.attachment_id;
     if (
       typeof id !== 'string' ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-        id,
-      ) ||
+      !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
       typeof item?.media_type !== 'string' ||
       !item.media_type.startsWith('image/') ||
       seen.has(id)
