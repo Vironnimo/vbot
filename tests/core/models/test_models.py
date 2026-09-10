@@ -1876,7 +1876,7 @@ class TestModelRegistryRealResources:
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
 
     def test_opencode_go_current_endpoint_profiles_load(self):
-        """All 27 current official Models route through their documented wire."""
+        """All 28 current official Models route through their documented wire."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
@@ -1896,6 +1896,7 @@ class TestModelRegistryRealResources:
                 "kimi-k2.7-code",
                 "kimi-k2.6",
                 "longcat-2.0",
+                "deepseek-flash",
                 "deepseek-v4-pro",
                 "deepseek-v4-flash",
                 "deepseek-v4-flash-vision-exp",
@@ -1915,11 +1916,37 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 27
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 28
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)
                 assert model.metadata["opencode_go"]["protocol"] == protocol
+
+    def test_gpt6_and_deepseek41_profiles_load(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        gpt = registry.get("openai", "gpt-6-astra")
+        assert gpt.connections == ("subscription",)
+        assert gpt.context_window_for("subscription") == 272_000
+        assert gpt.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh", "max")
+        assert gpt.capabilities.tools is True
+        assert gpt.metadata["openai"]["wire_policies"]["subscription"] == {
+            "protocol": "responses",
+            "minimum_reasoning_effort": "low",
+        }
+
+        deepseek = registry.get("opencode-go", "deepseek-flash")
+        assert deepseek.name == "DeepSeek V4.1 Flash"
+        assert deepseek.context_window == 1_000_000
+        assert deepseek.max_output_tokens == 384_000
+        assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
+        assert deepseek.capabilities.tools is True
+        assert deepseek.metadata["opencode_go"] == {
+            "protocol": "openai",
+            "reasoning_response_field": "reasoning_content",
+            "thinking_control": "toggle_with_effort",
+        }
+        assert deepseek.reasoning_replay is None
+        assert registry.provider_reasoning_replay("opencode-go") == "full_history"
 
     def test_opencode_go_response_fields_are_not_history_field_guesses(self):
         """Profiles describe inbound response carriers, not outbound replay."""

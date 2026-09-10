@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
+import pytest
+import respx
+
 from core.providers.openai import OpenAIAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
@@ -13,7 +17,38 @@ from scripts.probe_reasoning_replay_exact import (
     _build_tool_calls,
     _client_tools_expected,
     _encrypted_reasoning_expected,
+    _run_turn,
 )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_exact_probe_sends_opencode_session_header(tmp_path):
+    (tmp_path / ".env").write_text("OPENCODE_GO_API_KEY=test-key\n", encoding="utf-8")
+    built = _build_adapter("opencode-go", "deepseek-flash", data_dir=tmp_path)
+    route = respx.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 1},
+            },
+        )
+    )
+    try:
+        for _ in range(2):
+            await _run_turn(
+                built.adapter, "deepseek-flash", [{"role": "user", "content": "test"}], tools=None
+            )
+        first, second = [call.request for call in route.calls]
+        assert first.headers["x-opencode-session"].startswith("vbot-")
+        assert first.headers["x-opencode-session"] == second.headers["x-opencode-session"]
+        assert first.headers["user-agent"] == "vBot"
+        assert b"_opencode_session_id" not in first.content
+    finally:
+        await built.adapter.aclose()
 
 
 def test_build_tool_calls_accepts_canonical_vbot_shape() -> None:

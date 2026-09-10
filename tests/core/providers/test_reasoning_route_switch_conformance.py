@@ -5,20 +5,30 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage, ToolCall
-from core.chat.wire_shaping import _embed_notes_into_request
+from core.chat.wire_shaping import (
+    _assemble_request_history,
+    _assistant_message_from_response,
+    _embed_notes_into_request,
+)
+from core.models.models import ModelRegistry
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OllamaAdapter
+from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
+from core.sessions.sessions import ChatSessionManager
+from core.storage.layout import initialize_data_directory
 
 SOURCE_SCOPE = "source/reasoning-model::connection:account"
 READABLE_REASONING = "The two Tool outputs must be compared."
@@ -325,3 +335,148 @@ def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: s
     expected_opaque = "native-signature" if profile == "messages" else "native-encrypted"
     assert expected_opaque in serialized
     assert "provider-neutral context" not in serialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "model_id", "connection"),
+    [("openai", "gpt-6-astra", "subscription"), ("opencode-go", "deepseek-flash", "api-key")],
+)
+@pytest.mark.parametrize("route_change", [None, "provider", "model", "connection", "account"])
+async def test_new_models_replay_persisted_tool_history_only_on_its_original_route(
+    tmp_path: Path, provider_id: str, model_id: str, connection: str, route_change: str | None
+) -> None:
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ModelRegistry.load(resources)
+    config = ProviderRegistry.load(resources).get(provider_id)
+
+    def lookup(candidate: str):
+        return registry.get(provider_id, candidate)
+
+    adapter = (
+        OpenAIAdapter(
+            config, "test-token", model_lookup=lookup, connection_mode=CODEX_RESPONSES_MODE
+        )
+        if provider_id == "openai"
+        else OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    )
+    original_output = [
+        {
+            "type": "reasoning",
+            "id": "rs_native",
+            "encrypted_content": "native-encrypted",
+            "summary": [{"type": "summary_text", "text": READABLE_REASONING}],
+        },
+        {
+            "type": "message",
+            "id": "msg_native",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Reading the file."}],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_native",
+            "call_id": "call_native",
+            "name": "read",
+            "arguments": '{"path":"a.py"}',
+        },
+    ]
+    raw_response = (
+        {"output": original_output, "status": "completed"}
+        if provider_id == "openai"
+        else {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Reading the file.",
+                        "reasoning_content": READABLE_REASONING,
+                        "reasoning_details": [
+                            {"type": "reasoning.encrypted", "data": "foreign-encrypted"}
+                        ],
+                        "tool_calls": [
+                            {
+                                "id": "call_native",
+                                "type": "function",
+                                "function": {
+                                    "name": "read",
+                                    "arguments": '{"path":"a.py"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+    scope = f"{provider_id}/{model_id}::{connection}:default"
+    try:
+        normalized = adapter.normalize_response(raw_response, model_id=model_id)
+        assistant = _assistant_message_from_response(
+            f"{provider_id}/{model_id}", normalized, reasoning_scope=scope
+        )
+        data_dir = tmp_path / "data"
+        initialize_data_directory(data_dir)
+        manager = ChatSessionManager(data_dir)
+        try:
+            session = manager.create("audit", session_id="replay")
+            session.append_many(
+                [
+                    ChatMessage.user("Read the file."),
+                    assistant,
+                    ChatMessage.tool(tool_call_id="call_native", name="read", content="alpha"),
+                ]
+            )
+            address = session.address
+        finally:
+            manager.close()
+        manager = ChatSessionManager(data_dir)
+        try:
+            restored = manager.get(address).load()
+        finally:
+            manager.close()
+        assert restored[1].reasoning == assistant.reasoning == READABLE_REASONING
+        assert restored[1].reasoning_meta == assistant.reasoning_meta
+        assert restored[1].reasoning_scope == scope
+        route = {
+            "provider": provider_id,
+            "model": model_id,
+            "connection": connection,
+            "account": "default",
+        }
+        if route_change is not None:
+            route[route_change] = "other"
+        target_scope = (
+            f"{route['provider']}/{route['model']}::{route['connection']}:{route['account']}"
+        )
+        messages = _assemble_request_history(
+            restored,
+            replay_policy=adapter.reasoning_replay_policy(model_id),
+            agent_model=target_scope,
+        )
+        payload = (
+            adapter._build_responses_payload(messages, model_id=model_id)
+            if isinstance(adapter, OpenAIAdapter)
+            else adapter._build_payload(messages, model_id)
+        )
+        profile = "responses" if provider_id == "openai" else "chat-completions"
+        assert _wire_tool_ids(profile, payload) == (["call_native"], ["call_native"])
+        serialized = json.dumps(payload)
+        assert READABLE_REASONING in serialized
+        assert "foreign-encrypted" not in serialized
+        if provider_id == "openai":
+            if route_change is None:
+                assert payload["input"][1:4] == original_output
+            else:
+                assert "native-encrypted" not in serialized
+                assert all(item.get("type") != "reasoning" for item in payload["input"])
+        else:
+            prior = next(item for item in payload["messages"] if item["role"] == "assistant")
+            assert prior.get("reasoning_content") == (
+                READABLE_REASONING if route_change is None else None
+            )
+            assert "reasoning_details" not in prior
+    finally:
+        await adapter.aclose()

@@ -1,6 +1,18 @@
 {
   "provider_id": "openai",
   "models": {
+    "gpt-6-astra": {
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "subscription": {
+              "protocol": "responses",
+              "minimum_reasoning_effort": "low"
+            }
+          }
+        }
+      }
+    },
     "gpt-5.6": {
       "canonical": "openai/gpt-5.6-sol",
       "connections": ["api-key"],
