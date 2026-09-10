@@ -785,7 +785,17 @@ def _refresh_dev_webui(
         return _Step(True, "")
     if applied_revision and dist_present:
         changed = run(
-            ["git", "diff", "--quiet", applied_revision, target_revision, "--", "webui"],
+            [
+                "git",
+                "diff",
+                "--quiet",
+                applied_revision,
+                target_revision,
+                "--",
+                "webui",
+                ":(glob)resources/extensions/*/ui/**",
+                ":(glob)tests/fixtures/extension-pages/*/ui/**",
+            ],
             repo,
         )
         if changed.returncode == 0:
