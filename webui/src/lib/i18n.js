@@ -1,6 +1,7 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'settings.specializedModels.resetOptions': 'Reset options',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',
   'audio.pause': 'Pause audio',

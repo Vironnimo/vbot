@@ -26,7 +26,6 @@
   import {
     JSON_OPTION_TYPE,
     TASK_MODEL_ROWS,
-    applyOptionDefaults,
     createTaskModelUpdatePayload,
     normalizeOptionSchema,
     normalizeTargets,
@@ -66,7 +65,7 @@
   let taskModelJsonErrors = $state({});
   let autoSaveArmed = $state(false);
   // A queued model reload waits here while the user is actively editing, since
-  // a target reload re-applies option defaults onto the bindings.
+  // a target reload replaces the available option controls.
   let pendingTaskModelReload = $state(false);
   let lastModelsRefreshToken = null;
   let taskModelSchemaRequestIds = {};
@@ -192,8 +191,8 @@
     taskModelsAutosave.cancelPendingTimer();
   });
 
-  // Auto-save is armed only after a real user edit so that applying option
-  // defaults during the initial load does not silently persist settings.
+  // Auto-save is armed only after a real user edit. Schema defaults are
+  // display fallbacks and remain owned by the backend.
   $effect(() => {
     if (!autoSaveArmed || saveDisabled) {
       return;
@@ -220,7 +219,7 @@
   });
 
   // Run the queued reload once the surface is idle, so it never re-applies
-  // option defaults over an edit the user is mid-way through.
+  // option controls during an edit the user is mid-way through.
   $effect(() => {
     if (
       pendingTaskModelReload &&
@@ -304,10 +303,6 @@
       [taskType]: fields,
     };
     clearTaskModelJsonErrors(taskType);
-    taskModelBindings = {
-      ...taskModelBindings,
-      [taskType]: applyOptionDefaults(taskModelBindings[taskType], fields),
-    };
     return true;
   }
 
@@ -344,7 +339,10 @@
 
     try {
       const result = await updateTaskModelSettings(
-        createTaskModelUpdatePayload(taskModelBindings),
+        createTaskModelUpdatePayload(
+          taskModelBindings,
+          normalizeTaskModelSettings(settings),
+        ),
       );
       const nextSettings = {
         ...settings,
@@ -423,6 +421,16 @@
         },
       },
     };
+    onError('');
+    autoSaveArmed = true;
+  }
+
+  function resetTaskModelOptions(taskType) {
+    taskModelBindings = {
+      ...taskModelBindings,
+      [taskType]: { ...taskModelBindings[taskType], options: {} },
+    };
+    clearTaskModelJsonErrors(taskType);
     onError('');
     autoSaveArmed = true;
   }
@@ -740,6 +748,17 @@
             'This target has no configurable options.',
           )}
         </div>
+      {/if}
+
+      {#if binding.target && Object.keys(binding.options).length > 0}
+        <Button
+          disabled={taskModelSaving || taskModelLoading}
+          onClick={() => resetTaskModelOptions(row.taskType)}
+          >{t(
+            'settings.specializedModels.resetOptions',
+            'Reset options',
+          )}</Button
+        >
       {/if}
 
       {#if ['speech_to_text', 'text_to_speech'].includes(row.taskType) && selectedTarget?.kind === 'local'}

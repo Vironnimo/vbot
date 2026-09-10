@@ -106,3 +106,5 @@ loaded/busy state and targeted unload button. Unloading STT leaves TTS usable,
 including when TTS is busy. Stale polls cannot overwrite unload results, failed
 unloads permit retry, and unmount clears polling. Coverage:
 `SettingsSpecializedModelsPanel.test.js` and `lib/__tests__/api.test.js`.
+
+Specialized Models displays schema defaults without inserting them into stored option drafts and submits only changed bindings. Each configured row with stored options offers Reset options, including when those options are absent from the live schema; it clears the options while preserving the target. Coverage: `SettingsSpecializedModelsPanel.test.js` exercises unrelated stale bindings, displayed defaults, and reset after schema drift.

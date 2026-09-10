@@ -588,7 +588,11 @@ def _speech_to_text_fields(
                 description="Optional vocabulary or context bias for the transcription.",
             ),
         )
-    if model is not None and "response_format" in model.capabilities.supported_parameters:
+    if (
+        provider_id != "openrouter"
+        and model is not None
+        and "response_format" in model.capabilities.supported_parameters
+    ):
         fields.append(
             TaskModelOptionField(
                 name="response_format",

@@ -303,8 +303,8 @@ def test_option_schema_for_stt_response_format_field_type() -> None:
 
     schema = option_schema_for(
         TASK_SPEECH_TO_TEXT,
-        "openrouter",
-        "openrouter/openai/whisper-1::api-key",
+        "openai",
+        "openai/whisper-1::api-key",
         model=model,
     )
 
