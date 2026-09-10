@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -13,8 +13,9 @@ from core.automation.cron import CronJobValidationError, CronService
 
 
 @pytest.fixture()
-def service(tmp_path: Any) -> CronService:
-    return CronService(Mock(), tmp_path)
+def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
+    monkeypatch.setattr("core.automation.cron._utc_now", lambda: datetime(2026, 9, 1, tzinfo=UTC))
+    return CronService(Mock(), tmp_path, tz="UTC")
 
 
 class TestProjectOccurrences:
@@ -115,6 +116,28 @@ class TestProjectOccurrences:
             datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
         )
         assert len(occurrences) == 2
+
+    @pytest.mark.parametrize("elapsed_hours", [0, 12, 24])
+    def test_historical_ticks_do_not_consume_remaining_runs(
+        self, service: CronService, monkeypatch: pytest.MonkeyPatch, elapsed_hours: int
+    ) -> None:
+        window_start = datetime(2026, 9, 10, tzinfo=UTC)
+        now = window_start + timedelta(hours=elapsed_hours)
+        monkeypatch.setattr("core.automation.cron._utc_now", lambda: now)
+        service.create_job(
+            agent_id="joel",
+            prompt="limited",
+            schedule_type="interval",
+            interval_seconds=3600,
+            interval_anchor_at="2026-09-01T00:00:00+00:00",
+            remaining_runs=2,
+        )
+
+        occurrences = service.project_occurrences(window_start, window_start + timedelta(days=1))
+
+        assert [occurrence.fire_at_utc for occurrence in occurrences] == [
+            window_start + timedelta(hours=hour) for hour in range(min(elapsed_hours + 2, 24))
+        ]
 
     def test_projection_is_sorted_and_sorted_by_fire_time(self, service: CronService) -> None:
         service.create_job(
