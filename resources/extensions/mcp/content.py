@@ -42,15 +42,28 @@ class ContentStore:
         self, payload: dict[str, Any]
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         artifacts: list[dict[str, Any]] = []
-        result = await self._visit(copy.deepcopy(payload), artifacts)
+        result = copy.deepcopy(payload)
+        # Only protocol-owned content positions contain media. Application JSON,
+        # schemas and metadata can use the same keys with unrelated meanings.
+        for block in result.get("content", []):
+            await self._visit(block, artifacts)
+        for resource in result.get("contents", []):
+            await self._visit(resource, artifacts, resource=True)
+        for message in result.get("messages", []):
+            content = message.get("content", [])
+            for block in content if isinstance(content, list) else [content]:
+                await self._visit(block, artifacts)
         return result, artifacts
 
-    async def _visit(self, value: Any, artifacts: list[dict[str, Any]]) -> Any:
-        if isinstance(value, list):
-            return [await self._visit(item, artifacts) for item in value]
+    async def _visit(
+        self, value: Any, artifacts: list[dict[str, Any]], *, resource: bool = False
+    ) -> None:
         if not isinstance(value, dict):
-            return value
-        field = self._binary_field(value)
+            return
+        if not resource and value.get("type") == "resource":
+            await self._visit(value.get("resource"), artifacts, resource=True)
+            return
+        field = self._binary_field(value, resource=resource)
         if field is not None:
             encoded = value[field]
             raw = base64.b64decode(encoded, validate=True)
@@ -77,13 +90,16 @@ class ContentStore:
                     )
             value.pop(field)
             value["size_bytes"] = len(raw)
-        return {key: await self._visit(item, artifacts) for key, item in value.items()}
 
     @staticmethod
-    def _binary_field(value: dict[str, Any]) -> str | None:
-        if value.get("type") in {"image", "audio"} and isinstance(value.get("data"), str):
+    def _binary_field(value: dict[str, Any], *, resource: bool) -> str | None:
+        if (
+            not resource
+            and value.get("type") in {"image", "audio"}
+            and isinstance(value.get("data"), str)
+        ):
             return "data"
-        if "uri" in value and isinstance(value.get("blob"), str):
+        if resource and "uri" in value and isinstance(value.get("blob"), str):
             return "blob"
         return None
 
@@ -216,6 +232,8 @@ class ContentStore:
                     preview=encoded[:RESULT_PREVIEW_CHARACTERS],
                     read={"action": "read", "result_id": identifier, "pointer": item_pointer},
                 )
+                if fields is not None and isinstance(value, list) and isinstance(item, dict):
+                    entry["read"]["fields"] = fields
             else:
                 entry.update(complete=True, value=item)
             if (
