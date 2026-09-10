@@ -1257,3 +1257,68 @@ def test_websocket_handshake_reflection_run_carries_source_session(
             "source_session_id": source.id,
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_mode", ["disconnect", "send_error", "send_cancel"])
+async def test_shared_socket_closes_subscription_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_mode: str
+) -> None:
+    from types import SimpleNamespace
+
+    import server.app as server_app
+
+    bus = ServerEventBus()
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app.state.event_bus = bus
+    monkeypatch.setattr(server_app, "_register_ws_client", lambda _socket: None)
+    monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
+    monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
+    held_streams: list[Any] = []
+    original_subscribe = bus.subscribe
+
+    def subscribe(**kwargs: Any) -> Any:
+        stream = original_subscribe(**kwargs)
+        held_streams.append(stream)  # Prevent GC from concealing a missing aclose.
+        return stream
+
+    monkeypatch.setattr(bus, "subscribe", subscribe)
+
+    async def accept() -> None:
+        pass
+
+    async def receive() -> dict[str, Any]:
+        while bus.subscriber_count == 0:
+            await asyncio.sleep(0)
+        if exit_mode == "disconnect":
+            return {"type": "websocket.disconnect"}
+        bus.publish(APP_ERROR_EVENT, {"message": "test-owned event"})
+        await asyncio.Event().wait()
+        return {}
+
+    async def send_json(event: dict[str, Any]) -> None:
+        if event["type"] == "connection_ready":
+            return
+        assert bus.subscriber_count == 1
+        if exit_mode == "send_cancel":
+            raise asyncio.CancelledError
+        raise WebSocketDisconnect()
+
+    socket = SimpleNamespace(
+        app=app, query_params={}, accept=accept, receive=receive, send_json=send_json
+    )
+    endpoint = next(
+        cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
+    )
+    try:
+        async with asyncio.timeout(2):
+            if exit_mode == "send_cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await endpoint(socket)
+            else:
+                await endpoint(socket)
+        assert held_streams
+        assert bus.subscriber_count == 0
+    finally:
+        for stream in held_streams:
+            await stream.aclose()

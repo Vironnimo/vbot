@@ -465,100 +465,100 @@ class Runtime:
             logger.debug("Runtime already started — skipping")
             return
 
-        self._started_at = datetime.now(UTC)
-        self._startup_id = str(uuid4())
-        resources_path = self._resolve_resources_path()
-
-        self._storage = StorageManager(config=self._config, resources_dir=resources_path)
-        storage = self._storage
-        if storage is None:
-            raise RuntimeError("Storage service not available")
-        self._storage.ensure_directories()
-        self.logger = self._log_manager.get_logger("core")
-        self.logger.info("Runtime startup initiated")
-        self._storage.temporary_files.start()
-        settings = self._storage.load_settings()
-        timezone_name = effective_timezone_name(settings)
-        attachment_max_size_bytes = self._positive_size_setting(
-            settings,
-            key="attachment_max_size_bytes",
-            default=DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
-        )
-        self._speech_upload_max_size_bytes = self._positive_size_setting(
-            settings,
-            key="speech_upload_max_size_bytes",
-            default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
-        )
-        # Keep-awake is applied as soon as Settings are usable so an enabled
-        # server holds its power request for the whole lifetime of the process.
-        self._keep_awake = KeepAwakeController(self.logger)
-        self._keep_awake.set_enabled(settings.get("keep_awake") is True)
-        self._attachment_store = AttachmentStore(
-            self._storage.data_dir,
-            max_size_bytes=attachment_max_size_bytes,
-        )
-        data_dir_credentials = self._storage.load_environment()
-        self._fallback_environment = dict(data_dir_credentials)
-        custom_providers = self._storage.load_custom_providers_settings()
-
-        self._providers = ProviderRegistry.load(
-            resources_path,
-            custom_providers=custom_providers,
-            tolerate_invalid=True,
-        )
-        self._token_store = TokenStore(self._storage.data_dir)
-        self._provider_credentials = ProviderCredentialResolver(
-            self._providers,
-            fallback_credentials=data_dir_credentials,
-            token_store=self._token_store,
-            enabled_overrides_loader=self._provider_connection_enabled_overrides,
-        )
-        self._provider_usage = ProviderUsageService(
-            self,
-            data_root=self._storage.data_dir,
-        )
-        self._models = ModelRegistry.load(
-            resources_path,
-            runtime_models_dir=self._storage.layout.models,
-            custom_providers=custom_providers,
-        )
-        self._provider_runtime = ProviderRuntime(
-            providers=self._providers,
-            models=self._models,
-            credentials=self._provider_credentials,
-            token_store=self._token_store,
-            storage=self._storage,
-            resources_path=resources_path,
-            logger=self.logger,
-        )
-        local_speech = LocalSpeechExecutor(engines_dir=self._storage.layout.speech_engines)
-        self._model_tasks = TaskModelService(
-            self._providers,
-            self._models,
-            self._provider_credentials,
-            self._storage,
-            local_targets=local_speech.targets,
-        )
-        self._speech = SpeechService(
-            self._model_tasks,
-            self,
-            self._storage.data_dir,
-            local_executor=local_speech,
-            transcription_audio_getter=self._storage.load_speech_settings,
-        )
-        self._image = ImageService(
-            self._model_tasks,
-            self,
-            max_input_bytes=self._attachment_store.max_size_bytes,
-        )
-        self._video = VideoService(self._model_tasks, self)
-        self._music = MusicService(self._model_tasks, self)
-        self._embeddings = EmbeddingService(self._model_tasks, self)
-        # Sessions are a canonical service: it opens and verifies one database
-        # before any Agent lifecycle operation can create or validate a Session.
-        # Partial startup must close every Session resource in reverse order so a
-        # failed start does not leak descriptors or leave a half-open database.
         try:
+            self._started_at = datetime.now(UTC)
+            self._startup_id = str(uuid4())
+            resources_path = self._resolve_resources_path()
+
+            self._storage = StorageManager(config=self._config, resources_dir=resources_path)
+            storage = self._storage
+            if storage is None:
+                raise RuntimeError("Storage service not available")
+            self._storage.ensure_directories()
+            self.logger = self._log_manager.get_logger("core")
+            self.logger.info("Runtime startup initiated")
+            self._storage.temporary_files.start()
+            settings = self._storage.load_settings()
+            timezone_name = effective_timezone_name(settings)
+            attachment_max_size_bytes = self._positive_size_setting(
+                settings,
+                key="attachment_max_size_bytes",
+                default=DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+            )
+            self._speech_upload_max_size_bytes = self._positive_size_setting(
+                settings,
+                key="speech_upload_max_size_bytes",
+                default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
+            )
+            # Keep-awake is applied as soon as Settings are usable so an enabled
+            # server holds its power request for the whole lifetime of the process.
+            self._keep_awake = KeepAwakeController(self.logger)
+            self._keep_awake.set_enabled(settings.get("keep_awake") is True)
+            self._attachment_store = AttachmentStore(
+                self._storage.data_dir,
+                max_size_bytes=attachment_max_size_bytes,
+            )
+            data_dir_credentials = self._storage.load_environment()
+            self._fallback_environment = dict(data_dir_credentials)
+            custom_providers = self._storage.load_custom_providers_settings()
+
+            self._providers = ProviderRegistry.load(
+                resources_path,
+                custom_providers=custom_providers,
+                tolerate_invalid=True,
+            )
+            self._token_store = TokenStore(self._storage.data_dir)
+            self._provider_credentials = ProviderCredentialResolver(
+                self._providers,
+                fallback_credentials=data_dir_credentials,
+                token_store=self._token_store,
+                enabled_overrides_loader=self._provider_connection_enabled_overrides,
+            )
+            self._provider_usage = ProviderUsageService(
+                self,
+                data_root=self._storage.data_dir,
+            )
+            self._models = ModelRegistry.load(
+                resources_path,
+                runtime_models_dir=self._storage.layout.models,
+                custom_providers=custom_providers,
+            )
+            self._provider_runtime = ProviderRuntime(
+                providers=self._providers,
+                models=self._models,
+                credentials=self._provider_credentials,
+                token_store=self._token_store,
+                storage=self._storage,
+                resources_path=resources_path,
+                logger=self.logger,
+            )
+            local_speech = LocalSpeechExecutor(engines_dir=self._storage.layout.speech_engines)
+            self._model_tasks = TaskModelService(
+                self._providers,
+                self._models,
+                self._provider_credentials,
+                self._storage,
+                local_targets=local_speech.targets,
+            )
+            self._speech = SpeechService(
+                self._model_tasks,
+                self,
+                self._storage.data_dir,
+                local_executor=local_speech,
+                transcription_audio_getter=self._storage.load_speech_settings,
+            )
+            self._image = ImageService(
+                self._model_tasks,
+                self,
+                max_input_bytes=self._attachment_store.max_size_bytes,
+            )
+            self._video = VideoService(self._model_tasks, self)
+            self._music = MusicService(self._model_tasks, self)
+            self._embeddings = EmbeddingService(self._model_tasks, self)
+            # Sessions are a canonical service: it opens and verifies one database
+            # before any Agent lifecycle operation can create or validate a Session.
+            # Partial startup must close every Session resource in reverse order so a
+            # failed start does not leak descriptors or leave a half-open database.
             self._chat_sessions = ChatSessionManager(
                 self._storage.data_dir,
                 store_path=self._storage.layout.sessions_db_path,
@@ -1452,6 +1452,9 @@ class Runtime:
         self._log_manager.close()
 
     def _clear_service_references(self) -> None:
+        self._started = False
+        self._started_at = None
+        self._startup_id = None
         self._provider_runtime = None
         self._providers = None
         self._provider_credentials = None
@@ -1462,6 +1465,8 @@ class Runtime:
         self._model_tasks = None
         self._speech = None
         self._image = None
+        self._video = None
+        self._music = None
         self._embeddings = None
         self._storage = None
         self._attachment_store = None
@@ -2037,7 +2042,7 @@ class Runtime:
 
     async def reload_skills_async(self) -> None:
         """Reload Skills without scanning their files on the Event Loop."""
-        skills = await asyncio.to_thread(self._load_reloaded_skills)
+        skills = await _RUNTIME_WORKERS.run(self._load_reloaded_skills)
         self._apply_reloaded_skills(skills)
 
     def _load_reloaded_skills(self) -> SkillRegistry:

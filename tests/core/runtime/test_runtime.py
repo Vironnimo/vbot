@@ -1933,3 +1933,73 @@ class _StubPrompts:
         session_tool_grants: object = (),
     ) -> list[dict[str, object]]:
         return []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner", "method"),
+    [
+        ("StorageManager", "ensure_directories"),
+        ("StorageManager", "load_settings"),
+        ("StorageManager", "load_environment"),
+        ("StorageManager", "load_custom_providers_settings"),
+        ("TokenStore", None),
+        ("ModelRegistry", "load"),
+        ("TaskModelService", None),
+        ("ImageService", None),
+        ("Runtime", "_start_provider_usage_service"),
+    ],
+)
+async def test_failed_bootstrap_cleans_resources_and_can_retry(
+    config: Config, monkeypatch: pytest.MonkeyPatch, owner: str, method: str | None
+) -> None:
+    import core.runtime.runtime as runtime_module
+
+    runtime = Runtime(config)
+    resources: dict[str, Any] = {}
+    failure = RuntimeError("bootstrap test failure")
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        resources["storage"] = runtime._storage
+        resources["keep_awake"] = runtime._keep_awake
+        resources["speech"] = runtime._speech
+        if runtime._keep_awake is not None:
+            resources["closed_power"] = False
+            original_close = runtime._keep_awake.close
+
+            def close_power() -> None:
+                resources["closed_power"] = True
+                original_close()
+
+            monkeypatch.setattr(runtime._keep_awake, "close", close_power)
+        raise failure
+
+    with monkeypatch.context() as patch:
+        if method is None:
+            patch.setattr(runtime_module, owner, fail)
+        else:
+            patch.setattr(getattr(runtime_module, owner), method, fail)
+        with pytest.raises(RuntimeError) as caught:
+            runtime.start()
+    assert caught.value is failure
+    assert not runtime._started
+    assert runtime._started_at is None
+    assert runtime._startup_id is None
+    assert runtime._storage is None
+    assert runtime._speech is None
+    assert runtime._video is None
+    assert runtime._music is None
+    assert not runtime._log_manager._handlers
+    assert not runtime._log_manager._configured
+    if resources["storage"] is not None:
+        assert resources["storage"].temporary_files._sweeper_task is None
+    if resources["keep_awake"] is not None:
+        assert resources["closed_power"]
+
+    try:
+        runtime.start()
+        assert runtime._started
+        assert runtime.storage is not resources["storage"]
+        assert runtime._log_manager._configured
+    finally:
+        await runtime.aclose()

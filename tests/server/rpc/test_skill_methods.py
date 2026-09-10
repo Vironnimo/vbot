@@ -44,7 +44,7 @@ class _SkillRuntime:
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self._root / "agents" / agent_id / "skills"
 
-    def reload_skills(self) -> None:
+    async def reload_skills_async(self) -> None:
         self.reload_calls += 1
 
     def invalidate_agent_skills(self, agent_id: str) -> None:
@@ -56,10 +56,11 @@ def _state(tmp_path: Path, known_agents: set[str] | None = None) -> Any:
     return SimpleNamespace(runtime=_SkillRuntime(tmp_path, known))
 
 
-def test_create_global_writes_and_reloads(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_create_global_writes_and_reloads(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    result = _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
+    result = await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
 
     assert result["name"] == "demo"
     assert (state.runtime.global_skills_dir / "demo" / "SKILL.md").is_file()
@@ -67,20 +68,22 @@ def test_create_global_writes_and_reloads(tmp_path: Path) -> None:
     assert state.runtime.invalidated == []
 
 
-def test_create_agent_writes_and_invalidates(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_create_agent_writes_and_invalidates(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    _skill_create(state, {"scope": "agent:builder", "name": "demo", "content": _skill_md()})
+    await _skill_create(state, {"scope": "agent:builder", "name": "demo", "content": _skill_md()})
 
     assert (state.runtime.agent_skills_dir("builder") / "demo" / "SKILL.md").is_file()
     assert state.runtime.invalidated == ["builder"]
     assert state.runtime.reload_calls == 0
 
 
-def test_create_records_human_provenance(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_create_records_human_provenance(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    _skill_create(
+    await _skill_create(
         state, {"scope": "global", "name": "demo", "content": _skill_md(), "source": "wiki"}
     )
 
@@ -89,78 +92,91 @@ def test_create_records_human_provenance(tmp_path: Path) -> None:
     assert skill.metadata["vbot"]["source"] == "wiki"
 
 
-def test_update_rewrites_skill(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_update_rewrites_skill(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
+    await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
 
-    _skill_update(
+    await _skill_update(
         state, {"scope": "global", "name": "demo", "content": _skill_md(description="Updated.")}
     )
 
     assert SkillRegistry.load(state.runtime.global_skills_dir).get("demo").description == "Updated."
 
 
-def test_delete_removes_skill(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_delete_removes_skill(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
+    await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
 
-    _skill_delete(state, {"scope": "global", "name": "demo"})
+    await _skill_delete(state, {"scope": "global", "name": "demo"})
 
     assert not (state.runtime.global_skills_dir / "demo").exists()
 
 
-def test_write_and_remove_support_file(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_write_and_remove_support_file(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    _skill_create(state, {"scope": "agent:builder", "name": "demo", "content": _skill_md()})
+    await _skill_create(state, {"scope": "agent:builder", "name": "demo", "content": _skill_md()})
 
-    _skill_write_file(
+    await _skill_write_file(
         state,
         {"scope": "agent:builder", "name": "demo", "path": "scripts/run.py", "content": "x = 1\n"},
     )
     resource = state.runtime.agent_skills_dir("builder") / "demo" / "scripts" / "run.py"
     assert resource.is_file()
 
-    _skill_remove_file(state, {"scope": "agent:builder", "name": "demo", "path": "scripts/run.py"})
+    await _skill_remove_file(
+        state, {"scope": "agent:builder", "name": "demo", "path": "scripts/run.py"}
+    )
     assert not resource.exists()
 
 
-def test_project_scope_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_project_scope_is_rejected(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
     with pytest.raises(RpcError) as exc:
-        _skill_create(state, {"scope": "project:vbot", "name": "demo", "content": _skill_md()})
+        await _skill_create(
+            state, {"scope": "project:vbot", "name": "demo", "content": _skill_md()}
+        )
 
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
     assert "scope" in exc.value.message
 
 
-def test_invalid_agent_scope_id_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_invalid_agent_scope_id_is_rejected(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
     with pytest.raises(RpcError) as exc:
-        _skill_create(state, {"scope": "agent:../escape", "name": "demo", "content": _skill_md()})
+        await _skill_create(
+            state, {"scope": "agent:../escape", "name": "demo", "content": _skill_md()}
+        )
 
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
 
 
-def test_unknown_agent_scope_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_unknown_agent_scope_is_rejected(tmp_path: Path) -> None:
     # Private skill homes are identity-only. A well-formed id that names no stored
     # identity agent (e.g. a project-team slug) must be refused — a write would
     # create a stray ``agents/<id>/skills`` home that no agent owns.
     state = _state(tmp_path, known_agents={"builder"})
 
     with pytest.raises(RpcError) as exc:
-        _skill_create(state, {"scope": "agent:ghost", "name": "demo", "content": _skill_md()})
+        await _skill_create(state, {"scope": "agent:ghost", "name": "demo", "content": _skill_md()})
 
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
     assert "ghost" in exc.value.message
     assert not state.runtime.agent_skills_dir("ghost").exists()
 
 
-def test_missing_description_uses_body_and_reloads(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_missing_description_uses_body_and_reloads(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    result = _skill_create(
+    result = await _skill_create(
         state,
         {"scope": "global", "name": "demo", "content": "---\nname: demo\n---\n\nbody\n"},
     )
@@ -172,20 +188,22 @@ def test_missing_description_uses_body_and_reloads(tmp_path: Path) -> None:
     assert state.runtime.reload_calls == 1
 
 
-def test_missing_scope_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_missing_scope_is_rejected(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
     with pytest.raises(RpcError):
-        _skill_create(state, {"name": "demo", "content": _skill_md()})
+        await _skill_create(state, {"name": "demo", "content": _skill_md()})
 
 
-def test_read_returns_scope_skills_with_content(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_returns_scope_skills_with_content(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    _skill_create(
+    await _skill_create(
         state, {"scope": "global", "name": "demo", "content": _skill_md(body="# Demo\nGo.")}
     )
 
-    result = _skill_read(state, {"scope": "global"})
+    result = await _skill_read(state, {"scope": "global"})
 
     assert [skill["name"] for skill in result["skills"]] == ["demo"]
     entry = result["skills"][0]
@@ -193,10 +211,11 @@ def test_read_returns_scope_skills_with_content(tmp_path: Path) -> None:
     assert "# Demo\nGo." in entry["content"]
 
 
-def test_read_empty_scope_returns_no_skills(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_read_empty_scope_returns_no_skills(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    assert _skill_read(state, {"scope": "agent:builder"})["skills"] == []
+    assert (await _skill_read(state, {"scope": "agent:builder"}))["skills"] == []
 
 
 def test_method_handlers_registered() -> None:
@@ -213,3 +232,67 @@ def test_method_handlers_registered() -> None:
         "skill.set_disabled",
         "skill.share",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "owner_method", "params"),
+    [
+        ("skill.create", "create", {"name": "new", "content": _skill_md("new")}),
+        ("skill.update", "edit", {"name": "demo", "content": _skill_md()}),
+        ("skill.delete", "delete", {"name": "demo"}),
+        ("skill.write_file", "write_file", {"name": "demo", "path": "scripts/a.py", "content": ""}),
+        ("skill.remove_file", "remove_file", {"name": "demo", "path": "scripts/a.py"}),
+        ("skill.read", None, {}),
+    ],
+)
+async def test_skill_rpc_io_yields_and_refreshes_on_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    owner_method: str | None,
+    params: dict[str, Any],
+) -> None:
+    import asyncio
+    import threading
+
+    import server.rpc.skill_methods as methods
+    from server.rpc.methods import dispatch_rpc
+
+    state = _state(tmp_path)
+    await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
+    await _skill_write_file(
+        state, {"scope": "global", "name": "demo", "path": "scripts/a.py", "content": ""}
+    )
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+    refreshed: list[bool] = []
+    owner = state.runtime.skill_authoring if owner_method else methods
+    name = owner_method or "_read_skills"
+    original = getattr(owner, name)
+
+    def slow_io(*args: Any, **kwargs: Any) -> Any:
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return original(*args, **kwargs)
+
+    async def reload_skills() -> None:
+        assert threading.get_ident() == loop_thread
+        refreshed.append(True)
+
+    monkeypatch.setattr(owner, name, slow_io)
+    monkeypatch.setattr(state.runtime, "reload_skills_async", reload_skills)
+    task = asyncio.create_task(
+        dispatch_rpc(state, {"method": method, "params": {"scope": "global", **params}})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not task.done()
+    finally:
+        release.set()
+    result = await task
+    assert result["ok"] is True, result
+    assert bool(refreshed) == (method != "skill.read")

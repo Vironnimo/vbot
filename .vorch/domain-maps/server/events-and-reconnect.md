@@ -20,6 +20,8 @@ The shared `/ws` socket is server-push only. Clients send commands through RPC. 
 
 The client may reconnect with `epoch` and `after_sequence`. A matching epoch plus positive sequence resumes after the client's value. A missing/stale epoch or zero sequence starts live-only at the hello's `last_sequence`; the active-Run snapshot is authoritative for initial state. The server reads the high-water mark before awaiting the hello send, then subscribes from the chosen floor, so events published during the send remain in the retained deque and replay without a gap.
 
+The shared socket explicitly closes its bus subscription on every exit, including send failure and cancellation after an event was consumed; cleanup never depends on async-generator finalization (`tests/server/test_websocket.py`).
+
 ## Window presence
 
 `server/clients.py::ClientRegistry` is a momentary in-memory roster of open browser/Desktop `/ws` windows. CLI calls and Channels do not register. Each entry has a server-minted unregister `id`, client-minted `connection_id`, normalized accessor, coarse browser/OS labels, UTC `connected_at`, and constant `connected` status.
