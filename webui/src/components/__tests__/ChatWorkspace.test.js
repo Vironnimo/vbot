@@ -14,6 +14,7 @@ import {
   setupChatViewTestSuite,
   testChatStateRefs,
 } from './ChatView.support.js';
+import { unmount } from 'svelte';
 import { resetComposerMemory } from '../../lib/composerMemory.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
 
@@ -221,6 +222,59 @@ describe('ChatWorkspace', () => {
       ).toEqual(Array(5).fill('true'));
     },
   );
+
+  it('restores all Session filters independently after a fresh workspace mount', async () => {
+    const switches = () => [
+      ...document.querySelectorAll(
+        '.session-drawer__filter-menu [role="switch"]',
+      ),
+    ];
+    const openFilters = (index) => {
+      action(index, 'Sessions');
+      pane(index).querySelector('.session-drawer__filter-trigger').click();
+      flushSync();
+    };
+    await start(false);
+    openFilters(0);
+    for (const toggle of switches()) {
+      toggle.click();
+      flushSync();
+    }
+    action(0, 'Sessions');
+    action(0, 'Split view');
+    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    openFilters(1);
+    for (const toggle of switches()) {
+      toggle.click();
+      flushSync();
+    }
+
+    await unmount(harness.mountedComponent);
+    await start(false);
+    listSessionsMock.mockClear();
+    openFilters(0);
+    expect(switches()).toHaveLength(5);
+    expect(
+      switches().map((toggle) => toggle.getAttribute('aria-checked')),
+    ).toEqual(Array(5).fill('true'));
+    await waitForCondition(() => listSessionsMock.mock.calls.length > 0, 100);
+    expect(listSessionsMock).toHaveBeenLastCalledWith(
+      ['alpha'],
+      expect.objectContaining({
+        includeSubagents: true,
+        includeMemoryReflections: true,
+        includeSkillReflections: true,
+        includeCron: true,
+      }),
+    );
+    action(0, 'Sessions');
+    action(0, 'Split view');
+    await waitForCondition(() => button(pane(1), 'Sessions'), 100);
+    openFilters(1);
+    expect(
+      switches().map((toggle) => toggle.getAttribute('aria-checked')),
+    ).toEqual(Array(5).fill('false'));
+  });
 
   it('keeps two real Chat owners independent, retains drafts, and restores closed areas', async () => {
     await start();
