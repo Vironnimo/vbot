@@ -5,6 +5,10 @@
   import HtmlPreview from './chat/HtmlPreview.svelte';
   import Button from './ui/Button.svelte';
   import { tooltip } from '$lib/tooltip.js';
+  import {
+    loadSessionListFilters,
+    saveSessionListFilters,
+  } from '$lib/sessionListView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import {
     isDesktopAccessor,
@@ -23,7 +27,8 @@
   let kinds = $state(['chat', 'chat']);
   let previews = $state([null, null]);
   let sessions = $state([null, null]);
-  let firstSessionFilters = $state(null);
+  let firstSessionFilters = $state(loadSessionListFilters(0));
+  const secondSessionFilters = loadSessionListFilters(1);
   let sameSession = $derived(
     Boolean(sessions[0]?.sessionId) &&
       sessions[0]?.agentId === sessions[1]?.agentId &&
@@ -546,8 +551,11 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
-              onSessionFiltersChange={(filters) =>
-                (firstSessionFilters = filters)}
+              initialSessionFilters={firstSessionFilters}
+              onSessionFiltersChange={(filters) => {
+                firstSessionFilters = filters;
+                saveSessionListFilters(0, filters);
+              }}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
           {:else if secondChatCreated}
@@ -560,7 +568,10 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
-              initialSessionFilters={firstSessionFilters}
+              initialSessionFilters={secondSessionFilters ??
+                firstSessionFilters}
+              onSessionFiltersChange={(filters) =>
+                saveSessionListFilters(1, filters)}
               sharedSelectedAgentId={secondAgent}
               selectedProjectId={secondProject}
               sharedSelectedProjectAgentId={secondProjectAgent}

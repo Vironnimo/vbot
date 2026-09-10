@@ -1,16 +1,61 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applySessionList,
   createSessionListFilters,
   createSessionListState,
   isSessionHiddenByDefault,
+  loadSessionListFilters,
   overlayLiveSessionActivity,
   selectSession,
   sessionDisplayName,
   sessionParentReference,
+  saveSessionListFilters,
   visibleSessionsForSelection,
 } from '../sessionListView.js';
+
+describe('Session filter storage', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([null, '{broken', 'null', '[]', 'true', '42'])(
+    'ignores missing or malformed stored filters: %s',
+    (stored) => {
+      vi.stubGlobal('localStorage', { getItem: () => stored });
+      expect(loadSessionListFilters(0)).toBeNull();
+    },
+  );
+
+  it('accepts only known boolean filters and defaults missing fields', () => {
+    const setItem = vi.fn();
+    vi.stubGlobal('localStorage', {
+      getItem: () =>
+        JSON.stringify({ cron: true, allAgents: 'true', extra: true }),
+      setItem,
+    });
+    const expected = { ...createSessionListFilters(), cron: true };
+    expect(loadSessionListFilters(0)).toEqual(expected);
+    saveSessionListFilters(1, { ...expected, extra: true });
+    expect(setItem).toHaveBeenCalledWith(
+      'vbot.chat.sessionFilters.1',
+      JSON.stringify(expected),
+    );
+  });
+
+  it('keeps filters usable when storage reads or writes fail', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('Storage unavailable');
+      },
+      setItem: () => {
+        throw new Error('Storage full');
+      },
+    });
+    expect(loadSessionListFilters(0)).toBeNull();
+    expect(() =>
+      saveSessionListFilters(0, createSessionListFilters()),
+    ).not.toThrow();
+  });
+});
 
 describe('sessionListView helpers', () => {
   it('creates the default state shape', () => {

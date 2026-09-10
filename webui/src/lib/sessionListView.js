@@ -21,6 +21,29 @@ export function createSessionListFilters() {
   };
 }
 
+export function loadSessionListFilters(area) {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(`vbot.chat.sessionFilters.${area}`),
+    );
+    return isPlainObject(stored) ? normalizeFilters(stored) : null;
+  } catch {
+    // Missing or unavailable storage leaves the area's default intact.
+    return null;
+  }
+}
+
+export function saveSessionListFilters(area, filters) {
+  try {
+    localStorage.setItem(
+      `vbot.chat.sessionFilters.${area}`,
+      JSON.stringify(normalizeFilters(filters)),
+    );
+  } catch {
+    // Storage is optional; filter changes remain usable in memory.
+  }
+}
+
 export function createSessionListState() {
   return {
     sessions: [],
