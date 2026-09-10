@@ -819,6 +819,7 @@ class OllamaAdapter(ProviderAdapter):
         )
 
         has_tool_calls = False
+        tool_call_count = 0
         seen_done = False
         try:
             async for line in response.aiter_lines():
@@ -839,7 +840,10 @@ class OllamaAdapter(ProviderAdapter):
                     content = message.get("content")
                     if isinstance(content, str) and content:
                         yield {"type": "content_delta", "text": content}
-                    for tool_call in _ollama_stream_tool_calls(message.get("tool_calls")):
+                    for tool_call in _ollama_stream_tool_calls(
+                        message.get("tool_calls"), start_index=tool_call_count
+                    ):
+                        tool_call_count += 1
                         has_tool_calls = True
                         yield {
                             "type": "tool_call_delta",
@@ -1007,7 +1011,7 @@ def _extract_ollama_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]] | No
     return tool_calls or None
 
 
-def _ollama_stream_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]]:
+def _ollama_stream_tool_calls(raw_tool_calls: Any, *, start_index: int = 0) -> list[dict[str, Any]]:
     """Preserve malformed wire values so Chat can reject rather than dispatch them."""
 
     if not raw_tool_calls:
@@ -1020,7 +1024,7 @@ def _ollama_stream_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]]:
         function = function_value if isinstance(function_value, Mapping) else {}
         tool_call_id = raw_call.get("id")
         if not isinstance(tool_call_id, str) or not tool_call_id:
-            tool_call_id = f"tool_call_{position}"
+            tool_call_id = f"tool_call_{start_index + position}"
         name = function.get("name")
         arguments = function.get("arguments")
         tool_calls.append(

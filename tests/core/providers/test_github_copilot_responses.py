@@ -1938,3 +1938,47 @@ def test_build_payload_rejects_non_image_media_block() -> None:
             model_id="gpt-5.4",
             policy=responses_policy(),
         )
+
+
+@pytest.mark.parametrize(
+    "primary,other", [("input_tokens", "output_tokens"), ("output_tokens", "input_tokens")]
+)
+@pytest.mark.parametrize("invalid", [None, "12", 1.5, True, False, -1])
+def test_responses_usage_preserves_only_valid_primary_fields(primary, other, invalid) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    usage = {primary: 17, other: invalid, "input_tokens_details": {"cached_tokens": 4}}
+    response = {"status": "completed", "output": [], "usage": usage}
+    expected = {primary: 17, "cache_read_tokens": 4}
+    assert normalize_responses_response(response)["usage"] == expected
+    accumulator = StreamingAccumulator()
+    for delta in _iter_deltas(
+        [f"data: {json.dumps({'type': 'response.completed', 'response': response})}"]
+    ):
+        accumulator.add_delta(delta)
+    assert accumulator.finalize_assistant_fields().usage == expected
+
+
+@pytest.mark.parametrize(
+    "usage,expected",
+    [
+        ({"input_tokens": 0}, {"input_tokens": 0}),
+        ({"output_tokens": 0}, {"output_tokens": 0}),
+        ({"prompt_tokens": 12}, {"input_tokens": 12}),
+        ({"completion_tokens": 7}, {"output_tokens": 7}),
+        ({"total_tokens": 12}, None),
+        ({"input_tokens": True, "output_tokens": -1}, None),
+        ({"input_tokens_details": {"cached_tokens": 2}}, None),
+    ],
+)
+def test_responses_usage_missing_counters_and_real_zero(usage, expected) -> None:
+    assert normalize_responses_response({"usage": usage}).get("usage") == expected
+
+
+@pytest.mark.parametrize("frame", ['{"test_frame":', '["test_frame"]'])
+def test_responses_bad_frames_preserve_evidence_without_foreign_provider(frame) -> None:
+    with pytest.raises(ProviderError) as caught:
+        list(_iter_deltas([f"data: {frame}"]))
+    assert caught.value.retryable is False
+    assert frame in str(caught.value)
+    assert "GitHub Copilot" not in str(caught.value)
