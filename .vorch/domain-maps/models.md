@@ -81,6 +81,5 @@ Capabilities are facts about one model through one provider. `task_types` derive
 - **Refresh is dumb, Load is smart** - never push merge/join logic into Refresh, never make Load fetch.
 - The full canonical mirror is intentionally unfiltered; do not add discovery defaults.
 - `metadata` replaces wholesale at load (unlike one-level-deep `capabilities`).
-- Override-only models/providers work and must supply loader-required fields.
-- An override entry for a wire-id that is missing from the generated `<provider>.json` is dropped with "Ignoring invalid Model DB model ..." - a pin-only entry is valid only when the model exists in the generated file. Fix by refreshing the Model DB (`scripts/refresh_model_db.py`), never by duplicating required fields into the override; overrides carry only what they override (user rule 2026-08-26).
+- Override-only models/providers load without a generated Provider entry when assembly supplies `name` and `capabilities.reasoning.supported`, directly or through a canonical join. A pin-only entry can therefore load through its canonical base; records still missing required fields are omitted with an "Ignoring invalid Model DB model ..." warning. Keep overrides minimal instead of duplicating inherited fields. Evidence: `core/models/models.py` unions Provider/Override ids before assembly; `tests/core/models/test_models.py` covers override-only models/providers.
 - Models are immutable after load - change layer files, then invalidate/reload; never mutate a loaded `Model`.
