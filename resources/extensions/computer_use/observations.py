@@ -36,6 +36,7 @@ class Observation:
     source_size: tuple[int, int] = (0, 0)
     display_size: tuple[int, int] = (0, 0)
     foreground: bool = True
+    resolution: str = "auto"
 
     def point(self, view_id: str, x: int, y: int, *, edge: bool = False) -> tuple[int, int]:
         if not self.view_id or view_id != self.view_id:
@@ -46,7 +47,11 @@ class Observation:
         width, height = self.display_size
         if not (0 <= x < width + int(edge) and 0 <= y < height + int(edge)):
             raise ComputerUseError(
-                "Coordinates are outside this image. Use coordinates from the returned image.",
+                f"Coordinate [{x},{y}] is outside view {view_id} ({width}x{height}). "
+                f"Use x=0..{width - 1 + int(edge)}, y=0..{height - 1 + int(edge)} "
+                "measured in this image. "
+                "A zoom crop starts at [0,0]; use its local coordinates or the parent"
+                " view_id with parent coordinates.",
                 "invalid_coordinates",
             )
         source_width, source_height = self.source_size
@@ -151,10 +156,17 @@ def _present(
         "view_id": observation.view_id,
         "image_width": image.width,
         "image_height": image.height,
+        "coordinate_space": "image_pixels",
+        "coordinate_note": (
+            "Coordinates use this image's top-left [0,0] and the reported "
+            "image_width/image_height. Windows display scaling is already handled; do not"
+            " apply a DPI multiplier."
+        ),
     }
     if factor < 1:
         result["image_note"] = (
-            "The image was reduced for overview. Use zoom or resolution original for small details."
+            "Reduced overview. For small targets, zoom the relevant rectangle and use"
+            " the returned crop's view_id and local coordinates."
         )
     return result
 
@@ -172,7 +184,7 @@ def capture(
     raw = screenshot_bytes(payload, expected_path)
     for key in ("_note", "screenshot_width", "screenshot_height"):
         payload.pop(key, None)
-    observation = Observation(target)
+    observation = Observation(target, resolution=resolution)
     payload.pop("screenshot", None)
     result: dict[str, Any] = {}
     if mode != "ax":
@@ -290,5 +302,13 @@ def zoom(
     crop = original.crop((left, top, right, bottom))
     zoomed = Observation(observation.target, observation.elements.copy(), observation.original)
     zoomed.foreground = observation.foreground
+    zoomed.resolution = observation.resolution
     zoomed.origin = (left, top)
-    return zoomed, _present(context, zoomed, crop, "original")
+    result = _present(context, zoomed, crop, "original")
+    result["parent_view_id"] = view_id
+    result["image_note"] = (
+        "This crop has its own view_id and top-left [0,0]. Measure coordinates in this "
+        "crop, not in the full window. The parent view remains usable until input or a "
+        "new capture."
+    )
+    return zoomed, result
