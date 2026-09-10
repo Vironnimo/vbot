@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.agents import AgentError, AgentOrderConflictError, InvalidAgentOrderError
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
+from core.extensions.extensions import SessionCapabilityExpiredError
 from core.model_tasks import TaskModelError, TaskModelValidationError
 from core.projects import (
     AgentResolutionError,
@@ -40,6 +41,7 @@ from server.rpc.errors import (
     RPC_ERROR_PROJECT_ALREADY_EXISTS,
     RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
+    RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
     RpcError,
 )
 
@@ -47,6 +49,11 @@ from server.rpc.errors import (
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
+    if isinstance(error, SessionCapabilityExpiredError):
+        return RpcError(
+            RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
+            "Session capability expired; reload the Extension page and retry.",
+        )
     if isinstance(error, ChannelNotFoundError):
         return RpcError(RPC_ERROR_CHANNEL_NOT_FOUND, str(error))
     if isinstance(error, ChannelConfigError):

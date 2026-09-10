@@ -1204,3 +1204,35 @@ class _AsyncCloseDeviceFlowEngine:
 
     async def aclose(self) -> None:
         self.aclose_called = True
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyError])
+def test_rpc_unexpected_failure_preserves_json_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error_type: type[Exception],
+) -> None:
+    import server.app as server_app
+    from server.rpc.dispatcher import dispatch_rpc
+    from tests.server.test_rpc import StubAdapter, StubRuntime
+
+    def fail(_state: Any, _params: Any) -> Any:
+        raise error_type("test-owned-private-detail")
+
+    async def dispatch(state: Any, request: Any) -> Any:
+        return await dispatch_rpc(state, request, {"test.fail": fail})
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", dispatch)
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    with TestClient(app) as client, caplog.at_level(logging.ERROR):
+        response = client.post("/api/rpc", json={"method": "test.fail"})
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "internal_error"
+    assert payload["error"]["message"]
+    assert "test-owned-private-detail" not in response.text
+    assert any(
+        record.exc_info and record.name.endswith("rpc.dispatcher") for record in caplog.records
+    )

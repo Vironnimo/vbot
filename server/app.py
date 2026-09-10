@@ -48,7 +48,7 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import EXTENSION_ASSET_URL_PREFIX, PREVIEW_URL_PREFIX, FileDelivery
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
+from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
     publish_bash_process_status_changed,
@@ -466,7 +466,7 @@ def create_app(
         return {"status": "stopping"}
 
     @app.post("/api/rpc")
-    async def rpc(request: Request) -> JsonObject:
+    async def rpc(request: Request, response: Response) -> JsonObject:
         _require_json_media_type(request)
         try:
             payload = await _read_json_payload_with_limit(request)
@@ -478,7 +478,15 @@ def create_app(
                     "message": "RPC request body must be valid JSON",
                 },
             }
-        return await dispatch_rpc(request.app.state, payload)
+        try:
+            return await dispatch_rpc(request.app.state, payload)
+        except Exception:
+            # The dispatcher logged the original failure; never expose its details.
+            response.status_code = 500
+            return {
+                "ok": False,
+                "error": {"code": RPC_ERROR_INTERNAL, "message": "Internal server error"},
+            }
 
     @app.post("/api/upload")
     async def upload_attachment(request: Request) -> JsonObject:
