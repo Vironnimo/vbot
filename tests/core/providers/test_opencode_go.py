@@ -281,6 +281,51 @@ async def test_title_service_sends_opencode_session_header(opencode_go_adapter) 
     assert OPENCODE_SESSION_ID_KWARG not in json.loads(request.content)
 
 
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+async def test_compaction_sends_opencode_session_header(opencode_go_adapter, strategy) -> None:
+    from core.chat import ChatMessage
+    from core.compaction import CompactionService, CompactionSettings
+    from core.sessions import SessionAddress
+    from tests.core.compaction.test_compaction import StubStorage, provider_request
+
+    event = {"choices": [{"index": 0, "delta": {"content": "SUMMARY"}, "finish_reason": "stop"}]}
+    route = respx.post(OPENCODE_GO_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages = [
+        ChatMessage.user("old task " * 200),
+        ChatMessage.assistant(model="opencode-go/deepseek-flash", content="old answer " * 200),
+        ChatMessage.user("recent task"),
+        ChatMessage.assistant(model="opencode-go/deepseek-flash", content="recent answer"),
+    ]
+    checkpoint = await CompactionService().compact(
+        messages,
+        session_address=SessionAddress(project_id="project", agent_id="joel", session_id="child"),
+        prompt_cache_affinity_id="compaction-affinity",
+        summary_adapter=opencode_go_adapter,
+        summary_model_id="deepseek-flash",
+        active_adapter=opencode_go_adapter,
+        active_model_id="deepseek-flash",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy=strategy, tail_tokens=50),
+        request_messages=provider_request(messages),
+    )
+    assert checkpoint.role == "compaction_checkpoint"
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert request.headers[OPENCODE_SESSION_HEADER] == "vbot-compaction-affinity"
+    assert request.headers["user-agent"] == "vBot"
+    payload = json.loads(request.content)
+    assert OPENCODE_SESSION_ID_KWARG not in payload
+    assert all(key not in payload for key in ("agent_id", "session_id", "project_id"))
+
+
 @pytest.fixture()
 def opencode_go_config() -> ProviderConfig:
     return ProviderConfig(

@@ -27,7 +27,7 @@ from core.chat.wire_shaping import (
 )
 from core.debug.redaction import redact_json_body
 from core.providers.adapter import TERMINAL_OUTCOME_STOP
-from core.sessions import current_skill_activation_contents, skill_tool_activation
+from core.sessions import SessionAddress, current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
@@ -361,7 +361,8 @@ class CompactionService:
         self,
         messages: list[ChatMessage],
         *,
-        agent: Any,
+        session_address: SessionAddress,
+        prompt_cache_affinity_id: str,
         summary_adapter: Any,
         summary_model_id: str,
         storage: Any,
@@ -377,7 +378,6 @@ class CompactionService:
         active_temperature: float | None = None,
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
-        del agent
         if trigger not in COMPACTION_TRIGGERS:
             raise CompactionError(f"Unknown compaction trigger: {trigger}")
         if minimum_reclaim_tokens < 0:
@@ -414,6 +414,15 @@ class CompactionService:
                     ),
                     "thinking_effort": "",
                 }
+                if hasattr(adapter, "request_context_kwargs"):
+                    request_options.update(
+                        adapter.request_context_kwargs(
+                            agent_id=session_address.agent_id,
+                            session_id=session_address.session_id,
+                            project_id=session_address.project_id,
+                            prompt_cache_affinity_id=prompt_cache_affinity_id,
+                        )
+                    )
                 if active_tools is not None:
                     request_options["tools"] = list(active_tools)
                 model_messages = await _COMPACTION_WORKERS.run(

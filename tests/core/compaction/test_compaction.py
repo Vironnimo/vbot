@@ -39,6 +39,7 @@ from core.compaction.compaction import (
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.sessions import SessionAddress
 from core.sessions.sessions import _skill_context_note_content
 from core.tools import tool_success
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
@@ -130,7 +131,8 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
 
     first = await service.compact(
         first_messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter(),
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -154,7 +156,8 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
     second_messages = [*first_messages, first, beta_note, assistant("a2", "Second result")]
     second = await service.compact(
         second_messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter(),
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -179,7 +182,8 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
     third_messages = [*second_messages, second, assistant("a3", "Third result")]
     third = await service.compact(
         third_messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter(),
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -232,7 +236,8 @@ async def test_compaction_compacts_skill_tool_carrier_without_breaking_its_cycle
 
     result = await CompactionService(RetainContextStrategy()).compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter(),
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -336,7 +341,8 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
 
     result = await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=summary_adapter,
         summary_model_id="openai/summary",
         storage=storage,
@@ -399,7 +405,8 @@ async def test_summary_tail_discards_copied_outer_system_reminder_tags() -> None
 
     result = await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=summary_adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -431,7 +438,8 @@ async def test_manual_summary_tail_uses_manual_prompt_before_tail() -> None:
 
     await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=storage,
@@ -486,7 +494,8 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop(
     adapter = RecordingAdapter()
     await CompactionService(RecordingStrategy()).compact(
         [user("u1", "old context")],
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -527,7 +536,8 @@ async def test_compaction_consumes_canonical_stream_without_raw_wire_normalizati
 
     result = await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="summary",
         storage=StubStorage(),
@@ -566,7 +576,8 @@ async def test_compaction_rejects_partial_summary_without_successful_finish(
     with pytest.raises(CompactionError):
         await CompactionService().compact(
             messages,
-            agent=object(),
+            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+            prompt_cache_affinity_id="test-affinity",
             summary_adapter=adapter,
             summary_model_id="summary",
             storage=StubStorage(),
@@ -635,7 +646,8 @@ async def test_summary_tail_preserves_exact_active_model_prefix_with_reasoning()
 
     await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="gpt-5",
         storage=StubStorage(),
@@ -669,7 +681,8 @@ async def test_custom_summary_model_drops_active_provider_reasoning_state() -> N
 
     await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=summary_adapter,
         summary_model_id="claude-summary",
         storage=StubStorage(),
@@ -710,7 +723,8 @@ async def test_next_compaction_consumes_previous_projection_not_hidden_history()
 
     await CompactionService().compact(
         [hidden, prior, latest],
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -915,7 +929,8 @@ async def test_user_anchor_is_folded_into_the_next_compaction() -> None:
 
     first = await service.compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -928,7 +943,8 @@ async def test_user_anchor_is_folded_into_the_next_compaction() -> None:
 
     second = await service.compact(
         [*messages, first, continued],
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -994,7 +1010,8 @@ async def test_summary_tail_compacts_consumed_tool_batch_without_rewriting_reque
 
     result = await service.compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -1027,7 +1044,8 @@ async def test_summary_tail_requires_active_request_context() -> None:
     with pytest.raises(CompactionError):
         await CompactionService().compact(
             [user("u1", "old"), assistant("a1", "tail")],
-            agent=object(),
+            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+            prompt_cache_affinity_id="test-affinity",
             summary_adapter=StubAdapter(),
             summary_model_id="openai/summary",
             storage=StubStorage(),
@@ -1049,7 +1067,8 @@ async def test_automatic_compaction_rejects_projection_below_minimum_reclaim() -
     ):
         await CompactionService().compact(
             messages,
-            agent=object(),
+            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+            prompt_cache_affinity_id="test-affinity",
             summary_adapter=adapter,
             summary_model_id="openai/summary",
             storage=StubStorage(),
@@ -1073,7 +1092,8 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
 
     result = await service.compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter("Short retained summary."),
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -1098,7 +1118,8 @@ async def test_summary_target_uses_summary_temperature_not_active_temperature() 
 
     await CompactionService().compact(
         messages,
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=summary_adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
@@ -1127,7 +1148,8 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
 
     result = await CompactionService().compact(
         [user("u1", "hello"), assistant("a1", "answer")],
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=summary,
         summary_model_id="openai/summary",
         storage=storage,
@@ -1162,7 +1184,8 @@ async def test_manual_continuation_uses_the_non_continuing_prompt() -> None:
 
     await CompactionService().compact(
         [user("u1", "hello")],
-        agent=object(),
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
         summary_adapter=StubAdapter("must not be used"),
         summary_model_id="openai/summary",
         storage=storage,
@@ -1181,7 +1204,8 @@ async def test_continuation_requires_active_request_and_target() -> None:
     with pytest.raises(CompactionError):
         await CompactionService().compact(
             [user("u1", "hello")],
-            agent=object(),
+            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+            prompt_cache_affinity_id="test-affinity",
             summary_adapter=StubAdapter(),
             summary_model_id="openai/summary",
             storage=StubStorage(),

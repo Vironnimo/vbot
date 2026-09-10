@@ -980,7 +980,8 @@ class StubCompactionService:
         self,
         messages: list[ChatMessage],
         *,
-        agent: Any,
+        session_address: SessionAddress,
+        prompt_cache_affinity_id: str,
         summary_adapter: Any,
         summary_model_id: str,
         storage: Any,
@@ -992,7 +993,9 @@ class StubCompactionService:
         self.compact_calls.append(
             {
                 "message_roles": persisted_roles(messages),
-                "agent_id": getattr(agent, "id", None),
+                "agent_id": session_address.agent_id,
+                "session_address": session_address,
+                "prompt_cache_affinity_id": prompt_cache_affinity_id,
                 "summary_adapter": summary_adapter,
                 "summary_model_id": summary_model_id,
                 "storage": storage,
