@@ -28,12 +28,12 @@ from core.utils.ids import write_id_file
 from .runtime import BrowserRuntime, SetupError, desktop_available
 
 BROWSER_DESCRIPTION = (
-    "Use the configured browser to navigate websites, read pages, fill forms, "
-    "and inspect visual content. Start with open or tabs. Use element refs from "
-    "the latest snapshot; refresh after page changes. Fill accepts several "
-    "fields in order and stops on the first failure. Screenshots are returned "
-    "as images. Close disconnects a user-owned browser and closes a browser "
-    "started for this Session."
+    "Use the configured browser for website tasks and debugging: navigate, interact, run page "
+    "JavaScript, inspect console/errors/network, mock requests, and export PDF, HAR, or Chromium "
+    "performance traces. Start with open or tabs. Use current snapshot refs for elements. Fill "
+    "applies fields in order and stops on failure. Screenshots arrive as images. Large diagnostic "
+    "results return a result_id for result pagination without repeating the operation. Close "
+    "disconnects an attached browser or closes this Session's managed browser."
 )
 BROWSER_PARAMETERS = {
     "type": "object",
@@ -64,29 +64,54 @@ BROWSER_PARAMETERS = {
                 "upload",
                 "downloads",
                 "close",
+                "dblclick",
+                "check",
+                "uncheck",
+                "drag",
+                "type",
+                "resize",
+                "eval",
+                "console",
+                "errors",
+                "requests",
+                "request",
+                "result",
+                "route",
+                "unroute",
+                "trace_start",
+                "trace_stop",
+                "har_start",
+                "har_stop",
+                "pdf",
+                "cookies",
+                "state_save",
+                "state_load",
+                "dialog_status",
             ],
-            "description": "Browser operation.",
+            "description": "Browser operation. Console/errors/requests inspect "
+            "captured activity; request reads one request_id. Eval "
+            "runs page JavaScript. Result reads a saved diagnostic "
+            "output. Route mocks or blocks URL patterns; unroute "
+            "removes them. Trace and HAR start/stop bracket a "
+            "reproduction. State save/load exports or restores "
+            "cookies and localStorage.",
         },
         "url": {
             "type": "string",
-            "description": (
-                "Web address for open or new_tab, or exact destination URL for wait. "
-                "Omit for a blank new tab or when wait should not require a URL."
-            ),
+            "description": "Web address for open or new_tab, or exact destination URL "
+            "for wait. Omit for a blank new tab or when wait should not "
+            "require a URL.",
         },
         "target": {
             "type": "string",
-            "description": (
-                "Element ref from the latest snapshot. Required for click, select, "
-                "hover, and upload. Omit for whole-page read or scrolling."
-            ),
+            "description": "Element ref from the latest snapshot. Required for "
+            "click, dblclick, check, uncheck, drag, select, hover, "
+            "and upload. Omit for whole-page read or scrolling.",
         },
         "fields": {
             "type": "array",
-            "description": (
-                "Form fields for fill, in execution order. Earlier completed fields "
-                "remain filled if a later field fails."
-            ),
+            "description": "Form fields for fill, in execution order. Earlier "
+            "completed fields remain filled if a later field fails.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -96,18 +121,20 @@ BROWSER_PARAMETERS = {
                     },
                     "text": {
                         "type": "string",
-                        "description": (
-                            "Text to fill or option value to select. "
-                            "An empty string clears a text field."
-                        ),
+                        "description": "Text to fill or "
+                        "option value to "
+                        "select. An empty "
+                        "string clears a text "
+                        "field.",
                     },
                     "kind": {
                         "type": "string",
                         "enum": ["fill", "select"],
-                        "description": (
-                            "Form control operation. Omit for text input; "
-                            "use select for an option value."
-                        ),
+                        "description": "Form control "
+                        "operation. Omit for "
+                        "text input; use "
+                        "select for an option "
+                        "value.",
                     },
                 },
                 "required": ["target", "text"],
@@ -115,12 +142,11 @@ BROWSER_PARAMETERS = {
         },
         "text": {
             "type": "string",
-            "description": (
-                "Key combination for press, option value for select, visible text for wait, "
-                "or prompt response for dialog. Omit when accepting a dialog without a response."
-                " For wait, provide text or url, or omit both to observe the page "
-                "after a bounded settling period."
-            ),
+            "description": "Text for type, key combination for press, option value "
+            "for select, visible text for wait, or prompt response for "
+            "dialog. Omit for a dialog without a response. For wait, "
+            "provide text or url, or omit both for a bounded settling "
+            "period.",
         },
         "direction": {
             "type": "string",
@@ -133,24 +159,21 @@ BROWSER_PARAMETERS = {
         },
         "full": {
             "type": "boolean",
-            "description": (
-                "Include noninteractive content in snapshot, or the whole page in screenshot. "
-                "Omit for interactive elements or the visible viewport."
-            ),
+            "description": "Include noninteractive content in snapshot, or the whole "
+            "page in screenshot. Omit for interactive elements or the "
+            "visible viewport.",
         },
         "selector": {
             "type": "string",
-            "description": (
-                "CSS selector limiting snapshot or an action's requested observation "
-                "to a page section. Omit for the whole page."
-            ),
+            "description": "CSS selector limiting snapshot or an action's "
+            "requested observation to a page section. Omit for the "
+            "whole page.",
         },
         "observe": {
             "type": "boolean",
-            "description": (
-                "Return a bounded snapshot after the action, waiting briefly for page changes. "
-                "Omit to observe after navigation, tab switching, and wait."
-            ),
+            "description": "Return a bounded snapshot after the action, waiting "
+            "briefly for page changes. Omit to observe after "
+            "navigation, tab switching, and wait.",
         },
         "tab": {"type": "string", "description": "Tab id from tabs, for switch_tab or close_tab."},
         "accept": {
@@ -164,14 +187,66 @@ BROWSER_PARAMETERS = {
         },
         "offset": {
             "type": "integer",
-            "description": "Character offset for read. Omit to start at zero.",
+            "description": "Character offset for read or result. Omit to start at zero.",
         },
         "limit": {
             "type": "integer",
-            "description": (
-                "Maximum characters for read, snapshot, or an action's requested observation. "
-                "Omit for 12000 on read and 4000 on snapshots."
-            ),
+            "description": "Maximum characters for read, snapshots, or diagnostic "
+            "results. Omit for 12000 on read and 4000 elsewhere. With "
+            "an action observation, this bounds the snapshot.",
+        },
+        "destination": {
+            "type": "string",
+            "description": "Destination element ref for drag; target is the source.",
+        },
+        "width": {"type": "integer", "description": "Viewport width in CSS pixels for resize."},
+        "height": {"type": "integer", "description": "Viewport height in CSS pixels for resize."},
+        "script": {
+            "type": "string",
+            "description": "JavaScript expression for eval, executed once in the "
+            "selected page; promises are awaited. Return "
+            "JSON-serializable data. Use an async IIFE for several "
+            "statements. This has browser globals, not Playwright or "
+            "Node APIs.",
+        },
+        "request_id": {
+            "type": "string",
+            "description": "Exact requestId from requests, required for "
+            "request. Request capture begins when this browser "
+            "connection opens.",
+        },
+        "result_id": {
+            "type": "string",
+            "description": "Id returned with a saved diagnostic result, required "
+            "for result. Valid in this Session until the "
+            "connection closes; only the newest eight large "
+            "outputs are retained.",
+        },
+        "filter": {
+            "type": "string",
+            "description": "URL substring for requests or text substring for "
+            "console/errors. Omit to include all captured entries.",
+        },
+        "pattern": {
+            "type": "string",
+            "description": "URL wildcard pattern for route or unroute, such as "
+            "**/api/items. Required for route; omit on unroute to "
+            "remove all routes installed through this connection.",
+        },
+        "body": {
+            "type": "string",
+            "description": "JSON response body for route, returned with HTTP 200 and "
+            "application/json. Supply body or abort:true.",
+        },
+        "abort": {
+            "type": "boolean",
+            "description": "Block matching requests for route. Omit when supplying a mock body.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Absolute JSON file path on the vBot server for "
+            "state_load. Use a path returned by state_save or a "
+            "compatible cookies/localStorage state file.",
         },
     },
     "required": ["action"],
@@ -256,6 +331,47 @@ MESSAGES = {
     ),
     "partial": "Some fields may already be filled. Inspect the page before continuing.",
 }
+MESSAGES.update(
+    {
+        "empty_capture": (
+            "The recording contains no captured events. Start capture again, reproduce the "
+            "relevant activity, then stop capture and check the returned counts before "
+            "claiming it was recorded."
+        ),
+        "artifact": (
+            "The browser operation completed, but its output file could not be verified. Inspect "
+            "current state before repeating the operation."
+        ),
+        "dialog_blocked": (
+            "A JavaScript dialog is blocking the page. Use dialog_status to inspect it, "
+            "then dialog to accept or dismiss it before continuing."
+        ),
+        "managed_only": (
+            "This operation spans the browser context and requires a managed browser. Use the "
+            "selected page's observations and page JavaScript in an attached browser."
+        ),
+        "recording_active": (
+            "A recording of this kind is already active. Stop it and retrieve its file "
+            "before starting another."
+        ),
+        "recording_inactive": (
+            "No recording of this kind was started by this connection. Start capture "
+            "before reproducing the problem."
+        ),
+        "request_gone": (
+            "The captured request is no longer available. Use requests to select a current "
+            "requestId, or start HAR capture before reproducing the problem."
+        ),
+        "result_gone": (
+            "This diagnostic result is unavailable in this Session. Use the saved server file "
+            "if available; inspect current state before repeating the original operation."
+        ),
+        "script": (
+            "Page JavaScript raised an exception. Earlier statements may already have run. Inspect "
+            "errors and the page before deciding whether to retry."
+        ),
+    }
+)
 MAX_TEXT = 16000
 SNAPSHOT_LIMIT = 4000
 MAX_MEDIA = 32 * 1024 * 1024
@@ -309,6 +425,33 @@ FIELDS = {
     "downloads": (),
     "close": (),
 }
+FIELDS.update(
+    {
+        "dblclick": ("target", "observe"),
+        "check": ("target", "observe"),
+        "uncheck": ("target", "observe"),
+        "drag": ("target", "destination", "observe"),
+        "type": ("text", "observe"),
+        "resize": ("width", "height", "observe"),
+        "eval": ("script", "limit"),
+        "console": ("filter", "limit"),
+        "errors": ("filter", "limit"),
+        "requests": ("filter", "limit"),
+        "request": ("request_id", "limit"),
+        "result": ("result_id", "offset", "limit"),
+        "route": ("pattern", "body", "abort"),
+        "unroute": ("pattern",),
+        "trace_start": (),
+        "trace_stop": (),
+        "har_start": (),
+        "har_stop": (),
+        "pdf": (),
+        "cookies": ("limit",),
+        "state_save": (),
+        "state_load": ("path",),
+        "dialog_status": (),
+    }
+)
 REQUIRED = {
     "open": ("url",),
     "click": ("target",),
@@ -319,6 +462,40 @@ REQUIRED = {
     "switch_tab": ("tab",),
     "close_tab": ("tab",),
     "upload": ("target", "files"),
+}
+REQUIRED.update(
+    {
+        "dblclick": ("target",),
+        "check": ("target",),
+        "uncheck": ("target",),
+        "drag": ("target", "destination"),
+        "type": ("text",),
+        "resize": ("width", "height"),
+        "eval": ("script",),
+        "request": ("request_id",),
+        "result": ("result_id",),
+        "route": ("pattern",),
+        "state_load": ("path",),
+    }
+)
+DIAGNOSTICS = {
+    "console",
+    "trace_stop",
+    "eval",
+    "request",
+    "cookies",
+    "requests",
+    "result",
+    "har_stop",
+    "unroute",
+    "har_start",
+    "pdf",
+    "state_save",
+    "dialog_status",
+    "route",
+    "errors",
+    "trace_start",
+    "state_load",
 }
 NAVIGATION = {"open", "back", "forward", "reload", "new_tab", "switch_tab"}
 AUTO_OBSERVE = NAVIGATION | {"wait"}
@@ -412,9 +589,12 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
             f"arguments for {action}", "Provide the required fields: " + ", ".join(missing) + "."
         )
     for key, value in arguments.items():
-        if key in {"full", "observe", "accept"}:
+        if key in {"full", "observe", "accept", "abort"}:
             if type(value) is not bool:
                 raise BrowserArgumentError(key, "Provide true or false.")
+        elif key in {"width", "height"}:
+            if type(value) is not int or not 1 <= value <= 7680:
+                raise BrowserArgumentError(key, "Provide an integer from 1 to 7680.")
         elif key in {"amount", "offset", "limit"}:
             lower, upper = {"amount": (1, 5000), "offset": (0, 10000000), "limit": (1, MAX_TEXT)}[
                 key
@@ -468,13 +648,76 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
             "Provide text or url for wait, not both; omit both to observe the settled page.",
         )
     if (
-        action not in {"snapshot", "read"}
+        action not in {"snapshot", "read"} | DIAGNOSTICS
         and {"selector", "limit"} & arguments.keys()
         and not arguments.get("observe", action in AUTO_OBSERVE)
     ):
         raise BrowserArgumentError(
             "observe", "Set observe to true to use selector or limit with this action."
         )
+    if "pattern" in arguments and arguments["pattern"].startswith("-"):
+        raise BrowserArgumentError(
+            "pattern", "Provide a URL wildcard pattern that does not start with a dash."
+        )
+    if action == "route":
+        if ("body" in arguments) == arguments.get("abort", False):
+            raise BrowserArgumentError("body", "Provide body or abort:true, not both.")
+        if "body" in arguments:
+            try:
+                json.loads(
+                    arguments["body"],
+                    parse_constant=lambda value: (_ for _ in ()).throw(ValueError()),
+                )
+            except ValueError:
+                raise BrowserArgumentError("body", "Provide a valid JSON response body.") from None
+    if action == "state_load":
+        state_path = Path(arguments["path"])
+        if (
+            not state_path.is_absolute()
+            or not state_path.is_file()
+            or state_path.stat().st_size > MAX_OUTPUT
+        ):
+            raise BrowserArgumentError(
+                "path",
+                "Provide an absolute path to an existing JSON state file on the vBot server.",
+            )
+        try:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(saved, dict)
+                or not isinstance(saved.get("cookies"), list)
+                or not isinstance(saved.get("origins"), list)
+            ):
+                raise ValueError()
+            for cookie in saved["cookies"]:
+                if not isinstance(cookie, dict) or not all(
+                    isinstance(cookie.get(key), str) for key in ("name", "value", "domain", "path")
+                ):
+                    raise ValueError()
+                for key in ("secure", "httpOnly"):
+                    if key in cookie and type(cookie[key]) is not bool:
+                        raise ValueError()
+                if "expires" in cookie and type(cookie["expires"]) not in (int, float):
+                    raise ValueError()
+                if "sameSite" in cookie and cookie["sameSite"] not in ("Strict", "Lax", "None"):
+                    raise ValueError()
+            for origin in saved["origins"]:
+                if not isinstance(origin, dict) or not isinstance(origin.get("origin"), str):
+                    raise ValueError()
+                validate_url(origin["origin"])
+                if not isinstance(origin.get("localStorage"), list):
+                    raise ValueError()
+                for item in origin["localStorage"]:
+                    if not isinstance(item, dict) or not all(
+                        isinstance(item.get(key), str) for key in ("name", "value")
+                    ):
+                        raise ValueError()
+            state_text = json.dumps(saved, allow_nan=False)
+        except (ValueError, OSError):
+            raise BrowserArgumentError(
+                "path", "Provide a cookies/localStorage state object."
+            ) from None
+        return {**arguments, "_state_text": state_text}
     if "url" in arguments:
         validate_url(arguments["url"])
     return dict(arguments)
@@ -516,6 +759,8 @@ class BrowserSession:
     client: Any = None
     browser_executable: str = ""
     observe_after: float = 0.0
+    outputs: dict[str, Path] = field(default_factory=dict)
+    recordings: set[str] = field(default_factory=set)
 
 
 class BrowserClient:
@@ -572,6 +817,21 @@ class BrowserClient:
             # Classify only known native diagnostics. Never echo page values,
             # endpoint credentials, selectors, or arbitrary backend prose.
             message = diagnostic.lower() if isinstance(diagnostic, str) else ""
+            if message.startswith("a javascript ") and "dialog is blocking the page" in message:
+                raise BrowserError("dialog_blocked")
+            if message.startswith("request not found"):
+                raise BrowserError("request_gone")
+            if arguments[0] == "eval" and any(
+                marker in message
+                for marker in (
+                    "evaluation failed",
+                    "referenceerror",
+                    "typeerror",
+                    "syntaxerror",
+                    "javascript error",
+                )
+            ):
+                raise BrowserError("script")
             if message.startswith(("invalid response:", "failed to read:", "failed to send:")):
                 raise BrowserError("response_lost")
             if message.startswith(
@@ -766,6 +1026,10 @@ class BrowserService:
         with session.lock:
             self._check_access(context)
             result = {"connected": session.connected, **self._connection_info(session.config)}
+            result["recordings"] = [
+                {"kind": kind, "stop_action": kind + "_stop"} for kind in sorted(session.recordings)
+            ]
+            result["result_ids"] = list(session.outputs)
             if session.config != config:
                 result["next_connection"] = self._connection_info(config)
             return result
@@ -877,6 +1141,7 @@ class BrowserService:
         # Mark before dispatch so a lost response still retains cleanup ownership.
         session.connected = True
         self._tabs(context, session)
+        self._call(context, session, ["network", "requests"])
 
     def _tabs(self, context: ToolContext, session: BrowserSession) -> dict[str, Any]:
         payload = self._call(context, session, ["tab", "list"])
@@ -917,7 +1182,7 @@ class BrowserService:
         self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
     ) -> None:
         if (
-            args["action"] in {"tabs", "new_tab", "switch_tab", "close_tab", "downloads"}
+            args["action"] in {"tabs", "new_tab", "switch_tab", "close_tab", "downloads", "result"}
             or session.active_target is None
         ):
             return
@@ -1031,6 +1296,8 @@ class BrowserService:
         session.refs.clear()
         if session.connected:
             session.client.call(["close"])
+        session.outputs.clear()
+        session.recordings.clear()
         session.connected = False
         session.active_target = None
         with self._guard:
@@ -1113,6 +1380,8 @@ class BrowserService:
         self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
     ) -> dict[str, Any]:
         action = args["action"]
+        if action in DIAGNOSTICS:
+            return self._diagnostic(context, session, args)
         if action == "snapshot":
             return self._snapshot(context, session, args)
         if action == "tabs":
@@ -1227,7 +1496,7 @@ class BrowserService:
             )
         elif action in {"back", "forward", "reload"}:
             commands = [[action]]
-        elif action in {"click", "hover", "select"}:
+        elif action in {"click", "hover", "select", "dblclick", "check", "uncheck"}:
             commands = [
                 [
                     action,
@@ -1235,8 +1504,18 @@ class BrowserService:
                     *([args["text"]] if action == "select" else []),
                 ]
             ]
-        elif action == "press":
-            commands = [["press", args["text"]]]
+        elif action == "drag":
+            commands = [
+                [
+                    "drag",
+                    self._ref(session, args["target"]),
+                    self._ref(session, args["destination"]),
+                ]
+            ]
+        elif action == "resize":
+            commands = [["set", "viewport", str(args["width"]), str(args["height"])]]
+        elif action in {"press", "type"}:
+            commands = [[action, args["text"]]]
         elif action == "scroll":
             commands = [
                 [
@@ -1350,6 +1629,243 @@ class BrowserService:
                     "code": "browser_" + error.code,
                     "message": str(error),
                 }
+        return result
+
+    def _diagnostic_result(
+        self, session: BrowserSession, payload: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep large results immutable so pagination never replays browser input."""
+        text = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        limit = args.get("limit", SNAPSHOT_LIMIT)
+        if len(text) <= limit:
+            return {"result": payload, "truncated": False}
+        path = write_id_file(session.directory, "output", ".json", text.encode("utf-8"))
+        session.outputs[path.stem] = path
+        while len(session.outputs) > 8:
+            session.outputs.pop(next(iter(session.outputs)))
+        return {
+            "result_id": path.stem,
+            "path": path.as_posix(),
+            "text": text[:limit],
+            "offset": 0,
+            "total": len(text),
+            "next_offset": limit,
+            "truncated": True,
+        }
+
+    def _diagnostic(
+        self, context: ToolContext, session: BrowserSession, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        action = args["action"]
+        if action == "result":
+            path = session.outputs.get(args["result_id"])
+            if path is None or not path.is_file() or path.is_symlink():
+                raise BrowserError("result_gone")
+            text = path.read_text(encoding="utf-8")
+            start = args.get("offset", 0)
+            end = min(len(text), start + args.get("limit", SNAPSHOT_LIMIT))
+            return {
+                "result_id": args["result_id"],
+                "text": text[start:end],
+                "offset": start,
+                "total": len(text),
+                "next_offset": end if end < len(text) else None,
+                "truncated": end < len(text),
+            }
+        if (
+            action
+            in {
+                "cookies",
+                "state_save",
+                "state_load",
+                "trace_start",
+                "trace_stop",
+                "har_start",
+                "har_stop",
+            }
+            and session.config[0] != "managed"
+        ):
+            raise BrowserError("managed_only")
+        if action in {
+            "console",
+            "errors",
+            "requests",
+            "request",
+            "cookies",
+            "dialog_status",
+            "eval",
+        }:
+            command = {
+                "requests": ["network", "requests"],
+                "request": ["network", "request", args.get("request_id", "")],
+                "dialog_status": ["dialog", "status"],
+            }.get(action, [action])
+            if action == "eval":
+                # Encode scripts so a leading --stdin/--base64 is never a CLI option.
+                session.refs.clear()
+                command += ["--base64", base64.b64encode(args["script"].encode()).decode("ascii")]
+            payload = self._call(context, session, command)
+            if action == "eval":
+                payload = {"value": payload.get("result")}
+            else:
+                # Preserve browser evidence, not daemon launch bookkeeping.
+                keys = {
+                    "console": {"messages"},
+                    "errors": {"errors"},
+                    "requests": {"requests"},
+                    "request": {
+                        "requestId",
+                        "url",
+                        "method",
+                        "resourceType",
+                        "timestamp",
+                        "headers",
+                        "postData",
+                        "status",
+                        "responseHeaders",
+                        "mimeType",
+                        "responseBody",
+                    },
+                    "cookies": {"cookies"},
+                    "dialog_status": {"hasDialog", "type", "message", "defaultPrompt"},
+                }[action]
+                payload = {key: value for key, value in payload.items() if key in keys}
+            if action == "requests":
+                rows = payload.get("requests")
+                if not isinstance(rows, list):
+                    raise BrowserError("failed")
+                # Headers and posted data belong in the request detail, not every list row.
+                payload = {
+                    "requests": [
+                        {
+                            key: value
+                            for key, value in row.items()
+                            if key
+                            in {
+                                "requestId",
+                                "url",
+                                "method",
+                                "status",
+                                "resourceType",
+                                "mimeType",
+                                "timestamp",
+                            }
+                        }
+                        for row in rows
+                    ]
+                }
+            if "filter" in args:
+                key = {"requests": "requests", "console": "messages", "errors": "errors"}[action]
+                rows = payload.get(key)
+                if not isinstance(rows, list):
+                    raise BrowserError("failed")
+                field_name = "url" if action == "requests" else "text"
+                payload = {
+                    key: [row for row in rows if args["filter"] in str(row.get(field_name, ""))]
+                }
+            # A capture failure after eval must retain its completed effect.
+            try:
+                return {"completed": 1, **self._diagnostic_result(session, payload, args)}
+            except (OSError, ValueError):
+                return {
+                    "completed": 1,
+                    "result_error": {"code": "browser_artifact", "message": MESSAGES["artifact"]},
+                }
+        if action in {"route", "unroute"}:
+            command = ["network", action]
+            if "pattern" in args:
+                command.append(args["pattern"])
+            if action == "route":
+                command += ["--abort"] if args.get("abort", False) else ["--body", args["body"]]
+            self._call(context, session, command)
+            return {"completed": 1}
+        if action.endswith("_start"):
+            kind = action.removesuffix("_start")
+            if kind in session.recordings:
+                raise BrowserError("recording_active")
+            command = ["trace", "start"] if kind == "trace" else ["network", "har", "start"]
+            # Retain ownership after an uncertain transport error; do not silently restart.
+            session.recordings.add(kind)
+            try:
+                self._call(context, session, command)
+            except BrowserError as error:
+                if error.code in {"denied", "cancelled", "changed", "stopped"}:
+                    session.recordings.discard(kind)
+                raise
+            return {"recording": kind, "status": "recording", "stop_action": kind + "_stop"}
+        if action == "state_load":
+            session.refs.clear()
+            # Execute the validated content, even if the source file changed meanwhile.
+            path = write_id_file(
+                session.directory, "state", ".json", args["_state_text"].encode("utf-8")
+            )
+            self._call(context, session, ["state", "load", str(path)])
+            return {"completed": 1}
+        kind = {"trace_stop": "trace", "har_stop": "har", "pdf": "pdf", "state_save": "state"}[
+            action
+        ]
+        if kind in {"trace", "har"} and kind not in session.recordings:
+            raise BrowserError("recording_inactive")
+        suffix = {"trace": ".json", "har": ".har", "pdf": ".pdf", "state": ".json"}[kind]
+        path = write_id_file(session.directory, kind, suffix, b"")
+        command = {
+            "trace": ["trace", "stop"],
+            "har": ["network", "har", "stop"],
+            "pdf": ["pdf"],
+            "state": ["state", "save"],
+        }[kind]
+        self._call(context, session, [*command, str(path)])
+        session.recordings.discard(kind)
+        result: dict[str, Any] = {"completed": 1}
+        try:
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or not 0 < path.stat().st_size <= 256 * 1024 * 1024
+            ):
+                raise ValueError()
+            if kind == "pdf":
+                with path.open("rb") as stream:
+                    if stream.read(5) != b"%PDF-":
+                        raise ValueError()
+            else:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError()
+                if kind == "trace" and not isinstance(value.get("traceEvents"), list):
+                    raise ValueError()
+                if kind == "har" and not isinstance(value.get("log", {}).get("entries"), list):
+                    raise ValueError()
+                if kind == "state" and not all(
+                    isinstance(value.get(key), list) for key in ("cookies", "origins")
+                ):
+                    raise ValueError()
+                if kind == "har":
+                    entries = value["log"]["entries"]
+                    result["request_count"] = len(entries)
+                    result["failed_request_count"] = sum(
+                        type(entry.get("response", {}).get("status")) is int
+                        and entry["response"]["status"] >= 400
+                        for entry in entries
+                    )
+                    if not entries:
+                        result["hint"] = MESSAGES["empty_capture"]
+                if kind == "trace":
+                    result["event_count"] = len(value["traceEvents"])
+                    if not value["traceEvents"]:
+                        result["hint"] = MESSAGES["empty_capture"]
+            result["file"] = {
+                "path": path.as_posix(),
+                "bytes": path.stat().st_size,
+                "format": {
+                    "trace": "chromium-performance-trace",
+                    "har": "har-1.2",
+                    "pdf": "pdf",
+                    "state": "browser-storage-state",
+                }[kind],
+            }
+        except (OSError, ValueError, AttributeError):
+            result["artifact_error"] = {"code": "browser_artifact", "message": MESSAGES["artifact"]}
         return result
 
     def run_end(self, context: Any, **kwargs: Any) -> None:

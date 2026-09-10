@@ -12,6 +12,41 @@ The first opening operation automatically prepares the native client and, in man
 
 The Tool's permission controls access through vBot. An Agent with unrestricted host Bash access can independently launch host programs; Extension grants do not sandbox Bash.
 
+## Browser automation and debugging coverage
+
+The Tool exposes 46 actions. The comparison below uses the repository's Playwright CLI Skill and the pinned agent-browser 0.36.0 implementation, rather than assuming that a similarly named command has Playwright semantics.
+
+| Workflow | Browser Use support | Remaining difference |
+| --- | --- | --- |
+| Navigation, tabs, snapshots, text, screenshots | Open/back/forward/reload, stable tab ids, bounded/scoped snapshots, paginated text, direct screenshot media | Snapshot refs are required for element actions; arbitrary Playwright locators are not accepted |
+| Forms and input | Ordered multi-field fill/select, click/double click, check/uncheck, drag, hover, focused typing, key combinations, scrolling, viewport resize | No dedicated low-level mouse/key-down/key-up actions or external file drop |
+| JavaScript and storage | Page expressions and awaited promises, DOM/browser APIs, localStorage/sessionStorage; managed cookie inspection and cookies/localStorage JSON export/import | No Node or Playwright `page` object; sessionStorage is not exported |
+| Console and page errors | Captured messages and JavaScript errors, substring filters, bounded output with immutable continuation | Captured history covers the connection's tabs; it is not active-tab-only history |
+| Network investigation | Capture enabled before first navigation, compact request list, request detail with headers/post data/status and available response body | Native capture buffers are finite; unavailable response bodies are omitted |
+| Request mocking | Wildcard URL interception, blocking, HTTP 200 JSON response bodies, removal | No arbitrary response status/headers, route enumeration, or conditional handlers |
+| Debug artifacts | HAR with captured text bodies, Chromium performance trace, screenshot, PDF | Performance traces are for Chrome DevTools/Perfetto, not Playwright Trace Viewer; no action/DOM timeline or video |
+| Browser engines and test authoring | Managed Chromium or an attached Chrome/CDP browser | No Firefox/WebKit, Playwright test runner/generation, annotation dashboard, or locator picker |
+
+Browser Use is substantially broader than its original website-task interface, but it is not a complete replacement for Playwright's testing and debugging suite. No new dependency or browser add-on is required for these additions. A project that needs Playwright's Trace Viewer, cross-browser tests, or video should retain its Playwright setup.
+
+### Interpreting debug results
+
+Small diagnostics return structured `result` data. Large results return bounded JSON text plus `result_id`, `next_offset`, and a server file path. Continue with `result`; this reads the same capture instead of executing the original operation again. The newest eight large output ids remain valid in that Session until connection close. `status` exposes retained ids and active recordings without starting the browser.
+
+Request lists include ids, URL, method, status, type and time; headers and bodies belong in `request`. Results exclude native launch bookkeeping. Empty HAR/trace files are identified by verified request/event counts and a recovery hint. A successful stop or saved file alone does not establish that the desired failure was captured. Inspect HAR `request_count` and `failed_request_count`, and the captured entries when the precise request matters.
+
+Recordings, cookie inspection and state import/export require a managed browser. Page-level JavaScript and observations remain available in attached browsers. State import validates the entire file and imports a private copy of that validated content, so replacing the input file during the call cannot alter what is imported. Saved authentication state contains sensitive data and stays on the server.
+
+### Debugging verification, 2026-09-10
+
+The production Tool was exercised against a disposable local HTTP fixture in managed Chromium on Windows. The fixture served an HTTP 503 API response, a console warning, a JavaScript exception, checkboxes and a blocking dialog. Independent checks verified request capture before navigation, response-body retrieval, an HTTP 200 JSON mock and its removal, nonempty HAR/Chromium trace files, one-time JavaScript execution with paginated output, localStorage state round-trip, checkbox state, dialog recovery without replaying the click, PDF bytes and screenshot media.
+
+A fresh Luna workflow received the production definition and bundled Skill, with a diagnosis-and-capture task rather than prescribed calls. The initial result design returned an empty HAR as a saved file; the Model incorrectly treated unrelated checkbox input as reproducing the API failure. After adding verified capture counts and empty-capture guidance, the Model noticed the empty archive, restarted capture and reloaded the page. Its replacement HAR contained three requests, including the fixture's HTTP 503 API request; its final diagnosis matched the response body and JavaScript exception. This is one observed workflow improvement, not a guarantee of correct Model conclusions on arbitrary sites.
+
+The 145-case Luna invocation matrix covered all 46 actions, observation defaults/overrides, pagination and representative invalid inputs. It produced 143 exact argument matches initially; the two differences removed intentionally unsupported fields. Both matched on focused repeat probes. Runtime matrix tests verify valid effects and rejection before side effects separately from Model invocation conformance. The full backend gate passed 12,143 tests; the final affected-scope gate passed 408 tests after the capture-result refinement.
+
+The minified Tool definition grew from 3,254 to 5,694 characters while the action count doubled from 23 to 46. Default observations remain 4,000 characters. Request lists omit headers and bodies, diagnostic results omit native lifecycle bookkeeping, and large-output continuation does not replay browser input. These measurements describe interface cost and the tested fixture, not a universal token or latency benchmark.
+
 ## Automatic preparation
 
 The Extension downloads the pinned native **agent-browser 0.36.0** release, checks its SHA-256 against the bundled release digest, and validates its version before execution. The client lives under `<data-dir>/artifacts/browser-use/0.36.0/`; global executables and npm shims are not used. First use requires access to GitHub Releases and, if a browser is needed, the browser download or distribution package servers. See the upstream [native installation](https://agent-browser.dev/installation) and [Chrome engine](https://agent-browser.dev/engines/chrome) documentation.
