@@ -1414,3 +1414,35 @@ class _Storage:
             else:
                 self._settings.pop(task_type, None)
         return dict(self._settings)
+
+
+@pytest.mark.parametrize("stale_options", [{"retired_option": True}, {"voice": "removed"}])
+def test_unchanged_stale_binding_does_not_block_other_updates(stale_options: dict) -> None:
+    stale = {"target": "openrouter/voice::api-key", "options": stale_options}
+    storage = _Storage({TASK_TEXT_TO_SPEECH: stale})
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model("voice", (TASK_TEXT_TO_SPEECH,), supported_voices=("available",)),
+                _model("transcribe", (TASK_SPEECH_TO_TEXT,)),
+            ]
+        ),
+        _Credentials(),
+        storage,
+    )
+    update = {
+        TASK_TEXT_TO_SPEECH: stale,
+        TASK_SPEECH_TO_TEXT: {"target": "openrouter/transcribe::api-key", "options": {}},
+    }
+    service.validate_update(update)
+    saved = service.update(update)
+    assert saved[TASK_TEXT_TO_SPEECH] == stale
+    assert saved[TASK_SPEECH_TO_TEXT] == update[TASK_SPEECH_TO_TEXT]
+    with pytest.raises(TaskModelValidationError):
+        service.validate_binding(TASK_TEXT_TO_SPEECH, stale)
+    with pytest.raises(TaskModelValidationError):
+        service.update({TASK_TEXT_TO_SPEECH: {"options": {**stale_options, "speed": 1.1}}})
+    repaired = service.update({TASK_TEXT_TO_SPEECH: {"options": {"voice": "available"}}})
+    assert repaired[TASK_TEXT_TO_SPEECH]["target"] == stale["target"]
+    assert service.binding_is_usable(TASK_TEXT_TO_SPEECH)

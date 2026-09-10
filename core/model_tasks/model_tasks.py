@@ -325,6 +325,8 @@ class TaskModelService:
             if not isinstance(raw_options, Mapping):
                 raise TaskModelValidationError(f"{task_type} options must be an object")
             binding = {"target": target, "options": dict(raw_options)}
+            if binding == previous:
+                continue
             self.validate_binding(task_type, binding)
             prepared[task_type] = binding
         return prepared
