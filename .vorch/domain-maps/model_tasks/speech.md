@@ -150,7 +150,7 @@ OpenRouter STT sends Base64 JSON to `/audio/transcriptions`; the default compati
 }
 ```
 
-`language: "auto"` is omitted from the provider request. Numeric `temperature` is forwarded. Provider-specific `provider` options are preserved for OpenRouter when present.
+`language: "auto"` is omitted from the provider request. Numeric `temperature` is forwarded. The OpenRouter path consumes JSON transcription responses and does not expose the unused `response_format` option, even if a catalog advertises it (`test_model_tasks.py`). Provider-specific `provider` options are preserved for OpenRouter when present.
 
 Executable non-OpenRouter STT targets are treated as OpenAI-compatible audio endpoints and send multipart form data to `/audio/transcriptions` with `file`, `model`, and normalized optional fields such as `language`, `prompt`, `response_format`, and `temperature`.
 
