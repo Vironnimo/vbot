@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -322,7 +323,7 @@ def test_file_endpoint_serves_current_original_and_rejects_tampering(tmp_path: P
     assert first.headers["content-disposition"].startswith("inline;")
     assert "live%20image.png" in first.headers["content-disposition"]
     assert first.headers["x-content-type-options"] == "nosniff"
-    assert first.headers["cache-control"] == "no-cache"
+    assert first.headers["cache-control"] == "no-store"
     assert second.content == b"\x89PNG\r\n\x1a\nsecond"
     assert tampered.status_code == 404
     assert missing.status_code == 404
@@ -574,19 +575,66 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
         assert "image_files" not in public["tool_display"]
         url = preview["url"]
         assert client.get(url).content == image.read_bytes()
+        assert _visible_message(message, file_delivery=delivery) == public
         image.write_bytes(b"\x89PNG\r\n\x1a\nchanged")
+        updated = _visible_message(message, file_delivery=delivery)
+        updated_url = updated["tool_display"]["images"][0]["url"]
+        assert updated_url != url
+        response = client.get(updated_url)
+        assert response.content == image.read_bytes()
+        assert response.headers["cache-control"] == "no-store"
         assert client.get(url).content == image.read_bytes()
         image.unlink()
         assert client.get(url).status_code == 404
         reloaded = _visible_message(message, file_delivery=delivery)
-        assert reloaded["tool_display"]["images"][0]["url"] == url
+        missing_url = reloaded["tool_display"]["images"][0]["url"]
+        assert client.get(missing_url).status_code == 404
         event = remove_opaque_provider_metadata(
             {"payload": {"display": display}}, file_delivery=delivery
         )
-        assert event["payload"]["display"] == public["tool_display"]
+        assert event["payload"]["display"] == reloaded["tool_display"]
+        image.write_bytes(b"\x89PNG\r\n\x1a\nrestored")
+        restored = _visible_message(message, file_delivery=delivery)
+        assert restored["tool_display"]["images"][0]["url"] != missing_url
+        assert client.get(missing_url).content == image.read_bytes()
     restarted = _visible_message(message, file_delivery=FileDelivery(secret=b"restart"))
     assert restarted["tool_display"]["images"][0]["url"] != url
     assert "image_files" not in _visible_message(message)["tool_display"]
+
+
+@pytest.mark.parametrize("surface", ["tool", "assistant"])
+def test_image_urls_change_for_same_size_overwrites_within_one_second(
+    tmp_path: Path, surface: str
+) -> None:
+    image = tmp_path / "front.png"
+    first = b"\x89PNG\r\n\x1a\nfirst"
+    second = b"\x89PNG\r\n\x1a\nother"
+    image.write_bytes(first)
+    stamp = 1_780_000_000_000_000_000
+    os.utime(image, ns=(stamp, stamp))
+    delivery = FileDelivery()
+
+    def url() -> str:
+        if surface == "tool":
+            return str(
+                delivery.project_message({"image_files": [{"path": str(image)}]})["images"][0][
+                    "url"
+                ]
+            )
+        return _only_file_url(delivery.project_message(_assistant_payload(image))["content"])
+
+    original_url = url()
+    assert url() == original_url
+    image.write_bytes(second)
+    os.utime(image, ns=(stamp, stamp + 1_000_000))
+    updated_url = url()
+    assert updated_url != original_url
+    for source in [original_url, updated_url]:
+        delivered = delivery.resolve_token(source.removeprefix(FILE_URL_PREFIX))
+        assert delivered is not None
+        assert delivered.path.read_bytes() == second
+    tampered = updated_url[:-1] + ("a" if updated_url[-1] != "a" else "b")
+    assert delivery.resolve_token(tampered.removeprefix(FILE_URL_PREFIX)) is None
 
 
 def test_tool_image_projection_rejects_non_absolute_paths(tmp_path: Path) -> None:

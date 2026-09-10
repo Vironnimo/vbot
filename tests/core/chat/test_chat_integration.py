@@ -687,6 +687,84 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_format", ["PNG", "TIFF"])
+async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_format: str,
+) -> None:
+    colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0)]
+    frames = []
+    for color in colors:
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 12), color).save(buffer, format=source_format)
+        frames.append(buffer.getvalue())
+
+    class OverwritingAdapter(FakeAdapter):
+        async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            step = len(self.requests)
+            results = [
+                message
+                for message in messages
+                if message.get("role") == "tool" and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message
+            ]
+            assert [message["tool_call_id"] for message in results] == [
+                f"read-{index}" for index in range(step)
+            ]
+            for index, result in enumerate(results):
+                media = [
+                    part
+                    for part in result[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+                    if part.get("type") == "media"
+                ]
+                assert len(media) == 1
+                raw = base64.b64decode(media[0]["base64"])
+                if source_format == "PNG":
+                    assert raw == frames[index]
+                with Image.open(io.BytesIO(raw)) as delivered:
+                    assert delivered.size == (16, 12)
+                    assert delivered.getpixel((0, 0)) == colors[index]
+            if step < len(frames):
+                # Every Tool call reads the exact same path, as in a render loop.
+                image_path.write_bytes(frames[step])
+            else:
+                image_path.unlink()
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = OverwritingAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": f"read-{index}", "name": "read", "arguments": {"path": "front.png"}}
+                ],
+            }
+            for index in range(len(frames))
+        ]
+        + [{"content": "done", "tool_calls": None}]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
+    runtime.start()
+    try:
+        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        image_path = Path(agent.workspace) / "front.png"
+        stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
+        await runtime.chat_loop.send("coder", "Inspect each render", session_id="reread")
+        assert len(adapter.requests) == len(frames) + 1
+        persisted = runtime.chat_sessions.get(session_address("coder", "reread")).load()
+        assert "base64" not in json.dumps([message.to_dict() for message in persisted])
+        assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tight_budget", [False, True])
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     tmp_path: Path,
