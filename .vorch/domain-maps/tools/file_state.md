@@ -1,6 +1,6 @@
 # File-State and Mutation Coordination
 
-The per-session read stamps, per-path mutation locks, and atomic replacement shared by `read`, `write`, and `edit`. Lives in `core/tools/file_state.py`.
+The per-session read stamps, per-path mutation locks, and atomic replacement shared by `read`, `write`, `edit`, and `apply_patch`. Lives in `core/tools/file_state.py`.
 
 ## Overview
 
@@ -12,10 +12,12 @@ A single runtime-owned `FileReadState` registry remembers, per Session, the `(mt
 - `FileReadState.check_stale(session_id, resolved) -> StaleReason | None` - `NEVER_READ` (no stamp for this Session+path), `MODIFIED` (current `(mtime, size)` != stamp), or `None` (current). Returns `None` when the file cannot be stat'd (vanished mid-call -> a race, not staleness). `write` maps either stale reason to a hard failure; `edit` ignores `NEVER_READ` and converts `MODIFIED` into a post-success `stale_warning` only when its current-content match succeeds.
 - `FileReadState.lock_path(resolved)` - context manager that serializes mutations of exactly one resolved path. Lock entries count holders plus waiters and disappear when the final user leaves, so the Runtime does not accumulate a permanent path-lock catalog.
 - `stale_failure_text(reason, resolved) -> (code, message)` - `write` mapping to `file_not_read` / `file_modified_since_read`; the known path inserted into the Model-facing message uses the shared forward-slash presentation.
-- `atomic_write_bytes(resolved, payload)` - flush bytes through a same-directory temporary file, preserve an existing target's permission bits, install with `os.replace`, and remove the temporary file on every failure before replacement.
+- `atomic_write_bytes(resolved, payload, *, mode=None)` - flush bytes through a same-directory temporary file, preserve an existing target's permission bits unless an explicit source mode is supplied for a patch move, install with `os.replace`, and remove the temporary file on every failure before replacement.
 - `FILE_STATE_GUARD_ENABLED` (module constant, default `True`) - process-wide read-stamp off switch; when `False`, `record_read` no-ops and `check_stale` returns `None`, while path locks and atomic replacement remain active.
 
 ## Constraints & Gotchas
+
+- `apply_patch` receives the same Runtime-owned registry. It locks all resolved patch paths in deterministic order, validates an ordered pending state before writes, and stamps successful surviving files including no-ops. Its Update semantics are current-content optimistic matching like `edit`; multi-file failure and byte recheck semantics belong in `apply_patch.md`.
 
 - **Stamp key is `(session_id, str(resolved))`** - per Session, by resolved absolute path. Different Sessions (including Sub-agents, which get their own Session) never share read history. State is in-memory only, lost on restart (which forces a re-read only for a later full-file overwrite).
 - **New files are exempt at the `write` call site, not here.** `write` runs `check_stale` only when `resolved.exists()`; `edit` always operates on an existing file but never treats `NEVER_READ` as a conflict. `check_stale` itself reports `NEVER_READ` for any unstamped path regardless of existence - callers own operation-specific policy.
