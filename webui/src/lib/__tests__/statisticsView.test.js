@@ -29,6 +29,10 @@ import {
   runActivityTotals,
   sparklinePoints,
   tokenSplit,
+  statisticsWindow,
+  statisticsInsights,
+  timelineTicks,
+  tokenTimeline,
   topN,
   usageSeverity,
   usageHistoryIntervals,
@@ -37,6 +41,110 @@ import {
   usageHistorySince,
   usageHistorySummary,
 } from '../statisticsView.js';
+
+describe('statistics dashboard projections', () => {
+  it('uses UTC calendar days across month boundaries and leaves all time unfiltered', () => {
+    const now = Date.parse('2026-03-03T23:30:00-05:00');
+    expect(statisticsWindow('7d', now)).toEqual({
+      since: '2026-02-26T00:00:00.000Z',
+      until: '2026-03-04T04:30:00.000Z',
+    });
+    expect(statisticsWindow('all', now)).toEqual({});
+    expect(statisticsWindow('30d', now).since).toBe('2026-02-03T00:00:00.000Z');
+    expect(statisticsWindow('90d', now).since).toBe('2025-12-05T00:00:00.000Z');
+  });
+
+  it('fills absent periods and retains token provenance on a single scale', () => {
+    const window = {
+      since: '2026-02-27T00:00:00Z',
+      until: '2026-03-01T12:00:00Z',
+    };
+    const points = buildActivityTimeline(
+      [
+        {
+          date: '2026-02-27',
+          measured_input_tokens: 900,
+          measured_output_tokens: 100,
+          estimated_input_tokens: 10,
+          cache_read_tokens: 600,
+          cache_input_tokens: 900,
+        },
+        {
+          date: '2026-03-01',
+          measured_input_tokens: 100,
+          estimated_output_tokens: 100,
+        },
+      ],
+      'day',
+      window.until,
+      window,
+    );
+    expect(points.map((point) => point.date)).toEqual([
+      '2026-02-27',
+      '2026-02-28',
+      '2026-03-01',
+    ]);
+    const chart = tokenTimeline(points);
+    expect(
+      chart.points.map(({ measured, estimated }) => [measured, estimated]),
+    ).toEqual([
+      [1000, 10],
+      [0, 0],
+      [100, 100],
+    ]);
+    expect(chart.scaleMax).toBe(1500);
+    expect(cacheHitRate(chart.points[1])).toBeNull();
+    const months = buildActivityTimeline(points, 'month', window.until, window);
+    expect(months.map((point) => point.date)).toEqual(['2026-02', '2026-03']);
+    expect(tokenTimeline(months).points[0].measured).toBe(1000);
+  });
+
+  it('keeps single-period ticks unique and empty token charts finite', () => {
+    const points = [{ date: '2026-06' }];
+    expect(timelineTicks(points)).toEqual(points);
+    expect(timelineTicks([])).toEqual([]);
+    expect(tokenTimeline([])).toEqual({ points: [], scaleMax: 0 });
+  });
+
+  it('distinguishes Tool rejections from absent outcome evidence', () => {
+    const report = {
+      overview: {
+        total_runs: 4,
+        runs_with_tool_calls: 3,
+        daily_trend: [{ runs: 0 }, { runs: 4 }],
+      },
+      tools: {
+        total_calls: 10,
+        tools: [
+          {
+            successes: 4,
+            failures: 2,
+            error_codes: [{ key: 'invalid', count: 2 }],
+          },
+          {
+            successes: 1,
+            failures: 1,
+            error_codes: [{ key: 'invalid', count: 1 }],
+          },
+        ],
+      },
+    };
+    expect(statisticsInsights(report)).toEqual({
+      activeDays: 1,
+      toolRunShare: 0.75,
+      accepted: 5,
+      rejected: 3,
+      unknown: 2,
+      rejectionCodes: [{ key: 'invalid', count: 3 }],
+    });
+    expect(statisticsInsights(null)).toMatchObject({
+      activeDays: 0,
+      toolRunShare: null,
+      unknown: 0,
+      rejectionCodes: [],
+    });
+  });
+});
 
 describe('statisticsView formatting', () => {
   it('exposes the seven sub-views and three granularities', () => {
@@ -58,6 +166,7 @@ describe('statisticsView formatting', () => {
     expect(formatTokens(1234567, 'en')).toBe('1,234,567');
     expect(formatInteger(undefined, 'en')).toBe('0');
     expect(formatChartTick(12.5, 'en')).toBe('12.5');
+    expect(formatChartTick(1000000, 'en', { compact: true })).toBe('1M');
   });
 
   it('formats percentages and shares', () => {

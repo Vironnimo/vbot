@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
@@ -475,6 +475,26 @@ async function waitForOverview() {
   await waitForCondition(() => document.querySelector('.stats-health__track'));
 }
 
+function buttonNamed(key) {
+  return [...document.querySelectorAll('button')].find(
+    (button) =>
+      button.getAttribute('aria-label') === t(key) ||
+      button.textContent.trim() === t(key),
+  );
+}
+
+function cardValue(key) {
+  return [...document.querySelectorAll('.stats-card')]
+    .find((card) =>
+      card
+        .querySelector('.stats-card__label')
+        .textContent.trim()
+        .startsWith(t(key)),
+    )
+    ?.querySelector('.stats-card__value')
+    .textContent.trim();
+}
+
 describe('StatisticsView', () => {
   let mountedComponent;
 
@@ -491,6 +511,7 @@ describe('StatisticsView', () => {
       mountedComponent = null;
     }
     vi.useRealTimers();
+    vi.restoreAllMocks();
     document.body.innerHTML = '';
   });
 
@@ -500,7 +521,7 @@ describe('StatisticsView', () => {
     mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    expect(rpcMock).toHaveBeenCalledWith('statistics.report');
+    expect(rpcMock).toHaveBeenCalledWith('statistics.report', {});
     expect(
       document.querySelector('.stats-health__hero strong')?.textContent,
     ).toBe('75.0%');
@@ -511,10 +532,13 @@ describe('StatisticsView', () => {
       document.querySelectorAll('.stats-activity__legend .stats-legend'),
     ).toHaveLength(4);
     expect(
-      document
-        .querySelectorAll('.stats-grid .stats-card')[3]
-        .querySelector('.stats-card__value').textContent,
-    ).toBe('11');
+      [
+        ...document.querySelectorAll('.stats-grid--hero .stats-card__value'),
+      ].map((node) => node.textContent),
+    ).toEqual(['4', '1,200', '7', '1']);
+    expect(cardValue('statistics.overview.chatMessages')).toBe('11');
+    expect(cardValue('statistics.overview.activeDays')).toBe('2');
+    expect(cardValue('statistics.overview.toolRunShare')).toBe('50.0%');
     expect(document.querySelectorAll('.stats-bars')).toHaveLength(2);
     expect(document.body.textContent).toContain('main');
     expect(document.querySelector('.stats-view.view-frame')).toBeTruthy();
@@ -527,6 +551,142 @@ describe('StatisticsView', () => {
     expect(
       document.querySelector('.stats-view .view-toolbar__actions'),
     ).toBeTruthy();
+  });
+
+  it('applies a UTC window to every report tab and retains the previous scope while loading', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-06-13T10:00:00Z'));
+    let resolveReport;
+    rpcMock
+      .mockResolvedValue(makeReport())
+      .mockResolvedValueOnce(makeReport())
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReport = resolve;
+          }),
+      );
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.range.7d').click();
+    flushSync();
+    const window = {
+      since: '2026-06-07T00:00:00.000Z',
+      until: '2026-06-13T10:00:00.000Z',
+    };
+    expect(rpcMock).toHaveBeenLastCalledWith('statistics.report', window);
+    expect(
+      buttonNamed('statistics.range.all').getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(buttonNamed('statistics.range.7d').disabled).toBe(true);
+    expect(
+      document.querySelector('[role="tabpanel"]').getAttribute('aria-busy'),
+    ).toBe('true');
+    buttonNamed('statistics.subview.usage').click();
+    flushSync();
+    expect(rpcMock).toHaveBeenCalledTimes(2);
+    const filtered = makeReport({ window });
+    filtered.usage.totals.measured_input_tokens = 321;
+    resolveReport(filtered);
+    await waitForCondition(
+      () =>
+        buttonNamed('statistics.range.7d').getAttribute('aria-pressed') ===
+        'true',
+    );
+    expect(cardValue('statistics.col.input')).toBe('321');
+    expect(
+      document.querySelectorAll('.stats-token-chart .stats-activity__col'),
+    ).toHaveLength(7);
+    buttonNamed('statistics.subview.overview').click();
+    flushSync();
+    expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(7);
+    buttonNamed('statistics.range.all').click();
+    expect(rpcMock).toHaveBeenLastCalledWith('statistics.report', {});
+  });
+
+  it('keeps the last report on a failed filter request and retries that requested window', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-06-13T10:00:00Z'));
+    const window = {
+      since: '2026-05-15T00:00:00.000Z',
+      until: '2026-06-13T10:00:00.000Z',
+    };
+    rpcMock
+      .mockResolvedValueOnce(makeReport())
+      .mockRejectedValueOnce(new Error('report-error-sentinel'))
+      .mockResolvedValueOnce(makeReport({ window }));
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.range.30d').click();
+    await waitForCondition(() => document.querySelector('.banner--error'));
+    expect(document.body.textContent).toContain('report-error-sentinel');
+    expect(cardValue('statistics.overview.runs')).toBe('4');
+    expect(
+      buttonNamed('statistics.range.all').getAttribute('aria-pressed'),
+    ).toBe('true');
+    buttonNamed('common.retry').click();
+    await waitForCondition(
+      () =>
+        buttonNamed('statistics.range.30d').getAttribute('aria-pressed') ===
+        'true',
+    );
+    expect(rpcMock).toHaveBeenLastCalledWith('statistics.report', window);
+    expect(document.querySelector('.banner--error')).toBeNull();
+  });
+
+  it('exposes exact token values to keyboard users and keeps missing cache data unavailable', async () => {
+    const report = makeReport();
+    report.usage.totals.cache_turns = 0;
+    report.usage.totals.cache_input_tokens = 0;
+    rpcMock.mockResolvedValue(report);
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.subview.usage').click();
+    flushSync();
+    const point = document.querySelector(
+      '.stats-token-chart .stats-activity__col:last-child',
+    );
+    point.focus();
+    expect(document.activeElement).toBe(point);
+    expect(point.getAttribute('aria-label')).toContain('1,200');
+    expect(point.getAttribute('aria-label')).toContain('35');
+    expect(
+      Number.parseFloat(
+        point.querySelector('.stats-activity__bar').style.height,
+      ),
+    ).toBeCloseTo(82.3333);
+    const details = document.querySelector('.stats-panel details');
+    details.querySelector('summary').click();
+    expect(details.open).toBe(true);
+    expect(
+      [...details.querySelectorAll('tbody tr')].at(-1).textContent,
+    ).toContain('1,200');
+    expect(cardValue('statistics.usage.cacheHitRate')).toBe('—');
+    expect(cardValue('statistics.usage.cacheRead')).toBe('—');
+    expect(cardValue('statistics.usage.cacheWrite')).toBe('—');
+  });
+
+  it('renders unused report breakdowns and distinguishes unknown Tool results', async () => {
+    const report = makeReport();
+    report.runs.top_sessions_by_runs = [
+      { agent_id: 'main', session_id: 'session-ranking-sentinel', runs: 3 },
+    ];
+    report.errors.by_model = [{ key: 'model-error-sentinel', count: 1 }];
+    report.tools.tools[0].error_codes.push({
+      key: 'second-code-sentinel',
+      count: 1,
+    });
+    rpcMock.mockResolvedValue(report);
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.subview.runs').click();
+    flushSync();
+    expect(document.body.textContent).toContain('session-ranking-sentinel');
+    expect(document.body.textContent).toContain('model-error-sentinel');
+    buttonNamed('statistics.subview.tools').click();
+    flushSync();
+    expect(cardValue('statistics.tools.accepted')).toBe('4');
+    expect(cardValue('statistics.tools.rejected')).toBe('1');
+    expect(cardValue('statistics.tools.unknown')).toBe('2');
+    expect(document.body.textContent).toContain('second-code-sentinel');
   });
 
   it('switches the calendar-correct activity window with the granularity', async () => {
@@ -608,13 +768,12 @@ describe('StatisticsView', () => {
       'openrouter/anthropic/claude-sonnet-4',
     );
     expect(document.querySelector('.stats-tokens__est')).toBeTruthy();
-    const usageCards = document.querySelectorAll(
-      '.stats-panel > .stats-grid .stats-card',
-    );
-    expect(usageCards).toHaveLength(8);
-    expect(usageCards[7].querySelector('.stats-card__value').textContent).toBe(
-      '120',
-    );
+    expect(cardValue('statistics.usage.reasoning')).toBe('120');
+    expect(
+      [...document.querySelectorAll('.stats-columns .stats-card__value')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['1,000', '200', '5', '30', '5', '1']);
   });
 
   it('renders cache hit rate, worst sessions and suspected breaks in the usage sub-view', async () => {
@@ -630,14 +789,9 @@ describe('StatisticsView', () => {
     flushSync();
 
     // totals: 50 read of 500 cache-reporting input → 10.0%
-    const usageCards = document.querySelectorAll(
-      '.stats-panel > .stats-grid .stats-card',
-    );
-    expect(usageCards[4].querySelector('.stats-card__value').textContent).toBe(
-      '10.0%',
-    );
+    expect(cardValue('statistics.usage.cacheHitRate')).toBe('10.0%');
     expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
-      4,
+      5,
     );
     // The incident table shows the collapsed turn's expectation vs. reality.
     expect(document.body.textContent).toContain('9,000');
@@ -655,13 +809,11 @@ describe('StatisticsView', () => {
     runsTab.click();
     flushSync();
 
-    const runGrids = document.querySelectorAll('.stats-panel > .stats-grid');
+    const runGrids = document.querySelectorAll(
+      '.stats-panel > .stats-block > .stats-grid',
+    );
     expect(runGrids).toHaveLength(3);
-    expect(
-      runGrids[1]
-        .querySelectorAll('.stats-card')[3]
-        .querySelector('.stats-card__value').textContent,
-    ).toBe('1');
+    expect(cardValue('statistics.runs.fallbackRuns')).toBe('1');
     expect(document.querySelectorAll('.stats-hours__col')).toHaveLength(24);
     expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
   });

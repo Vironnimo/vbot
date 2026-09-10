@@ -42,6 +42,7 @@ import {
   getLocalSpeechMemory,
   unloadLocalSpeech,
   getSessionStoreStatus,
+  getStatisticsReport,
   inspectSubAgentWork,
   listTaskModelTargets,
   listQueue,
@@ -253,6 +254,25 @@ describe('rpc()', () => {
       rpc('agent.list', {}, { fetch: malformedFetch }),
     ).rejects.toMatchObject({
       code: RPC_ERROR_RESPONSE,
+    });
+  });
+
+  it('forwards the Statistics window through the existing report RPC', async () => {
+    const params = {
+      since: '2026-06-01T00:00:00Z',
+      until: '2026-06-07T12:00:00Z',
+    };
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { window: params } }),
+      );
+    await expect(
+      getStatisticsReport(params, { fetch: fetchFunction }),
+    ).resolves.toEqual({ window: params });
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'statistics.report',
+      params,
     });
   });
 

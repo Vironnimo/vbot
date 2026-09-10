@@ -17,6 +17,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
 ]);
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
+export const STATISTICS_RANGES = Object.freeze(['7d', '30d', '90d', 'all']);
 export const USAGE_HISTORY_RANGES = Object.freeze(['24h', '7d', '30d', 'all']);
 
 export const ACTIVITY_BUCKET_COUNTS = Object.freeze({
@@ -56,10 +57,15 @@ export function formatInteger(value, locale = 'en') {
   );
 }
 
-export function formatChartTick(value, locale = 'en') {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
-    toFiniteNumber(value),
-  );
+export function formatChartTick(
+  value,
+  locale = 'en',
+  { compact = false } = {},
+) {
+  return new Intl.NumberFormat(locale, {
+    maximumFractionDigits: 1,
+    notation: compact ? 'compact' : 'standard',
+  }).format(toFiniteNumber(value));
 }
 
 // Tokens are plain grouped integers today; kept distinct from formatInteger so a
@@ -541,31 +547,117 @@ export function buildActivityTimeline(
   points,
   granularity = 'day',
   anchorIso = null,
+  window = {},
 ) {
   const period = DAILY_GRANULARITIES.includes(granularity)
     ? granularity
     : 'day';
   const rolled = rollupDaily(points, period);
-  const anchorDay = isoDayKey(anchorIso) ?? lastSeriesDay(rolled);
+  const anchorDay =
+    isoDayKey(window?.until ?? anchorIso) ?? lastSeriesDay(rolled);
   const endKey = bucketKeyFor(anchorDay, period);
   if (endKey === null) {
     return [];
   }
 
   const byDate = new Map(rolled.map((point) => [point.date, point]));
-  const count = ACTIVITY_BUCKET_COUNTS[period];
-  return Array.from({ length: count }, (_, index) => {
+  const startKey = bucketKeyFor(isoDayKey(window?.since), period);
+  const count = startKey
+    ? period === 'month'
+      ? (bucketDate(endKey).getUTCFullYear() -
+          bucketDate(startKey).getUTCFullYear()) *
+          12 +
+        bucketDate(endKey).getUTCMonth() -
+        bucketDate(startKey).getUTCMonth() +
+        1
+      : Math.round(
+          (bucketDate(endKey) - bucketDate(startKey)) /
+            (DAY_MS * (period === 'week' ? 7 : 1)),
+        ) + 1
+    : ACTIVITY_BUCKET_COUNTS[period];
+  const fields = new Set(ACTIVITY_FIELDS);
+  for (const point of rolled) {
+    for (const [key, value] of Object.entries(point)) {
+      if (typeof value === 'number') fields.add(key);
+    }
+  }
+  return Array.from({ length: Math.max(0, count) }, (_, index) => {
     const offset = index - count + 1;
     const date = shiftBucketKey(endKey, period, offset);
     const source = byDate.get(date);
     return Object.fromEntries([
       ['date', date],
-      ...ACTIVITY_FIELDS.map((field) => [
-        field,
-        toFiniteNumber(source?.[field]),
-      ]),
+      ...[...fields].map((field) => [field, toFiniteNumber(source?.[field])]),
     ]);
   });
+}
+
+// UTC calendar windows match the report's daily aggregation boundary. The last
+// day is partial; an explicit until keeps every section on the same snapshot.
+export function statisticsWindow(range, now = Date.now()) {
+  if (range === 'all' || !STATISTICS_RANGES.includes(range)) return {};
+  const until = new Date(now);
+  const since = new Date(until);
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - Number.parseInt(range, 10) + 1);
+  return { since: since.toISOString(), until: until.toISOString() };
+}
+
+export function timelineTicks(points) {
+  if (!points.length) return [];
+  return [
+    ...new Set([
+      points[0],
+      points[Math.floor((points.length - 1) / 2)],
+      points.at(-1),
+    ]),
+  ];
+}
+
+export function tokenTimeline(points) {
+  const series = points.map((point) => ({ ...point, ...tokenSplit(point) }));
+  return {
+    points: series,
+    scaleMax: niceScaleMax(Math.max(0, ...series.map((point) => point.total))),
+  };
+}
+
+export function statisticsInsights(report) {
+  const overview = report?.overview;
+  const tools = report?.tools;
+  const totalRuns = toFiniteNumber(overview?.total_runs);
+  const rows = tools?.tools ?? [];
+  const accepted = rows.reduce(
+    (sum, tool) => sum + toFiniteNumber(tool.successes),
+    0,
+  );
+  const rejected = rows.reduce(
+    (sum, tool) => sum + toFiniteNumber(tool.failures),
+    0,
+  );
+  const codes = new Map();
+  for (const tool of rows) {
+    for (const entry of tool.error_codes ?? []) {
+      codes.set(entry.key, (codes.get(entry.key) ?? 0) + entry.count);
+    }
+  }
+  return {
+    activeDays: (overview?.daily_trend ?? []).filter((point) => point.runs > 0)
+      .length,
+    toolRunShare:
+      totalRuns > 0
+        ? toFiniteNumber(overview.runs_with_tool_calls) / totalRuns
+        : null,
+    accepted,
+    rejected,
+    unknown: Math.max(
+      0,
+      toFiniteNumber(tools?.total_calls) - accepted - rejected,
+    ),
+    rejectionCodes: [...codes]
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key)),
+  };
 }
 
 export function activitySummary(points) {
