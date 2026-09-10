@@ -730,8 +730,9 @@ class EmptyBlockStore:
 def load_layout_entries(raw: object) -> list[LayoutEntry]:
     """Parse a ``layout.json`` payload into :class:`LayoutEntry` objects, fail-soft.
 
-    The bundled default layout and Phase 2's persisted layouts share this one
-    parser. The payload is the ordered ``[{"id", "enabled", "source"}, ...]`` list
+    Used for the bundled default layout; persisted layouts validate complete
+    entries in Storage before consumption. The payload is the ordered
+    ``[{"id", "enabled", "source"}, ...]`` list
     (D3). A non-list payload yields ``[]``; a malformed entry (not an object, no
     string ``id``) is skipped with a warning rather than aborting assembly — a
     broken layout must never take a run down, it just falls back to defaults. A
