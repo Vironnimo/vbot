@@ -2042,7 +2042,7 @@ class Runtime:
 
     async def reload_skills_async(self) -> None:
         """Reload Skills without scanning their files on the Event Loop."""
-        skills = await asyncio.to_thread(self._load_reloaded_skills)
+        skills = await _RUNTIME_WORKERS.run(self._load_reloaded_skills)
         self._apply_reloaded_skills(skills)
 
     def _load_reloaded_skills(self) -> SkillRegistry:
