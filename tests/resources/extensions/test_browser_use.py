@@ -72,6 +72,24 @@ class FakeClient:
             return {"text": "0123456789" * 3000, "origin": self.page["url"]}
         if command[0] == "screenshot":
             Path(command[1]).write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+        if command[:2] == ["trace", "stop"]:
+            Path(command[-1]).write_text('{"traceEvents": [{"name": "fixture"}]}')
+        if command[:3] == ["network", "har", "stop"]:
+            Path(command[-1]).write_text('{"log": {"entries": []}}')
+        if command[:2] == ["state", "save"]:
+            Path(command[-1]).write_text('{"cookies": [], "origins": []}')
+        if command[0] == "pdf":
+            Path(command[-1]).write_bytes(b"%PDF-1.7 fixture")
+        if command == ["console"]:
+            return {"messages": [{"type": "log", "text": "fixture"}]}
+        if command == ["errors"]:
+            return {"errors": [{"text": "fixture", "line": 7}]}
+        if command == ["network", "requests"]:
+            return {
+                "requests": [
+                    {"requestId": "123.4", "url": "https://example.com/fixture", "status": 500}
+                ]
+            }
         return {}
 
 
@@ -1140,6 +1158,216 @@ def _cases():
     return BROWSER_CASE_ARGUMENTS
 
 
+def test_network_capture_starts_before_first_navigation(setup):
+    _, _, _, client = opened(setup)
+    assert client.calls.index(["network", "requests"]) < client.calls.index(
+        ["open", "https://example.com"]
+    )
+
+
+def test_diagnostic_projection_keeps_useful_evidence_without_launch_metadata(setup, monkeypatch):
+    service, context, _, client = opened(setup)
+    original = client.call
+    row = {
+        "requestId": "native-id",
+        "url": "https://example.com",
+        "status": 503,
+        "headers": {"test": "sentinel"},
+        "postData": "payload",
+    }
+
+    def call(command):
+        if command == ["network", "requests"]:
+            return {"requests": [row], "lifecycle": {"launchHash": 123}}
+        if command[:2] == ["network", "request"]:
+            return {**row, "responseBody": "response", "lifecycle": {"launchHash": 123}}
+        return original(command)
+
+    monkeypatch.setattr(client, "call", call)
+    listing = service.handle(context, {"action": "requests"})["data"]["result"]
+    assert listing == {
+        "requests": [{"requestId": "native-id", "url": "https://example.com", "status": 503}]
+    }
+    detail = service.handle(context, {"action": "request", "request_id": "native-id"})["data"][
+        "result"
+    ]
+    assert detail == {**row, "responseBody": "response"}
+
+
+def test_eval_pagination_is_immutable_and_never_replays_input(setup, monkeypatch):
+    service, context, session, client = opened(setup)
+    original = client.call
+    evaluations = []
+
+    def call(command):
+        if command[:2] == ["eval", "--base64"]:
+            evaluations.append(base64.b64decode(command[2]).decode())
+            return {"result": {"sentinel": "abcdef" * 1000}}
+        return original(command)
+
+    monkeypatch.setattr(client, "call", call)
+    args = {"action": "eval", "script": "--stdin", "limit": 101}
+    result = service.handle(context, args)["data"]
+    assert result["completed"] == 1 and not session.refs
+    text = result["text"]
+    output_id = result["result_id"]
+    # A saved result is readable even after the selected tab closes.
+    client.tab_rows = []
+    while result["next_offset"] is not None:
+        result = service.handle(
+            context,
+            {
+                "action": "result",
+                "result_id": output_id,
+                "offset": result["next_offset"],
+                "limit": 1000,
+            },
+        )["data"]
+        text += result["text"]
+    assert json.loads(text) == {"value": {"sentinel": "abcdef" * 1000}}
+    assert evaluations == ["--stdin"]
+    assert (
+        service.handle(
+            replace(context, session_id="another"), {"action": "result", "result_id": output_id}
+        )["error"]["code"]
+        == "browser_not_open"
+    )
+
+
+def test_saved_output_eviction_and_unknown_ids_do_not_execute(setup):
+    service, context, session, client = opened(setup)
+    first = service._diagnostic_result(session, "x" * 100, {"limit": 10})
+    for _ in range(8):
+        service._diagnostic_result(session, "y" * 100, {"limit": 10})
+    client.calls.clear()
+    for result_id in (first["result_id"], "../../config"):
+        result = service.handle(context, {"action": "result", "result_id": result_id})
+        assert result["error"]["code"] == "browser_result_gone"
+    assert not client.calls
+    assert Path(first["path"]).is_file()
+
+
+@pytest.mark.parametrize("kind", ["trace", "har"])
+def test_recording_lifecycle_and_real_file_validation(setup, kind):
+    service, context, session, client = opened(setup)
+    assert (
+        service.handle(context, {"action": kind + "_stop"})["error"]["code"]
+        == "browser_recording_inactive"
+    )
+    started = service.handle(context, {"action": kind + "_start"})["data"]
+    assert started["stop_action"] == kind + "_stop"
+    assert (
+        service.handle(context, {"action": kind + "_start"})["error"]["code"]
+        == "browser_recording_active"
+    )
+    result = service.handle(context, {"action": kind + "_stop"})["data"]
+    assert result["file"]["bytes"] > 0
+    assert json.loads(Path(result["file"]["path"]).read_text())
+    assert not session.recordings
+    if kind == "har":
+        assert result["request_count"] == 0 and result["failed_request_count"] == 0
+        assert "hint" in result
+    else:
+        assert result["event_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "action", ["cookies", "state_save", "trace_start", "trace_stop", "har_start", "har_stop"]
+)
+def test_browser_context_diagnostics_do_not_touch_attached_browser(setup, action):
+    setup[3]["mode"] = "existing"
+    service, context, _, client = opened(setup)
+    client.calls.clear()
+    result = service.handle(context, {"action": action})
+    assert result["error"]["code"] == "browser_managed_only"
+    assert client.calls == [["tab", "list"]]
+
+
+def test_drag_resolves_both_refs_before_any_side_effect(setup):
+    service, context, session, client = opened(setup)
+    client.calls.clear()
+    result = service.handle(
+        context, {"action": "drag", "target": next(iter(session.refs)), "destination": "stale"}
+    )
+    assert result["error"]["code"] == "browser_stale"
+    assert client.calls == [["tab", "list"]]
+
+
+def test_export_failure_preserves_completed_operation(setup, monkeypatch):
+    service, context, _, client = opened(setup)
+    original = client.call
+
+    def call(command):
+        if command[0] == "pdf":
+            return {}
+        return original(command)
+
+    monkeypatch.setattr(client, "call", call)
+    result = service.handle(context, {"action": "pdf"})
+    assert result["ok"] and result["data"]["completed"] == 1
+    assert result["data"]["artifact_error"]["code"] == "browser_artifact"
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        {"cookies": [None], "origins": []},
+        {"cookies": [], "origins": [{"origin": "https://example.com", "localStorage": [None]}]},
+        {
+            "cookies": [
+                {"name": "x", "value": "v", "domain": "example.com", "path": "/", "secure": "false"}
+            ],
+            "origins": [],
+        },
+    ],
+)
+def test_state_load_validates_all_items_before_side_effects(setup, saved):
+    service, context, *_ = setup
+    path = context.workspace / "state.json"
+    path.write_text(json.dumps(saved))
+    result = service.handle(context, {"action": "state_load", "path": str(path)})
+    assert result["error"]["code"] == "invalid_arguments"
+    assert not service._sessions
+
+
+def test_state_load_uses_the_validated_snapshot(setup):
+    service, context, _, client = opened(setup)
+    path = context.workspace / "state.json"
+    saved = {
+        "cookies": [],
+        "origins": [
+            {
+                "origin": "https://example.com",
+                "localStorage": [{"name": "fixture", "value": "safe"}],
+            }
+        ],
+    }
+    path.write_text(json.dumps(saved))
+    client.hook = lambda _: path.write_text("invalid after validation")
+    result = service.handle(context, {"action": "state_load", "path": str(path)})
+    assert result["ok"]
+    command = next(command for command in client.calls if command[:2] == ["state", "load"])
+    assert json.loads(Path(command[2]).read_text()) == saved
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"action": "route", "pattern": "--abort", "body": "{}"},
+        {"action": "route", "pattern": "**/*", "body": "NaN"},
+        {"action": "eval", "script": 123},
+        {"action": "resize", "width": True, "height": 720},
+        {"action": "console", "offset": 1},
+        {"action": "state_load", "path": "relative.json"},
+    ],
+)
+def test_invalid_debug_arguments_never_start_browser(setup, args):
+    service, context, *_ = setup
+    result = service.handle(context, args)
+    assert result["error"]["code"] == "invalid_arguments"
+    assert not service._sessions
+
+
 @pytest.mark.parametrize("name", list(_cases()))
 def test_complete_model_case_matrix_runtime_results(setup, name):
     service, context, session, _ = opened(setup)
@@ -1147,6 +1375,8 @@ def test_complete_model_case_matrix_runtime_results(setup, name):
     refs = list(session.refs)
     if "target" in args:
         args["target"] = refs[0]
+    if "destination" in args:
+        args["destination"] = refs[1]
     if "fields" in args:
         for index, item in enumerate(args["fields"]):
             item["target"] = refs[index]
@@ -1154,6 +1384,14 @@ def test_complete_model_case_matrix_runtime_results(setup, name):
         path = context.workspace / "fixture.txt"
         path.write_text("fixture")
         args["files"] = [str(path)]
+    if args["action"] == "result":
+        saved = service._diagnostic_result(session, {"value": "x" * 10000}, {"limit": 10})
+        args["result_id"] = saved["result_id"]
+    if args["action"] in {"trace_stop", "har_stop"}:
+        service.handle(context, {"action": args["action"].replace("_stop", "_start")})
+    if args["action"] == "state_load":
+        saved = service.handle(context, {"action": "state_save"})["data"]
+        args["path"] = saved["file"]["path"]
     result = service.handle(context, args)
     if name.startswith("invalid_"):
         assert not result["ok"] and result["error"]["code"] == "invalid_arguments"

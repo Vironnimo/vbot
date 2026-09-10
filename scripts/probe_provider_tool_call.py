@@ -458,6 +458,93 @@ BROWSER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "invalid_field": {"action": "fill", "fields": [{"target": "r1"}]},
 }
 
+BROWSER_CASE_ARGUMENTS.update(
+    {
+        **{
+            action: {"action": action}
+            for action in (
+                "console",
+                "errors",
+                "requests",
+                "trace_start",
+                "trace_stop",
+                "har_start",
+                "har_stop",
+                "pdf",
+                "cookies",
+                "state_save",
+                "dialog_status",
+                "unroute",
+            )
+        },
+        **{
+            action: {"action": action, "target": "r1"}
+            for action in ("dblclick", "check", "uncheck")
+        },
+        "drag": {"action": "drag", "target": "r1", "destination": "r2"},
+        "type": {"action": "type", "text": "hello"},
+        "resize": {"action": "resize", "width": 1280, "height": 720},
+        "eval": {"action": "eval", "script": "document.title"},
+        "eval_large": {
+            "action": "eval",
+            "script": "Array.from({length: 1000}, (_, i) => i)",
+            "limit": 200,
+        },
+        "request": {"action": "request", "request_id": "123.4"},
+        "result": {"action": "result", "result_id": "output_example"},
+        "result_offset": {
+            "action": "result",
+            "result_id": "output_example",
+            "offset": 4000,
+            "limit": 8000,
+        },
+        "route": {"action": "route", "pattern": "**/api/items", "body": '{"items":[]}'},
+        "route_abort": {"action": "route", "pattern": "**/ads/*", "abort": True},
+        "route_abort_false": {
+            "action": "route",
+            "pattern": "**/api/items",
+            "body": "{}",
+            "abort": False,
+        },
+        "unroute_pattern": {"action": "unroute", "pattern": "**/api/items"},
+        "state_load": {"action": "state_load", "path": "/tmp/browser-state.json"},
+        "invalid_route_conflict": {
+            "action": "route",
+            "pattern": "**/*",
+            "abort": True,
+            "body": "{}",
+        },
+        "invalid_route_missing": {"action": "route", "pattern": "**/*"},
+        "invalid_route_body": {"action": "route", "pattern": "**/*", "body": "broken"},
+        "invalid_resize": {"action": "resize", "width": 0, "height": 720},
+        "invalid_eval_observe": {"action": "eval", "script": "1", "observe": True},
+        **{
+            f"{action}_filter": {"action": action, "filter": "fixture", "limit": 500}
+            for action in ("console", "errors", "requests")
+        },
+        **{
+            f"{action}_limited": {
+                "action": action,
+                "limit": 500,
+                **({"request_id": "123.4"} if action == "request" else {}),
+            }
+            for action in ("console", "errors", "requests", "cookies", "request")
+        },
+    }
+)
+for _browser_action in ("dblclick", "check", "uncheck", "drag", "type", "resize"):
+    for _observe in (True, False):
+        BROWSER_CASE_ARGUMENTS[f"{_browser_action}_observe_{_observe}"] = {
+            **BROWSER_CASE_ARGUMENTS[_browser_action],
+            "observe": _observe,
+        }
+    BROWSER_CASE_ARGUMENTS[f"{_browser_action}_scoped"] = {
+        **BROWSER_CASE_ARGUMENTS[_browser_action],
+        "observe": True,
+        "selector": "main",
+        "limit": 800,
+    }
+
 COMPUTER_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     **{action: {"action": action} for action in ("status", "apps", "windows", "close")},
     **{
