@@ -628,3 +628,28 @@ def _context(
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
         session_tool_grants=session_tool_grants,
     )
+
+
+def test_bundled_playwright_activation_and_each_reference(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    registry = SkillRegistry.load(root / "resources/skills")
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    context = _context(tmp_path)
+    result = asyncio.run(async_dispatch(tools, context, {"name": "playwright-cli"}))
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    assert data["status"] == "loaded"
+    package = root / "resources/skills/playwright-cli"
+    expected = sorted(
+        path.relative_to(package).as_posix() for path in (package / "references").glob("*.md")
+    )
+    assert data["resource_files"]["files"] == expected
+    for relative in expected:
+        result = asyncio.run(
+            async_dispatch(tools, context, {"name": "playwright-cli", "file_path": relative})
+        )
+        assert result["ok"] is True
+        file_data = cast(dict[str, Any], result["data"])
+        assert file_data["status"] == "file_loaded"
+        assert file_data["content"] == (package / relative).read_text(encoding="utf-8")

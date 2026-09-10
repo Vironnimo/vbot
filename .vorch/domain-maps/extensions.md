@@ -81,7 +81,7 @@ Read these only when your task matches - not by default.
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
 - Changing Computer Use, its opt-in Tool, driver sessions, capture ownership, or desktop input -> `extensions/computer-use.md`
-- Changing Browser Use, its opt-in Tool, CDP connections, browser ownership, refs, or browser media -> `extensions/browser-use.md`
+- Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled MCP client, transports, Agent grants, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
