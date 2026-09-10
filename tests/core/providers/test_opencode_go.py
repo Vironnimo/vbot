@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -13,7 +14,7 @@ import pytest
 import respx
 
 import core.providers.opencode_go as opencode_go_module
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.errors import ProviderError
@@ -27,6 +28,56 @@ from core.providers.opencode_go import (
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.sessions.titles import SessionTitleService
 from core.utils.tokens import estimate_request_input_tokens
+
+
+@pytest.mark.parametrize(
+    ("effort", "thinking", "level"),
+    [
+        (None, "enabled", None),
+        ("none", "disabled", None),
+        ("minimal", "enabled", "low"),
+        ("low", "enabled", "low"),
+        ("medium", "enabled", "low"),
+        ("high", "enabled", "high"),
+        ("xhigh", "enabled", "high"),
+        ("max", "enabled", "max"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_deepseek41_preserves_effort_with_its_thinking_toggle(effort, thinking, level):
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ModelRegistry.load(resources)
+    from core.providers.providers import ProviderRegistry
+
+    config = ProviderRegistry.load(resources).get("opencode-go")
+
+    def lookup(model_id):
+        return registry.get("opencode-go", model_id)
+
+    adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    try:
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "test"}],
+            "deepseek-flash",
+            thinking_effort=effort,
+        )
+        assert payload["thinking"] == {"type": thinking}
+        assert payload.get("reasoning_effort") == level
+        assert adapter._model_protocol("deepseek-flash") == "openai"
+        assert adapter.reasoning_replay_policy("deepseek-flash") == "full_history"
+        assert adapter.reasoning_replay_fidelity("deepseek-flash") == "readable_only"
+        intent = adapter.describe_reasoning_render(
+            model_lookup=lookup,
+            model_id="deepseek-flash",
+            effort=effort,
+        )
+        assert intent.kind == (
+            "default" if effort is None else "off" if effort == "none" else "effort"
+        )
+        assert intent.effort_level == level
+    finally:
+        await adapter.aclose()
+
 
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"

@@ -66,6 +66,7 @@ THINKING_KEEP_METADATA_KEY = "thinking_keep"
 THINKING_KEEP_ALL = "all"
 THINKING_CONTROL_METADATA_KEY = "thinking_control"
 THINKING_CONTROL_TOGGLE = "toggle"
+THINKING_CONTROL_TOGGLE_WITH_EFFORT = "toggle_with_effort"
 THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
 MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
 # The endpoint returns bare ids with no protocol, so a model the override does
@@ -435,11 +436,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         )
         payload = super()._build_payload(messages, model_id, **kwargs)
         thinking_control = self._profile_value(model_id, THINKING_CONTROL_METADATA_KEY)
-        if thinking_control in (THINKING_CONTROL_TOGGLE, THINKING_CONTROL_ALWAYS_ENABLED):
-            # Kimi K2.5/K2.6/K2.7 use the ``thinking`` object, not the generic
-            # OpenAI-compatible ``reasoning_effort`` field. K2.7 is always-on;
-            # K2.5/K2.6 expose only a binary toggle.
-            payload.pop("reasoning_effort", None)
+        if thinking_control in (
+            THINKING_CONTROL_TOGGLE,
+            THINKING_CONTROL_TOGGLE_WITH_EFFORT,
+            THINKING_CONTROL_ALWAYS_ENABLED,
+        ):
+            # Binary Kimi profiles suppress effort; DeepSeek's toggle is
+            # independent of its effort ladder and must preserve both controls.
+            if thinking_control != THINKING_CONTROL_TOGGLE_WITH_EFFORT or selected_effort == "none":
+                payload.pop("reasoning_effort", None)
             thinking_enabled = (
                 thinking_control == THINKING_CONTROL_ALWAYS_ENABLED or selected_effort != "none"
             )

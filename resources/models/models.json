@@ -3669,6 +3669,34 @@
       "release_date": "2026-08-12",
       "temperature": true
     },
+    "deepseek/deepseek-v4.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "knowledge": "2025-05",
+      "last_updated": "2026-09-10",
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4.1 Flash",
+      "release_date": "2026-09-10",
+      "temperature": true
+    },
     "google/deep-research-max-preview-04-2026": {
       "capabilities": {
         "input_modalities": [
