@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-10T09:46:50.330642+00:00",
+  "fetched_at": "2026-09-10T22:09:50.047293+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -2880,6 +2880,47 @@
         }
       },
       "name": "Black Forest Labs: FLUX.3 Video"
+    },
+    "black-forest-labs/flux-video-edit": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "passthrough_parameters": [
+              "safety_tolerance"
+            ]
+          }
+        },
+        "task_types": [
+          "video_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+video->video"
+        }
+      },
+      "name": "Black Forest Labs: FLUX Video Edit"
     },
     "black-forest-labs/flux-video-upscale": {
       "capabilities": {
@@ -5934,7 +5975,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 393216,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6017,16 +6058,22 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "logprobs",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
+          "repetition_penalty",
           "response_format",
+          "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
           "top_logprobs",
           "top_p"
         ],
@@ -8967,7 +9014,7 @@
       ],
       "context_window": 262144,
       "family": "gemma",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -10209,6 +10256,63 @@
         }
       },
       "name": "inclusionAI: Ling 3.0 Flash Sante (free)"
+    },
+    "inclusionai/ling-3.0-flash-vl:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "seed",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "ling",
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "inclusionAI: Ling 3.0 Flash VL (free)"
     },
     "intfloat/e5-base-v2": {
       "capabilities": {
@@ -12159,7 +12263,7 @@
           "modality": "text+image->image"
         }
       },
-      "name": "MicrosoftAI: MAI-Image-2.5"
+      "name": "Microsoft AI: MAI-Image-2.5"
     },
     "microsoft/mai-image-2.5-pro": {
       "capabilities": {
@@ -12226,7 +12330,7 @@
           "modality": "text+image->image"
         }
       },
-      "name": "MicrosoftAI: MAI-Image-2.5 Pro"
+      "name": "Microsoft AI: MAI-Image-2.5 Pro"
     },
     "microsoft/mai-image-2.6": {
       "capabilities": {
@@ -12298,7 +12402,7 @@
           "modality": "text+image->image"
         }
       },
-      "name": "MicrosoftAI: MAI-Image-2.6"
+      "name": "Microsoft AI: MAI-Image-2.6"
     },
     "microsoft/mai-image-2.6-flash": {
       "capabilities": {
@@ -12370,7 +12474,7 @@
           "modality": "text+image->image"
         }
       },
-      "name": "MicrosoftAI: MAI-Image-2.6 Flash"
+      "name": "Microsoft AI: MAI-Image-2.6 Flash"
     },
     "microsoft/mai-transcribe-1.5": {
       "capabilities": {
@@ -12409,7 +12513,7 @@
           "modality": "audio->transcription"
         }
       },
-      "name": "MicrosoftAI: MAI-Transcribe 1.5"
+      "name": "Microsoft AI: MAI-Transcribe 1.5"
     },
     "microsoft/mai-transcribe-2": {
       "capabilities": {
@@ -12448,7 +12552,7 @@
           "modality": "audio->transcription"
         }
       },
-      "name": "MicrosoftAI: MAI-Transcribe 2"
+      "name": "Microsoft AI: MAI-Transcribe 2"
     },
     "microsoft/mai-voice-2": {
       "capabilities": {
@@ -12491,7 +12595,7 @@
           "modality": "text->speech"
         }
       },
-      "name": "MicrosoftAI: MAI-Voice-2"
+      "name": "Microsoft AI: MAI-Voice-2"
     },
     "microsoft/mai-voice-2-flash": {
       "capabilities": {
@@ -12534,7 +12638,7 @@
           "modality": "text->speech"
         }
       },
-      "name": "MicrosoftAI: MAI-Voice-2-Flash"
+      "name": "Microsoft AI: MAI-Voice-2-Flash"
     },
     "microsoft/phi-4": {
       "capabilities": {
@@ -13157,7 +13261,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -24530,7 +24634,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -30272,7 +30376,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logprobs",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -30281,7 +30384,6 @@
           "stop",
           "temperature",
           "tools",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -32186,7 +32288,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 202752,
+      "context_window": 200000,
       "family": "glm-flash",
       "max_output_tokens": 117964,
       "metadata": {
@@ -32213,10 +32315,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -32408,7 +32508,7 @@
       ],
       "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
