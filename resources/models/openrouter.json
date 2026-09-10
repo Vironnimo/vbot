@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-09T13:56:25.494889+00:00",
+  "fetched_at": "2026-09-10T09:46:50.330642+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -5095,7 +5095,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5934,7 +5934,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5994,6 +5994,64 @@
         }
       },
       "name": "DeepSeek: DeepSeek V4 Pro 0813 (batch)"
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "DeepSeek: DeepSeek V4.1 Flash"
     },
     "dots-studio/dots-3-note-preview:free": {
       "capabilities": {
@@ -13099,7 +13157,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -13495,6 +13553,55 @@
       },
       "name": "Mistral: Codestral 2508"
     },
+    "mistralai/codestral-2508:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "prediction",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 256000,
+      "max_output_tokens": 204800,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+file->text"
+        }
+      },
+      "name": "Mistral: Codestral 2508 (batch)"
+    },
     "mistralai/codestral-embed-2505": {
       "capabilities": {
         "input_modalities": [
@@ -13733,6 +13840,54 @@
       },
       "name": "Mistral: Ministral 3 8B 2512"
     },
+    "mistralai/ministral-8b-2512:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 209715,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Mistral: Ministral 3 8B 2512 (batch)"
+    },
     "mistralai/mistral-embed-2312": {
       "capabilities": {
         "input_modalities": [
@@ -13924,6 +14079,57 @@
         }
       },
       "name": "Mistral: Mistral Large 3 2512"
+    },
+    "mistralai/mistral-large-2512:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 209715,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Mistral: Mistral Large 3 2512 (batch)"
     },
     "mistralai/mistral-medium-3": {
       "capabilities": {
@@ -14143,6 +14349,57 @@
       },
       "name": "Mistral: Mistral Medium 3.1"
     },
+    "mistralai/mistral-medium-3.1:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 104857,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Mistral: Mistral Medium 3.1 (batch)"
+    },
     "mistralai/mistral-nemo": {
       "capabilities": {
         "input_modalities": [
@@ -14349,6 +14606,57 @@
         }
       },
       "name": "Mistral: Mistral Small 4"
+    },
+    "mistralai/mistral-small-2603:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 209715,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Mistral: Mistral Small 4 (batch)"
     },
     "mistralai/mistral-small-3.1-24b-instruct": {
       "capabilities": {
@@ -14902,7 +15210,7 @@
       ],
       "context_window": 262144,
       "family": "kimi-thinking",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 100352,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -15370,7 +15678,8 @@
     "nex-agi/nex-n2.5-mini:free": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -15403,10 +15712,12 @@
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "connections": [
         "api-key"
@@ -15416,7 +15727,7 @@
       "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text+image->text"
         }
       },
       "name": "Nex AGI: Nex-N2.5-Mini (free)"
@@ -15619,52 +15930,6 @@
         }
       },
       "name": "Nous: Hermes 4 405B"
-    },
-    "nousresearch/hermes-4-70b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "family": "hermes",
-      "max_output_tokens": 117964,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Nous: Hermes 4 70B"
     },
     "nvidia/llama-nemotron-embed-vl-1b-v2:free": {
       "capabilities": {
@@ -24265,7 +24530,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32000,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -25534,7 +25799,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 81920,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -26617,6 +26882,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -26664,10 +26930,13 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "logprobs",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
+          "repetition_penalty",
           "response_format",
           "seed",
           "stop",
@@ -29844,7 +30113,7 @@
       ],
       "context_window": 1048576,
       "family": "ling",
-      "max_output_tokens": 471859,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image+audio->text"
@@ -33226,7 +33495,7 @@
       ],
       "context_window": 1310720,
       "family": "glm-flash",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"

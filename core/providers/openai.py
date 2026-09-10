@@ -49,6 +49,8 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_INTENT_EFFORT,
+    ReasoningIntent,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
@@ -623,6 +625,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 )
             ),
             supports_structured_outputs=supports_structured_outputs,
+            minimum_reasoning_effort=_optional_string(
+                self._model_wire_policy(model_id).get("minimum_reasoning_effort")
+            )
+            or None,
             supported_request_parameters=(
                 OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
                 if self._connection_mode == CODEX_RESPONSES_MODE
@@ -634,6 +640,40 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if self._connection_mode == CODEX_RESPONSES_MODE:
             return False
         return self._model_wire_policy(model_id).get("protocol") == OPENAI_RESPONSES_PROTOCOL
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        model = model_lookup(model_id) if model_lookup is not None else None
+        if (
+            model is not None
+            and model.capabilities.reasoning.supported
+            and normalize_thinking_effort(effort) == "none"
+        ):
+            provider_metadata = _optional_mapping(model.metadata.get(OPENAI_METADATA_KEY))
+            policies = _optional_mapping(provider_metadata.get(OPENAI_WIRE_POLICIES_KEY))
+            # Without a Connection argument, describe a minimum only when all
+            # allowed Connections agree. Do not guess another wire's behavior.
+            minima = [
+                _optional_mapping(policies.get(connection)).get("minimum_reasoning_effort")
+                for connection in model.connections
+            ]
+            if minima and all(value == minima[0] for value in minima):
+                minimum = minima[0]
+                if isinstance(minimum, str) and minimum in model.capabilities.reasoning.levels:
+                    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=minimum)
+        return super().describe_reasoning_render(
+            model_lookup=model_lookup,
+            model_id=model_id,
+            effort=effort,
+            provider_config=provider_config,
+        )
 
     def _model_context_window(self, model_id: str) -> int | None:
         """Resolve the Context window for the active OpenAI Connection."""
@@ -1176,6 +1216,7 @@ class OpenAISubscriptionResponsesPolicy:
     endpoint_path: str = RESPONSES_POLICY_ENDPOINT
     supported_request_parameters: frozenset[str] = OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
     supports_explicit_none_effort: bool = False
+    minimum_reasoning_effort: str | None = None
 
     @property
     def allows_any_reasoning_controls(self) -> bool:
@@ -1213,6 +1254,8 @@ class OpenAISubscriptionResponsesPolicy:
         if not normalized_effort:
             return None
         if normalized_effort == "none":
+            if self.minimum_reasoning_effort in self.allowed_reasoning_efforts:
+                return self.minimum_reasoning_effort
             return "none" if self.allows_any_reasoning_controls else None
         return closest_supported_effort(normalized_effort, self.allowed_reasoning_efforts)
 
