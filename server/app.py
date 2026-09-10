@@ -834,10 +834,10 @@ def create_app(
                 subscribe_after_sequence = client_after_sequence
             else:
                 subscribe_after_sequence = last_sequence_at_hello
-            await _stream_websocket_events(
-                websocket,
-                event_bus.subscribe(after_sequence=subscribe_after_sequence),
-            )
+            async with aclosing(
+                event_bus.subscribe(after_sequence=subscribe_after_sequence)
+            ) as stream:
+                await _stream_websocket_events(websocket, stream)
         except WebSocketDisconnect:
             return
         finally:
