@@ -1006,7 +1006,19 @@ HISTORY_CASES = (
     "around_all",
     "around_cursor",
 )
-PROCESS_CASES = ("status_list", "status_one", "kill")
+PROCESS_CASES = (
+    "status_list",
+    "status_one",
+    "kill",
+    "running",
+    "finished",
+    "all",
+    "limit_min",
+    "limit_max",
+    "before",
+    "kill_filter",
+    "status_one_limit",
+)
 READ_CASES = (
     "path_only",
     "offset_line",
@@ -2540,6 +2552,14 @@ def _process_scenario(case_name: str) -> ProbeScenario:
         "status_list": {"action": "status"},
         "status_one": {"action": "status", "process_id": process_id},
         "kill": {"action": "kill", "process_id": process_id},
+        "running": {"action": "status", "filter": "running"},
+        "finished": {"action": "status", "filter": "finished"},
+        "all": {"action": "status", "filter": "all"},
+        "limit_min": {"action": "status", "filter": "all", "limit": 1},
+        "limit_max": {"action": "status", "filter": "all", "limit": 100},
+        "before": {"action": "status", "filter": "finished", "limit": 20, "before": process_id},
+        "kill_filter": {"action": "kill", "process_id": process_id, "filter": "all"},
+        "status_one_limit": {"action": "status", "process_id": process_id, "limit": 1},
     }
     expected_arguments = process_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))

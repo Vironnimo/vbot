@@ -6,6 +6,7 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -108,7 +109,7 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert "oneOf" not in PROCESS_TOOL_PARAMETERS
     properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
     assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
-    assert set(properties) == {"action", "process_id"}
+    assert set(properties) == {"action", "process_id", "filter", "limit", "before"}
     assert PROCESS_ACTIONS == ("status", "kill")
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
     assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
@@ -178,6 +179,115 @@ async def test_status_with_process_id_returns_non_consuming_snapshot(
     assert "stdin_open" not in first_data
     assert "waiting_for_input" not in first_data
     assert first_data["log_file"] is None
+
+
+@pytest.mark.asyncio
+async def test_default_hides_130_finished_commands_but_history_remains_retrievable(
+    manager, context
+):
+    process_id = await spawn_python(manager, "print('retained output')")
+    await wait_for_terminal(manager, process_id)
+    template = manager.get_process(process_id, AGENT_A)
+    manager._processes.clear()
+    for index in range(130):
+        tracked = replace(
+            template,
+            process_id=f"proc-{index:03d}",
+            status=("completed", "failed", "killed")[index % 3],
+            started_at=template.started_at + timedelta(seconds=index),
+        )
+        manager._processes[tracked.process_id] = tracked
+    active_id = await spawn_python(manager, "import time; time.sleep(30)")
+    callbacks = []
+    context = replace(context, result_persisted_hook=callbacks.append)
+
+    default = (await dispatch_process(manager, context, {"action": "status"}))["data"]
+    assert [row["process_id"] for row in default["processes"]] == [active_id]
+    assert default["counts"] == {"running": 1, "finished": 130}
+    assert default["next_call"] is None
+    arguments = default["history_call"]
+    seen = []
+    while arguments:
+        result = await dispatch_process(manager, context, arguments)
+        assert result["ok"] is True
+        page = result["data"]
+        assert 1 <= len(page["processes"]) <= 20
+        seen.extend(row["process_id"] for row in page["processes"])
+        arguments = page["next_call"]
+    assert seen == [f"proc-{index:03d}" for index in reversed(range(130))]
+    assert callbacks == []  # Browsing history must not acknowledge completion.
+    detail = await dispatch_process(manager, context, {"action": "status", "process_id": seen[-1]})
+    assert detail["data"]["output_tail"].strip() == "retained output"
+    assert len(callbacks) == 1
+
+
+@pytest.mark.asyncio
+async def test_pages_use_stable_boundaries_and_scope_counts(manager, context):
+    process_id = await spawn_python(manager, "print('done')")
+    await wait_for_terminal(manager, process_id)
+    template = manager.get_process(process_id, AGENT_A)
+    manager._processes.clear()
+    for key in ("a", "b", "c"):
+        manager._processes[key] = replace(template, process_id=key)
+    manager._processes["foreign-agent"] = replace(
+        template, process_id="foreign-agent", agent_id=AGENT_B
+    )
+    manager._processes["foreign-project"] = replace(
+        template, process_id="foreign-project", project_id="other"
+    )
+    first = (
+        await dispatch_process(manager, context, {"action": "status", "filter": "all", "limit": 1})
+    )["data"]
+    assert first["counts"] == {"running": 0, "finished": 3}
+    assert [row["process_id"] for row in first["processes"]] == ["c"]
+    manager._processes["new"] = replace(
+        template, process_id="new", started_at=template.started_at + timedelta(seconds=1)
+    )
+    second = (await dispatch_process(manager, context, first["next_call"]))["data"]
+    assert [row["process_id"] for row in second["processes"]] == ["b"]
+    del manager._processes["b"]
+    expired = await dispatch_process(manager, context, second["next_call"])
+    assert expired["error"]["code"] == "process_not_found"
+    for boundary in ("foreign-agent", "foreign-project", "missing"):
+        result = await dispatch_process(manager, context, {"action": "status", "before": boundary})
+        assert result["error"]["code"] == "process_not_found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["running", "finished", "all"])
+async def test_empty_lists_and_explicit_filters(manager, context, selection):
+    result = await dispatch_process(
+        manager, context, {"action": "status", "filter": selection, "limit": 100}
+    )
+    assert result["data"] == {
+        "processes": [],
+        "filter": selection,
+        "counts": {"running": 0, "finished": 0},
+        "next_call": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "status", "filter": "failed"},
+        *({"action": "status", "limit": value} for value in (0, 101, True, 1.5, None, "20")),
+        {"action": "status", "before": 1},
+        *(
+            {"action": "status", "process_id": "missing", key: value}
+            for key, value in (("filter", "all"), ("limit", 1), ("before", "older"))
+        ),
+        *(
+            {"action": "kill", "process_id": "missing", key: value}
+            for key, value in (("filter", "all"), ("limit", 1), ("before", "older"))
+        ),
+    ],
+)
+async def test_list_arguments_are_validated_before_process_access(manager, context, arguments):
+    result = await call_process(manager, context, arguments)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.asyncio
