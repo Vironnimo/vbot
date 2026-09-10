@@ -1114,10 +1114,8 @@ def test_options_for_image_seed_only_when_supported_by_model() -> None:
     assert "seed" not in recraft_names
 
 
-def test_options_for_stt_includes_response_format_when_model_advertises_it() -> None:
-    """``response_format`` is added to the STT schema only when the model's
-    ``supported_parameters`` includes it. Whisper-style models do; non-
-    Whisper STT models may not."""
+def test_openrouter_stt_omits_response_format_even_when_advertised() -> None:
+    """OpenRouter execution consumes JSON and does not send response_format."""
 
     models = _Models(
         [
@@ -1132,11 +1130,7 @@ def test_options_for_stt_includes_response_format_when_model_advertises_it() -> 
 
     schema = service.options(TASK_SPEECH_TO_TEXT, "openrouter/openai/whisper-1::api-key")
     field_names = {field.name for field in schema.fields}
-    assert "response_format" in field_names
-    response_format = next(field for field in schema.fields if field.name == "response_format")
-    assert response_format.type == "select"
-    response_values = {choice.value for choice in response_format.options}
-    assert {"json", "text", "srt", "verbose_json", "vtt"} <= response_values
+    assert "response_format" not in field_names
 
 
 def test_options_for_stt_omits_response_format_when_model_does_not_advertise_it() -> None:
