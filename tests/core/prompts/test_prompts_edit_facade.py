@@ -61,6 +61,18 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert by_id["memory:guidance"]["owner"] == "memory"
 
 
+def test_empty_layout_retains_defaults_and_explicit_disable_removes_blocks(tmp_path):
+    store = StubBlockStore()
+    manager = _facade_manager(tmp_path, store=store)
+    agent = _agent(tmp_path)
+    default_prompt = manager.build_system_prompt(agent)
+    manager.set_layout([])
+    assert store.read_layout("default") == []
+    assert manager.build_system_prompt(agent) == default_prompt
+    manager.set_layout([{"id": block["id"], "enabled": False} for block in manager.list_blocks()])
+    assert manager.build_system_prompt(agent) == ""
+
+
 def test_list_blocks_agent_scope_carries_inheritance_flags(tmp_path: Path) -> None:
     # The agent owns an override on the tools block; the default scope overrides the
     # runtime block; the skills block is untouched → owner default.
@@ -338,3 +350,27 @@ def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:
 
     with pytest.raises(PromptError):
         manager.list_blocks({"type": "agent", "agent_id": "coder"})
+
+
+@pytest.mark.parametrize("scope", [None, "coder"])
+@pytest.mark.parametrize(
+    "body", [b"{broken", b"{}", b"[null]", b"\xff", b'[{"id":"core:tools","enabled":"false"}]']
+)
+def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
+    from core.runtime.runtime import _StorageManagerBlockStore
+    from core.storage import StorageManager
+
+    storage = StorageManager(data_dir=tmp_path / "data")
+    store = _StorageManagerBlockStore(storage)
+    agent = _agent(tmp_path, custom_system_prompt_enabled=scope is not None)
+    manager = _facade_manager(tmp_path, store=store, agents=[agent])
+    baseline = manager.build_system_prompt(agent)
+    path = (
+        storage.data_dir / "prompts" / "layout.json"
+        if scope is None
+        else storage.data_dir / "agents" / scope / "prompts" / "layout.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    assert manager.build_system_prompt(agent) == baseline
+    assert path.read_bytes() == body

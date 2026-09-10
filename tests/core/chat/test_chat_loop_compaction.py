@@ -1785,19 +1785,49 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     # Pin the epoch's texts (as the first build would), then observe the refresh.
     pinned_soul_context(loop._dependencies, "coder", "session-one", agent, None)
     pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
-    soul_calls_before = runtime.system_prompts.render_soul_calls
-    memory_calls_before = runtime.system_prompts.render_memory_files_calls
 
-    messages = await loop._build_request_messages(agent, session)
-    await _maybe_auto_compact(
-        loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
+    context = await loop._create_run_execution_context(
+        run,
+        _RunRequest(content="test"),
+        session=session,
+        prior_continuation=None,
+        continuation_reminder=None,
+        continuation_tracker=None,
+    )
+    context.request_state = await loop.build_request_state(
+        agent,
+        session,
+        inputs=RequestBuildInputs.from_context(context, context.primary_target),
+    )
+    runtime.system_prompts.render_soul = lambda *_args, **_kwargs: "NEW_SOUL_SENTINEL"
+    runtime.system_prompts.render_memory_files = lambda *_args, **_kwargs: "NEW_MEMORY_SENTINEL"
+    await loop._compaction_runs.maybe_auto_compact_state(
+        context,
+        context.primary_target,
+        {"input_tokens": 90},
+    )
+    assert context.soul_context == "NEW_SOUL_SENTINEL"
+    assert context.memory_files_context == "NEW_MEMORY_SENTINEL"
+    await loop.build_request_state(
+        agent,
+        session,
+        inputs=RequestBuildInputs.from_context(context, context.primary_target),
+    )
+    assert runtime.system_prompts.build_pin_calls[-1]["soul_context"] == "NEW_SOUL_SENTINEL"
+    assert (
+        runtime.system_prompts.build_pin_calls[-1]["memory_files_context"] == "NEW_MEMORY_SENTINEL"
+    )
+    assert (
+        pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
+        == "NEW_MEMORY_SENTINEL"
     )
 
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
-    assert runtime.system_prompts.render_soul_calls == soul_calls_before + 1
-    assert runtime.system_prompts.render_memory_files_calls == memory_calls_before + 1
-    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
-    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {"text": "Memory of coder"}
+    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "NEW_SOUL_SENTINEL"}
+    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {
+        "text": "NEW_MEMORY_SENTINEL",
+        "mode": "agent_user",
+    }
 
 
 @pytest.mark.asyncio
@@ -2619,3 +2649,147 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
     assert runtime.refresh_skills_for_calls == []
     request_state = await loop.build_request_state(agent, session, inputs=RequestBuildInputs())
     assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_id", [None, "proj"])
+@pytest.mark.parametrize("child", [False, True])
+async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
+    tmp_path, project_id, child
+):
+    from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+    from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
+    from core.extensions.extensions import ExtensionDeclarations
+    from core.runs import RunExecutionOwner
+    from core.tools.availability import ToolAccess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    rules = repo / "AGENTS.md"
+    rules.write_text("OLD_RULES_SENTINEL", encoding="utf-8")
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
+        adapter=adapter,
+        projects=StubProjects({"proj": StubProject("proj", str(repo), ["AGENTS.md"])}),
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("test", declarations, config={}, logger=None)
+    api.register_session_tool(
+        "test_private",
+        "TEST_TOOL_SENTINEL",
+        {"type": "object", "properties": {}},
+        lambda *_args, **_kwargs: tool_success({}),
+    )
+    api.register_session_runtime(
+        before_request=lambda *_args, **_kwargs: None,
+        run_finished=lambda *_args, **_kwargs: None,
+        quiesce=lambda: None,
+    )
+    extensions = ExtensionRegistry()
+    extensions._records.append(
+        ExtensionRecord(
+            "test", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    extensions.apply_tools(runtime.tools)
+    runtime.extensions = extensions
+    registry = TemporaryAgentRegistry(runtime.chat_sessions)
+    runtime.agent_resolver.temporary_agents = registry
+    binding = registry.create(
+        owner_name="test",
+        group_id="group",
+        participant_id="participant",
+        project_id=project_id,
+        config=TemporaryAgentConfig(
+            model="openai/gpt-5.2",
+            cwd=repo,
+            tool_access=ToolAccess(mode="none"),
+            allowed_skills=["*"],
+            tools={},
+            name="Test",
+            instructions="TEMP_BODY_SENTINEL",
+        ),
+    )
+    session = (
+        runtime.chat_sessions.create(
+            binding.address.agent_id, session_id="child", project_id=project_id
+        )
+        if child
+        else runtime.chat_sessions.get(binding.address)
+    )
+    session.append(ChatMessage.user("Tail user"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Tail answer"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="SUMMARY_SENTINEL", projection=session.load(), compacted_token_count=42
+    )
+    loop = build_chat_loop(
+        runtime,
+        compaction_service=cast(
+            Any, StubCompactionService(should_auto=True, checkpoint=checkpoint)
+        ),
+    )
+    run = Run(
+        run_id="run-test",
+        agent_id=binding.address.agent_id,
+        session_id=session.id,
+        project_id=project_id,
+        working_project_id=project_id,
+        execution_owner=RunExecutionOwner(
+            epoch=1,
+            extension="test",
+            group_id="group",
+            participant_id="participant",
+            generation_id=binding.generation_id,
+        ),
+    )
+    request = (
+        _RunRequest(content="test", temporary_parent_binding=binding)
+        if child
+        else _RunRequest(content="test", temporary_binding=binding)
+    )
+    context = await loop._create_run_execution_context(
+        run,
+        request,
+        session=session,
+        prior_continuation=None,
+        continuation_reminder=None,
+        continuation_tracker=None,
+    )
+    context.request_state = await loop.build_request_state(
+        context.agent,
+        session,
+        inputs=RequestBuildInputs.from_context(context, context.primary_target),
+    )
+    old_project_context = context.working_project_context
+    rules.write_text("NEW_RULES_SENTINEL", encoding="utf-8")
+    runtime.skills = StubSkills([StubSkill("new", "NEW_SKILL_SENTINEL", Path("new"))])
+    rebuilt = await loop._compaction_runs.maybe_auto_compact_state(
+        context, context.primary_target, {"input_tokens": 90}
+    )
+    metadata = runtime.chat_sessions.get_metadata(
+        session_address(run.agent_id, session.id, project_id)
+    )
+    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
+    assert metadata[SEEN_SKILLS_META_KEY] == ["new"]
+    assert runtime.refresh_skills_for_calls == [(project_id, None)]
+    assert runtime.agent_resolver.calls == []
+    assert context.agent_body == "TEMP_BODY_SENTINEL"
+    assert context.soul_context is None and context.memory_files_context is None
+    assert PINNED_SOUL_CONTEXT_META_KEY not in metadata
+    assert PINNED_MEMORY_FILES_META_KEY not in metadata
+    if project_id:
+        assert "OLD_RULES_SENTINEL" in old_project_context
+        assert "NEW_RULES_SENTINEL" in metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
+        assert "NEW_RULES_SENTINEL" in rebuilt.messages[0]["content"]
+        assert runtime.file_read_state.check_stale(session.id, rules.resolve()) is None
+        assert (
+            context.working_project_context
+            == metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
+        )

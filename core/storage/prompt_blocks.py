@@ -25,6 +25,7 @@ block has no override path at all — the store never invents one.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -45,6 +46,8 @@ BLOCKS_DIRNAME = "blocks"
 LAYOUT_FILENAME = "layout.json"
 # Override files are plain Markdown text bodies.
 OVERRIDE_SUFFIX = ".md"
+
+_LOGGER = logging.getLogger("vbot.storage")
 
 
 class PromptBlockStore:
@@ -111,7 +114,7 @@ class PromptBlockStore:
     def read_layout(self, scope: str | None) -> list[LayoutEntry]:
         """Read a scope's ordered layout, or ``[]`` when none is written yet.
 
-        A missing ``layout.json`` reads as empty — the scope owns no order, so
+        A missing or invalid ``layout.json`` reads as empty — the scope owns no order, so
         Phase 1 defaults every block in at its definition rank. Each JSON object
         becomes a :class:`LayoutEntry`; ``enabled`` defaults to ``True`` and a
         missing ``source`` is left ``None`` (Phase 1 re-derives it from the
@@ -119,23 +122,21 @@ class PromptBlockStore:
         """
 
         layout_path = self.layout_path(scope)
-        if not layout_path.exists():
-            return []
-
         try:
             raw = layout_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Cannot read layout {layout_path}: {exc}") from exc
-
-        try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise StorageError(f"Invalid layout JSON in {layout_path}: {exc}") from exc
-
-        if not isinstance(parsed, list):
-            raise StorageError(f"Layout {layout_path} must be a JSON array of entries")
-
-        return [self._parse_layout_entry(item, layout_path) for item in parsed]
+            if not isinstance(parsed, list):
+                raise StorageError("Layout must be a JSON array of entries")
+            return [self._parse_layout_entry(item, layout_path) for item in parsed]
+        except FileNotFoundError:
+            return []
+        except (OSError, UnicodeError, ValueError, StorageError) as exc:
+            _LOGGER.warning(
+                "Ignoring invalid prompt layout path=%s error_type=%s",
+                layout_path,
+                type(exc).__name__,
+            )
+            return []
 
     def write_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
         """Atomically write a scope's ordered layout to ``layout.json``.

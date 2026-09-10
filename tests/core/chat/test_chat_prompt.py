@@ -16,7 +16,7 @@ only the project-specific wiring is asserted here.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -37,6 +37,82 @@ from tests.core.chat.test_chat_loop import (
 PROJECT_ID = "vbot"
 AGENT_ID = "orchestrator"
 MODEL = "openai/gpt-5.2"
+
+
+@pytest.mark.parametrize("mode", ["off", "agent", "agent_user"])
+def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> None:
+    from core.prompts.pinned_context import pinned_memory_files, pinned_soul_context
+    from core.tools.file_state import StaleReason
+    from tests.core.prompts.prompts_test_support import _agent, _facade_manager
+
+    for name in ("SOUL.md", "USER.md", "MEMORY.md"):
+        (tmp_path / name).write_text("- ORIGINAL_SENTINEL", encoding="utf-8")
+    agent = _agent(tmp_path, memory_prompt_mode=mode)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
+    runtime.system_prompts = _facade_manager(tmp_path)
+    runtime.chat_sessions.create(agent.id, session_id="s1")
+    dependencies = build_chat_loop(runtime)._dependencies
+    soul = pinned_soul_context(dependencies, agent.id, "s1", agent, None)
+    memory = pinned_memory_files(dependencies, agent.id, "s1", agent, None)
+    visible = {"SOUL.md"}
+    if mode != "off":
+        visible.add("MEMORY.md")
+    if mode == "agent_user":
+        visible.add("USER.md")
+    for name in ("SOUL.md", "USER.md", "MEMORY.md"):
+        path = (tmp_path / name).resolve()
+        assert runtime.file_read_state.check_stale("s1", path) == (
+            None if name in visible else StaleReason.NEVER_READ
+        )
+        path.write_text("- CHANGED_SENTINEL_WITH_DIFFERENT_SIZE", encoding="utf-8")
+    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == soul
+    assert pinned_memory_files(dependencies, agent.id, "s1", agent, None) == memory
+    for name in visible:
+        assert (
+            runtime.file_read_state.check_stale("s1", (tmp_path / name).resolve())
+            == StaleReason.MODIFIED
+        )
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("off", "agent"),
+        ("off", "agent_user"),
+        ("agent", "agent_user"),
+        ("agent_user", "agent"),
+        ("agent_user", "off"),
+        ("agent", "off"),
+    ],
+)
+def test_memory_mode_change_replaces_only_memory_snapshot(tmp_path, before, after):
+    from dataclasses import replace
+
+    from core.prompts.pinned_context import pinned_memory_files, pinned_soul_context
+    from tests.core.prompts.prompts_test_support import _agent, _facade_manager
+
+    (tmp_path / "SOUL.md").write_text("SOUL_SENTINEL", encoding="utf-8")
+    (tmp_path / "USER.md").write_text("- USER_SENTINEL", encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_text("- MEMORY_SENTINEL", encoding="utf-8")
+    agent = _agent(tmp_path, memory_prompt_mode=before)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
+    runtime.system_prompts = _facade_manager(tmp_path)
+    runtime.chat_sessions.create(agent.id, session_id="s1")
+    dependencies = build_chat_loop(runtime)._dependencies
+    soul = pinned_soul_context(dependencies, agent.id, "s1", agent, None)
+    pinned_memory_files(dependencies, agent.id, "s1", agent, None)
+    (tmp_path / "SOUL.md").write_text("CHANGED_SOUL_SENTINEL", encoding="utf-8")
+    agent = replace(agent, memory_prompt_mode=after)
+    memory = pinned_memory_files(dependencies, agent.id, "s1", agent, None)
+    prompt = runtime.system_prompts.build_system_prompt(
+        agent, soul_context=soul, memory_files_context=memory
+    )
+    assert ("USER_SENTINEL" in prompt) == (after == "agent_user")
+    assert ("MEMORY_SENTINEL" in prompt) == (after != "off")
+    assert "CHANGED_SOUL_SENTINEL" not in prompt
+    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == soul
+    (tmp_path / "MEMORY.md").write_text("- LATER_MEMORY_SENTINEL", encoding="utf-8")
+    assert pinned_memory_files(dependencies, agent.id, "s1", agent, None) == memory
 
 
 def _config_agent(body: str) -> ConfigAgent:
@@ -138,7 +214,10 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
     assert runtime.system_prompts.render_memory_files_calls == 1
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
     assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
-    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {"text": "Memory of coder"}
+    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {
+        "text": "Memory of coder",
+        "mode": "agent_user",
+    }
     first_pins, second_pins = runtime.system_prompts.build_pin_calls
     assert first_pins["soul_context"] == "Soul of coder"
     assert first_pins["memory_files_context"] == "Memory of coder"

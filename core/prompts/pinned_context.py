@@ -2,9 +2,10 @@
 
 The rendered Skill catalog, Working Project Context, SOUL block, and
 pinned-memory text are prompt-cache state: they stay byte-identical between
-successful Compactions so ordinary mid-epoch changes cannot break the System
-Prompt prefix. Assembly reads and writes those snapshots through the narrow
-dependency slice declared by :class:`PinnedContextDependencies`.
+successful Compactions (Memory also refreshes when its mode changes) so ordinary
+file changes cannot break the System Prompt prefix. Assembly reads and writes
+those snapshots through the narrow dependency slice declared by
+:class:`PinnedContextDependencies`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.prompts.prompts import PinnedSkillCatalog
 
 if TYPE_CHECKING:
@@ -126,6 +128,8 @@ def _pinned_epoch_text(
     session_id: str,
     project_id: str | None,
     render: Callable[[], str],
+    *,
+    attributes: dict[str, str] | None = None,
 ) -> str:
     """Return the prompt epoch's pinned text under *meta_key*, snapshotting on first build.
 
@@ -133,7 +137,8 @@ def _pinned_epoch_text(
     Session metadata under the Session's own ``project_id`` anchor), so an
     ordinary mid-epoch file change leaves the System Prompt prefix unchanged.
     A successful Compaction replaces the snapshot; a new Session starts with a
-    fresh snapshot too.
+    fresh snapshot too. Attributes qualify the snapshot; a changed attribute
+    replaces only this text (used for the Memory rendering mode).
     """
     # Local import: core.sessions transitively imports core.chat at module load,
     # and core.chat imports this package back (runtime cycle).
@@ -143,7 +148,12 @@ def _pinned_epoch_text(
     metadata = dependencies.sessions.get_metadata(address)
     pinned = metadata.get(meta_key)
     pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
-    if isinstance(pinned_text, str):
+    attributes = attributes or {}
+    if (
+        isinstance(pinned, dict)
+        and isinstance(pinned_text, str)
+        and all(pinned.get(key) == value for key, value in attributes.items())
+    ):
         return pinned_text
     text = render()
     selected = text
@@ -152,10 +162,14 @@ def _pinned_epoch_text(
         nonlocal selected
         pinned = current.get(meta_key)
         pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
-        if isinstance(pinned_text, str):
+        if (
+            isinstance(pinned, dict)
+            and isinstance(pinned_text, str)
+            and all(pinned.get(key) == value for key, value in attributes.items())
+        ):
             selected = pinned_text
         else:
-            current[meta_key] = {"text": text}
+            current[meta_key] = {"text": text, **attributes}
 
     dependencies.sessions.mutate_metadata(address, update)
     return selected
@@ -218,7 +232,7 @@ def pinned_soul_context(
             on_read=read_paths.append,
         )
 
-    return _pinned_epoch_text(
+    text = _pinned_epoch_text(
         dependencies,
         PINNED_SOUL_CONTEXT_META_KEY,
         agent_id,
@@ -226,6 +240,8 @@ def pinned_soul_context(
         project_id,
         render,
     )
+    stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
+    return text
 
 
 def pinned_memory_files(
@@ -250,11 +266,14 @@ def pinned_memory_files(
             on_read=read_paths.append,
         )
 
-    return _pinned_epoch_text(
+    text = _pinned_epoch_text(
         dependencies,
         PINNED_MEMORY_FILES_META_KEY,
         agent_id,
         session_id,
         project_id,
         render,
+        attributes={"mode": getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)},
     )
+    stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
+    return text

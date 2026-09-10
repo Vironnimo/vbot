@@ -180,44 +180,39 @@ def test_read_layout_defaults_enabled_and_source(tmp_path: Path) -> None:
     assert entry == LayoutEntry(id="core:intro", enabled=True, source=None)
 
 
-def test_read_layout_rejects_non_array(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scope", [None, "assistant"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{not json",
+        b"{}",
+        b'[{"enabled": true}]',
+        b"[null]",
+        b"\xff",
+        b'[{"id":"core:intro","enabled":"yes"}]',
+        b'[{"id":"core:intro","source":42}]',
+        b'[{"id":"core:intro","enabled":false},null]',
+    ],
+)
+def test_invalid_layout_falls_back_without_rewriting(tmp_path, caplog, scope, body):
     store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
-    layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text(json.dumps({"id": "core:intro"}), encoding="utf-8")
+    path = store.layout_path(scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    assert store.read_layout(scope) == []
+    assert path.read_bytes() == body
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
-    with pytest.raises(StorageError):
-        store.read_layout(None)
 
-
-def test_read_layout_rejects_invalid_json(tmp_path: Path) -> None:
+def test_unreadable_layout_falls_back(tmp_path, monkeypatch, caplog):
     store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
-    layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text("{not json", encoding="utf-8")
 
-    with pytest.raises(StorageError):
-        store.read_layout(None)
+    def fail_read(*args, **kwargs):
+        raise PermissionError("test sentinel")
 
-
-def test_read_layout_rejects_entry_without_id(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
-    layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text(json.dumps([{"enabled": True}]), encoding="utf-8")
-
-    with pytest.raises(StorageError):
-        store.read_layout(None)
-
-
-def test_read_layout_rejects_non_boolean_enabled(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
-    layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text(json.dumps([{"id": "core:intro", "enabled": "yes"}]), encoding="utf-8")
-
-    with pytest.raises(StorageError):
-        store.read_layout(None)
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    assert store.read_layout(None) == []
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 def test_write_layout_leaves_no_temp_file(tmp_path: Path) -> None:

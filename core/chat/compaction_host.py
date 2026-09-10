@@ -33,6 +33,7 @@ from core.chat.model_resolution import (
     resolve_request_temperature,
 )
 from core.chat.wire_shaping import _restore_in_run_assistant_reasoning
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
@@ -340,6 +341,9 @@ class ChatCompactionHost:
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
     ) -> _CompactionPromptRefresh:
+        from core.agents.temporary import TemporaryAgent
+
+        is_temporary = isinstance(agent, TemporaryAgent)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
             ProjectPromptContext.from_project(
@@ -356,11 +360,13 @@ class ChatCompactionHost:
             prompt_project,
             agent_id,
         )
+        if is_temporary:
+            prompt_skill_project_id, prompt_identity_agent_id = working_project_id, None
         prompt_skill_registry = self._dependencies.refresh_skills(
             prompt_skill_project_id,
             prompt_identity_agent_id,
         )
-        activation_identity_agent_id = agent_id if project_id is None else None
+        activation_identity_agent_id = agent_id if project_id is None and not is_temporary else None
         if (
             activation_skill_project_id == prompt_skill_project_id
             and activation_identity_agent_id == prompt_identity_agent_id
@@ -374,7 +380,13 @@ class ChatCompactionHost:
 
         system_prompts = self._dependencies.get_system_prompts()
         skill_catalog = system_prompts.render_skill_catalog(agent, prompt_skill_registry)
-        refreshed_agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        # Temporary configuration is the immutable, already-admitted Session binding.
+        # It has no Identity/Team record to reload, including in delegated child Runs.
+        refreshed_agent = (
+            agent
+            if is_temporary
+            else self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        )
         working_project_context: str | None = None
         soul_context: str | None = None
         memory_files_context: str | None = None
@@ -408,6 +420,9 @@ class ChatCompactionHost:
             prompt_read_paths=tuple(read_paths),
             available_skill_names=(
                 tuple(available_skill_names) if available_skill_names is not None else None
+            ),
+            memory_prompt_mode=getattr(
+                refreshed_agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE
             ),
         )
 
@@ -453,6 +468,8 @@ class ChatCompactionHost:
                     metadata.pop(pin_key, None)
                 else:
                     metadata[pin_key] = {"text": pin_text}
+                    if pin_key == PINNED_MEMORY_FILES_META_KEY:
+                        metadata[pin_key]["mode"] = refresh.memory_prompt_mode
 
         self.sessions.mutate_metadata(address, update)
         stamp_prompt_files_read(
@@ -617,5 +634,7 @@ class ChatCompactionHost:
         context.agent_body = typed_refresh.agent_body
         context.project_prompt_context = typed_refresh.project_prompt_context
         context.working_project_context = typed_refresh.working_project_context
+        context.soul_context = typed_refresh.soul_context
+        context.memory_files_context = typed_refresh.memory_files_context
         context.skill_registry = typed_refresh.skill_registry
         context.skill_catalog = typed_refresh.skill_catalog
