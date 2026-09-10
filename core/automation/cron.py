@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
 from tzlocal import get_localzone
 
 from core.config_validation import (
@@ -122,6 +122,17 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
 _LEGACY_CRON_JOB_FIELDS = frozenset(("timezone",))
 
 _LOGGER = get_logger("automation.cron")
+
+
+def _cron_is_schedulable(expression: str, reference: datetime) -> bool:
+    """Require both valid syntax and a reachable fire within croniter's search horizon."""
+    if not croniter.is_valid(expression):
+        return False
+    try:
+        croniter(expression, reference).get_next(datetime)
+    except CroniterBadDateError:
+        return False
+    return True
 
 
 class CronServiceError(VBotError):
@@ -594,7 +605,7 @@ class CronService:
             )
 
         if len(normalized.split()) == CRON_EXPRESSION_FIELD_COUNT:
-            if not croniter.is_valid(normalized):
+            if not _cron_is_schedulable(normalized, reference_utc.astimezone(self._timezone)):
                 raise CronJobValidationError("schedule is not a valid five-field cron expression")
             return ParsedSchedule(schedule_type="cron", cron_expression=normalized)
 
@@ -761,17 +772,19 @@ class CronService:
         if job.cron_expression is None:
             return []
         timezone = self._system_timezone()
-        cursor_local = window_start.astimezone(timezone)
-        end_local = window_end.astimezone(timezone)
+        # get_next is exclusive; step back in UTC to include an exact window-start tick.
+        cursor_local = (window_start - timedelta(microseconds=1)).astimezone(timezone)
         iterator = croniter(job.cron_expression, cursor_local)
         ticks: list[datetime] = []
         while len(ticks) < cap:
             next_local = cast(datetime, iterator.get_next(datetime))
             if next_local.tzinfo is None:
                 next_local = next_local.replace(tzinfo=timezone)
-            if next_local >= end_local:
+            next_utc = next_local.astimezone(UTC)
+            if next_utc >= window_end:
                 break
-            ticks.append(next_local.astimezone(UTC))
+            if next_utc >= window_start:
+                ticks.append(next_utc)
         return ticks
 
     def update_job(self, job_id: str, **fields: Any) -> CronJob:
@@ -1512,7 +1525,9 @@ class CronService:
                     f"cron_expression must contain exactly {CRON_EXPRESSION_FIELD_COUNT} fields "
                     "(minute hour day-of-month month day-of-week)"
                 )
-            if not croniter.is_valid(normalized_expression):
+            if not _cron_is_schedulable(
+                normalized_expression, _utc_now().astimezone(self._timezone)
+            ):
                 raise CronJobValidationError("cron_expression is invalid")
             job.cron_expression = normalized_expression
             job.interval_seconds = None
