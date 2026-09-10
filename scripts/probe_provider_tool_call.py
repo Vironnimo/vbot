@@ -806,6 +806,53 @@ COMPUTER_CASE_ARGUMENTS.update(
             "mode": "vision",
             "query": "Draft",
         },
+        "type_view": {"action": "type", "view_id": "vtest", "text": "draft"},
+        "key_view": {"action": "key", "view_id": "vtest", "shortcut": "enter"},
+        "type_unicode": {
+            "action": "type",
+            **_COMPUTER_WINDOW,
+            "text": "draft",
+            "text_mode": "unicode",
+        },
+        "type_keyboard": {
+            "action": "type",
+            **_COMPUTER_WINDOW,
+            "foreground": True,
+            "text": "0.45",
+            "text_mode": "keyboard",
+        },
+        "zoom_foreground": {
+            "action": "zoom",
+            "view_id": "vtest",
+            "foreground": True,
+            "coordinate": [10, 10],
+            "to_coordinate": [100, 100],
+        },
+        "sequence_mixed_shared_view": {
+            "action": "sequence",
+            "view_id": "vtest",
+            "foreground": True,
+            "steps": [
+                {"action": "click", "coordinate": [10, 10]},
+                {"action": "key", "shortcut": "g"},
+                {"action": "type", "text": "0.45", "text_mode": "keyboard"},
+                {"action": "key", "shortcut": "enter"},
+            ],
+        },
+        "invalid_keyboard_background": {
+            "action": "type",
+            **_COMPUTER_WINDOW,
+            "text": "draft",
+            "text_mode": "keyboard",
+        },
+        "invalid_keyboard_element": {
+            "action": "type",
+            **_COMPUTER_WINDOW,
+            "foreground": True,
+            "element": "1",
+            "text": "draft",
+            "text_mode": "keyboard",
+        },
     }
 )
 
