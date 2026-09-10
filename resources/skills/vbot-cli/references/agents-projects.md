@@ -14,14 +14,15 @@ vbot agent reorder <agent-id>...
 vbot agent delete <agent-id>
 ```
 
-Shared create/update flags: `--model`, `--fallback-models <model> ...`, `--temperature <0..2>`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--allowed-tools <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-temperature`, `--clear-thinking-effort`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
+Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
 
 Gotchas:
 
 - `--model` takes `<provider>/<model-id>`, optionally pinned `::<connection>[:<account>]` (e.g. `openai/gpt-5.2::api-key:work`). `--fallback-models` repeats once per chain entry; list order is priority order (max 5, no duplicates).
 - An Identity Agent may be created without `--model` so onboarding can finish before Provider setup. If neither the Agent nor global defaults supply an effective Model, the saved result warns that the Agent cannot run and prints the recovery commands. Run `vbot model list --task chat`, then `vbot agent update <agent-id> --model <model-id>` using an id from that output.
-- `--allowed-tools`/`--allowed-skills` replace the whole allowlist; the flag with no values sets an empty list; quote `'*'` in shells that expand it.
-- `--subagent-allow` replaces `tools.subagent.allowed_agents`; use bare Identity Agent ids or qualified `agent@project` addresses, and pass the flag with no values to deny every target.
+- Tool access is a complete policy replacement. Always pass `--tool-access-mode` with `--tool-allow` or `--tool-deny`. `all` selects all normally available Tools; `selected --tool-allow <name> ...` selects named Tools; `none` disables Tools. In selected mode, omitting `--tool-allow` selects no direct Tools. `--tool-deny` applies absolute denials; omitting it while replacing the policy clears existing denials. Inspect `agent show` first and repeat every selection/denial to preserve. Tool names are exact; `*` is invalid.
+- `--allowed-skills` replaces the whole Skill allowlist; no values selects none, while `'*'` allows every available Skill. Quote the wildcard in shells that expand it. Omitted Tool/Skill flags leave that configuration unchanged on update.
+- `--subagent-allow` replaces `tools.subagent.allowed_agents`; use bare Identity Agent ids or qualified `agent@project` addresses, and pass the flag with no values for self-delegation only. To disable delegation entirely, deny the `subagent` Tool in the Tool access policy.
 - `--compaction-policy` replaces the full Agent Policy object. Pass JSON as one shell argument. `--clear-compaction-policy` resumes live inheritance from global Compaction settings.
 - `--clear-model` and `--clear-fallback-models` remove the Agent tier so the corresponding global default can apply.
 - `--clear-temperature`/`--clear-thinking-effort` drop the override so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear.
@@ -32,7 +33,7 @@ Gotchas:
 - `rename` moves the complete Identity Agent tree and retargets live server-owned references (Channels, non-terminal Cron jobs, bare Identity Agent delegation entries, and functional Sub-Agent parent links). It preserves external custom Workspace paths and historical provenance, refuses collisions or busy old/new ids, and rolls back if a reference update fails.
 
 ```bash
-vbot agent create coder Coder --model openai/gpt-5.2 --allowed-tools '*' --allowed-skills '*'
+vbot agent create coder Coder --model openai/gpt-5.2 --tool-access-mode all --allowed-skills '*'
 vbot agent update coder --temperature 0.4 --thinking-effort high
 vbot agent update librarian --project second-brain
 vbot agent rename coder researcher
@@ -55,8 +56,8 @@ vbot project add <path> [--name <display-name>] [--format opencode|claude] [--de
 vbot project list
 vbot project show <project-id>
 vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add flags] [--clear-default-agent] [--clear-default-model] [--clear-default-temperature] [--clear-default-thinking-effort]
-vbot project set-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy <value>
-vbot project clear-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy
+vbot project set-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access <value>
+vbot project clear-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access
 vbot project detect [<path>]
 vbot project rm <project-id> [--copy-rooted-agent-files]
 ```
@@ -68,7 +69,7 @@ vbot project rm <project-id> [--copy-rooted-agent-files]
 - `--auto-load` lists repo files folded into project agent prompts; on `set`, the flag with no values clears the list.
 - `--default-agent`/`--default-model`/`--default-temperature`/`--default-thinking-effort` are Project defaults for its Agents; the matching `--clear-*` flags remove that Project tier so resolution falls through.
 - Capability flags on `add`/`set` are `--allowed-tools`, `--enabled-bundled-skills`, `--enabled-global-skills`, and `--disabled-project-skills`; each replaces its complete list, and an empty flag value clears it.
-- `set-override` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` takes a JSON object as one shell argument. `clear-override` removes that one field and resumes the normal Agent → Project → global chain.
+- `set-override` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` and `tool_access` take a JSON object as one shell argument. A Tool override replaces the repository Tool policy but remains inside the Project's `--allowed-tools` ceiling; for example, `'{"mode":"selected","allowed":["read"]}'` selects only `read` when the Project permits it. `clear-override` removes that one field and resumes the normal Agent → Project → global chain.
 - `add`, `set`, `set-override`, and `clear-override` print the saved Project plus a fresh Team/scan report, including effective Tools, repository Tool denials, overrides, and configuration-source provenance.
 - `rm` archives the project's runtime anchor (never the repo) and prints the archive path. It unroots Identity Agents that selected the Project; an Agent with a custom Workspace is moved back to its default Workspace. Use `--copy-rooted-agent-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` before that reset. The result lists affected Agents plus copied/backed-up files. Removal is blocked while a Project Agent has an active or queued Run (`project_busy`) or a Cron job targets a Project Agent (`project_in_use`) — clear those first.
 

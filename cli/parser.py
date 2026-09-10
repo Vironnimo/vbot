@@ -261,7 +261,16 @@ EXTENSIONS_HELP = {
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse vBot CLI arguments without prompting for input."""
 
-    parser = argparse.ArgumentParser(description="Manage vBot from the command line")
+    parser = argparse.ArgumentParser(
+        description="Manage vBot from the command line",
+        epilog=(
+            "Start with vbot <area> --help, then vbot <area> <command> --help. "
+            "Use vbot config list [prefix] to discover Settings and vbot config describe <path> "
+            "to inspect a setting before changing it. Append target options after the command; "
+            "keep the same target on follow-up calls. Read mutation results for saved state "
+            "and pending work; exit 0 alone does not prove runtime readiness."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
     _add_desktop_parsers(subparsers)
@@ -320,9 +329,24 @@ def _add_target_arguments(
     *,
     default_host: str | None = DEFAULT_HOST,
 ) -> None:
-    parser.add_argument("--host", default=default_host)
-    parser.add_argument("--port", type=int)
-    parser.add_argument("--data-dir")
+    parser.add_argument(
+        "--host",
+        default=default_host,
+        help=(
+            f"Server host (default: {default_host})"
+            if default_host is not None
+            else "Server host override; omission uses this command's instance selection"
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Server port; normally --port > VBOT_SERVER_PORT > local Settings > 8420",
+    )
+    parser.add_argument(
+        "--data-dir",
+        help="Local instance configuration directory; does not redirect RPC state on the server",
+    )
 
 
 def _json_object_argument(raw: str) -> dict[str, object]:
@@ -352,7 +376,7 @@ def _add_command_parser(
     *,
     example: str | None = None,
 ) -> argparse.ArgumentParser:
-    description = help_text if example is None else f"{help_text}. Example: {example}"
+    description = help_text if example is None else f"{help_text}. Example: vbot {example}"
     command_parser = subparsers.add_parser(command, help=help_text, description=description)
     _add_target_arguments(command_parser)
     return command_parser
@@ -539,24 +563,24 @@ def _add_agent_change_arguments(
     parser.add_argument(
         "--tool-access-mode",
         choices=("all", "selected", "none"),
-        help="Replace the Agent Tool access mode",
+        help="Replace the complete Tool policy; repeat selections and denials to preserve them",
     )
     parser.add_argument(
         "--tool-allow",
         nargs="*",
-        help="Tool names for selected mode; empty selects no direct Tools",
+        help="Requires --tool-access-mode selected; omitted or empty selects no direct Tools",
     )
     parser.add_argument(
         "--tool-deny",
         nargs="*",
-        help="Absolute Tool denials; empty clears denials",
+        help="Requires --tool-access-mode; omitted or empty clears denials in the replacement",
     )
     parser.add_argument("--allowed-skills", nargs="*", help="Replace the full skill allowlist")
     parser.add_argument(
         "--subagent-allow",
         nargs="*",
         metavar="<agent-id>",
-        help="Replace the agents this agent may delegate to; empty denies all",
+        help="Replace additional delegation targets; empty permits self-delegation only",
     )
     parser.add_argument(
         "--compaction-policy",
@@ -1483,7 +1507,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     )
     set_key_parser.description = (
         "Write an API key to the target data-dir .env through the server RPC contract. "
-        "Example: provider set-key openai sk-... --refresh-models"
+        "Example: vbot provider set-key openai sk-... --refresh-models"
     )
     set_key_parser.add_argument(
         "provider", metavar="<provider-id>", help="Provider id to configure"
@@ -1513,7 +1537,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     )
     unset_key_parser.description = (
         "Remove an API key from the target data-dir .env through the server RPC contract. "
-        "Process-environment credentials are not touched. Example: provider unset-key openai"
+        "Process-environment credentials are not touched. Example: vbot provider unset-key openai"
     )
     unset_key_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to clear")
     unset_key_parser.add_argument(
@@ -1538,7 +1562,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             f"{PROVIDER_HELP[command]} "
             "Keyless local connections (e.g. Ollama) are disabled until enabled here; "
             "a disabled connection is never probed and offers no models. "
-            f"Example: provider {command} ollama"
+            f"Example: vbot provider {command} ollama"
         )
         toggle_parser.add_argument(
             "provider", metavar="<provider-id>", help="Provider id to toggle"
@@ -1772,7 +1796,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "share",
         SKILL_HELP["share"],
-        example="skill share assistant librarian --to researcher coder",
+        example="skill share assistant librarian --to researcher --to coder",
     )
     share_parser.add_argument("agent", metavar="<agent-id>", help="Owning Identity Agent id")
     share_parser.add_argument("name", metavar="<skill-name>", help="Private Skill name to share")
