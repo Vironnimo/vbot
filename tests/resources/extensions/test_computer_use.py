@@ -298,10 +298,12 @@ def test_window_target_mismatch_rejects_tokens(computer):
 
 
 def test_failure_invalidates_capture_and_never_retries_input(computer):
-    capture(computer)
+    view = capture(computer)["data"]["view_id"]
     computer[2].fail = "type_text"
-    assert not call(computer, "type", text="draft", apply=True)["ok"]
-    assert call(computer, "type", text="draft", apply=True)["error"]["code"] == "capture_required"
+    result = call(computer, "type", text="draft", apply=True)
+    assert not result["ok"]
+    assert result["artifacts"][0]["observation"]["view_id"] != view
+    assert call(computer, "type", view_id=view, text="draft")["error"]["code"] == "stale_view"
     assert sum(name == "type_text" for name, _ in computer[2].calls) == 1
 
 
@@ -1779,6 +1781,142 @@ def test_sequence_inherits_one_view_and_reports_each_outcome(computer):
     assert all(step["effect"] == "unverifiable" for step in result["data"]["step_results"])
     assert client.inputs == 2 and client.snapshots == 2
     assert len(json.dumps(result)) < 1400
+
+
+@pytest.mark.parametrize("first", ["click", "key"])
+def test_root_view_does_not_turn_keyboard_steps_into_coordinate_input(computer, first):
+    service, context, client, _ = computer
+    data = capture(computer, foreground=True)["data"]
+    steps = [
+        {"action": "click", "coordinate": [10, 20]},
+        {"action": "key", "shortcut": "x"},
+        {"action": "type", "text": "0.45", "text_mode": "keyboard"},
+        {"action": "key", "shortcut": "enter"},
+    ]
+    if first == "key":
+        steps[0], steps[1] = steps[1], steps[0]
+    result = service.handle(
+        context, {"action": "sequence", "view_id": data["view_id"], "steps": steps}
+    )
+    assert result["ok"] and result["data"]["completed_steps"] == 4
+    assert client.inputs == 4 and client.snapshots == 2
+    typed = next(args for name, args in client.calls if name == "type_text")
+    assert typed["text_mode"] == "keyboard" and "x" not in typed and "y" not in typed
+
+
+@pytest.mark.parametrize(
+    "action, fields", [("key", {"shortcut": "enter"}), ("type", {"text": "draft"})]
+)
+def test_focused_input_uses_explicit_view_target_and_delivery(computer, action, fields):
+    service, context, client, _ = computer
+    data = capture(computer, foreground=True)["data"]
+    result = service.handle(context, {"action": action, "view_id": data["view_id"], **fields})
+    assert result["ok"]
+    name = "press_key" if action == "key" else "type_text"
+    sent = next(args for called, args in client.calls if called == name)
+    assert sent["pid"] == 1 and sent["window_id"] == 2
+    assert sent["delivery_mode"] == "foreground" and "x" not in sent
+    result = service.handle(context, {"action": action, "view_id": data["view_id"], **fields})
+    assert result["error"]["code"] == "stale_view" and client.inputs == 1
+
+
+@pytest.mark.parametrize("completed", [0, 1])
+def test_unexpected_sequence_failure_retains_progress_and_recovery_image(computer, completed):
+    service, context, client, _ = computer
+    data = capture(computer)["data"]
+
+    def fail(name):
+        if name == "press_key":
+            raise RuntimeError("test-owned dispatch failure")
+
+    client.hook = fail
+    steps = [{"action": "click", "coordinate": [10, 20]}] if completed else []
+    steps += [{"action": "key", "shortcut": "enter"}, {"action": "type", "text": "never"}]
+    result = service.handle(
+        context, {"action": "sequence", "view_id": data["view_id"], "steps": steps}
+    )
+    outcome = result["data"] if completed else result["artifacts"][0]
+    assert result["ok"] == bool(completed)
+    assert outcome["completed_steps"] == completed
+    assert outcome["stopped_step"] == completed + 1 and outcome["partial"]
+    assert outcome["observation"]["view_id"] != data["view_id"]
+    assert client.inputs == completed and client.snapshots == 2
+    assert not any(name == "type_text" for name, _ in client.calls)
+
+
+def test_unexpected_single_input_failure_keeps_recovery_image(computer):
+    capture(computer)
+
+    def fail(name):
+        if name == "type_text":
+            raise RuntimeError("test-owned failure")
+
+    computer[2].hook = fail
+    result = call(computer, "type", text="draft")
+    assert result["error"]["code"] == "computer_use_failed"
+    assert result["artifacts"][0]["observation"]["view_id"]
+    assert result["artifacts"][0]["partial"]
+
+
+def test_original_resolution_survives_input_zoom_and_explicit_target(computer):
+    service, context, client, _ = computer
+    client.size = (2578, 1398)
+    original = capture(computer, resolution="original")["data"]
+    crop = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": original["view_id"],
+            "coordinate": [100, 100],
+            "to_coordinate": [300, 300],
+        },
+    )["data"]
+    assert crop["parent_view_id"] == original["view_id"]
+    assert crop["coordinate_space"] == "image_pixels"
+    result = service.handle(
+        context, {"action": "click", "view_id": crop["view_id"], "coordinate": [10, 10]}
+    )["data"]
+    assert (
+        result["observation"]["image_width"],
+        result["observation"]["image_height"],
+    ) == client.size
+    result = call(computer, "key", shortcut="enter")["data"]
+    assert result["observation"]["image_width"] == 2578
+    assert capture(computer, resolution="auto")["data"]["image_width"] == 1600
+
+
+def test_zoom_foreground_is_a_consistency_assertion_not_a_delivery_switch(computer):
+    data = capture(computer, foreground=True)["data"]
+    fields = {"view_id": data["view_id"], "coordinate": [0, 0], "to_coordinate": [100, 100]}
+    result = call(computer, "zoom", foreground=False, **fields)
+    assert result["error"]["code"] == "invalid_arguments"
+    assert call(computer, "zoom", foreground=True, **fields)["ok"]
+    assert computer[2].inputs == 0
+
+
+def test_resolution_preference_outlives_views_after_skipped_observation(computer):
+    computer[2].size = (2578, 1398)
+    capture(computer, resolution="original")
+    assert call(computer, "key", shortcut="enter", capture_after=False)["ok"]
+    assert capture(computer)["data"]["image_width"] == 2578
+    assert call(computer, "key", shortcut="enter", capture_after=False, resolution="auto")["ok"]
+    assert capture(computer)["data"]["image_width"] == 1600
+
+
+def test_unexpected_observation_failure_preserves_applied_input(computer):
+    capture(computer)
+    client = computer[2]
+
+    def fail(name):
+        if name == "capture_pixels" and client.inputs:
+            raise RuntimeError("test-owned private diagnostic")
+
+    client.hook = fail
+    result = call(computer, "type", text="draft")
+    assert result["ok"] and result["data"]["applied"]
+    assert result["data"]["observation_error"]["code"] == "observation_failed"
+    assert "test-owned private diagnostic" not in json.dumps(result)
+    assert client.inputs == 1
 
 
 def test_sequence_infers_target_from_first_step_view_before_element_validation(computer):

@@ -120,6 +120,20 @@ class WindowsDesktop:
             "GetKeyboardLayout": ([ct.c_uint32], ct.c_void_p),
             "VkKeyScanExW": ([ct.c_wchar, ct.c_void_p], ct.c_int16),
             "GetAsyncKeyState": ([ct.c_int], ct.c_int16),
+            "GetKeyState": ([ct.c_int], ct.c_int16),
+            "MapVirtualKeyExW": ([ct.c_uint, ct.c_uint, ct.c_void_p], ct.c_uint),
+            "ToUnicodeEx": (
+                [
+                    ct.c_uint,
+                    ct.c_uint,
+                    ct.POINTER(ct.c_ubyte),
+                    ct.c_wchar_p,
+                    ct.c_int,
+                    ct.c_uint,
+                    ct.c_void_p,
+                ],
+                ct.c_int,
+            ),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.user, name)
@@ -129,6 +143,12 @@ class WindowsDesktop:
     def _physical(self):
         # Thread-local awareness avoids changing the hosting application's DPI policy.
         previous = self.user.SetThreadDpiAwarenessContext(ct.c_void_p(-4))
+        if not previous:
+            raise ComputerUseError(
+                "Windows could not establish physical pixel coordinates. "
+                "Capture the target again before further input.",
+                "dpi_unavailable",
+            )
         try:
             yield
         finally:
@@ -183,6 +203,9 @@ class WindowsDesktop:
             ]
 
         result: list[dict[str, Any]] = []
+        scaling = ct.WinDLL("shcore", use_last_error=True).GetScaleFactorForMonitor
+        scaling.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
+        scaling.restype = ct.c_long
         callback_type = ct.WINFUNCTYPE(
             ct.c_int, ct.c_void_p, ct.c_void_p, ct.POINTER(Rect), ct.c_ssize_t
         )
@@ -199,6 +222,9 @@ class WindowsDesktop:
             if not self.user.GetMonitorInfoW(handle, ct.byref(info)):
                 return 0
             box = info.monitor
+            scale = ct.c_int()
+            if scaling(handle, ct.byref(scale)) != 0:
+                return 0
             result.append(
                 {
                     "id": len(result) + 1,
@@ -208,6 +234,7 @@ class WindowsDesktop:
                     "y": box.top,
                     "width": box.right - box.left,
                     "height": box.bottom - box.top,
+                    "scale_percent": scale.value,
                 }
             )
             return 1
@@ -224,7 +251,13 @@ class WindowsDesktop:
         layout = tuple(
             number
             for item in monitors
-            for number in (item["x"], item["y"], item["width"], item["height"])
+            for number in (
+                item["x"],
+                item["y"],
+                item["width"],
+                item["height"],
+                item["scale_percent"],
+            )
         )
         if "window_id" in args:
             pid = ct.c_uint32()
@@ -304,6 +337,12 @@ class WindowsDesktop:
                     "The desktop image is too large. Select one monitor.", "image_too_large"
                 )
             image = ImageGrab.grab(bbox=bounds, all_screens=True, include_layered_windows=True)
+            if image.size != (bounds[2] - bounds[0], bounds[3] - bounds[1]):
+                raise ComputerUseError(
+                    "The screenshot size does not match the display geometry. Capture the "
+                    "target again before sending input.",
+                    "capture_geometry_mismatch",
+                )
             _, after = self._geometry(args)
             self._check_capture_focus(args)
         self._check()
@@ -340,7 +379,7 @@ class WindowsDesktop:
         if not any(
             layout[i] <= x < layout[i] + layout[i + 2]
             and layout[i + 1] <= y < layout[i + 1] + layout[i + 3]
-            for i in range(0, len(layout), 4)
+            for i in range(0, len(layout), 5)
         ):
             raise ComputerUseError(
                 "The pointer target is outside the desktop.", "invalid_coordinates"
@@ -366,6 +405,78 @@ class WindowsDesktop:
             result.extend(vk for mask, vk in ((1, 0x10), (2, 0x11), (4, 0x12)) if (key >> 8) & mask)
             result.append(key & 0xFF)
         return list(dict.fromkeys(result))
+
+    def _keyboard_text(self, text: str) -> None:
+        thread = self.user.GetWindowThreadProcessId(self.user.GetForegroundWindow(), None)
+        layout = self.user.GetKeyboardLayout(thread)
+        caps_lock = bool(self.user.GetKeyState(0x14) & 1)
+        plan = []
+        for char in text.replace("\r\n", "\n"):
+            key = (
+                13
+                if char in "\r\n"
+                else 9
+                if char == "\t"
+                else self.user.VkKeyScanExW(char, layout)
+                if ord(char) <= 0xFFFF
+                else -1
+            )
+            if key == -1 or (key >> 8) & ~7:
+                raise ComputerUseError(
+                    "Keyboard text contains a character unavailable on the active layout. "
+                    "No text was sent. Use text_mode=unicode for a text field or key for "
+                    "supported shortcuts.",
+                    "unsupported_keyboard_text",
+                )
+            vk, flags = key & 0xFF, key >> 8
+            if caps_lock and char.isalpha() and char.lower() != char.upper():
+                flags ^= 1
+            modifiers = [key for mask, key in ((1, 0x10), (2, 0x11), (4, 0x12)) if flags & mask]
+            if char not in "\r\n\t":
+                state = (ct.c_ubyte * 256)()
+                state[0x14] = int(caps_lock)
+                for modifier in modifiers:
+                    state[modifier] = 0x80
+                translated = ct.create_unicode_buffer(8)
+                # Flag 4 probes without altering Windows' pending dead-key state.
+                if (
+                    self.user.ToUnicodeEx(
+                        vk,
+                        self.user.MapVirtualKeyExW(vk, 0, layout),
+                        state,
+                        translated,
+                        8,
+                        4,
+                        layout,
+                    )
+                    < 0
+                ):
+                    raise ComputerUseError(
+                        "Keyboard text contains a character that requires dead-key composition. "
+                        "No text was sent. Use text_mode=unicode in a field that accepts Unicode, "
+                        "or ask the user to enter this character.",
+                        "unsupported_keyboard_text",
+                    )
+            plan.append((vk, modifiers))
+        if any(
+            self.user.GetAsyncKeyState(key) & 0x8000
+            for key in {0x10, 0x11, 0x12, 0x5B, 0x5C, *(vk for vk, _ in plan)}
+        ):
+            raise ComputerUseError(
+                "A modifier or text key is already held. No text was sent. Release the held "
+                "keys before continuing.",
+                "input_busy",
+            )
+        for vk, modifiers in plan:
+            self._check()
+            try:
+                for key in [*modifiers, vk]:
+                    self._press(keyboard(key), keyboard(key, up=True))
+                # Let raw-input consumers read the modifier state before releasing it.
+                self._wait(0.01)
+            finally:
+                self.release()
+            self._wait(0.01)
 
     def _text(self, text: str) -> None:
         for char in text.replace("\r\n", "\n"):
@@ -429,7 +540,10 @@ class WindowsDesktop:
                         self._press(mouse(down), mouse(up))
                         self.release(keep=len(modifiers))
                 elif name == "type_text":
-                    self._text(args["text"])
+                    if args.get("text_mode") == "keyboard":
+                        self._keyboard_text(args["text"])
+                    else:
+                        self._text(args["text"])
                 elif name in {"press_key", "hotkey"}:
                     keys = self._keys(args.get("keys", [args.get("key", "")]))
                     if any(self.user.GetAsyncKeyState(key) & 0x8000 for key in keys):

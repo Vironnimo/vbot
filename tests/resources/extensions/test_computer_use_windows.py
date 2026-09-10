@@ -43,10 +43,13 @@ def native(monkeypatch):
         GetKeyboardLayout=lambda _: 1,
         VkKeyScanExW=lambda char, _: ord(char.upper()) if char.isalpha() else -1,
         GetAsyncKeyState=lambda _: 0,
+        GetKeyState=lambda _: 0,
+        MapVirtualKeyExW=lambda vk, mode, layout: vk,
+        ToUnicodeEx=lambda *args: 1,
     )
     monitors = [
-        {"id": 1, "x": -1280, "y": -100, "width": 1280, "height": 1024},
-        {"id": 2, "x": 0, "y": 0, "width": 1920, "height": 1080},
+        {"id": 1, "x": -1280, "y": -100, "width": 1280, "height": 1024, "scale_percent": 100},
+        {"id": 2, "x": 0, "y": 0, "width": 1920, "height": 1080, "scale_percent": 125},
     ]
     monkeypatch.setattr(desktop, "monitors", lambda: monitors)
     monkeypatch.setattr(desktop, "_physical", nullcontext)
@@ -110,6 +113,142 @@ def test_unicode_uses_utf16_without_clipboard_or_keyboard_layout(native):
     scans = [event[2] for event in sent if event[3] == 4]
     assert scans == [0xE4, 0xF6, 0xFC, 0xDF, 0x20AC, 0xD83D, 0xDE00]
     assert sent[-4:] == [(1, 13, 0, 0), (1, 13, 0, 2), (1, 9, 0, 0), (1, 9, 0, 2)]
+
+
+def test_keyboard_text_maps_layout_modifiers_and_releases_between_characters(native):
+    desktop, sent, _, _ = native
+    mapping = {"g": 0x47, "z": 0x5A, "0": 0x30, ".": 0xBE, "4": 0x34, "A": 0x141, "@": 0x651}
+    desktop.user.VkKeyScanExW = lambda char, layout: mapping.get(char, -1)
+    desktop.capture({})
+    desktop.input("type_text", {"text": "gz0.4A@", "text_mode": "keyboard"})
+    assert [event[1] for event in sent if event[3] == 0] == [
+        0x47,
+        0x5A,
+        0x30,
+        0xBE,
+        0x34,
+        0x10,
+        0x41,
+        0x11,
+        0x12,
+        0x51,
+    ]
+    assert all(event[2] == 0 and event[3] in {0, 2} for event in sent)
+    assert desktop._held == []
+
+
+def test_keyboard_text_handles_caps_lock_without_toggling_user_state(native):
+    desktop, sent, _, _ = native
+    desktop.user.VkKeyScanExW = lambda char, layout: 0x141 if char == "A" else 0x41
+    desktop.user.GetKeyState = lambda key: 1
+    desktop.capture({})
+    desktop.input("type_text", {"text": "Aa", "text_mode": "keyboard"})
+    assert [event[1] for event in sent if event[3] == 0] == [0x41, 0x10, 0x41]
+
+
+@pytest.mark.parametrize("text", ["a😀", "aЖ"])
+def test_keyboard_text_unavailable_character_fails_before_any_character(native, text):
+    desktop, sent, _, _ = native
+    desktop.user.VkKeyScanExW = lambda char, layout: 0x41 if char == "a" else -1
+    desktop.capture({})
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.input("type_text", {"text": text, "text_mode": "keyboard"})
+    assert caught.value.code == "unsupported_keyboard_text" and not sent
+
+
+def test_keyboard_text_stop_releases_character_and_modifiers(native):
+    desktop, sent, _, _ = native
+    desktop.user.VkKeyScanExW = lambda char, layout: 0x141
+    desktop.capture({})
+    desktop._wait = lambda _: desktop.interrupt() or desktop._check()
+    with pytest.raises(ComputerUseError):
+        desktop.input("type_text", {"text": "AB", "text_mode": "keyboard"})
+    assert desktop._held == []
+    assert sent == [(1, 0x10, 0, 0), (1, 0x41, 0, 0), (1, 0x41, 0, 2), (1, 0x10, 0, 2)]
+
+
+def test_keyboard_dead_key_preflight_does_not_send_prefix_or_change_composition(native):
+    desktop, sent, _, _ = native
+    desktop.user.VkKeyScanExW = lambda char, layout: 0x41 if char == "a" else 0xDC
+    probes = []
+
+    def translate(vk, scan, state, output, size, flags, layout):
+        probes.append(flags)
+        return -1 if vk == 0xDC else 1
+
+    desktop.user.ToUnicodeEx = translate
+    desktop.capture({})
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.input("type_text", {"text": "a^", "text_mode": "keyboard"})
+    assert caught.value.code == "unsupported_keyboard_text" and not sent
+    assert probes == [4, 4]
+
+
+@pytest.mark.parametrize("held", [0x10, 0x11, 0x12, 0x5B, 0x41])
+def test_keyboard_text_does_not_modify_user_held_keys(native, held):
+    desktop, sent, _, _ = native
+    desktop.user.GetAsyncKeyState = lambda key: 0x8000 if key == held else 0
+    desktop.capture({})
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.input("type_text", {"text": "abc", "text_mode": "keyboard"})
+    assert caught.value.code == "input_busy" and not sent
+
+
+@pytest.mark.parametrize("route", ["other_os", "background", "element"])
+def test_keyboard_text_requires_supported_native_route_before_dispatch(native, monkeypatch, route):
+    desktop, sent, _, _ = native
+    client = CuaDriver.__new__(CuaDriver)
+    client.desktop = None if route == "other_os" else desktop
+    monkeypatch.setattr(client, "connect", lambda: None)
+    args = {"text": "draft", "text_mode": "keyboard", "delivery_mode": "foreground"}
+    if route == "background":
+        args["delivery_mode"] = "background"
+    if route == "element":
+        args["element_token"] = "s00000001:1"
+    with pytest.raises(ComputerUseError) as caught:
+        client.call("type_text", args)
+    assert caught.value.code == "unsupported_capability" and not sent
+
+
+def test_mixed_dpi_coordinates_are_physical_and_scale_change_retires_capture(native):
+    desktop, sent, monitors, _ = native
+    monitors[0]["scale_percent"] = 100
+    monitors[1]["scale_percent"] = 125
+    args = {"session": "s", "monitor": 2}
+    desktop.capture(args)
+    desktop.input("move_cursor", {**args, "x": 800, "y": 400})
+    assert sent[0][1:3] == (round(2080 * 65535 / 3199), round(500 * 65535 / 1179))
+    monitors[1]["scale_percent"] = 150
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.input("click", {**args, "x": 800, "y": 400})
+    assert caught.value.code == "capture_required" and len(sent) == 1
+
+
+def test_wrong_capture_pixel_dimensions_never_authorize_input(native, monkeypatch):
+    desktop, sent, _, _ = native
+    monkeypatch.setattr(
+        "resources.extensions.computer_use.windows.ImageGrab.grab",
+        lambda **kwargs: Image.new("RGB", (100, 100)),
+    )
+    with pytest.raises(ComputerUseError) as caught:
+        desktop.capture({})
+    assert caught.value.code == "capture_geometry_mismatch"
+    assert not desktop._frames and not sent
+
+
+def test_physical_dpi_context_restores_on_error_and_refuses_failed_entry():
+    desktop = WindowsDesktop.__new__(WindowsDesktop)
+    calls = []
+    desktop.user = SimpleNamespace(
+        SetThreadDpiAwarenessContext=lambda value: calls.append(value) or 42
+    )
+    with pytest.raises(RuntimeError), desktop._physical():
+        raise RuntimeError("test-owned failure")
+    assert calls[0].value == ct.c_void_p(-4).value and calls[1] == 42
+    desktop.user.SetThreadDpiAwarenessContext = lambda value: None
+    with pytest.raises(ComputerUseError) as caught, desktop._physical():
+        pytest.fail("must not enter an unknown coordinate space")
+    assert caught.value.code == "dpi_unavailable"
 
 
 @pytest.mark.parametrize(
