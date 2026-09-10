@@ -430,6 +430,22 @@ class SubAgentBatchTracker:
                 return entry.run_id
         return None
 
+    def owned_entries(
+        self,
+        parent_agent_id: str,
+        parent_session_id: str,
+        parent_project_id: str | None,
+    ) -> list[tuple[ParentKey, _SubAgentEntry]]:
+        """Snapshot retained work in admission order across the caller's Runs."""
+        return [
+            (parent_key, entry)
+            for parent_key, batch in self._batches.items()
+            if parent_key[0] == parent_agent_id
+            and parent_key[1] == parent_session_id
+            and batch.project_id == parent_project_id
+            for entry in batch.entries.values()
+        ]
+
     def owned_entry(
         self,
         parent_agent_id: str,

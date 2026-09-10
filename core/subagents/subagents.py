@@ -900,6 +900,22 @@ async def _handle_subagent_status(
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
+    if "id" not in arguments:
+        entries = batch_tracker.owned_entries(
+            context.agent_id, context.session_id, context.project_id
+        )
+        snapshots: list[JsonObject] = []
+        for parent_key, entry in entries:
+            snapshot = await _subagent_status_snapshot(
+                context, parent_key, entry, runtime=runtime, batch_tracker=batch_tracker
+            )
+            snapshots.append(
+                snapshot["data"]
+                if snapshot["ok"]
+                else {"id": entry.work_id, "error": snapshot["error"]}
+            )
+        return tool_success({"subagents": snapshots})
+
     try:
         work_id = required_string(arguments.get("id"), field_name="id")
     except ToolArgumentError as error:
@@ -914,6 +930,21 @@ async def _handle_subagent_status(
     if owned is None:
         return _subagent_not_owned_failure(work_id)
     parent_key, entry = owned
+    return await _subagent_status_snapshot(
+        context, parent_key, entry, runtime=runtime, batch_tracker=batch_tracker
+    )
+
+
+async def _subagent_status_snapshot(
+    context: ToolContext,
+    parent_key: ParentKey,
+    entry: _SubAgentEntry,
+    *,
+    runtime: RuntimeServices,
+    batch_tracker: SubAgentBatchTracker,
+) -> JsonObject:
+    """Resolve one captured entry and acknowledge only after Parent persistence."""
+    work_id = entry.work_id
 
     if entry.run_id is None:
         return tool_success(

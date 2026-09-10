@@ -1059,6 +1059,7 @@ SUBAGENT_CASES = (
     "thinking_xhigh",
     "thinking_max",
     "thinking_none",
+    "status_all",
     "status",
     "cancel",
 )
@@ -2723,6 +2724,7 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Inspect the Tool contract and report concise findings.",
             "thinking_effort": "none",
         },
+        "status_all": {"action": "status"},
         "status": {"action": "status", "id": "sub_123"},
         "cancel": {"action": "cancel", "id": "sub_123"},
     }
