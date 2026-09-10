@@ -111,6 +111,7 @@ from core.tools import (
     ChangeTracker,
     FileReadState,
     register_analyze_image_tool,
+    register_apply_patch_tool,
     register_bash_tool,
     register_edit_tool,
     register_generate_music_tool,
@@ -593,6 +594,7 @@ class Runtime:
                 speech_max_size_bytes=self._speech_upload_max_size_bytes,
             )
             register_edit_tool(self._tools, file_state=self._file_state)
+            register_apply_patch_tool(self._tools, file_state=self._file_state)
             register_glob_tool(self._tools)
             register_grep_tool(self._tools)
             register_write_tool(self._tools, file_state=self._file_state)

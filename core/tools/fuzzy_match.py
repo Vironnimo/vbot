@@ -68,6 +68,18 @@ _UNICODE_NORMALIZATION = {
     "–": "-",  # en dash
 }
 
+# Patch-only typography folds may expand a glyph. Existing edit defaults keep
+# their established normalization and replacement semantics.
+_TYPOGRAPHIC_NORMALIZATION = {
+    **_UNICODE_NORMALIZATION,
+    "\u2014": "--",
+    "\u2026": "...",
+    "\u2212": "-",
+    **dict.fromkeys(
+        "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000", " "
+    ),
+}
+
 # Every line-ending flavor the read tool renders as a separate line (mirrors
 # read.py's _LINE_BREAK_PATTERN). Detection order matters: CRLF first, then LF
 # before CR (write.py's _detect_file_line_ending prefers the same way for
@@ -126,21 +138,44 @@ def replace_fuzzy(
     new_string: str,
     *,
     replace_all: bool,
+    whole_lines: bool = False,
+    precise_only: bool = False,
+    at_eof: bool = False,
+    typographic: bool = False,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
     Returns a :class:`FuzzyReplacement` on success, an :class:`AmbiguousFuzzyMatch`
     when the winning strategy matched more than once without ``replace_all``, or
     ``None`` when no strategy matched.
+
+    Patch callers can require whole-line spans, restrict matching to precise
+    strategies for retry evidence, or anchor a hunk at EOF. Defaults retain
+    edit's existing substring and fuzzy-matching behavior.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
     file_ending = _detect_line_ending(content)
 
     for name, matcher, reindent, approximate in _STRATEGIES:
-        if replace_all and approximate:
+        if (replace_all or precise_only) and approximate:
             continue
-        matches = matcher(content, old_string)
+        matches = (
+            _match_normalized(content, old_string, typographic=True, whole_lines=whole_lines)
+            if typographic and name == "normalized"
+            else matcher(content, old_string)
+        )
+        if whole_lines:
+            matches = [
+                (start, end)
+                for start, end in matches
+                if (start == 0 or content[start - 1] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+                and (end == len(content) or content[end] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+            ]
+        if at_eof:
+            matches = [
+                (start, end) for start, end in matches if content[end:] in ("", *_LINE_ENDINGS)
+            ]
         if not matches:
             continue
         if len(matches) > 1 and not replace_all:
@@ -156,7 +191,7 @@ def replace_fuzzy(
             content,
             selected,
             replacement_text,
-            reindent=reindent,
+            reindent=reindent or (typographic and name == "normalized"),
             old_string_lf=old_lf,
             file_ending=file_ending,
         )
@@ -325,13 +360,15 @@ def _line_and_character_at(content: str, offset: int) -> tuple[int, int]:
     return len(breaks) + 1, offset - line_start + 1
 
 
-def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
+def _normalize_with_spans(
+    text: str, *, typographic: bool = False
+) -> tuple[str, list[tuple[int, int]]]:
     """Normalize newlines + Unicode and record each normalized char's origin span.
 
     ``spans[k]`` is the ``(start, end)`` range in ``text`` that produced the k-th
     normalized character, so a match found in the normalized string maps back to
-    the exact original characters. Every mapping is K-original-chars -> 1-normalized
-    (CRLF -> LF is 2->1; everything else is 1->1), so the lists stay aligned.
+    the exact original characters. Expanded glyphs share one origin span for
+    every normalized character, so the character and span lists stay aligned.
     """
     chars: list[str] = []
     spans: list[tuple[int, int]] = []
@@ -355,8 +392,10 @@ def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
             spans.append((index, index + 1))
             index += 1
             continue
-        chars.append(_UNICODE_NORMALIZATION.get(char, char))
-        spans.append((index, index + 1))
+        mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
+        folded = mapping.get(char, char)
+        chars.extend(folded)
+        spans.extend([(index, index + 1)] * len(folded))
         index += 1
 
     return "".join(chars), spans
@@ -370,11 +409,13 @@ def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
     return _find_non_overlapping(content, pattern)
 
 
-def _match_normalized(content: str, pattern: str) -> list[tuple[int, int]]:
-    normalized_pattern = _normalize_text(pattern)
+def _match_normalized(
+    content: str, pattern: str, *, typographic: bool = False, whole_lines: bool = False
+) -> list[tuple[int, int]]:
+    normalized_pattern = _normalize_with_spans(pattern, typographic=typographic)[0]
     if not normalized_pattern:
         return []
-    normalized_content, spans = _normalize_with_spans(content)
+    normalized_content, spans = _normalize_with_spans(content, typographic=typographic)
 
     matches: list[tuple[int, int]] = []
     pattern_length = len(normalized_pattern)
@@ -383,9 +424,64 @@ def _match_normalized(content: str, pattern: str) -> list[tuple[int, int]]:
         position = normalized_content.find(normalized_pattern, start)
         if position < 0:
             break
-        matches.append((spans[position][0], spans[position + pattern_length - 1][1]))
+        end = position + pattern_length
+        # A substring of an expanded glyph must not authorize replacing it.
+        if (position == 0 or spans[position - 1] != spans[position]) and (
+            end == len(spans) or spans[end - 1] != spans[end]
+        ):
+            left, right = spans[position][0], spans[end - 1][1]
+            if not whole_lines or (
+                (position == 0 or normalized_content[position - 1] == "\n")
+                and (end == len(normalized_content) or normalized_content[end] == "\n")
+            ):
+                matches.append((left, right))
         start = position + pattern_length
+    if not matches and typographic:
+        matches = [
+            (spans[start][0], spans[end - 1][1])
+            for start, end in _match_line_trimmed(normalized_content, normalized_pattern)
+            if end > start
+        ]
     return matches
+
+
+def preserve_typography(actual: str, locator: str, replacement: str) -> str:
+    """Retain original glyphs in unchanged portions of a normalized patch line.
+
+    Only a precisely equivalent preimage proves the character correspondence.
+    A changed glyph or a merely similar preimage never authorizes restoration.
+    """
+    actual_body, old_body, new_body = (
+        text.lstrip(" \t") for text in (actual, locator, replacement)
+    )
+    actual_folded, actual_spans = _normalize_with_spans(actual_body, typographic=True)
+    old_folded = _normalize_with_spans(old_body, typographic=True)[0]
+    new_folded, new_spans = _normalize_with_spans(new_body, typographic=True)
+    if actual_folded != old_folded:
+        return replacement
+    blocks = SequenceMatcher(None, old_folded, new_folded, autojunk=False).get_matching_blocks()
+    replacements = []
+    index = 0
+    while index < len(actual_spans):
+        start, end = actual_spans[index]
+        limit = index + 1
+        while limit < len(actual_spans) and actual_spans[limit] == (start, end):
+            limit += 1
+        original = actual_body[start:end]
+        folded = actual_folded[index:limit]
+        if original != folded:
+            for block in blocks:
+                if block.a <= index and limit <= block.a + block.size:
+                    new_start = block.b + index - block.a
+                    new_end = new_start + limit - index
+                    left, right = new_spans[new_start][0], new_spans[new_end - 1][1]
+                    if new_body[left:right] == folded:
+                        replacements.append((left, right, original))
+                    break
+        index = limit
+    for start, end, original in reversed(replacements):
+        new_body = new_body[:start] + original + new_body[end:]
+    return replacement[: len(replacement) - len(replacement.lstrip(" \t"))] + new_body
 
 
 def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:
@@ -691,4 +787,5 @@ __all__ = [
     "FuzzyReplacement",
     "find_closest_candidates",
     "replace_fuzzy",
+    "preserve_typography",
 ]

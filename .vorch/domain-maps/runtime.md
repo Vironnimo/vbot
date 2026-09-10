@@ -36,7 +36,7 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 
 - `provider_credentials` - the central resolver also exposed via `has_provider_credentials`/`get_provider_credentials`; `resolve_environment_credential(key)` resolves env-first without exposing values, `environment_credential_source(key)` reports provenance. Web Search, Extensions, and Channels consume this shared instance so live `.env` reloads reach every credential-backed subsystem.
 - `tools` - full built-in roster lives in source; `analyze_image` registers but Chat gates its Model-facing visibility on route capability plus ImageService availability; `channel_send` registers dynamically while >=1 valid Agent owns an enabled Channel (adapter liveness irrelevant).
-- `file_read_state` - the shared read-before-write guard behind read/write/edit and chat `@`-mention snapshots.
+- `file_read_state` - the shared read stamps and mutation locks behind read/write/edit/apply_patch and chat `@`-mention snapshots.
 - `command_dispatcher` - the canonical stable dispatcher; server/accessor code must reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` - no probing, no fallback construction (stub runtimes must provide them).
 
 ### Hot-reload seams
