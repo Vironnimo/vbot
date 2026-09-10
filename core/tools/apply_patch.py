@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
+from core.tools.edit import _change_preview
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
@@ -35,9 +36,12 @@ from core.utils.paths import model_path
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 APPLY_PATCH_TOOL_DESCRIPTION = (
-    "Apply a V4A patch to create, update, delete, or move files. Operations are ordered "
-    "and validated together before any file is changed. A write failure can leave partial "
-    "changes; the result lists the files actually changed."
+    "Create, update, delete, or move files with a text patch. Batch known changes into one "
+    "call: use multiple hunks for different locations in a file and multiple file operations "
+    "for different files. Each hunk is a block of context, removed lines, and added lines. "
+    "Changes run in order against current content. A failed hunk leaves its target unchanged "
+    "while other applicable changes continue. Results identify applied, already-applied, "
+    "failed, and skipped entries; successful changes remain applied."
 )
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -54,8 +58,11 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
                 "`*** Move to: destination`. Use `@@ context` to locate a section and "
                 "`*** End of File` to anchor the final hunk. Addition-only hunks insert "
                 "after their context hint, or append when no hint is given. Include "
-                "enough context to identify one location. Already-applied anchored hunks "
-                "are skipped."
+                "enough context to identify one location. Repeat `@@` for another location "
+                "in the same file, or start another file operation for a different file. "
+                "For example:\n*** Begin Patch\n*** Update File: settings.txt\n@@\n"
+                "-timeout=10\n+timeout=20\n@@\n-retries=1\n+retries=3\n"
+                "*** Update File: notes.txt\n@@\n-Status: draft\n+Status: ready\n*** End Patch"
             ),
         },
     },
@@ -87,21 +94,36 @@ _MESSAGES = {
         "or a unique context hint and retry."
     ),
     "text_not_found": (
-        "Hunk {hunk} in {path} was not found. Compare the current file with the candidate "
-        "excerpts and retry with current context."
+        "Hunk {hunk} in {path} was not found. Use any candidate excerpts below to update "
+        "the hunk, or inspect the file for current context."
     ),
     "line_numbered_content": (
         "Hunk {hunk} in {path} contains incomplete line-number gutters. "
         "Supply complete raw lines without read-output prefixes."
     ),
     "file_changed": (
-        "{path} changed while the patch was being prepared. Inspect its current content and retry."
+        "{path} changed unexpectedly during this patch. Inspect its current content and retry."
     ),
 }
 _VALIDATION_FAILED = "Patch validation failed; no files were changed."
 _WRITE_FAILED = (
-    "Writing stopped at {path}: {reason}. Earlier listed changes remain applied. "
-    "Inspect them before retrying."
+    "Could not change {path}: {reason}. Inspect this path before retrying the failed entry."
+)
+_PARTIAL_GUIDANCE = (
+    "Some entries are incomplete. Applied changes remain in place. Inspect entries marked "
+    "partial before continuing; retry only failed or skipped entries using current content. "
+    "Do not replay the whole patch."
+)
+_DEPENDENCY_FAILED = (
+    "A previous operation left {path} unavailable or uncertain. Inspect this path and any "
+    "move destination before retrying this entry."
+)
+_NONE_APPLIED = "No requested changes were applied. Correct the failed entries and retry."
+_ALL_FAILED = "All {count} entries failed or were skipped. No files were changed."
+_PRECISE_RECOVERY = (
+    "After an earlier failure in this file, this hunk requires a unique exact or "
+    "whitespace-normalized match. Inspect current content and retry this hunk "
+    "with matching context."
 )
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
 _ESCAPE_WARNING = "Normalized escaped patch text after the literal text did not match."
@@ -127,6 +149,7 @@ class _Hunk:
     lines: list[tuple[str, str]] = field(default_factory=list)
     eof: bool = False
     no_newline: bool = False
+    precise_only: bool = False
 
 
 @dataclass
@@ -135,6 +158,7 @@ class _Operation:
     path: str
     destination: str | None = None
     hunks: list[_Hunk] = field(default_factory=list)
+    hunk_number: int = 1
 
 
 def _parse(patch: str) -> list[_Operation]:
@@ -153,12 +177,7 @@ def _parse(patch: str) -> list[_Operation]:
     hunk: _Hunk | None = None
     ended = False
     for number, line in enumerate(lines, 1):
-        if (
-            re.fullmatch(r"\*\*\*\s+Begin\s+Patch\s*", line)
-            and not operations
-            and current is None
-            and number == 1
-        ):
+        if re.fullmatch(r"\*\*\*\s+Begin\s+Patch\s*", line) and not operations and current is None:
             continue
         if re.fullmatch(r"\*\*\*\s+End\s+Patch\s*", line):
             ended = True
@@ -191,7 +210,9 @@ def _parse(patch: str) -> list[_Operation]:
         if line == "*** End of File" and hunk is not None:
             hunk.eof = True
             continue
-        if line.startswith("@@") and current and current.action == "update":
+        if line.startswith("@@") and current and current.action in {"update", "move"}:
+            # Explicit hunks after Move File unambiguously mean update-and-move.
+            current.action = "update"
             hint = line[2:].strip()
             if "@@" in hint:
                 hint = hint.split("@@", 1)[0].strip()
@@ -267,6 +288,24 @@ def _candidates(content: str, pattern: str, offset: int = 0) -> JsonObject:
             for candidate in find_closest_candidates(content, pattern)
         ]
     }
+
+
+def _ambiguous_candidates(content: str, match: AmbiguousFuzzyMatch, offset: int = 0) -> JsonObject:
+    lines = content.splitlines()
+    candidates = []
+    for number in dict.fromkeys(match.line_numbers):
+        number += len(_BREAK.findall(content[:offset]))
+        start, end = max(0, number - 2), min(len(lines), number + 1)
+        candidates.append(
+            {
+                "line": start + 1,
+                "text": "\n".join(line[:240] for line in lines[start:end]),
+                "truncated": any(len(line) > 240 for line in lines[start:end]),
+            }
+        )
+        if len(candidates) == 3:
+            break
+    return {"occurrences": match.occurrences, "candidates": candidates}
 
 
 def _match(
@@ -373,7 +412,12 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
     for hint in hunk.hints:
         found = _match(content[offset:], hint, hint, precise=True)
         if isinstance(found, AmbiguousFuzzyMatch):
-            raise _PatchError("ambiguous_match", path=path, hunk=index)
+            raise _PatchError(
+                "ambiguous_match",
+                path=path,
+                hunk=index,
+                details=_ambiguous_candidates(content, found, offset),
+            )
         if found is None:
             raise _PatchError(
                 "text_not_found", path=path, hunk=index, details=_candidates(content, hint)
@@ -460,10 +504,14 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
             and isinstance(_match(window, new, new, precise=True, eof=hunk.eof), FuzzyReplacement)
         ):
             return content, warnings
-        found = _match(window, old, new, eof=hunk.eof)
+        if not hunk.precise_only:
+            found = _match(window, old, new, eof=hunk.eof)
     if isinstance(found, AmbiguousFuzzyMatch):
         raise _PatchError(
-            "ambiguous_match", path=path, hunk=index, details=_candidates(content, old)
+            "ambiguous_match",
+            path=path,
+            hunk=index,
+            details=_ambiguous_candidates(content, found, offset),
         )
     if found is None:
         code = (
@@ -603,7 +651,7 @@ def _plan(
             continue
         if operation.action == "update":
             content = _decode(payload, displayed)
-            for index, hunk in enumerate(operation.hunks, 1):
+            for index, hunk in enumerate(operation.hunks, operation.hunk_number):
                 content, notes = _apply_hunk(content, hunk, displayed, index)
                 warnings.setdefault(path, []).extend(notes)
             bom = b"\xef\xbb\xbf" if payload.startswith(b"\xef\xbb\xbf") else b""
@@ -629,37 +677,237 @@ def _change_details(
         new = _decode(after or b"", model_path(path))
     except _PatchError:
         return result, 0, 0
-    old_lines, new_lines = old.splitlines(), new.splitlines()
-    changes = [
-        op
-        for op in SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes()
-        if op[0] != "equal"
-    ]
-    added = sum(j2 - j1 for _, _, _, j1, j2 in changes)
-    removed = sum(i2 - i1 for _, i1, i2, _, _ in changes)
-    result["preview"] = [
-        {
-            "before_line": i1 + 1,
-            "after_line": j1 + 1,
-            "before": [line[:240] for line in old_lines[i1 : min(i2, i1 + 4)]],
-            "after": [line[:240] for line in new_lines[j1 : min(j2, j1 + 4)]],
-            "before_omitted_lines": max(0, i2 - i1 - 4),
-            "after_omitted_lines": max(0, j2 - j1 - 4),
-            "before_truncated_lines": [
-                i + 1 for i in range(i1, min(i2, i1 + 4)) if len(old_lines[i]) > 240
-            ],
-            "after_truncated_lines": [
-                j + 1 for j in range(j1, min(j2, j1 + 4)) if len(new_lines[j]) > 240
-            ],
-        }
-        for _, i1, i2, j1, j2 in changes[:2]
-    ]
-    result["omitted_regions"] = max(0, len(changes) - 2)
+    old_lines, new_lines = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    old_starts, new_starts = [0], [0]
+    for line in old_lines:
+        old_starts.append(old_starts[-1] + len(line))
+    for line in new_lines:
+        new_starts.append(new_starts[-1] + len(line))
+    before_spans, after_spans = [], []
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in SequenceMatcher(
+        None, old_lines, new_lines, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        added += j2 - j1
+        removed += i2 - i1
+        a, b, c, d = old_starts[i1], old_starts[i2], new_starts[j1], new_starts[j2]
+        # Locate the changed characters inside a long line, not its first 240 characters.
+        while a < b and c < d and old[a] == new[c]:
+            a += 1
+            c += 1
+        while b > a and d > c and old[b - 1] == new[d - 1]:
+            b -= 1
+            d -= 1
+        before_spans.append((a, b))
+        after_spans.append((c, d))
+    preview, omitted = _change_preview(old, new, tuple(before_spans), tuple(after_spans))
+    result["preview"] = preview
+    if omitted:
+        result["preview_omitted_regions"] = omitted
     if after is not None:
         warning = warning_for_edited_file(path, old, new)
         if warning:
             result["syntax_warning"] = warning
     return result, added, removed
+
+
+@dataclass
+class _Batch:
+    # Actual observations and completed mutations only; never a speculative final plan.
+    observed: dict[Path, _Snapshot] = field(default_factory=dict)
+    before: dict[Path, _Snapshot] = field(default_factory=dict)
+    after: dict[Path, _Snapshot] = field(default_factory=dict)
+    warnings: dict[Path, list[str]] = field(default_factory=dict)
+    blocked: set[Path] = field(default_factory=set)
+    failed_text: set[Path] = field(default_factory=set)
+    results: list[JsonObject] = field(default_factory=list)
+
+
+def _error_data(error: _PatchError | OSError) -> JsonObject:
+    if isinstance(error, _PatchError):
+        return {"code": error.code, "message": str(error), **error.details}
+    return {"code": "file_read_error", "message": str(error)}
+
+
+def _commit(
+    context: ToolContext,
+    state: FileReadState,
+    batch: _Batch,
+    before: dict[Path, _Snapshot],
+    pending: dict[Path, _Snapshot],
+    warnings: dict[Path, list[str]],
+) -> tuple[list[str], JsonObject | None]:
+    completed: list[str] = []
+    expected = before.copy()
+    changed = [path for path in pending if pending[path] != before[path]]
+    # A move first materializes its destination; a failure never silently loses its source.
+    for path in sorted(changed, key=lambda p: pending[p].payload is None):
+        target = pending[path]
+        try:
+            for checked, snapshot in expected.items():
+                if _snapshot(checked) != snapshot:
+                    raise _PatchError("file_changed", path=model_path(checked))
+            stale = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
+            if target.payload is None:
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(path, target.payload, mode=target.mode)
+        except (OSError, _PatchError) as error:
+            batch.blocked.update(before)
+            return completed, {
+                "code": error.code if isinstance(error, _PatchError) else "file_write_error",
+                "message": _WRITE_FAILED.format(path=model_path(path), reason=str(error)),
+            }
+        batch.before.setdefault(path, before[path])
+        batch.after[path] = batch.observed[path] = target
+        completed.append(model_path(path))
+        notes = batch.warnings.setdefault(path, [])
+        notes.extend(warnings.get(path, []))
+        if stale:
+            notes.append(_STALE_WARNING.format(path=model_path(path)))
+        if context.change_tracker is not None:
+            try:
+                old = _decode(before[path].payload or b"", model_path(path))
+                new = _decode(target.payload or b"", model_path(path))
+            except _PatchError:
+                pass
+            else:
+                context.change_tracker.record_write(context.session_id, path, before=old, after=new)
+        # Record the completed write before observing it: an observation failure must
+        # not report that nothing happened or invite a blind replay.
+        try:
+            actual = _snapshot(path)
+            if actual.payload != target.payload or (
+                target.mode is not None and actual.mode != target.mode
+            ):
+                raise _PatchError("file_changed", path=model_path(path))
+        except (OSError, _PatchError) as error:
+            batch.blocked.update(before)
+            return completed, _error_data(error)
+        pending[path] = expected[path] = batch.after[path] = batch.observed[path] = actual
+        if actual.payload is not None:
+            state.record_read(context.session_id, path)
+    for path in before:
+        batch.observed[path] = pending[path]
+        if path not in changed and pending[path].payload is not None:
+            state.record_read(context.session_id, path)
+    return completed, None
+
+
+def _run_step(
+    context: ToolContext,
+    state: FileReadState,
+    batch: _Batch,
+    operation: _Operation,
+    paths: dict[str, Path],
+    outcome: JsonObject,
+) -> None:
+    resolved = set(paths.values())
+    source = paths[operation.path]
+    if resolved & batch.blocked:
+        outcome.update(
+            status="skipped",
+            error={
+                "code": "previous_operation_failed",
+                "message": _DEPENDENCY_FAILED.format(path=model_path(source)),
+            },
+        )
+        return
+    try:
+        before = {path: _snapshot(path) for path in resolved}
+        for path, snapshot in before.items():
+            if path in batch.observed and snapshot != batch.observed[path]:
+                batch.blocked.update(resolved)
+                raise _PatchError("file_changed", path=model_path(path))
+        if source in batch.failed_text:
+            operation = replace(
+                operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
+            )
+        pending, warnings = _plan([operation], paths, before)
+        for path in resolved:
+            if _snapshot(path) != before[path]:
+                batch.blocked.update(resolved)
+                raise _PatchError("file_changed", path=model_path(path))
+        completed, failure = _commit(context, state, batch, before, pending, warnings)
+        if failure:
+            outcome.update(status="partial" if completed else "failed", error=failure)
+            if completed:
+                outcome["completed_paths"] = completed
+                outcome["pending_paths"] = [
+                    model_path(p) for p in resolved if model_path(p) not in completed
+                ]
+            return
+        if completed:
+            outcome["status"] = "applied"
+        elif operation.action == "update" and all(
+            _hunk_text(h, " -") == _hunk_text(h, " +") for h in operation.hunks
+        ):
+            outcome["status"] = "unchanged"
+        else:
+            outcome["status"] = "already_applied"
+    except (OSError, _PatchError) as error:
+        outcome.update(status="failed", error=_error_data(error))
+        if (
+            source in batch.failed_text
+            and isinstance(error, _PatchError)
+            and error.code == "text_not_found"
+        ):
+            outcome["error"]["message"] += " " + _PRECISE_RECOVERY
+    if outcome["status"] == "failed":
+        if operation.action in {"add", "move"} or operation.destination:
+            batch.blocked.update(resolved)
+        else:
+            batch.failed_text.add(source)
+
+
+def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
+    files = []
+    added = removed = 0
+    for path, before in batch.before.items():
+        after = batch.after[path]
+        if before == after:
+            continue
+        details, plus, minus = _change_details(path, before.payload, after.payload)
+        added += plus
+        removed += minus
+        notes = list(dict.fromkeys(batch.warnings.get(path, [])))
+        if notes:
+            details["warnings"] = notes
+        files.append(details)
+    context.add_display_line_changes(added=added, removed=removed)
+    context.add_display_count(len(files), "files")
+    failed = sum(r["status"] in {"failed", "skipped", "partial"} for r in batch.results)
+    succeeded = len(batch.results) - failed
+    if failed and not succeeded and not batch.before:
+        if len(batch.results) == 1:
+            error = batch.results[0]["error"]
+            message = _NONE_APPLIED + "\n" + error["message"]
+            details = {k: v for k, v in error.items() if k not in {"code", "message"}}
+            if details:
+                message += "\n" + json.dumps(details, ensure_ascii=False)
+            return tool_failure(error["code"], message)
+        return tool_failure(
+            "all_changes_failed",
+            _ALL_FAILED.format(count=failed) + "\n" + json.dumps(batch.results, ensure_ascii=False),
+        )
+    data: JsonObject = {
+        "status": "partial" if failed else "success",
+        "total": len(batch.results),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": batch.results,
+        "files": files,
+    }
+    if failed:
+        data["guidance"] = _PARTIAL_GUIDANCE
+    if not files:
+        data["no_change"] = True
+    if batch.results and all(r["status"] == "already_applied" for r in batch.results):
+        data["already_applied"] = True
+    return tool_success(data)
 
 
 def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) -> JsonObject:
@@ -668,100 +916,68 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
         return tool_failure("invalid_arguments", _MESSAGES["invalid_arguments"])
     try:
         operations = _parse(patch)
-        paths = {
-            name: _resolve(context, name)
-            for op in operations
-            for name in (op.path, op.destination)
-            if name is not None
-        }
-        resolved = sorted(set(paths.values()), key=str)
-        for path in resolved:
-            if any(parent in resolved for parent in path.parents):
-                raise _PatchError("overlapping_paths", path=model_path(path))
-        with ExitStack() as locks:
-            for path in resolved:
-                locks.enter_context(state.lock_path(path))
-            before = {path: _snapshot(path) for path in resolved}
-            pending, warnings = _plan(operations, paths, before)
-            changed = [path for path in resolved if pending[path] != before[path]]
-            # Protect against an external writer during matching, before the first write.
-            for path in resolved:
-                if _snapshot(path) != before[path]:
-                    raise _PatchError("file_changed", path=model_path(path))
-            return _commit(context, state, before, pending, changed, warnings)
     except _PatchError as error:
-        message = _VALIDATION_FAILED + "\n" + str(error)
-        if error.details:
-            message += "\n" + json.dumps(error.details, ensure_ascii=False)
-        return tool_failure(error.code, message)
-    except OSError as error:
-        return tool_failure("file_read_error", _VALIDATION_FAILED + "\n" + str(error))
-
-
-def _commit(
-    context: ToolContext,
-    state: FileReadState,
-    before: dict[Path, _Snapshot],
-    pending: dict[Path, _Snapshot],
-    changed: list[Path],
-    warnings: dict[Path, list[str]],
-) -> JsonObject:
-    results: list[JsonObject] = []
-    added = removed = 0
-    # Materialize destinations first, so a failed move never loses its source.
-    ordered = sorted(changed, key=lambda path: pending[path].payload is None)
-    failure: JsonObject | None = None
-    for position, path in enumerate(ordered):
-        target = pending[path]
-        try:
-            if _snapshot(path) != before[path]:
-                raise _PatchError("file_changed", path=model_path(path))
-            stale = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
-            if target.payload is None:
-                path.unlink()
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(path, target.payload, mode=target.mode)
-        except (OSError, _PatchError) as error:
-            failure = {
-                "code": error.code if isinstance(error, _PatchError) else "file_write_error",
-                "message": _WRITE_FAILED.format(path=model_path(path), reason=str(error)),
-                "pending_paths": [model_path(p) for p in ordered[position:]],
-            }
-            break
-        if target.payload is not None:
-            state.record_read(context.session_id, path)
-        details, plus, minus = _change_details(path, before[path].payload, target.payload)
-        added += plus
-        removed += minus
-        notes = list(dict.fromkeys(warnings.get(path, [])))
-        if stale:
-            notes.append(_STALE_WARNING.format(path=model_path(path)))
-        if notes:
-            details["warnings"] = notes
-        results.append(details)
-        if context.change_tracker is not None:
-            try:
-                old = _decode(before[path].payload or b"", model_path(path))
-                new = _decode(target.payload or b"", model_path(path))
-            except _PatchError:
-                pass  # Binary moves/deletions do not have a text delta.
-            else:
-                context.change_tracker.record_write(context.session_id, path, before=old, after=new)
-    context.add_display_line_changes(added=added, removed=removed)
-    context.add_display_count(len(results), "files")
-    for path in before:
-        if path not in changed and pending[path].payload is not None:
-            state.record_read(context.session_id, path)
-    if failure is not None and not results:
-        failure["message"] += "\nNo files were changed."
-        return tool_failure(failure["code"], failure["message"])
-    data: JsonObject = {"status": "partial" if failure else "success", "files": results}
-    if not changed:
-        data["already_applied"] = True
-    if failure:
-        data["error"] = failure
-    return tool_success(data)
+        return tool_failure(error.code, _VALIDATION_FAILED + "\n" + str(error))
+    batch = _Batch()
+    resolved: dict[str, Path] = {}
+    resolution_errors: dict[str, JsonObject] = {}
+    for operation in operations:
+        for name in (operation.path, operation.destination):
+            if name is not None and name not in resolved and name not in resolution_errors:
+                try:
+                    resolved[name] = _resolve(context, name)
+                except _PatchError as error:
+                    resolution_errors[name] = _error_data(error)
+    all_paths = set(resolved.values())
+    overlaps = {
+        p for p in all_paths if any(p in q.parents or q in p.parents for q in all_paths if p != q)
+    }
+    with ExitStack() as locks:
+        for path in sorted(all_paths, key=str):
+            locks.enter_context(state.lock_path(path))
+        for number, operation in enumerate(operations, 1):
+            steps = [operation]
+            if operation.action == "update":
+                steps = [
+                    replace(operation, destination=None, hunks=[h], hunk_number=i)
+                    for i, h in enumerate(operation.hunks, 1)
+                ]
+                if operation.destination:
+                    steps.append(_Operation("move", operation.path, operation.destination))
+            operation_failed = False
+            for step in steps:
+                outcome: JsonObject = {
+                    "operation": number,
+                    "action": step.action,
+                    "path": model_path(resolved[step.path]) if step.path in resolved else step.path,
+                }
+                if step.action == "update":
+                    outcome["hunk"] = step.hunk_number
+                if step.destination:
+                    outcome["destination"] = (
+                        model_path(resolved[step.destination])
+                        if step.destination in resolved
+                        else step.destination
+                    )
+                batch.results.append(outcome)
+                names = [n for n in (step.path, step.destination) if n is not None]
+                entry_error = next(
+                    (resolution_errors[n] for n in names if n in resolution_errors), None
+                )
+                paths = {n: resolved[n] for n in names if n in resolved}
+                overlap = next((p for p in paths.values() if p in overlaps), None)
+                if overlap is not None:
+                    entry_error = _error_data(
+                        _PatchError("overlapping_paths", path=model_path(overlap))
+                    )
+                if entry_error:
+                    outcome.update(status="failed", error=entry_error)
+                else:
+                    if operation_failed and step.action == "move":
+                        batch.blocked.update(paths.values())
+                    _run_step(context, state, batch, step, paths, outcome)
+                operation_failed |= outcome["status"] in {"failed", "skipped", "partial"}
+    return _batch_result(context, batch)
 
 
 def _display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
@@ -793,6 +1009,9 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         offload_tool_handler(make_apply_patch_handler(file_state)),
         family="files",
         open_input_schema=True,
-        result_schema={"type": "object", "required": ["status", "files"]},
+        result_schema={
+            "type": "object",
+            "required": ["status", "total", "succeeded", "failed", "results", "files"],
+        },
         display=ToolDisplay(parts_builder=_display_parts, hidden_argument_keys=("patch",)),
     )
