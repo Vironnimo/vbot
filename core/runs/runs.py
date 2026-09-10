@@ -37,6 +37,7 @@ DEFAULT_RUN_EVENT_RETENTION_LIMIT = 4096
 DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT = 4096
 DEFAULT_COMPLETED_RUN_RETENTION_LIMIT = 512
 DEFAULT_WAITING_WORK_LIMIT = 32
+_CANCEL_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
@@ -332,6 +333,7 @@ class Run:
             CancelCallback | _ActiveToolCallSentinel | _CancelledToolCallSentinel,
         ] = {}
         self._cancel_cleanup_futures: set[asyncio.Future[Any]] = set()
+        self._cancel_cleanup_expired = False
         self._started_from_queue_item_id: str | None = None
         # Executor-supplied extras merged into every terminal event payload
         # (e.g. the chat loop's end-of-run session usage totals). Filled by the
@@ -474,27 +476,44 @@ class Run:
         future = _schedule_callback(callback)
         if future is None:
             return
+        if self._cancel_cleanup_expired:
+            future.cancel()
+            return
         self._cancel_cleanup_futures.add(future)
         future.add_done_callback(self._cancel_cleanup_futures.discard)
 
     async def _wait_for_cancel_cleanup(self) -> None:
-        """Wait until every async cancellation callback has settled.
+        """Drain async cancellation callbacks within one shared time budget.
 
         Callbacks may register further cancellation work while an earlier
         callback is completing, so drain snapshots until the owned set is
         empty. Callback failures are logged by their completion callback and do
-        not prevent the Run from reaching its terminal cancelled state.
+        not prevent the Run from reaching its terminal cancelled state. At the
+        deadline, cancel remaining work without waiting for cancellation-resistant
+        callbacks; cleanup remains best effort and the Session can advance.
         """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _CANCEL_CLEANUP_TIMEOUT_SECONDS
         while self._cancel_cleanup_futures:
             cleanup_futures = tuple(self._cancel_cleanup_futures)
-            await asyncio.gather(
-                *cleanup_futures,
-                return_exceptions=True,
+            done, pending = await asyncio.wait(
+                cleanup_futures,
+                timeout=max(0.0, deadline - loop.time()),
             )
-            # Gathering already-completed futures need not yield to their queued
-            # done callbacks. Retire this settled snapshot ourselves so the drain
-            # cannot spin while preserving any newly registered cleanup work.
-            self._cancel_cleanup_futures.difference_update(cleanup_futures)
+            # Retire settled Futures directly while preserving cleanup work
+            # registered by a callback in this snapshot.
+            self._cancel_cleanup_futures.difference_update(done)
+            if pending or (self._cancel_cleanup_futures and loop.time() >= deadline):
+                self._cancel_cleanup_expired = True
+                _LOGGER.warning(
+                    "Run cancel cleanup timed out (run=%s pending=%d)",
+                    self.id,
+                    len(self._cancel_cleanup_futures),
+                )
+                for future in self._cancel_cleanup_futures:
+                    future.cancel()
+                self._cancel_cleanup_futures.clear()
+                return
 
     def tool_call_cancelled(self, tool_call_id: str) -> bool:
         """Return whether a tool call was user-cancelled."""
@@ -942,6 +961,7 @@ class ChatRunManager:
                     address.session_id,
                     self._waiting_work_limit,
                 )
+                item.future.cancel()
                 raise WaitingWorkLimitError("global waiting work limit reached")
 
             item.waiting_scope = waiting_scope
@@ -1272,8 +1292,7 @@ class ChatRunManager:
         except (KeyboardInterrupt, SystemExit):
             # Process-level interrupts must never be downgraded to a failed run:
             # record the run as cancelled best-effort, then let the interrupt
-            # propagate so shutdown proceeds. Other non-Exception BaseExceptions
-            # (e.g. GeneratorExit) likewise fall through untouched.
+            # propagate so shutdown proceeds.
             run.mark_cancelled(payload_extras=terminal_extras())
             raise
         except Exception as exc:
@@ -1283,6 +1302,12 @@ class ChatRunManager:
                 return
             run.mark_failed(exc, payload_extras=terminal_extras())
         finally:
+            # An escaping BaseException, including one from exception-handler
+            # cleanup, must settle waiters before releasing the Session slot.
+            # Preserve the original abort on the executor task while waiters
+            # receive the ordinary terminal cancellation contract.
+            if run.status == RunStatus.RUNNING:
+                run.mark_cancelled(payload_extras=terminal_extras())
             async with self._lock:
                 if self._active_by_session.get(address) is run:
                     self._active_by_session.pop(address, None)
