@@ -1724,6 +1724,26 @@ class TestModelRegistryRealResources:
             assert deepseek.capabilities.reasoning.control == "levels"
             assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
 
+    def test_ollama_cloud_deepseek_v41_provisional_profile(self):
+        """Pin the user-approved V4 Flash assumptions until live rollout verification."""
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        model = registry.get("ollama-cloud", "deepseek-v4.1-flash")
+        previous = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
+
+        assert model.model_id == "deepseek-v4.1-flash"
+        assert model.connections == ("api-key",)
+        assert model.context_window == 1_048_576
+        assert model.capabilities.vision is True
+        assert model.capabilities.tools is True
+        assert model.capabilities.reasoning == previous.capabilities.reasoning
+        assert model.max_output_tokens == previous.max_output_tokens == 65_536
+        assert model.recommended_temperature == previous.recommended_temperature == 1.0
+        assert model.recommended_top_p == previous.recommended_top_p == 0.95
+        assert model.metadata["ollama"]["remote"] is True
+        assert model.metadata["ollama_cloud"]["reasoning_response_field"] == "reasoning"
+        assert model.reasoning_replay is None
+        assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
+
     @pytest.mark.parametrize(
         ("model_id", "max_output_tokens"),
         [
