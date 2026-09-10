@@ -728,6 +728,7 @@ class _CompactionPromptRefresh:
     skill_catalog: PinnedSkillCatalog
     prompt_read_paths: tuple[Path, ...]
     available_skill_names: tuple[str, ...] | None
+    memory_prompt_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1720,16 +1721,16 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
+        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_working_project_context,
+            self._dependencies,
+            run.agent_id,
+            run.session_id,
+            prompt_project,
+            project_prompt_context,
+            project_id,
+        )
         if temporary_source is None:
-            working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-                pinned_working_project_context,
-                self._dependencies,
-                run.agent_id,
-                run.session_id,
-                prompt_project,
-                project_prompt_context,
-                project_id,
-            )
             soul_context = await _CHAT_TRANSFORM_WORKERS.run(
                 pinned_soul_context,
                 self._dependencies,
@@ -1750,7 +1751,7 @@ class ChatLoop:
                 project_id, prompt_project, run.agent_id
             )
         else:
-            working_project_context = soul_context = memory_files_context = None
+            soul_context = memory_files_context = None
             # A temporary participant has no identity-owned Skills, but an
             # explicitly selected Project still supplies its shared Skill pool.
             skill_project_id = working_project_id
