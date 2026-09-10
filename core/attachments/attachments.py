@@ -292,8 +292,13 @@ def sniff_media_type(data: bytes, filename: str) -> str:
 
 
 def _sniff_mime(data: bytes, filename: str) -> str:
-    if data.startswith(b"BM") and len(data) >= 14:
-        return "image/bmp"
+    if data.startswith(b"BM") and len(data) >= 26 and data[6:10] == b"\x00" * 4:
+        header_size = int.from_bytes(data[14:18], "little")
+        pixel_offset = int.from_bytes(data[10:14], "little")
+        if header_size in {12, 16, 40, 52, 56, 64, 108, 124} and (
+            14 + header_size <= pixel_offset < len(data)
+        ):
+            return "image/bmp"
     if data.startswith((b"II\x2a\x00", b"MM\x00\x2a", b"II\x2b\x00", b"MM\x00\x2b")):
         return "image/tiff"
     if len(data) >= 16 and data[4:8] == b"ftyp":

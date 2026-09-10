@@ -744,6 +744,97 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(document.body.textContent).not.toContain('Stale option');
   });
 
+  it('saves an edited task without replaying stale siblings or displayed defaults', async () => {
+    const model_tasks = {
+      speech_to_text: { target: 'openrouter/transcribe::api-key', options: {} },
+      text_to_speech: {
+        target: 'openrouter/voice::api-key',
+        options: { retired: true },
+      },
+    };
+    getTaskModelOptionsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        fields: [
+          {
+            name: 'temperature',
+            type: 'number',
+            label: 'Temperature',
+            default: 0,
+          },
+          ...(taskType === 'speech_to_text'
+            ? [
+                {
+                  name: 'translate',
+                  type: 'boolean',
+                  label: 'Translate',
+                  default: false,
+                },
+              ]
+            : []),
+        ],
+      }),
+    );
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: { settings: { model_tasks } },
+    });
+    await waitForCondition(() =>
+      document.querySelector('button[role="switch"]'),
+    );
+    expect(updateTaskModelSettingsMock).not.toHaveBeenCalled();
+    document.querySelector('button[role="switch"]').click();
+    flushSync();
+    button('Save').click();
+    await waitForCondition(() => updateTaskModelSettingsMock.mock.calls.length);
+    expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
+      speech_to_text: {
+        target: model_tasks.speech_to_text.target,
+        options: { translate: true },
+      },
+    });
+  });
+
+  it.each([{ retired: true }, { voice: 'removed' }])(
+    'resets stale options without changing the target: %j',
+    async (options) => {
+      const target = 'openrouter/voice::api-key';
+      getTaskModelOptionsMock.mockResolvedValue({
+        fields: [
+          {
+            name: 'voice',
+            type: 'select',
+            label: 'Voice',
+            default: '',
+            required: true,
+            options: [{ value: 'available', label: 'Available' }],
+          },
+        ],
+      });
+      mountedComponent = mount(SettingsSpecializedModelsPanel, {
+        target: document.body,
+        props: {
+          settings: { model_tasks: { text_to_speech: { target, options } } },
+        },
+      });
+      await waitForCondition(
+        () => button('Reset options') && !button('Reset options').disabled,
+      );
+      button('Reset options').click();
+      flushSync();
+      document.getElementById('task-model-text_to_speech-voice').click();
+      flushSync();
+      document.querySelector('[role="option"]').click();
+      flushSync();
+      button('Save').click();
+      await waitForCondition(
+        () => updateTaskModelSettingsMock.mock.calls.length,
+      );
+      expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
+        text_to_speech: { target, options: { voice: 'available' } },
+      });
+    },
+  );
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.

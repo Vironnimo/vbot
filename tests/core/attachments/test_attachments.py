@@ -411,3 +411,31 @@ def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monke
     assert second.id == "att_000000000002"
     assert Path(store.get(first.id).file_path).read_bytes() == b"first"
     assert Path(store.get(second.id).file_path).read_bytes() == b"%PDF-1.7 second"
+
+
+@pytest.mark.parametrize("data", [b"BMW is a car maker\n", b"BM25 ranking notes\n"])
+def test_bm_prefixed_text_is_stored_as_text(tmp_path: Path, data: bytes) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", data)
+    assert record.media_type == "text/plain"
+    assert Path(record.file_path).suffix == ".txt"
+    assert Path(record.file_path).read_bytes() == data
+    assert store.get(record.id).media_type == "text/plain"
+
+
+def test_bmp_sniffing_requires_plausible_headers() -> None:
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), "red").save(output, format="BMP")
+    data = output.getvalue()
+    assert sniff_media_type(data, "arbitrary.txt") == "image/bmp"
+    assert sniff_media_type(b"BM" + b"\x00" * 20, "x.bmp") != "image/bmp"
+    for offset, replacement in [
+        (6, b"BAD!"),
+        (10, (9999).to_bytes(4, "little")),
+        (14, (9999).to_bytes(4, "little")),
+    ]:
+        malformed = data[:offset] + replacement + data[offset + 4 :]
+        assert sniff_media_type(malformed, "x.bmp") != "image/bmp"
+    assert sniff_media_type(data[:54], "x.bmp") != "image/bmp"

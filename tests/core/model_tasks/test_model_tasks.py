@@ -1114,10 +1114,8 @@ def test_options_for_image_seed_only_when_supported_by_model() -> None:
     assert "seed" not in recraft_names
 
 
-def test_options_for_stt_includes_response_format_when_model_advertises_it() -> None:
-    """``response_format`` is added to the STT schema only when the model's
-    ``supported_parameters`` includes it. Whisper-style models do; non-
-    Whisper STT models may not."""
+def test_openrouter_stt_omits_response_format_even_when_advertised() -> None:
+    """OpenRouter execution consumes JSON and does not send response_format."""
 
     models = _Models(
         [
@@ -1132,11 +1130,7 @@ def test_options_for_stt_includes_response_format_when_model_advertises_it() -> 
 
     schema = service.options(TASK_SPEECH_TO_TEXT, "openrouter/openai/whisper-1::api-key")
     field_names = {field.name for field in schema.fields}
-    assert "response_format" in field_names
-    response_format = next(field for field in schema.fields if field.name == "response_format")
-    assert response_format.type == "select"
-    response_values = {choice.value for choice in response_format.options}
-    assert {"json", "text", "srt", "verbose_json", "vtt"} <= response_values
+    assert "response_format" not in field_names
 
 
 def test_options_for_stt_omits_response_format_when_model_does_not_advertise_it() -> None:
@@ -1420,3 +1414,35 @@ class _Storage:
             else:
                 self._settings.pop(task_type, None)
         return dict(self._settings)
+
+
+@pytest.mark.parametrize("stale_options", [{"retired_option": True}, {"voice": "removed"}])
+def test_unchanged_stale_binding_does_not_block_other_updates(stale_options: dict) -> None:
+    stale = {"target": "openrouter/voice::api-key", "options": stale_options}
+    storage = _Storage({TASK_TEXT_TO_SPEECH: stale})
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model("voice", (TASK_TEXT_TO_SPEECH,), supported_voices=("available",)),
+                _model("transcribe", (TASK_SPEECH_TO_TEXT,)),
+            ]
+        ),
+        _Credentials(),
+        storage,
+    )
+    update = {
+        TASK_TEXT_TO_SPEECH: stale,
+        TASK_SPEECH_TO_TEXT: {"target": "openrouter/transcribe::api-key", "options": {}},
+    }
+    service.validate_update(update)
+    saved = service.update(update)
+    assert saved[TASK_TEXT_TO_SPEECH] == stale
+    assert saved[TASK_SPEECH_TO_TEXT] == update[TASK_SPEECH_TO_TEXT]
+    with pytest.raises(TaskModelValidationError):
+        service.validate_binding(TASK_TEXT_TO_SPEECH, stale)
+    with pytest.raises(TaskModelValidationError):
+        service.update({TASK_TEXT_TO_SPEECH: {"options": {**stale_options, "speed": 1.1}}})
+    repaired = service.update({TASK_TEXT_TO_SPEECH: {"options": {"voice": "available"}}})
+    assert repaired[TASK_TEXT_TO_SPEECH]["target"] == stale["target"]
+    assert service.binding_is_usable(TASK_TEXT_TO_SPEECH)

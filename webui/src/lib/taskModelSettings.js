@@ -174,14 +174,22 @@ export function applyOptionDefaults(binding, fields) {
   return { ...normalizeBinding(binding), options };
 }
 
-export function createTaskModelUpdatePayload(bindings) {
+export function createTaskModelUpdatePayload(bindings, previous) {
   const payload = {};
+  const baseline = previous ? createTaskModelUpdatePayload(previous) : null;
   for (const row of TASK_MODEL_ROWS) {
     const binding = normalizeBinding(bindings?.[row.taskType]);
     payload[row.taskType] = {
       target: binding.target,
       options: normalizeOptionsForPayload(binding.options),
     };
+    if (
+      baseline &&
+      JSON.stringify(payload[row.taskType]) ===
+        JSON.stringify(baseline[row.taskType])
+    ) {
+      delete payload[row.taskType];
+    }
   }
   return payload;
 }
