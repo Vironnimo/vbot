@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -19,6 +20,7 @@ CRON_UPDATE_FLAGS = (
     "--at",
     "--repeat",
     "--session",
+    "--clear-session",
     "--status",
 )
 _PROMPT_PREVIEW_LIMIT = 60
@@ -45,6 +47,26 @@ def cron_list(instance: ServerInstance) -> CommandResult:
     if not isinstance(jobs, list):
         return CommandResult(ok=False, message="RPC result missing jobs list", instance=instance)
     return CommandResult(ok=True, message=_format_job_rows(jobs), instance=instance)
+
+
+def cron_show(instance: ServerInstance, job_id: str) -> CommandResult:
+    """Read the complete saved job, including its prompt and execution state."""
+    payload = _rpc_call(instance, "cron.list", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    jobs = payload.data.get("jobs")
+    if not isinstance(jobs, list):
+        return CommandResult(ok=False, message="RPC result missing jobs list", instance=instance)
+    job = next((item for item in jobs if isinstance(item, dict) and item.get("id") == job_id), None)
+    if job is None:
+        return CommandResult(
+            ok=False,
+            message=f"cron job not found: {job_id}; use vbot cron list with the same target",
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True, message=json.dumps(job, ensure_ascii=False, indent=2), instance=instance
+    )
 
 
 def cron_update(
@@ -143,7 +165,9 @@ def _format_job_row(job: object) -> str:
         f" schedule={schedule}"
         f" remaining_runs={remaining_runs}"
         f" next_fire_at={next_fire_at}"
+        f" session={job.get('session_id') or 'new'}"
         f" last_outcome={last_outcome}"
+        f" last_error={job.get('last_error') or '-'}"
         f" prompt={prompt}"
     )
 

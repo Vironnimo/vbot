@@ -1009,8 +1009,9 @@ def test_provider_connect_passes_account_and_suggests_account_status_command(
     lines = result.message.splitlines()
     assert "openai:subscription" in result.message
     assert "account: work" in result.message
-    assert lines[-1].endswith(
+    assert (
         "provider connect-status openai --connection openai:subscription --account work"
+        in lines[-1]
     )
     assert calls == [
         {
@@ -1511,7 +1512,7 @@ def test_provider_set_enabled_reports_missing_credential_hint(
     result = provider_management.provider_set_enabled(instance, "ollama", True, "ollama:cloud")
 
     assert result.ok is True
-    assert "provider set-key ollama" in result.message
+    assert "provider status ollama --connection ollama:cloud" in result.message
 
 
 def test_provider_usage_history_formats_samples(
@@ -1624,3 +1625,29 @@ def test_parse_args_supports_usage_history_commands() -> None:
 
     assert (history.command, history.since, history.until) == ("usage-history", None, None)
     assert (clear.command, clear.yes) == ("usage-history-clear", True)
+
+
+def test_set_key_preserves_save_and_reports_discovery_failure(tmp_path, monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        result = (
+            {"connection_id": "openai:api-key", "credential_key": "OPENAI_API_KEY"}
+            if len(calls) == 1
+            else {
+                "provider_id": "openai",
+                "errors": [{"connection_id": "openai:api-key", "error": "discovery-sentinel"}],
+            }
+        )
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    monkeypatch.setattr(provider_management.httpx, "post", post)
+    result = provider_management.provider_set_key(
+        make_instance(tmp_path), "openai", "secret-sentinel", refresh_models=True
+    )
+    assert not result.ok
+    assert [call["method"] for call in calls] == ["provider.set_key", "model.refresh_db"]
+    assert "OPENAI_API_KEY" in result.message
+    assert "discovery-sentinel" in result.message
+    assert "secret-sentinel" not in result.message

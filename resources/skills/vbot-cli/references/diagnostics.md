@@ -4,10 +4,10 @@
 
 ```bash
 vbot log list
-vbot log read <daily-log-name>
+vbot log read <daily-log-name> [--limit <count>] [--level error]
 ```
 
-- `list` shows daily log files newest-first. `read` takes the name exactly as listed (`<date>.log`) and returns parsed entries plus a cursor for live-tail handoff.
+- `list` shows daily log files newest-first. `read` takes the name exactly as listed (`<date>.log`) and prints the newest 100 parsed entries by default, in chronological order. `--level` filters first; `--limit 0` prints all matches. The summary states how many matches are shown. This is a snapshot, not a live tail; the CLI still fetches the complete daily file from the server.
 
 ## Debug traces — raw provider traffic
 
@@ -39,6 +39,7 @@ vbot statistics skills   [--since <iso>] [--until <iso>]
 ```
 
 - `--since`/`--until` take ISO-8601 UTC timestamps (e.g. `2026-06-01T00:00:00Z`); omit both for all time. The server rejects malformed or inverted windows.
+- Ranked Provider/Model/Run/error/Tool breakdowns show at most the top 20 rows; totals cover the selected window.
 - `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `compactions` = checkpoints, reclaimed context, and per-Session breakdowns; `errors` = failures by kind/provider/model; `tools` = per-tool call counts and error rates.
 - `skills` reports Skill usage for delete/improve decisions: it separates Skills whose recorded offers produced no conversion from Skills with no offer data, then per Skill shows origins, `offered` (Sessions whose catalog recorded it), `activated` (all Sessions that loaded it), `activated_after_offer`, `offer_conversion`, and last activation.
 

@@ -325,3 +325,26 @@ def test_parse_args_rejects_non_array_prompt_layout(
         cli_main.parse_args(["prompt", "set-layout", "--layout-json", '{"id":"core:tools"}'])
 
     assert exc_info.value.code == 2
+
+
+def test_prompt_show_returns_only_requested_block_in_exact_scope(tmp_path, monkeypatch):
+    import json
+
+    expected = {"id": "user:long", "text": "sentinel line\n" * 80, "editable": True}
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"blocks": [expected, {"id": "other", "text": "excluded"}]},
+            },
+        )
+
+    monkeypatch.setattr(prompt_management.httpx, "post", post)
+    result = prompt_management.prompt_show(make_instance(tmp_path), "user:long", "agent:assistant")
+    assert result.ok
+    assert json.loads(result.message) == {"scope": "agent:assistant", **expected}
+    assert calls[0]["params"] == {"scope": {"type": "agent", "agent_id": "assistant"}}

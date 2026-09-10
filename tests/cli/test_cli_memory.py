@@ -25,6 +25,29 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
     )
 
 
+@pytest.mark.parametrize("listing", [{"ok": True, "result": {}}, {"ok": False}])
+def test_failed_entry_lookup_never_claims_the_scope_is_empty(tmp_path, monkeypatch, listing):
+    calls = []
+
+    def post(url, *, json, **kwargs):
+        calls.append(json["method"])
+        if json["method"] == "memory.remove":
+            return httpx.Response(
+                200, json={"ok": False, "error": {"message": "entry 99 does not exist"}}
+            )
+        return httpx.Response(200, json=listing)
+
+    monkeypatch.setattr(memory_management.httpx, "post", post)
+    result = memory_management.memory_remove(
+        make_instance(tmp_path), "assistant", "agent", 99, True
+    )
+    assert not result.ok
+    assert "entry 99 does not exist" in result.message
+    assert "entry lookup" in result.message
+    assert "has no agent-scope entries" not in result.message
+    assert calls == ["memory.remove", "memory.list"]
+
+
 def memory_response(entry: dict[str, Any] | None = None) -> dict[str, Any]:
     scopes = {
         "agent": [{"id": 1, "scope": "agent", "content": "Keep answers short"}],

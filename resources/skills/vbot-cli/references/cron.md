@@ -1,27 +1,29 @@
-# Cron Jobs
+# Cron jobs
 
-Schedule recurring or one-time agent prompts.
+Schedule an Agent Run at a time or repeatedly. A bare Agent id targets an Identity Agent; `agent@project` targets that Project Agent.
 
 ```bash
 vbot cron list
-vbot cron create <agent> --name <name> --prompt <text> (--cron "<expression>" | --at <iso-datetime>) [--session <session-id>]
-vbot cron update <job-id> [--agent <agent>] [--name <name>] [--prompt <text>] [--cron "<expression>" | --at <iso-datetime>] [--session <session-id>] [--status active|paused]
-vbot cron delete|enable|disable <job-id>
+vbot cron show <job-id>
+vbot cron create <agent> --prompt <text> [--name <name>] (--cron "<five fields>" | --every <minutes> | --at <iso-datetime>) [--repeat <count>] [--session <session-id>]
+vbot cron update <job-id> [--agent <agent>] [--name <name>] [--prompt <text>] [--cron "<five fields>" | --every <minutes> | --at <iso-datetime>] [--repeat <count>] [--session <session-id> | --clear-session] [--status active|paused]
+vbot cron enable <job-id>
+vbot cron disable <job-id>
+vbot cron delete <job-id>
 ```
 
-- `create` requires exactly one of `--cron` (exactly five fields: minute, hour, day of month, month, weekday; minimum cadence one minute) or `--at` (one-time ISO 8601 datetime); the schedule type is derived from the flag.
-- `<agent>` (and `update --agent`) takes a bare identity agent or `agent@projekt`; a project-targeted job runs in that project.
-- `cron list` includes active, paused, failed, completed, and missed history, and shows name, id, target (same address form), status, schedule, next fire time, last outcome, and a prompt preview — read job ids from there.
-- `--name` is the human-readable job name shown before the technical id. Names do not need to be unique.
-- `create`, `update`, `enable`, and `disable` return the saved Cron job with its id, target, schedule, status, and projected next fire time; use that output as the immediate verification result.
-- `--session` pins the job to an existing Session owned by the target. Without it, every fire creates a fresh Session.
-- Cron expressions and offset-free timestamps passed to `--at` use the application timezone (`vbot config get server.timezone`). A missed one-time job does not catch up after a restart and is recorded as `missed`.
-- A recurring job waits for its Run to finish before scheduling its next occurrence, so fires never overlap for the same job. Repeated Run failures are recorded and eventually stop the job as `failed`.
-- A cron job targeting a project agent blocks `project rm` for that project (`project_in_use`) — retarget or delete the job first.
+Create requires exactly one schedule: `--cron` is minute/hour/day/month/weekday, `--every` is a positive whole-minute interval, and `--at` is a one-time ISO timestamp. Cron and offset-free timestamps use `vbot config get server.timezone`. Choose a future date for one-time jobs; missed fires do not replay after restart.
+
+Names need not be unique and default from the prompt when omitted. `list` returns exact ids, schedule, remaining fires, next fire, Session target, last outcome/error and a shortened prompt. Use `show` for the complete prompt and saved record before editing. Create/update/enable/disable report the saved state; that does not prove the scheduled Run has executed.
+
+Recurring schedules are unlimited unless `--repeat` sets a finite number of future fires. On update it replaces the remaining count. A recurring job waits for its Run to finish before scheduling its next occurrence; repeated failures eventually stop it. Inspect `last_outcome` and `last_error` when troubleshooting.
+
+On create, omitting `--session` creates a fresh Session per fire. On update, omission preserves the current target; `--clear-session` restores fresh Sessions. A pinned Session must belong to the chosen Agent. Other omitted update fields stay unchanged.
+
+Write self-contained prompts stating the work, relevant constraints and expected report. A Project-targeted job can block Project removal; retarget or delete it first.
 
 ```bash
-vbot cron create assistant --name "Morning news" --prompt "Check the news" --cron "0 9 * * *"
-vbot cron create builder@vbot --name "Nightly build" --prompt "Run the nightly build" --cron "0 2 * * *"
-vbot cron create assistant --name "Deadline reminder" --prompt "Remind me about the deadline" --at 2026-07-01T09:00:00
+vbot cron create assistant --name "Morning news" --prompt "Check the news and report relevant changes" --cron "0 9 * * *"
+vbot cron create assistant --prompt "Check the build and report a changed result" --every 15 --repeat 4
 vbot cron update <job-id> --status paused
 ```

@@ -260,7 +260,7 @@ The WebUI is the recommended place to manage Connections and Accounts because it
 <summary>Equivalent Provider CLI examples</summary>
 
 ```bash
-vbot provider set-key openrouter YOUR_KEY --refresh-models
+vbot provider set-key openrouter --stdin --refresh-models
 vbot provider connect openai --connection openai:subscription
 vbot provider usage --connection openai:subscription
 vbot provider enable ollama
@@ -317,7 +317,7 @@ The equivalent secret-free `settings.json` shape is:
 }
 ```
 
-Use `"auth": "api_key"` for standard `Authorization: Bearer` authentication and enter the key through Settings or `provider custom-save --api-key`. Omit or clear `models_endpoint` to use manual Models only. Discovery and manual Models can coexist: a manual record overrides discovered facts for the same wire id, while other discovered Models remain available. Saving through the WebUI/RPC reloads Providers and Models immediately; after direct file editing, validate with `vbot doctor settings` and restart vBot.
+Use `"auth": "api_key"` for standard `Authorization: Bearer` authentication and enter the key through Settings or `provider custom-save --api-key-stdin`. Omit or clear `models_endpoint` to use manual Models only. Discovery and manual Models can coexist: a manual record overrides discovered facts for the same wire id, while other discovered Models remain available. Saving through the WebUI/RPC reloads Providers and Models immediately; after direct file editing, validate with `vbot doctor settings` and restart vBot.
 
 ```bash
 vbot provider custom-save local-ai --name "Local AI" --base-url http://127.0.0.1:8080/v1 --auth none --models-endpoint /models --model chat-model
@@ -566,9 +566,11 @@ vbot session list coder
 vbot session create coder --make-current
 vbot session fork coder SESSION_ID --target-agent reviewer
 vbot session rename coder SESSION_ID --title "Research notes"
-vbot session set-compaction-policy coder SESSION_ID --policy '{"enabled": false}'
+vbot session set-compaction-policy coder SESSION_ID --policy '{"enabled":false,"trigger":{"type":"context_ratio","threshold":0.8},"strategy":{"type":"summary_tail","tail_tokens":15000,"summary_model":null}}'
 vbot session delete coder SESSION_ID --yes
 ```
+
+`session list` returns at most 100 Sessions by default. Use `--limit`, pass the returned JSON as `--cursor`, or explicitly request `--all` to collect every page.
 
 Deleting an Agent, Project, or Session archives its vBot-owned state rather than silently erasing it. Project source repositories are never archived or removed.
 
@@ -610,12 +612,12 @@ Tools are runtime capabilities exposed according to Agent, Project, Extension, a
 ```bash
 vbot tool list
 vbot skill list
-vbot skill read --scope global
+vbot skill read SKILL_NAME --scope global
 vbot skill create librarian --scope agent:coder --file SKILL.md
 vbot prompt preview coder
 ```
 
-The CLI Skill manager authors only global and private Identity Agent scopes; it supports `read`, `create`, `update`, `delete`, `write-file`, and `remove-file`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates.
+The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `read`, `create`, `update`, `delete`, `write-file`, and `remove-file`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
 
 The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Foreground work returns directly, while top-level background work completes asynchronously and wakes the parent with the finished results. Nested Sub-Agents run in the foreground, and background Bash is unavailable inside a Sub-Agent so work cannot be stranded after the child Session ends.
 
@@ -645,7 +647,7 @@ vbot model list --task chat
 vbot model list --provider openai --task chat --capability tools
 ```
 
-The result contains only Models with at least one enabled, credentialed Connection and prints the exact id accepted by `agent create --model` or `agent update --model`. It also includes the effective context window, capabilities/task types, and `reachable: no` for a local Model whose service is currently down. Additional repeatable filters are `--capability`, `--task`, `--input-modality`, and `--output-modality`; `--min-context-window` applies a token floor.
+The result contains only Models with at least one usable Connection (including enabled keyless Connections) and prints the exact id accepted by `agent create --model` or `agent update --model`. It also includes the effective context window, capabilities/task types, and `reachable: no` for a local Model whose service is currently down. Additional repeatable filters are `--capability`, `--task`, `--input-modality`, and `--output-modality`; `--min-context-window` applies a token floor.
 
 ### Recall
 
@@ -836,19 +838,20 @@ Channels serialize work per conversation and share bounded Queue capacity. Only 
 
 ## Cron
 
-Cron schedules one-time or recurring Agent Runs. Every job has a required human-readable name; names need not be unique because the generated job id remains its identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
+Cron schedules one-time or recurring Agent Runs. Names default from the prompt when omitted and need not be unique; the generated job id is the identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
 
 ```bash
 vbot cron create assistant --name "Morning priorities" --prompt "Summarize today's priorities" --cron "0 9 * * *"
-vbot cron create reviewer@my-project --name "Repository review" --prompt "Review the repository status" --at "2026-07-20T10:00:00+02:00"
+vbot cron create reviewer@my-project --name "Repository review" --prompt "Review the repository status" --every 60 --repeat 3
 vbot cron list
+vbot cron show JOB_ID
 vbot cron update JOB_ID --status paused
 vbot cron enable JOB_ID
 vbot cron disable JOB_ID
 vbot cron delete JOB_ID
 ```
 
-Recurring expressions contain exactly five fields and have a minimum cadence of one minute. A job without `--session` receives a fresh Session for every fire. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
+Recurring expressions contain exactly five fields and have a minimum cadence of one minute. On create, omitting `--session` gives each fire a fresh Session. On update, omission preserves the target; `--clear-session` restores fresh Sessions. Use `show` to read the full prompt before replacing it. `--every` takes whole minutes; `--repeat` limits future fires. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
 
 ## Bootstrap
 
@@ -858,6 +861,7 @@ Bootstrap schedules an Agent Run after the server has fully reached its ready po
 vbot bootstrap create assistant --name "Startup health" --prompt "Check server status and logs" --mode always
 vbot bootstrap create --current-session --name "Verify vBot update" --prompt "Check server status and the latest logs, then report whether the update succeeded. Do not repeat the update." --mode once
 vbot bootstrap list
+vbot bootstrap show JOB_ID
 vbot bootstrap update JOB_ID --prompt "Check status, logs, and Provider health"
 vbot bootstrap disable JOB_ID
 vbot bootstrap enable JOB_ID
@@ -866,7 +870,7 @@ vbot bootstrap delete JOB_ID
 
 Creation requires `--mode once|always`. A job created, updated, or enabled is armed for a future startup and cannot fire immediately in the current process. `--current-session` is available only from Bash inside a vBot Run and uses that Run's exact Agent/Project/Session context; otherwise pass an Agent address and optional `--session` explicitly. A completed one-shot is immutable history. Failed one-shots may be rearmed with `enable`.
 
-Before `vbot update` when it will restart the server, create a one-shot Bootstrap with `--current-session`, verify it with `vbot bootstrap list`, and give it a prompt that runs `vbot server status`, `vbot log list`, and `vbot log read` on the latest log before reporting the result. `vbot update --no-restart` does not need a Bootstrap unless a later startup check is wanted.
+Before `vbot update` when it will restart the server, create a one-shot Bootstrap with `--current-session`, verify its full prompt and target with `vbot bootstrap show JOB_ID`, and give it a prompt that runs `vbot server status`, `vbot log list`, and `vbot log read` on the latest log before reporting the result. `vbot update --no-restart` does not need a Bootstrap unless a later startup check is wanted.
 
 ## Extensions and Home Assistant
 
@@ -913,21 +917,24 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Paths | `home [--data-dir ...]` |
 | Desktop | `desktop [--host ... --port ...]` |
 | Installation lifecycle | `update`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status` |
-| Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent delete` |
-| Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project rm` |
+| Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
+| Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project detect`, `project rm` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session set-compaction-policy`, `session delete`, `session link-channel` |
 | Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
-| Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel grant-admin`, `channel revoke-admin`, `channel remove` |
-| Tools and Skills | `tool list`, `skill list`, `skill read`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
-| System Prompt | `prompt list`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
-| Providers | `provider list`, `provider status`, `provider usage`, `provider custom-list`, `provider custom-save`, `provider custom-delete`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |
-| Models | `model list`, `model refresh`, `task-model list`, `task-model targets`, `task-model options`, `task-model set`, `task-model clear` |
-| Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set` |
-| Cron | `cron list`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
-| Bootstrap | `bootstrap list`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |
-| Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics errors`, `statistics tools`, `statistics skills` |
+| Channels | `channel add`, `channel list`, `channel update`, `channel set-token`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel grant-admin`, `channel revoke-admin`, `channel remove` |
+| Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
+| Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
+| System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
+| Providers | `provider list`, `provider status`, `provider usage`, `provider usage-history`, `provider usage-history-clear`, `provider custom-list`, `provider custom-save`, `provider custom-delete`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |
+| Models | `model list`, `model show`, `model refresh`, `task-model list`, `task-model targets`, `task-model options`, `task-model set`, `task-model set-option`, `task-model unset-option`, `task-model clear` |
+| Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set`, `extensions <name> operations`, `extensions <name> <operation>` |
+| Cron | `cron list`, `cron show`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
+| Bootstrap | `bootstrap list`, `bootstrap show`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |
+| Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics compactions`, `statistics errors`, `statistics tools`, `statistics skills` |
 | Configuration | `config list`, `config describe`, `config effective`, `config raw`, `config get`, `config set`, `config unset`, `config patch`, `doctor settings`, `doctor config` |
 | Diagnostics | `log list`, `log read`, `debug status`, `debug traces`, `debug trace`, `debug clear`, `debug probe` |
+
+`config set <path> --stdin` reads an exact JSON value without shell-quoting loss. `log read` prints the latest 100 entries by default; `--limit 0` prints all, and `--level` filters first. Provider credential writes and Extension activation can save successfully while a later refresh/load check fails; the nonzero exit and output preserve both outcomes.
 
 Representative syntax:
 
@@ -936,8 +943,8 @@ vbot provider status openai --connection openai:subscription
 vbot provider usage --connection openai:subscription
 vbot model refresh openai
 vbot statistics usage --since 2026-07-01
-vbot log read 2026-07-18.log
-vbot debug probe openrouter
+vbot log read 2026-07-18.log --level error --limit 100
+vbot debug probe openrouter --connection openrouter:api-key
 ```
 
 Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and positional argument. Primary Agent, Project, Session, Channel, Provider, task type, Cron job, and Extension identifiers shown in the examples are positional unless the leaf help explicitly names an option.

@@ -206,12 +206,13 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         (
             "- name=Morning news id=job-1 agent=assistant status=active "
             "schedule=cron[0 9 * * *] remaining_runs=unlimited "
-            "next_fire_at=2026-06-12T07:00:00+00:00 last_outcome=- prompt=Check the news"
+            "next_fire_at=2026-06-12T07:00:00+00:00 session=new last_outcome=- "
+            "last_error=- prompt=Check the news"
         ),
         (
             "- name=One-time audit id=job-2 agent=coder status=paused "
             "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
-            "next_fire_at=- last_outcome=- "
+            "next_fire_at=- session=new last_outcome=- last_error=- "
             "prompt=" + "A" * 57 + "..."
         ),
     ]
@@ -416,3 +417,32 @@ def test_cron_create_full_response_confirms_schedule_and_next_fire(
     assert "name=Build check" in result.message
     assert "agent=builder@vbot" in result.message
     assert "next_fire_at=2026-07-21T07:00:00+00:00" in result.message
+
+
+@pytest.mark.parametrize(
+    "jobs,expected",
+    [
+        ([], False),
+        ([{"id": "another"}], False),
+        ([{"id": "wanted", "prompt": "long prompt " * 40, "session_id": "pinned"}], True),
+    ],
+)
+def test_cron_show_reads_exact_full_job(tmp_path, monkeypatch, jobs, expected):
+    import json
+
+    from cli import cron_management as management
+    from cli.server_management import resolve_instance
+
+    instance = resolve_instance(data_dir=tmp_path)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(200, json={"ok": True, "result": {"jobs": jobs}})
+
+    monkeypatch.setattr(management.httpx, "post", post)
+    result = management.cron_show(instance, "wanted")
+    assert result.ok is expected
+    assert calls == [{"method": "cron.list", "params": {}}]
+    if expected:
+        assert json.loads(result.message) == jobs[0]

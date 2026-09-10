@@ -309,7 +309,7 @@ def test_extensions_enable_warns_when_extension_fails_to_load(
     result = extensions_management.extensions_enable(instance, "legacy")
 
     # The toggle itself succeeded (ok=True) but the re-list surfaces the bad state.
-    assert result.ok is True
+    assert result.ok is False
     assert "legacy" in result.message
     assert "failed" in result.message
     assert "import failed: boom" in result.message
@@ -333,7 +333,7 @@ def test_extensions_reload_prints_summary_failures_and_hint(
 
     result = extensions_management.extensions_reload(instance)
 
-    assert result.ok is True
+    assert result.ok is False
     assert "1 loaded" in result.message
     assert "1 failed" in result.message
     assert "1 disabled" in result.message
@@ -907,3 +907,35 @@ def test_run_extensions_unknown_subcommand_is_usage_error(
     exit_code = cli_main.run(["extensions", "homeassistant", "bogus"], resolve=fake_resolve)
 
     assert exit_code == 1
+
+
+def test_enabled_setting_survives_failed_activation_observation(tmp_path, monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {"extensions": [{"name": "example", "disabled": True}]},
+                },
+            )
+        if len(calls) == 2:
+            return httpx.Response(200, json={"ok": True, "result": {}})
+        return httpx.Response(
+            200,
+            json={"ok": False, "error": {"code": "observation_failed", "message": "read-sentinel"}},
+        )
+
+    monkeypatch.setattr(extensions_management.httpx, "post", post)
+    result = extensions_management.extensions_enable(make_instance(tmp_path), "example")
+    assert not result.ok
+    assert [call["method"] for call in calls] == [
+        "extensions.list",
+        "settings.update",
+        "extensions.list",
+    ]
+    assert "read-sentinel" in result.message
+    assert calls[1]["params"]["extensions"]["disabled"] == []

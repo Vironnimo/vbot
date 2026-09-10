@@ -17,6 +17,8 @@ vbot channel disable <channel-id>
 vbot channel remove <channel-id>
 ```
 
+Start by reading `channel list` for the saved configuration and `channel status <id>` for listener health. Use the exact existing id when updating.
+
 Rules and gotchas:
 
 - Prefer `--token-stdin` on `add`: the server stores the token under a collision-free managed key in the data-dir `.env`, reloads Credentials live, and starts the Channel without a server restart. Never put the token itself in a CLI argument.

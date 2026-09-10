@@ -41,20 +41,21 @@ Before an update that will restart the server, create a one-shot Bootstrap in th
 
 ```bash
 vbot bootstrap create --current-session --name "Verify vBot update" --mode once --prompt "The vBot update that interrupted this Session should now be complete. Use the vbot CLI to run vbot server status, vbot log list, and vbot log read on the latest log. Verify startup and update health, investigate relevant errors if present, then report clearly whether the update succeeded and what needs user attention. Do not repeat the update."
-vbot bootstrap list
+vbot bootstrap show <returned-job-id>
 vbot update
 ```
 
-`--current-session` works only inside a vBot Run Bash command. It binds both the current Agent address and Session without guessing from an Agent's default Session. The created job is armed for the next startup and cannot fire in the current process. Use `vbot bootstrap list` to confirm its `mode=once`, `status=active`, and Session before running the update. If the user requested `--no-restart`, do not create this Bootstrap unless a later startup check is explicitly wanted.
+`--current-session` works only inside a vBot Run Bash command. It binds both the current Agent address and Session without guessing from an Agent's default Session. The created job is armed for the next startup and cannot fire in the current process. Use `vbot bootstrap show <returned-job-id>` to confirm its `mode=once`, `status=active`, and Session before running the update. If the user requested `--no-restart`, do not create this Bootstrap unless a later startup check is explicitly wanted.
 
 The update invocation itself stays `vbot update`. In vBot Run context the CLI internally hands the restart to a short-lived detached helper, allowing the update command and its Bash launcher to finish before the old server enters normal Runtime shutdown. Do not find PIDs, stop the server first, or invoke an internal helper manually. The Bootstrap remains required because it resumes verification after the intentional process restart; it is not process-cleanup machinery.
 
-Updates the installation from the git checkout it was installed from, then restarts the server. Never touches the `~/.vbot` data directory.
+Updates the installation from its git checkout and requests a server restart unless suppressed. In the current Run, restart is scheduled; the command’s success does not establish post-restart health. Let the saved Bootstrap verify startup. Preserves runtime data and creates a verified Session snapshot before changing code when a current Session database exists. A snapshot failure stops the update.
 
 - The track is auto-detected: a branch checkout pulls and rebuilds the WebUI locally (needs Node); a release-tag checkout fetches the latest release with its prebuilt WebUI (no Node, re-downloaded only when the tag changed).
 - On Windows, close every vBot Desktop window first. The updater refuses before changing the checkout when this installation's exact Desktop launcher is running and checks again before pip; follow the printed source-based `resume update` command if an earlier pip failure damaged the normal `vbot` launcher.
 - With local changes to tracked files, `update` refuses. `--discard` drops them; `--stash` keeps them and reapplies after the update.
-- `--no-restart` updates the code without restarting.
+- `--no-restart` updates the code without restarting. A Desktop Client installation updates only its local client and has no server to restart.
+- On a failed update, read the checkout version and completed steps before recovery. Code may already have changed even though dependency installation, WebUI build, stash reapplication or restart failed.
 
 ## Uninstall
 

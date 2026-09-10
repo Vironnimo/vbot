@@ -25,7 +25,7 @@ The command result shows the saved Channel, credential source, and whether the m
 
 For an externally managed deployment secret, use `--token-env <ENV_VAR>` instead of `--token-stdin`; the variable must already be present in the server process environment.
 
-## 3. Create and verify the channel
+## 3. Verify the listener
 
 The Channel was created in step 2. Its allowlist starts empty — an empty allowlist denies all inbound chats, which is safe and is exactly what the discovery flow in step 4 expects:
 
@@ -44,14 +44,14 @@ vbot channel status tg-main
 
 Inbound messages are only accepted from chats on the channel's allowlist. You rarely know a chat's id up front — use the built-in discovery flow instead of third-party id bots:
 
-1. The user sends the bot any message (for a direct chat: open the bot, press Start or send text; for a group: add the bot to the group and send a message there).
+1. The user sends the bot any message (for a direct chat: open the bot, press Start or send text; for a group: add the bot and send a command explicitly addressed to it, such as `/start@your_bot`).
 2. The message is rejected (not on the allowlist) but recorded. Read it from status:
 
 ```bash
 vbot channel status tg-main
 ```
 
-The output lists denied inbound chats with their chat id, kind (direct/group), sender or group name, and last-seen time. Denied chats are also logged at info level in the server log.
+The output lists denied inbound chats with their chat id, kind (direct/group), sender or group name, and last-seen time. Use this status list for discovery; do not depend on chat ids appearing in server logs.
 
 3. Allow the chat. `--allow` replaces the whole list, so pass all ids that should stay allowed:
 
@@ -69,9 +69,9 @@ Notes:
 
 ## 5. Groups and privacy mode
 
-BotFather bots have **privacy mode on** by default: in groups the bot only receives @mentions, replies to its own messages, and `/commands`. Those addressing forms work with vBot's default group gating (`response_mode: "mention"`), but the visible Telegram name is a plain message and requires privacy mode to be disabled.
+Telegram’s privacy mode limits which group messages reach a bot. Explicit `/command@bot_username` commands and relevant replies are reliable discovery inputs; an ordinary username mention is not guaranteed to be delivered. Bot administrators and bots with privacy disabled receive ordinary group messages. See the [Telegram bot FAQ](https://core.telegram.org/bots/faq#what-messages-will-my-bot-get).
 
-Disable privacy mode when the bot must see plain group messages — required for visible-name addressing, `observe_unaddressed: true` (passive context capture), and wake-word `mention_patterns`:
+When a non-administrator bot must see plain group messages for visible-name addressing, `observe_unaddressed: true`, or `mention_patterns`, disable privacy mode:
 
 1. Send `/setprivacy` to BotFather, select the bot, choose `Disable`.
 2. Remove the bot from the group and re-add it (Telegram applies the change only on re-join).
@@ -96,7 +96,7 @@ Admins retain the Agent's existing Tool access. Members may authorize only `web_
 
 ## Troubleshooting
 
-- **Bot does not react at all in a direct chat** → chat not on the allowlist. Check `vbot channel status` for the denied entry and allow it.
+- **No reply in a direct chat:** inspect `channel status` for listener failure or a denied chat. If neither explains it, inspect the routed Agent’s effective Model and recent logs. Silence alone does not identify the cause.
 - **Channel `failed=yes`** → read the `failure_reason`; use `channel set-token <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
-- **Bot ignores its visible name or other plain group messages** → privacy mode is still on (step 5), or the text did not match a configured wake word. @username and replies remain available with privacy mode on.
+- **Bot ignores its visible name or other plain group messages** → privacy mode is still on (step 5), or the text did not match a configured wake word. Test delivery with an explicitly addressed command or a reply to the bot.
 - **Group commands ignored** → group slash commands require the sender's `admin` role. Confirm own identity and group roles with `channel identity` and `channel access`, then use additive `grant-admin` if needed.

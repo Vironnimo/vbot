@@ -68,7 +68,7 @@ def model_refresh(
     if not payload.ok:
         return payload.to_command_result()
     return CommandResult(
-        ok=True,
+        ok=not bool(payload.data.get("errors")),
         message=_format_refresh_result(payload.data, provider_id),
         instance=instance,
     )
@@ -128,7 +128,8 @@ def _format_refresh_result(data: Mapping[str, Any], provider_id: str | None) -> 
     failures = _format_refresh_failures(data.get("errors"))
     if provider_id is not None:
         resolved_provider_id = _string_or_default(data.get("provider_id"), provider_id)
-        return f"refreshed {resolved_provider_id}{failures}"
+        model_count = data.get("model_count", "?")
+        return f"refreshed {resolved_provider_id} ({model_count} models){failures}"
 
     refreshed_count = data.get("refreshed_count", "?")
     model_count = data.get("model_count", "?")
@@ -136,22 +137,23 @@ def _format_refresh_result(data: Mapping[str, Any], provider_id: str | None) -> 
 
 
 def _format_refresh_failures(errors: object) -> str:
-    """Render a "; N failed: …" suffix for connections discovery skipped.
-
-    A broken provider no longer aborts the refresh; it is reported instead so
-    an agent reading the CLI output knows which connections were left stale.
-    """
-
+    """Preserve each failed discovery result and the next valid action."""
     if not isinstance(errors, Sequence) or isinstance(errors, str | bytes) or not errors:
         return ""
-    labels = []
+    lines = [f"\nrefresh incomplete: {len(errors)} failed"]
     for entry in errors:
         if isinstance(entry, Mapping):
             label = entry.get("connection_id") or entry.get("provider_id") or "unknown"
+            detail = entry.get("error") or entry.get("message") or "discovery failed"
         else:
-            label = "unknown"
-        labels.append(str(label))
-    return f"; {len(labels)} failed: {', '.join(labels)}"
+            label, detail = "unknown", "discovery failed"
+        lines.append(f"  {label}: {detail}")
+    lines.append(
+        "Inspect the failed connection with vbot provider status; retry vbot "
+        "model refresh after correcting it. Keep the same target options. "
+        "Saved credentials need not be written again."
+    )
+    return "\n".join(lines)
 
 
 def _stringify_or_default(value: object, default: str) -> str:
