@@ -13,27 +13,42 @@ are owned together by `core/tools/apply_patch.py`.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
-  aliases sharing the same pending state and lock.
-- The complete patch is parsed and simulated before any filesystem mutation.
-  Later operations see earlier operations' pending contents, including Add ->
-  Update and Move -> Update. Parent/file overlaps, missing sources, ambiguous
-  hunks, and conflicting destinations fail before writes. Add never overwrites
-  different existing bytes; an exact existing Add is an idempotent no-op.
-- Success data reports `status` and the actual changed `files`, each with its
-  resolved path, action, bounded before/after preview, and relevant warnings.
-  An unchanged final plan returns `already_applied: true`. File moves appear
-  as a destination addition and source deletion in this net-change result.
-- Validation failures use the ordinary failure envelope and explicitly state
-  that no files changed. Candidate diagnostics are bounded JSON excerpts inside
-  the error message, preserving the shared envelope's closed error shape.
+  aliases sharing the same mutation history and lock.
+- The complete patch structure is parsed before mutation; unparseable framing or
+  operation syntax rejects the call without writes. Once parsed, each Update
+  hunk and each Add/Delete/Move is attempted in order against actual current
+  bytes. A failed hunk does not prevent later matching hunks, even in the same
+  file. Add -> Update and Move -> Update observe completed earlier effects.
+  Parent/file overlaps reject the affected entries, not unrelated files. Add
+  never overwrites different existing bytes; an identical Add is a verified no-op.
+- Failed creates/moves and uncertain writes block later entries touching those
+  paths for this call. A failed hunk in Update plus Move leaves successful hunks
+  applied at the source and skips that operation's move. Other files continue.
+- Success data includes ordered entry outcomes with 1-based operation/hunk
+  coordinates, resolved paths, and status; counts distinguish successful entries
+  from failed/skipped/partially committed entries. Mixed outcomes return
+  `status: partial` with guidance to retry only unfinished entries. All-failed
+  calls use the ordinary failure envelope, retaining indexed errors/candidates
+  in its message; no applied effects are hidden behind a failure envelope.
+- `files` reports net completed file effects once per path, including bounded
+  read-compatible previews with neighboring lines, first/last regions, long-line
+  windows around changed characters, and omission metadata. Moves appear as
+  destination addition and source deletion; the entry outcome retains the move
+  relationship. Syntax warnings compare the initial and final Tool-written text,
+  avoiding warnings caused only by intermediate hunks.
+- `no_change` means zero net file effects, including cancelling edits.
+  `already_applied` is emitted only when every entry was a verified already-present
+  no-op. It never substitutes for failed or uncertain operations.
 
 ## Matching and recovery
 
 - Canonical framing is `*** Begin Patch` / `*** End Patch`; one enclosing
-  Markdown patch/diff fence and omitted framing are tolerated. Body line
-  prefixes retain their meaning even when content spells a patch marker.
+  Markdown patch/diff fence, repeated leading Begin markers, and omitted framing
+  are tolerated. Body line prefixes retain their meaning even when content spells
+  a patch marker.
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and non-empty text after End Patch are rejected.
+  Explicit `@@` hunks following Move File use Update-plus-Move semantics.
 - `@@ context` hints select successive unique whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
   hints can narrow a section. Numeric unified-diff headers are advisory;
@@ -42,6 +57,14 @@ are owned together by `core/tools/apply_patch.py`.
   adjacent content at a hint makes repeated nonblank insertions no-ops.
   Unanchored appends always append because an existing suffix cannot distinguish
   a retry from an intentional repeated line.
+- Match errors return bounded raw candidate excerpts with starting file lines.
+  Missing targets use similarity-ranked diagnostics; ambiguity reports the
+  winning match's actual locations (including section offsets), not guessed
+  alternatives. These excerpts never authorize a write.
+- After any text-entry failure on a path, remaining hunks on that path allow
+  only unique precise/normalized matches, preventing approximate matching from
+  silently satisfying a failed earlier precondition. Other files retain normal
+  tolerance.
 - `fuzzy_match.replace_fuzzy` remains the matching owner. Patch-only options
   require whole-line matches, permit precise-only retry checks, and constrain
   EOF. Existing `edit` defaults and behavior remain intact. Precise matches win;
@@ -75,20 +98,22 @@ are owned together by `core/tools/apply_patch.py`.
 ## Mutation invariants
 
 - One Runtime's shared FileReadState locks cover every resolved path, acquired
-  in deterministic order and held across planning and writing. Existing-target
-  Updates do not require a prior read; they match against current bytes. Content
-  and mode are checked again after planning and before each mutation.
+  in deterministic order and held across the call. Each entry is planned on its
+  own; existing-target Updates need no prior read. Bytes and mode are checked
+  after planning, before mutation, and after completed writes. Later entries
+  detect drift from earlier observations and leave affected paths alone.
 - Updates reject NUL bytes and invalid UTF-8. BOM, surviving context bytes,
   existing EOF newline state, and file permissions are preserved. New lines
   adopt the detected file style; explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
-  permissions to a move destination. Destinations are written before source
-  deletions. There is no multi-file filesystem transaction: an I/O failure stops
-  writing and returns `status: partial` with completed files and pending paths
-  when anything changed, otherwise a failure envelope. No rollback is claimed.
-  Locks cannot exclude unrelated external writers; atomic replace is not a
-  portable filesystem compare-and-swap.
+  permissions to a move destination. A destination is written and checked before
+  its source is deleted; both paths are rechecked before deleting the source.
+  A move that wrote its destination but could not delete its source reports
+  completed/pending paths and blocks follow-up entries on both. An observation
+  failure after writing also retains the completed effect in a partial result.
+  No rollback is claimed. Locks cannot exclude unrelated external writers;
+  checks plus atomic replace are not a portable filesystem compare-and-swap.
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
@@ -103,8 +128,9 @@ are owned together by `core/tools/apply_patch.py`.
   read stamps, statistics, syntax warnings, and generic display metadata.
 - Existing fuzzy-match, edit, write, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
-- `scripts/probe_provider_tool_call.py --scenario apply_patch` uses the
-  production registry and disposable files. Its 16-case Luna matrix includes
-  natural first-use tasks and exact edge/invalid requests; success checks actual
-  files and error codes. Probe tests prevent completion claims or scope escapes
-  from counting as success.
+- `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the
+  production registry and disposable files. Its matrix separates natural batching tasks
+  (no imposed call count or prebuilt arguments), exact edge/invalid requests,
+  and continuation from an actual partial Tool Result with candidate excerpts.
+  It rejects imports from a different checkout, checks file effects and entry
+  statuses, and verifies that recovery avoids replaying a completed append. Probe tests reject scope escapes and false completion.
