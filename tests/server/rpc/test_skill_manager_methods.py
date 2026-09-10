@@ -41,7 +41,7 @@ class _ManagerRuntime:
     def skill_inventory(self) -> dict[str, Any]:
         return self.inventory
 
-    def reload_skills(self) -> None:
+    async def reload_skills_async(self) -> None:
         self.reload_calls += 1
 
     def invalidate_agent_skills(self, agent_id: str | None) -> None:
@@ -90,11 +90,12 @@ class TestInventory:
 
 
 class TestSetDisabled:
-    def test_known_name_persists_reloads_and_publishes(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_known_name_persists_reloads_and_publishes(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
         state.runtime.inventory["skills"] = [{"name": "deploy"}]
 
-        result = _skill_set_disabled(state, {"name": "deploy", "disabled": True})
+        result = await _skill_set_disabled(state, {"name": "deploy", "disabled": True})
 
         assert result == {"name": "deploy", "disabled": True}
         assert state.runtime.policy_calls == [("set_disabled", ("deploy", True))]
@@ -102,28 +103,33 @@ class TestSetDisabled:
         assert state.runtime.invalidated == []
         assert state.runtime.published == ["skills"]
 
-    def test_unknown_name_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_unknown_name_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_set_disabled(state, {"name": "ghost", "disabled": True})
+            await _skill_set_disabled(state, {"name": "ghost", "disabled": True})
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
         assert state.runtime.reload_calls == 0
 
-    def test_non_boolean_disabled_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_non_boolean_disabled_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
         state.runtime.inventory["skills"] = [{"name": "deploy"}]
 
         with pytest.raises(RpcError):
-            _skill_set_disabled(state, {"name": "deploy", "disabled": "yes"})
+            await _skill_set_disabled(state, {"name": "deploy", "disabled": "yes"})
 
 
 class TestShare:
-    def test_valid_owner_and_skill_persists_invalidates_and_publishes(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_valid_owner_and_skill_persists_invalidates_and_publishes(
+        self, tmp_path: Path
+    ) -> None:
         state = _state(tmp_path)
 
-        result = _skill_share(
+        result = await _skill_share(
             state,
             {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["reviewer"]},
         )
@@ -141,62 +147,68 @@ class TestShare:
         assert state.runtime.reload_calls == 0
         assert state.runtime.published == ["skills"]
 
-    def test_unknown_agent_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_unknown_agent_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(
+            await _skill_share(
                 state,
                 {"agent_id": "ghost", "name": "deploy", "shared": True, "receivers": ["reviewer"]},
             )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
-    def test_agent_not_owning_the_skill_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_agent_not_owning_the_skill_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(
+            await _skill_share(
                 state,
                 {"agent_id": "builder", "name": "notes", "shared": True, "receivers": ["reviewer"]},
             )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
-    def test_unshare_passes_false_through(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_unshare_passes_false_through(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
-        _skill_share(state, {"agent_id": "builder", "name": "deploy", "shared": False})
+        await _skill_share(state, {"agent_id": "builder", "name": "deploy", "shared": False})
 
         assert state.runtime.policy_calls == [("set_shared", ("builder", "deploy", False, []))]
 
-    def test_unknown_receiver_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_unknown_receiver_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(
+            await _skill_share(
                 state,
                 {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["ghost"]},
             )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
-    def test_self_receiver_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_self_receiver_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(
+            await _skill_share(
                 state,
                 {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["builder"]},
             )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
-    def test_empty_receivers_when_sharing_is_invalid_request(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_empty_receivers_when_sharing_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(
+            await _skill_share(
                 state, {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": []}
             )
 
@@ -243,3 +255,118 @@ async def test_inspection_maps_a_vanished_package_to_invalid_request(tmp_path: P
     with pytest.raises(RpcError) as error:
         await _skill_inspect(state, {"id": "missing-id"})
     assert error.value.code == RPC_ERROR_INVALID_REQUEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["skill.set_disabled", "skill.share"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_policy_rpc_offloads_io_and_applies_even_after_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, cancel: bool
+) -> None:
+    import asyncio
+    import threading
+
+    from server.rpc.methods import dispatch_rpc
+
+    state = _state(tmp_path)
+    runtime = state.runtime
+    runtime.inventory = {"skills": [{"name": "deploy"}]}
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+    policy_method = "set_disabled" if method == "skill.set_disabled" else "set_shared"
+    original = getattr(runtime.skill_policy, policy_method)
+
+    def check_worker(function: Any) -> Any:
+        def checked(*args: Any, **kwargs: Any) -> Any:
+            assert threading.get_ident() != loop_thread
+            return function(*args, **kwargs)
+
+        return checked
+
+    monkeypatch.setattr(runtime, "skill_inventory", check_worker(runtime.skill_inventory))
+    monkeypatch.setattr(
+        runtime, "agent_owns_private_skill", check_worker(runtime.agent_owns_private_skill)
+    )
+
+    def slow_write(*args: Any, **kwargs: Any) -> Any:
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        return original(*args, **kwargs)
+
+    async def reload_skills() -> None:
+        assert threading.get_ident() == loop_thread
+        assert runtime.policy_calls
+        runtime.reload_calls += 1
+
+    monkeypatch.setattr(runtime.skill_policy, policy_method, slow_write)
+    monkeypatch.setattr(runtime, "reload_skills_async", reload_skills)
+    params = (
+        {"name": "deploy", "disabled": True}
+        if method == "skill.set_disabled"
+        else {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["reviewer"]}
+    )
+    task = asyncio.create_task(dispatch_rpc(state, {"method": method, "params": params}))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        assert (await task)["ok"] is True
+    assert runtime.policy_calls
+    assert runtime.published == ["skills"]
+    assert runtime.reload_calls == (1 if method == "skill.set_disabled" else 0)
+    assert runtime.invalidated == ([] if method == "skill.set_disabled" else [None])
+
+
+@pytest.mark.asyncio
+async def test_skill_mutations_remain_serialized_through_cancelled_reload(tmp_path: Path) -> None:
+    import asyncio
+
+    from server.rpc.methods import dispatch_rpc
+
+    state = _state(tmp_path)
+    runtime = state.runtime
+    runtime.inventory = {"skills": [{"name": "deploy"}]}
+    reload_entered = asyncio.Event()
+    release_reload = asyncio.Event()
+
+    async def reload_skills() -> None:
+        reload_entered.set()
+        await release_reload.wait()
+        runtime.reload_calls += 1
+
+    runtime.reload_skills_async = reload_skills
+    request = {"method": "skill.set_disabled", "params": {"name": "deploy", "disabled": True}}
+    first = asyncio.create_task(dispatch_rpc(state, request))
+    second = None
+    try:
+        await asyncio.wait_for(reload_entered.wait(), 2)
+        first.cancel()
+        await asyncio.sleep(0)
+        first.cancel()
+        second = asyncio.create_task(
+            dispatch_rpc(state, {**request, "params": {"name": "deploy", "disabled": False}})
+        )
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert not second.done()
+        assert len(runtime.policy_calls) == 1
+    finally:
+        release_reload.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        if second is not None:
+            assert (await second)["ok"] is True
+    assert runtime.policy_calls[-1] == ("set_disabled", ("deploy", False))
+    assert runtime.reload_calls == 2
+    assert runtime.published == ["skills", "skills"]

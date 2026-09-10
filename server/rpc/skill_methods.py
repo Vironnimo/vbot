@@ -16,7 +16,9 @@ the ``skills`` kind.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -74,24 +76,24 @@ def _scope_root(state: Any, scope: str) -> Path:
     return cast(Path, state.runtime.agent_skills_dir(scope[len(_AGENT_SCOPE_PREFIX) :]))
 
 
-def _invalidate_scope(state: Any, scope: str) -> None:
+async def _invalidate_scope(state: Any, scope: str) -> None:
     if scope == _GLOBAL_SCOPE:
         # A global write changes the shared pool every project/agent registry layers
         # over, so reload the whole registry (which also drops those caches).
-        state.runtime.reload_skills()
+        await state.runtime.reload_skills_async()
     else:
         state.runtime.invalidate_agent_skills(scope[len(_AGENT_SCOPE_PREFIX) :])
 
 
-def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) -> JsonObject:
+async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) -> JsonObject:
     """Run one authoring write, map its diagnostics to an RpcError, then invalidate."""
     try:
-        result = write(_scope_root(state, scope))
+        result = await _SKILL_READ_WORKERS.run(write, _scope_root(state, scope))
     except SkillAuthoringError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "; ".join(exc.diagnostics)) from exc
     except OSError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-    _invalidate_scope(state, scope)
+    await _invalidate_scope(state, scope)
     _LOGGER.info(
         "Skill mutated (skill=%s scope=%s operation=%s)",
         result.name,
@@ -101,7 +103,11 @@ def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) ->
     return {"name": result.name, "operation": result.operation, "warnings": list(result.warnings)}
 
 
-def _skill_read(state: Any, params: JsonObject) -> JsonObject:
+async def _skill_read(state: Any, params: JsonObject) -> JsonObject:
+    return await _SKILL_READ_WORKERS.run(_read_skills, state, params)
+
+
+def _read_skills(state: Any, params: JsonObject) -> JsonObject:
     """Return the editable skills of one scope, each with its full ``SKILL.md`` text.
 
     Scans only the scope's own directory (the data-dir global pool or an agent's
@@ -120,12 +126,12 @@ def _skill_read(state: Any, params: JsonObject) -> JsonObject:
     return {"skills": skills}
 
 
-def _skill_create(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(state, params)
+async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
     content = _required_string(params, "content")
     source = _optional_string(params, "source")
-    return _write(
+    return await _write(
         state,
         scope,
         lambda root: state.runtime.skill_authoring.create(
@@ -134,12 +140,12 @@ def _skill_create(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
-def _skill_update(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(state, params)
+async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
     content = _required_string(params, "content")
     source = _optional_string(params, "source")
-    return _write(
+    return await _write(
         state,
         scope,
         lambda root: state.runtime.skill_authoring.edit(
@@ -148,31 +154,31 @@ def _skill_update(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
-def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(state, params)
+async def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
-    return _write(state, scope, lambda root: state.runtime.skill_authoring.delete(root, name))
+    return await _write(state, scope, lambda root: state.runtime.skill_authoring.delete(root, name))
 
 
-def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(state, params)
+async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
     path = _required_string(params, "path")
     content = params.get("content")
     if not isinstance(content, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
-    return _write(
+    return await _write(
         state,
         scope,
         lambda root: state.runtime.skill_authoring.write_file(root, name, path, content),
     )
 
 
-def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
-    scope = _validated_scope(state, params)
+async def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
     path = _required_string(params, "path")
-    return _write(
+    return await _write(
         state, scope, lambda root: state.runtime.skill_authoring.remove_file(root, name, path)
     )
 
@@ -201,21 +207,27 @@ def _required_bool(params: JsonObject, key: str) -> bool:
     return value
 
 
-def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
+async def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
     """Toggle the policy disable switch for one Skill name (master switch)."""
     name = _required_string(params, "name")
     disabled = _required_bool(params, "disabled")
-    inventory = state.runtime.skill_inventory()
+    inventory = await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory)
     if not any(entry["name"] == name for entry in inventory["skills"]):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown skill: {name!r}")
-    state.runtime.skill_policy.set_disabled(name, disabled=disabled)
-    # Disable hides the name in every registry flavor → full reload.
-    state.runtime.reload_skills()
+    await _SKILL_READ_WORKERS.run(state.runtime.skill_policy.set_disabled, name, disabled=disabled)
+    await state.runtime.reload_skills_async()
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {"name": name, "disabled": disabled}
 
 
-def _skill_share(state: Any, params: JsonObject) -> JsonObject:
+async def _skill_share(state: Any, params: JsonObject) -> JsonObject:
+    result = await _SKILL_READ_WORKERS.run(_share_skill_policy, state, params)
+    state.runtime.invalidate_agent_skills(None)
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return result
+
+
+def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
     """Share or unshare one Identity Agent's private Skill with specific Agents."""
     agent_id = _required_string(params, "agent_id")
     if not is_valid_agent_id(agent_id):
@@ -262,24 +274,47 @@ def _skill_share(state: Any, params: JsonObject) -> JsonObject:
                 "at least one receiver agent is required to share a skill",
             )
     state.runtime.skill_policy.set_shared(agent_id, name, shared=shared, receivers=receivers)
-    # A share change reshuffles every receiver's registry layer; the global pool
-    # is unaffected because shared Skills never enter it.
-    state.runtime.invalidate_agent_skills(None)
-    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {"agent_id": agent_id, "name": name, "shared": shared, "receivers": receivers}
+
+
+def _serialized_skill_mutation(
+    handler: Callable[[Any, JsonObject], Awaitable[JsonObject]],
+) -> RpcMethodHandler:
+    """Keep persisted writes and loop-owned refresh in one cancellation-safe sequence."""
+
+    async def run(state: Any, params: JsonObject) -> JsonObject:
+        lock = getattr(state, "_skill_mutation_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            state._skill_mutation_lock = lock
+        async with lock:
+            task = asyncio.ensure_future(handler(state, params))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Retain serialization until the registry and publication catch up
+                # with any completed disk write, even across repeated cancellation.
+                while not task.done():
+                    with suppress(asyncio.CancelledError, Exception):
+                        await asyncio.shield(task)
+                if not task.cancelled():
+                    task.exception()
+                raise
+
+    return run
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the skill mutation RPC handlers."""
     return {
         "skill.read": _skill_read,
-        "skill.create": _skill_create,
-        "skill.update": _skill_update,
-        "skill.delete": _skill_delete,
-        "skill.write_file": _skill_write_file,
-        "skill.remove_file": _skill_remove_file,
+        "skill.create": _serialized_skill_mutation(_skill_create),
+        "skill.update": _serialized_skill_mutation(_skill_update),
+        "skill.delete": _serialized_skill_mutation(_skill_delete),
+        "skill.write_file": _serialized_skill_mutation(_skill_write_file),
+        "skill.remove_file": _serialized_skill_mutation(_skill_remove_file),
         "skill.inventory": _skill_inventory,
         "skill.inspect": _skill_inspect,
-        "skill.set_disabled": _skill_set_disabled,
-        "skill.share": _skill_share,
+        "skill.set_disabled": _serialized_skill_mutation(_skill_set_disabled),
+        "skill.share": _serialized_skill_mutation(_skill_share),
     }

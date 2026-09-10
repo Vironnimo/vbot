@@ -45,6 +45,7 @@ All reload methods keep registry/service identity stable so already-wired consum
 
 - `reload_custom_providers()` - Settings-owned Providers + manual Models into existing registries.
 - `maybe_refresh_local_catalogs(force=False)` - staged copy refresh for auto-refresh Connections, published atomically after validation; failures never raise and leave the last database untouched.
+- `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers use it instead of the synchronous variant.
 - `reload_skills()` - asks `core/skills/runtime.py::SkillRuntime` for a replacement global registry, then re-registers Skill Tools and updates prompts. `SkillRuntime` owns scan-layer resolution, Project/Agent/shared scoping, inventory, and both scoped registry caches; Runtime preserves the existing public facade methods.
 - `reload_recall_backend()` re-registers both Recall Tools from settings without restart.
 - `reload_keep_awake()` holds/releases the Windows power request per persisted setting (no-op elsewhere).
