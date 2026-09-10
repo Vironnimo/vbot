@@ -883,7 +883,7 @@ def _normalize_gemini_stream_chunk(
     part_values = (
         parts if isinstance(parts, list) else [parts] if isinstance(parts, Mapping) else []
     )
-    for position, raw_part in enumerate(part_values):
+    for raw_part in part_values:
         if not isinstance(raw_part, Mapping):
             continue
         part = copy.deepcopy(dict(raw_part))
@@ -904,7 +904,7 @@ def _normalize_gemini_stream_chunk(
             deltas.append(
                 {
                     "type": "tool_call_delta",
-                    "id": _gemini_tool_call_id(function_call, chunk, position),
+                    "id": _gemini_tool_call_id(function_call, chunk, len(replay_parts) - 1),
                     "name_delta": name if isinstance(name, str) else "",
                     "arguments_delta": json.dumps(
                         arguments if arguments is not None else {},
@@ -946,7 +946,7 @@ def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
     reasoning_tokens = _nonnegative_int(raw.get("thoughtsTokenCount"))
     cache_read = _nonnegative_int(raw.get("cachedContentTokenCount"))
     usage = {
-        "input_tokens": max(0, input_tokens - cache_read),
+        "input_tokens": input_tokens,
         "output_tokens": visible_output + reasoning_tokens,
     }
     if reasoning_tokens:

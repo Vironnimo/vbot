@@ -343,9 +343,8 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
-            classify_http_status(
+            self._classify_http_status(
                 response.status_code,
-                idempotent=False,
                 detail=_openrouter_http_error_detail(response),
                 response_headers=response.headers,
             )
@@ -358,7 +357,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_responses_stream(payload)
-        state = ResponsesStreamState()
+        state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -412,9 +411,8 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
-                classify_http_status(
+                self._classify_http_status(
                     response.status_code,
-                    idempotent=False,
                     detail=_openrouter_http_error_detail(response, body),
                     response_headers=response.headers,
                 )
