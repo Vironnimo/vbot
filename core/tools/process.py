@@ -9,6 +9,7 @@ from core.tools.arguments import optional_string, required_string
 from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
+    ProcessTerminationError,
     TrackedProcess,
 )
 from core.tools.tools import (
@@ -95,6 +96,8 @@ async def _handle_process_tool(
             "Process not found",
             retryable=False,
         )
+    except ProcessTerminationError as error:
+        return tool_failure("process_kill_failed", str(error), retryable=True)
     except ValueError as error:
         return tool_failure(
             "invalid_arguments",

@@ -143,7 +143,7 @@ async def test_start_uses_compact_default_until_explicit_resize(
     monkeypatch: pytest.MonkeyPatch,
     command: str | None,
 ) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
     context = make_context(tmp_path)
     arguments: JsonObject = {"action": "start"}
@@ -384,7 +384,7 @@ async def test_start_keeps_relative_workdir_resolution_unchanged(
 async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
     manual = await terminal_manager.spawn_for_operator(
         command=None,
