@@ -225,6 +225,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "kind_connection": {"action": "search", "kind": "connection"},
 }
 PROBE_SCENARIOS = (
+    "apply_patch",
     "reflection_workflow",
     "swarm_tool",
     "browser",
@@ -5387,15 +5388,230 @@ async def _probe_reflection_workflow(adapter: Any, args: argparse.Namespace) -> 
     }
 
 
+def _apply_patch_cases() -> list[dict[str, Any]]:
+    def patch(body: str) -> dict[str, str]:
+        return {"patch": "*** Begin Patch\n" + body + "\n*** End Patch"}
+
+    return [
+        {
+            "id": "create",
+            "before": {},
+            "task": "Create new.txt containing exactly hello followed by a newline.",
+            "expected": {"new.txt": "hello\n"},
+        },
+        {
+            "id": "empty",
+            "before": {},
+            "task": "Create an empty new.txt file.",
+            "expected": {"new.txt": ""},
+        },
+        {
+            "id": "update",
+            "before": {"one.txt": "alpha\nold\nomega\n"},
+            "task": "Change the line old to new in one.txt.",
+            "expected": {"one.txt": "alpha\nnew\nomega\n"},
+        },
+        {
+            "id": "delete",
+            "before": {"gone.txt": "obsolete\n"},
+            "task": "Delete gone.txt.",
+            "expected": {},
+        },
+        {
+            "id": "move",
+            "before": {"one.txt": "keep\n"},
+            "task": "Move one.txt to nested/new.txt without changing its contents.",
+            "expected": {"nested/new.txt": "keep\n"},
+        },
+        {
+            "id": "update_move",
+            "before": {"one.txt": "old\n"},
+            "task": "Move one.txt to moved.txt and change old to new in it.",
+            "expected": {"moved.txt": "new\n"},
+        },
+        {
+            "id": "sequence",
+            "before": {},
+            "arguments": patch(
+                "*** Add File: one.txt\n+old\n*** Update File: one.txt\n@@\n-old\n+new"
+            ),
+            "expected": {"one.txt": "new\n"},
+        },
+        {
+            "id": "append",
+            "before": {"one.txt": "first\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n+last"),
+            "expected": {"one.txt": "first\nlast\n"},
+        },
+        {
+            "id": "hint",
+            "before": {"one.txt": "first\nold\nsecond\nold\n"},
+            "arguments": patch("*** Update File: one.txt\n@@ second\n-old\n+new"),
+            "expected": {"one.txt": "first\nold\nsecond\nnew\n"},
+        },
+        {
+            "id": "eof",
+            "before": {"one.txt": "old\nsecond\nold\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n-old\n+new\n*** End of File"),
+            "expected": {"one.txt": "old\nsecond\nnew\n"},
+        },
+        {
+            "id": "retry",
+            "before": {"one.txt": "alpha\nnew\nomega\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n alpha\n-old\n+new\n omega"),
+            "expected": {"one.txt": "alpha\nnew\nomega\n"},
+        },
+        {
+            "id": "ambiguous",
+            "before": {"one.txt": "old\nother\nold\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n-old\n+new"),
+            "error": "ambiguous_match",
+        },
+        {
+            "id": "missing",
+            "before": {},
+            "arguments": patch("*** Delete File: missing.txt"),
+            "error": "file_not_found",
+        },
+        {
+            "id": "collision",
+            "before": {"one.txt": "keep\n"},
+            "arguments": patch("*** Add File: one.txt\n+clobber"),
+            "error": "destination_exists",
+        },
+        {
+            "id": "malformed",
+            "before": {},
+            "arguments": patch("*** Unknown File: one.txt"),
+            "error": "invalid_patch",
+        },
+        {
+            "id": "unknown_field",
+            "before": {},
+            "arguments": {**patch("*** Add File: new.txt\n+hello"), "path": "new.txt"},
+            "error": "invalid_arguments",
+        },
+    ]
+
+
+async def _probe_apply_patch_case(
+    adapter: Any, args: argparse.Namespace, case: dict[str, Any]
+) -> dict[str, Any]:
+    from core.tools.apply_patch import _parse, register_apply_patch_tool
+    from core.tools.file_state import FileReadState
+    from core.tools.tools import ToolContext, ToolRegistry
+
+    with TemporaryDirectory(prefix="vbot-patch-probe-") as directory:
+        root = Path(directory).resolve()
+        for name, content in case["before"].items():
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content.encode("utf-8"))
+        registry = ToolRegistry()
+        register_apply_patch_tool(registry, file_state=FileReadState())
+        definitions = registry.provider_definitions(allowed_tools=["apply_patch"])
+        if "arguments" in case:
+            task = (
+                "Exercise this file-tool request exactly once, including any invalid fields or "
+                "patch syntax so its validation is exercised. Do not repair the request: "
+                + json.dumps(case["arguments"])
+            )
+        else:
+            task = case["task"] + " Use one apply_patch call."
+        messages = _probe_messages(
+            task + "\nCurrent files and their exact contents:\n" + json.dumps(case["before"])
+        )
+        raw = await adapter.send(
+            messages,
+            model_id=args.model,
+            tools=definitions,
+            thinking_effort=args.thinking_effort,
+            max_tokens=args.max_tokens or 4000,
+        )
+        response = adapter.normalize_response(raw, model_id=args.model)
+        calls = response.get("tool_calls") or []
+        outcomes: list[dict[str, Any]] = []
+        for index, call in enumerate(calls):
+            arguments = call.get("arguments", {})
+            # The evaluator can only mutate its disposable directory, even if
+            # the model invents a path. Runtime file tools retain normal agency.
+            try:
+                operations = _parse(arguments.get("patch", ""))
+            except Exception:
+                operations = []  # Let the real handler diagnose malformed input.
+            safe = all(
+                (root / name).resolve().is_relative_to(root)
+                for operation in operations
+                for name in (operation.path, operation.destination)
+                if name is not None
+            )
+            if not safe or call.get("name") != "apply_patch":
+                outcomes.append({"ok": False, "error": {"code": "probe_scope_violation"}})
+                continue
+            context = ToolContext(
+                agent_id="probe",
+                session_id="probe-session",
+                run_id="probe-run",
+                tool_call_id=call["id"],
+                tool_name="apply_patch",
+                tool_call_index=index,
+                workspace=root,
+                cwd=root,
+                vbot_root=root,
+                data_root=root,
+            )
+            outcomes.append(await registry.dispatch(context, arguments, ["apply_patch"]))
+        snapshot = {
+            p.relative_to(root).as_posix(): p.read_bytes().decode("utf-8")
+            for p in root.rglob("*")
+            if p.is_file()
+        }
+        expected = case.get("expected", case["before"])
+        codes = [outcome["error"]["code"] if not outcome["ok"] else None for outcome in outcomes]
+        passed = len(outcomes) == 1 and snapshot == expected and codes == [case.get("error")]
+        return {
+            "case": case["id"],
+            "passed": passed,
+            "calls": len(calls),
+            "effect_ok": snapshot == expected,
+            "error_codes": codes,
+            "definition_chars": len(json.dumps(definitions, separators=(",", ":"))),
+        }
+
+
+async def _probe_apply_patch(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
+    limit = asyncio.Semaphore(4)
+
+    async def evaluate(case: dict[str, Any]) -> dict[str, Any]:
+        async with limit:
+            return await _probe_apply_patch_case(adapter, args, case)
+
+    rows = await asyncio.gather(*(evaluate(case) for case in _apply_patch_cases()))
+    return {
+        "scenario": "apply_patch",
+        "model": args.model,
+        "cases": rows,
+        "passed": all(row["passed"] for row in rows),
+    }
+
+
 async def _run(args: argparse.Namespace) -> int:
-    if args.scenario in {"mcp_workflow", "browser_workflow", "swarm_tool", "reflection_workflow"}:
+    if args.scenario in {
+        "apply_patch",
+        "mcp_workflow",
+        "browser_workflow",
+        "swarm_tool",
+        "reflection_workflow",
+    }:
         runtime = Runtime(Config(data_dir=args.data_dir))
         _start_probe_runtime(runtime)
         try:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 probe = (
-                    _probe_reflection_workflow
+                    _probe_apply_patch
+                    if args.scenario == "apply_patch"
+                    else _probe_reflection_workflow
                     if args.scenario == "reflection_workflow"
                     else _probe_swarm_tool
                     if args.scenario == "swarm_tool"

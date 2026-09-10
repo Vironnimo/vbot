@@ -1,5 +1,6 @@
 """Tool registry, definitions, result envelopes, and execution scheduling."""
 
+from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.availability import (
     TOOL_ACCESS_MODE_ALL,
     TOOL_ACCESS_MODE_NONE,
@@ -240,6 +241,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "register_apply_patch_tool",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
     "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",

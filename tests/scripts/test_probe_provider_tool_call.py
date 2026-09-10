@@ -26,6 +26,45 @@ def _load_module() -> ModuleType:
 PROBE = _load_module()
 
 
+class _PatchAdapter:
+    def __init__(self, arguments):
+        self.arguments = arguments
+
+    async def send(self, messages, **kwargs):
+        from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
+
+        assert kwargs["tools"][0]["parameters"] == APPLY_PATCH_TOOL_PARAMETERS
+        return {
+            "content": "",
+            "tool_calls": [{"id": "probe", "name": "apply_patch", "arguments": self.arguments}],
+        }
+
+    def normalize_response(self, raw, **kwargs):
+        return raw
+
+
+def test_patch_probe_measures_actual_effects_and_rejects_scope_escape():
+    args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
+    case = PROBE._apply_patch_cases()[0]
+    good = _PatchAdapter({"patch": "*** Add File: new.txt\n+hello"})
+    assert asyncio.run(PROBE._probe_apply_patch_case(good, args, case))["passed"]
+    wrong = _PatchAdapter({"patch": "*** Add File: new.txt\n+wrong"})
+    assert not asyncio.run(PROBE._probe_apply_patch_case(wrong, args, case))["passed"]
+    escaped = _PatchAdapter({"patch": "*** Add File: ../escaped.txt\n+no"})
+    row = asyncio.run(PROBE._probe_apply_patch_case(escaped, args, case))
+    assert row["error_codes"] == ["probe_scope_violation"]
+
+
+def test_patch_probe_executes_all_exact_cases_through_production_registry():
+    args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
+    for case in PROBE._apply_patch_cases():
+        if "arguments" in case:
+            row = asyncio.run(
+                PROBE._probe_apply_patch_case(_PatchAdapter(case["arguments"]), args, case)
+            )
+            assert row["passed"], row
+
+
 class _ReflectionAdapter:
     def __init__(self, calls=()):
         self.calls = iter(calls)

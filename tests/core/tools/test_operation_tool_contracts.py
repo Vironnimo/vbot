@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from core.providers.tool_schema import render_tool_definitions
+from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
@@ -38,6 +39,7 @@ from core.tools.write import WRITE_TOOL_PARAMETERS
 JsonObject = dict[str, Any]
 
 _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
+    ("apply_patch", APPLY_PATCH_TOOL_PARAMETERS),
     ("analyze_image", ANALYZE_IMAGE_TOOL_PARAMETERS),
     ("bash", BASH_TOOL_PARAMETERS),
     ("channel_send", CHANNEL_SEND_TOOL_PARAMETERS),
@@ -100,6 +102,7 @@ def test_direct_tool_schema_is_flat_and_declares_required_properties(
 ) -> None:
     assert schema["type"] == "object", tool_name
     if tool_name in {
+        "apply_patch",
         "analyze_image",
         "bash",
         "channel_send",
