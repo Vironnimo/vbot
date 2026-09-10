@@ -38,6 +38,7 @@ from core.providers.errors import (
     ProviderError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    classify_in_band_provider_error,
 )
 from core.providers.reasoning import merge_reasoning_meta, reasoning_token_count
 from core.providers.tool_schema import render_tool_definitions
@@ -86,6 +87,7 @@ class ResponsesRequestPolicy(Protocol):
 class ResponsesStreamState:
     """State needed to normalize one Responses SSE stream."""
 
+    lenient_unknown_errors: bool = False
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
     item_id_to_call_id: dict[str, str] = field(default_factory=dict)
     tool_call_order: list[str] = field(default_factory=list)
@@ -257,7 +259,9 @@ def normalize_responses_stream_event(
 
     event_type = _event_type(event_name, event_data)
     if event_type in RESPONSES_ERROR_EVENTS:
-        raise _classify_responses_stream_error(event_data)
+        raise _classify_responses_stream_error(
+            event_data, lenient_unknown=state.lenient_unknown_errors
+        )
     if event_type in RESPONSES_INCOMPLETE_EVENTS:
         return _completed_event_deltas(event_data, state, implied_status="incomplete")
     if event_type == "response.output_text.delta":
@@ -793,12 +797,12 @@ def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
         return None
     input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
-    if not isinstance(input_tokens, int) and not isinstance(output_tokens, int):
+    normalized: dict[str, int] = {}
+    for field_name, value in (("input_tokens", input_tokens), ("output_tokens", output_tokens)):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            normalized[field_name] = value
+    if not normalized:
         return None
-    normalized = {
-        "input_tokens": input_tokens if isinstance(input_tokens, int) else 0,
-        "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
-    }
     cache_read_tokens = _responses_cached_input_tokens(usage)
     if cache_read_tokens is not None:
         normalized["cache_read_tokens"] = cache_read_tokens
@@ -808,7 +812,7 @@ def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
     reasoning_tokens = reasoning_token_count(usage)
     if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
         normalized["reasoning_tokens"] = reasoning_tokens
-    return normalized
+    return normalized or None
 
 
 def _responses_cached_input_tokens(usage: Mapping[str, Any]) -> int | None:
@@ -821,7 +825,13 @@ def _responses_cached_input_tokens(usage: Mapping[str, Any]) -> int | None:
     if not isinstance(details, Mapping):
         return None
     cached_tokens = details.get("cached_tokens")
-    return cached_tokens if isinstance(cached_tokens, int) else None
+    return (
+        cached_tokens
+        if isinstance(cached_tokens, int)
+        and not isinstance(cached_tokens, bool)
+        and cached_tokens >= 0
+        else None
+    )
 
 
 def _responses_cache_write_tokens(usage: Mapping[str, Any]) -> int | None:
@@ -871,12 +881,12 @@ def _flush_sse_event(
         parsed = json.loads(data)
     except json.JSONDecodeError as exc:
         raise ProviderError(
-            f"GitHub Copilot Responses provider sent malformed JSON in stream: {exc.msg}",
+            f"Responses provider sent malformed JSON in stream ({exc.msg}): {data}",
             retryable=False,
         ) from exc
     if not isinstance(parsed, Mapping):
         raise ProviderError(
-            "GitHub Copilot Responses provider sent non-object JSON in stream",
+            f"Responses provider sent non-object JSON in stream: {data}",
             retryable=False,
         )
     yield event_name, parsed
@@ -1176,7 +1186,9 @@ def _responses_error_message(event_data: Mapping[str, Any]) -> str:
     return "Responses request failed"
 
 
-def _classify_responses_stream_error(event_data: Mapping[str, Any]) -> ProviderError:
+def _classify_responses_stream_error(
+    event_data: Mapping[str, Any], *, lenient_unknown: bool = False
+) -> ProviderError:
     """Map exact Responses error facts into vBot's shared recovery taxonomy."""
 
     payload = _responses_error_payload(event_data)
@@ -1191,6 +1203,16 @@ def _classify_responses_stream_error(event_data: Mapping[str, Any]) -> ProviderE
     classifier = error_type or (_non_empty_string_or_none(code) if isinstance(code, str) else None)
     numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
     message = _responses_error_message(event_data)
+
+    if lenient_unknown:
+        router_error = {**payload, **error_mapping}
+        if error_type is not None:
+            metadata = router_error.get("metadata")
+            router_error["metadata"] = {
+                **(metadata if isinstance(metadata, Mapping) else {}),
+                "error_type": error_type,
+            }
+        return classify_in_band_provider_error(router_error, lenient_unknown=True)
 
     if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in {401, 403}:
         return ProviderAuthError(message)
