@@ -16,11 +16,18 @@ import httpx
 import pytest
 import respx
 
+from core.chat.messages import ChatMessage
+from core.chat.wire_shaping import (
+    _assemble_request_history,
+    _assistant_continuation_dict,
+    _assistant_message_from_response,
+)
 from core.models.models import (
     REASONING_CONTROL_LEVELS,
     REASONING_CONTROL_ON_OFF,
     Capabilities,
     Model,
+    ModelRegistry,
     ReasoningCapabilities,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
@@ -31,7 +38,7 @@ from core.providers.ollama import (
     OllamaAdapter,
     OllamaCloudAdapter,
 )
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
@@ -388,6 +395,97 @@ CLOUD_REASONING_CONTENT_RESPONSE: dict[str, Any] = {
 
 
 class TestOllamaCloudChatWire:
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("current_run", [False, True])
+    @pytest.mark.parametrize(
+        ("effort", "wire_effort"),
+        [("low", "low"), ("high", "high"), ("max", "max"), ("xhigh", "max"), ("none", "none")],
+    )
+    async def test_v41_provisional_profile_replays_persisted_reasoning_on_fresh_adapter(
+        self, current_run: bool, effort: str, wire_effort: str
+    ) -> None:
+        """Local continuity contract; this fixture is not live V4.1 evidence."""
+        resources = Path(__file__).resolve().parents[3] / "resources"
+        models = ModelRegistry.load(resources)
+        config = ProviderRegistry.load(resources).get("ollama-cloud")
+        connection = config.get_connection("api-key")
+        model_id = "deepseek-v4.1-flash"
+        scope = f"ollama-cloud/{model_id}::api-key"
+        adapter = OllamaCloudAdapter(
+            config,
+            "test-key",
+            connection.base_url,
+            connection.auth,
+            model_lookup=lambda mid: models.get("ollama-cloud", mid),
+            connection_mode=connection.mode,
+        )
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        # Simulate the normalized response persisted by a previous Adapter/Run.
+        assistant = _assistant_message_from_response(
+            f"ollama-cloud/{model_id}",
+            {
+                "content": None,
+                "reasoning": "test-owned reasoning sentinel",
+                "reasoning_meta": {"reasoning_details": [{"text": "opaque sentinel"}]},
+                "tool_calls": [
+                    {"id": "call_weather", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+            reasoning_scope=scope,
+        )
+        restored = ChatMessage.from_dict(json.loads(json.dumps(assistant.to_dict())))
+        policy = adapter.reasoning_replay_policy(model_id)
+        assert policy == "full_history"
+        assert adapter.reasoning_replay_fidelity(model_id) == "readable_only"
+        messages = _assemble_request_history(
+            [ChatMessage.user("Check Berlin weather."), restored],
+            replay_policy=policy,
+            agent_model=scope,
+        )
+        if current_run:
+            messages[-1] = _assistant_continuation_dict(restored, replay_policy=policy)
+        messages.append({"role": "tool", "tool_call_id": "call_weather", "content": "20 C"})
+        if not current_run:
+            messages.extend(
+                [
+                    {"role": "assistant", "content": "20 C in Berlin."},
+                    {"role": "user", "content": "Check again."},
+                ]
+            )
+        try:
+            await adapter.send(
+                messages,
+                model_id=model_id,
+                thinking_effort=effort,
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "description": "Test weather tool",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    }
+                ],
+            )
+            payload = _last_request_payload(route)
+            replayed = payload["messages"][1]
+            assert payload["model"] == model_id
+            assert payload["reasoning_effort"] == wire_effort
+            assert payload["max_tokens"] == 65_536
+            assert payload["tools"][0]["function"]["name"] == "get_weather"
+            assert replayed["reasoning"] == "test-owned reasoning sentinel"
+            assert "reasoning_content" not in replayed
+            assert "reasoning_details" not in replayed
+            assert "reasoning_scope" not in replayed
+            assert "opaque sentinel" not in json.dumps(payload)
+            assert replayed["tool_calls"][0]["id"] == payload["messages"][2]["tool_call_id"]
+        finally:
+            await adapter.aclose()
+
     @respx.mock
     @pytest.mark.asyncio
     @pytest.mark.parametrize("effort", ["low", "medium", "high", "max"])
