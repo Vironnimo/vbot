@@ -1,6 +1,6 @@
 ---
 name: browser-use
-description: "Complete website tasks with the browser Tool: navigate, read, fill forms, handle tabs and dialogs, and retrieve files."
+description: "Complete website tasks with the browser Tool: navigate, read, fill forms, handle tabs and dialogs, retrieve files, and debug console, network, JavaScript, and performance problems."
 ---
 
 # Browser Use
@@ -35,3 +35,21 @@ Use `status` to inspect connection mode and `headed` without starting a browser.
 When a website shows an error, inspect its text and the reported HTTP status when available. Report that evidence; do not invent a cause such as automation detection. Avoid repeatedly submitting the same request to an unchanged error page. Preserve the user's requested website and method; report the concrete blocker when that required route remains unavailable.
 
 Use existing logins when available. If the site requires a user-only login or Chrome displays a connection-consent dialog, identify that specific blocker. Summarize the verified result and provide relevant downloaded files. Use `close` when the browser connection is no longer needed; it disconnects a user-owned browser and closes a browser started for this Session.
+
+## Debugging a website
+
+1. Open the page and reproduce the problem once. Request capture starts before the first navigation. Use `console`, `errors`, and `requests` to inspect evidence; narrow noisy output with `filter`. Logs describe captured activity across this connection's tabs, not only the visible page.
+2. Copy a `requestId` from `requests` into `request` as `request_id` to inspect headers, status, posted data, and an available response body. A missing body means it was unavailable, not empty. Use `har_start` before a reproduction and `har_stop` afterward when you need an HTTP archive with captured text bodies.
+3. Large diagnostics return JSON text with `result_id`, `next_offset`, and a server file path. Continue with `result`, passing that id and offset. This reads the same captured output; never repeat `eval` or another mutating operation just to retrieve its remaining output. The newest eight large outputs remain available until the connection closes.
+4. For performance work, call `trace_start`, reproduce the slowdown, then `trace_stop`. The returned JSON is a Chromium performance trace for Chrome DevTools or Perfetto. It is not a Playwright Trace Viewer archive with DOM snapshots and an action timeline. Trace capture is available only in a managed browser because it can record browser-wide activity. HAR start/stop also requires a managed browser. Save screenshots separately for visual evidence. Stop recordings before closing the connection.
+5. Inspect a blocking JavaScript dialog with `dialog_status`, then use `dialog` to accept or dismiss it as appropriate. An action can complete before its requested snapshot fails because a dialog opened; resolve the dialog without replaying the action.
+
+## JavaScript, mocks, and state
+
+Use `eval` with `script` for DOM attributes, computed styles, page data, localStorage/sessionStorage, or browser APIs. It executes once in the selected page and awaits promises. For example, `{"action":"eval","script":"({title: document.title, theme: localStorage.getItem('theme')})"}` returns JSON data. For several statements use an async IIFE such as `(async () => { const r = await fetch('/api/items'); return {status: r.status, data: await r.json()}; })()`. This is page JavaScript: `page`, Playwright locators, Node imports, and server filesystem APIs are unavailable. A thrown script may already have changed the page; inspect before retrying. Eval invalidates element refs even when used only to read.
+
+For request mocking, first open a blank tab with `new_tab`. Install `route` with `pattern` and either a JSON `body` or `abort:true`, then navigate to the test page. For example, `{"action":"route","pattern":"**/api/items","body":"{\"items\":[]}"}` supplies an HTTP 200 JSON response. Remove a route with `unroute` and the same pattern, or omit the pattern to remove all routes installed through this connection. Routes apply across this connection's tabs; mock only as part of the user's test and remove mocks when finished. Custom response status/headers, conditional interception, and a Playwright test runner are not exposed by this Tool.
+
+Use `cookies` to inspect browser cookies. Use `state_save` to export cookies and localStorage to a server JSON file, and `state_load` with its absolute `path` to restore it. State import and cookie inspection are available only in a managed browser because they span the browser context. Treat saved authentication state as sensitive. Use page JavaScript for individual localStorage/sessionStorage keys. SessionStorage is not part of the state export.
+
+Use `check`/`uncheck` for an explicit checkbox state, `dblclick` for a double click, `drag` with source `target` and `destination` refs, and `type` to insert text into the focused element. Use `resize` with `width` and `height` for viewport checks, and `pdf` for a PDF file on the server. Request `observe:true` when the next step needs new refs. This Tool controls Chromium; Firefox/WebKit runs, Playwright test generation, interactive locator picking, and video recording require a separate testing setup.
