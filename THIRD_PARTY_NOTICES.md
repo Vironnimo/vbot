@@ -62,3 +62,13 @@ The `terminal` Tool uses [pyte](https://github.com/selectel/pyte), distributed u
 ## MCP client
 
 The bundled MCP Extension uses the official [Model Context Protocol Python SDK](https://github.com/modelcontextprotocol/python-sdk), distributed under the MIT License. It remains a separately installed dependency; its source distribution and license text are available from the upstream project and installed package metadata.
+
+## Playwright CLI Skill
+
+`resources/skills/playwright-cli/` includes Microsoft's Playwright CLI Skill and
+nine reference files from [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli),
+revision `655530f6d0dc71a0d6bf46ae165877d3c7311099` (CLI 0.1.19), under Apache-2.0.
+The upstream license is included in that directory. `SKILL.md` adds a vBot
+execution/session/file-handling introduction; reference files are unmodified.
+`UPSTREAM.json` records the original hashes and attribution. The CLI executable
+and browser binaries are installed separately and are not bundled with vBot.

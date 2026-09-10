@@ -45,6 +45,9 @@ local-speech = ["torch>=2.10,<3", "transformers>=5.16.1,<6", "huggingface-hub>=1
 desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "webrtcvad-wheels>=2.0.14,<3", "onnxruntime>=1.16,<2"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "types-python-dateutil", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "soxr>=0.5,<2", "av>=18,<19"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["/archive"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
 

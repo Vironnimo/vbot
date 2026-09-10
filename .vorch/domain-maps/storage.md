@@ -14,7 +14,7 @@ Directory creation does not transfer ownership: Agents own their trees, Channels
 
 Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
 
-Browser Use creates its own durable native-client cache under `artifacts/browser-use/`; it is not a `TemporaryFileManager` retention category or a Storage bootstrap directory. That directory also contains the Extension-owned `refs.db` counter, which prevents short element ids from being reused across reloads and must not be reset as routine cache cleanup. Its shared Chrome for Testing cache is outside the data directory at `~/.agent-browser/browsers`. Preparation and locking belong to `resources/extensions/browser_use/runtime.py`, ref allocation to `extension.py`; see `extensions/browser-use.md`.
+The archived Browser Use Extension previously owned `artifacts/browser-use/` (including its `refs.db` counter) and `~/.agent-browser/browsers`. Removal from bundled discovery does not delete these existing files or make them Storage cleanup categories; see `extensions/browser-use.md`.
 
 ## Temporary files
 

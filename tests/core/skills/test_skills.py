@@ -1,6 +1,10 @@
 """Tests for the local skill metadata registry."""
 
+import hashlib
+import json
 import logging
+import re
+import zipfile
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -718,3 +722,41 @@ class TestProjectSkillLocations:
         registry = load_project_skill_registry(tmp_path, "claude", [tmp_path / "bundled"])
 
         assert {skill.name for skill in registry.list_all()} == {"review", "teach"}
+
+
+def test_bundled_playwright_package_preserves_upstream_and_resolves_references() -> None:
+    package = PROJECT_ROOT / "resources/skills/playwright-cli"
+    provenance = json.loads((package / "UPSTREAM.json").read_text(encoding="utf-8"))
+    for relative, digest in provenance["upstream_sha256_lf"].items():
+        content = (package / relative).read_text(encoding="utf-8").encode("utf-8")
+        if relative == "SKILL.md":
+            text = content.decode("utf-8")
+            # The only local addition precedes the original Quick start section.
+            start = text.index("## Using this Skill in vBot")
+            end = text.index("## Quick start", start)
+            content = (text[:start] + text[end:]).encode("utf-8")
+        assert hashlib.sha256(content).hexdigest() == digest, relative
+    assert (package / "LICENSE").is_file()
+    for path in [package / relative for relative in provenance["upstream_sha256_lf"]]:
+        for link in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
+            target = link.split("#", 1)[0]
+            if target and "://" not in target and target.endswith(".md"):
+                assert (path.parent / target).is_file(), (path, target)
+    registry = SkillRegistry.load(PROJECT_ROOT / "resources/skills", environment={"PATH": ""})
+    skill = registry.get("playwright-cli")
+    assert skill.requirements.empty
+    assert registry.availability_for("playwright-cli", ["playwright-cli"]).state == "available"
+    assert registry.filter_allowed([]) == []
+
+
+def test_retired_browser_is_preserved_outside_discovery_roots() -> None:
+    assert not (PROJECT_ROOT / "resources/extensions/browser_use/extension.py").exists()
+    with zipfile.ZipFile(PROJECT_ROOT / "archive/browser-use.zip") as archive:
+        assert archive.testzip() is None
+        assert {
+            "resources/extensions/browser_use/extension.py",
+            "resources/extensions/browser_use/runtime.py",
+            "resources/extensions/browser_use/skills/browser-use/SKILL.md",
+            "tests/resources/extensions/test_browser_use.py",
+            "tests/resources/extensions/test_browser_runtime.py",
+        } <= set(archive.namelist())

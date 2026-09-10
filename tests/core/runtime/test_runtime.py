@@ -33,7 +33,7 @@ from core.tools import ToolAccess
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
-from core.tools.tools import ToolNotFoundError, ToolRegistry, tool_is_ready
+from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
 
@@ -82,9 +82,7 @@ HOME_ASSISTANT_TOOLS = [
     "ha_list_entities",
     "ha_list_services",
 ]
-CANONICAL_REGISTERED_TOOLS = sorted(
-    CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["browser", "computer"]
-)
+CANONICAL_REGISTERED_TOOLS = sorted(CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["computer"])
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
@@ -1728,14 +1726,18 @@ def test_disabling_extension_live_drops_its_skill(config: Config) -> None:
         runtime.skills.get("ext-skill")
 
 
-def test_browser_skill_follows_loaded_extension_without_external_binary(config: Config) -> None:
+def test_playwright_replaces_archived_browser_extension(config: Config) -> None:
     runtime = Runtime(config)
     runtime.start()
     try:
-        skill = runtime.skills.get("browser-use")
-        assert "browser_use" in skill.path.parts
-        assert tool_is_ready(runtime.tools.get("browser"))
-        asyncio.run(runtime.apply_extension_disabled_change({"browser_use"}))
+        skill = runtime.skills.get("playwright-cli")
+        assert (
+            skill.path.parent
+            == Path(__file__).resolve().parents[3] / "resources/skills/playwright-cli"
+        )
+        assert skill.requirements.empty
+        assert runtime.extensions is not None
+        assert not any(record.name == "browser_use" for record in runtime.extensions.records())
         with pytest.raises(KeyError):
             runtime.skills.get("browser-use")
         with pytest.raises(ToolNotFoundError):
