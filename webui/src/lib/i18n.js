@@ -613,7 +613,7 @@ export const englishCatalog = Object.freeze({
   'chat.tokenTooltipContext': 'Current context: {tokens} tok',
   'chat.tokenTooltipContextInput': '  · provider input: {tokens}',
   'chat.tokenTooltipContextOutput': '  · provider output: {tokens}',
-  'chat.tokenTooltipContextDelta': '  · estimated newer messages: {tokens}',
+  'chat.tokenTooltipContextDelta': '  · estimated request changes: {tokens}',
   'chat.tokenTooltipLastTurn': 'Last turn',
   'chat.tokenTooltipInput': 'Input: {tokens} tok',
   'chat.tokenTooltipCacheRead': '  · read from cache: {tokens}',

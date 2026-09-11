@@ -858,7 +858,7 @@ def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
     result = _temporary_history_projection(snapshot, None)
     assert result["context_usage"] == {
         "tokens": 150,
-        "estimated": False,
+        "estimated": True,
         "provider_input_tokens": 120,
         "provider_output_tokens": 30,
     }

@@ -138,9 +138,9 @@ from core.chat.tool_dispatch import (
     _read_media_outputs,
 )
 from core.chat.usage import (
+    RequestContextUsage,
     add_session_turn_usage,
     aggregate_session_usage,
-    build_model_step_context_usage,
     latest_session_context_usage,
 )
 from core.chat.wire_shaping import (
@@ -182,7 +182,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     TerminalOutcome,
-    estimate_wire_request_input_tokens,
+    request_input_budget,
 )
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
@@ -356,9 +356,14 @@ def _prepare_completed_assistant(
     assistant_message: ChatMessage,
     request_messages: list[JsonObject],
     output_cwd: Path | None,
+    estimated_input_tokens: int,
 ) -> ChatMessage:
     """Fill estimated Usage and resolve output-file references off the Event Loop."""
-    completed = _complete_usage_with_estimates(assistant_message, request_messages)
+    completed = _complete_usage_with_estimates(
+        assistant_message,
+        request_messages,
+        estimated_input_tokens=estimated_input_tokens,
+    )
     return _with_assistant_output_files(completed, cwd=output_cwd)
 
 
@@ -672,6 +677,7 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
+    context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
 
 
 @dataclass
@@ -3078,6 +3084,15 @@ class ChatLoop:
                 target.model_id,
                 len(messages_for_request),
             )
+            request_tools = [] if tool_finalization_reason is not None else tools
+            request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                context.context_usage.project,
+                messages_for_request,
+                adapter=target.adapter,
+                model_id=target.model_id,
+                tools=request_tools,
+                scope=context.prompt_cache_affinity_id,
+            )
             self._raise_if_measured_context_exhausted(
                 context.session_snapshot.active_messages,
                 messages_for_request,
@@ -3085,6 +3100,7 @@ class ChatLoop:
                 agent,
                 run,
                 target,
+                context_usage=request_context_usage,
             )
             step_started_perf = time.perf_counter()
             workspace = getattr(agent, "workspace", None)
@@ -3095,20 +3111,21 @@ class ChatLoop:
                 if workspace
                 else None
             )
-            assistant_step = await self._wire_requests.send_assistant_request(
-                agent,
-                target.adapter,
-                target.model_id,
-                target.model_reference,
-                messages_for_request,
-                [] if tool_finalization_reason is not None else tools,
-                run,
-                prompt_cache_affinity_id=context.prompt_cache_affinity_id,
-                chunk_timeout_seconds=target.chunk_timeout_seconds,
-                continuation_tracker=context.continuation_tracker,
-                output_cwd=output_cwd,
-                provider_id=target.provider_id,
-            )
+            with request_input_budget(target.model_id, int(request_context_usage["tokens"])):
+                assistant_step = await self._wire_requests.send_assistant_request(
+                    agent,
+                    target.adapter,
+                    target.model_id,
+                    target.model_reference,
+                    messages_for_request,
+                    [] if tool_finalization_reason is not None else tools,
+                    run,
+                    prompt_cache_affinity_id=context.prompt_cache_affinity_id,
+                    chunk_timeout_seconds=target.chunk_timeout_seconds,
+                    continuation_tracker=context.continuation_tracker,
+                    output_cwd=output_cwd,
+                    provider_id=target.provider_id,
+                )
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
             # Calls or readable Assistant blocks the response contains.
@@ -3147,8 +3164,9 @@ class ChatLoop:
             assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
                 _prepare_completed_assistant,
                 assistant_message,
-                messages,
+                messages_for_request,
                 output_cwd,
+                int(request_context_usage["tokens"]),
             )
             assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                 _assistant_continuation_dict,
@@ -3167,11 +3185,28 @@ class ChatLoop:
                 # Reasoning is stripped. Do not send an empty Assistant entry.
                 assistant_request_messages = []
             assert isinstance(assistant_message.usage, dict)
-            assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                build_model_step_context_usage,
+            await _CHAT_TRANSFORM_WORKERS.run(
+                context.context_usage.observe,
                 assistant_message.usage,
-                [*messages_for_request, *assistant_request_messages],
+                messages_for_request,
+                adapter=target.adapter,
+                model_id=target.model_id,
+                tools=request_tools,
+                scope=context.prompt_cache_affinity_id,
             )
+            assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                context.context_usage.project,
+                [*messages_for_request, *assistant_request_messages],
+                adapter=target.adapter,
+                model_id=target.model_id,
+                tools=request_tools,
+                scope=context.prompt_cache_affinity_id,
+            )
+            assistant_message = replace(
+                assistant_message,
+                usage={**assistant_message.usage, "context_usage": assistant_context_usage},
+            )
+            assert assistant_message.usage is not None
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
             _LOGGER.debug(
@@ -3526,10 +3561,12 @@ class ChatLoop:
                 remember=True,
             )
             tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                build_model_step_context_usage,
-                assistant_message.usage,
+                context.context_usage.project,
                 continuation_request_messages,
-                estimated_delta_messages=tool_request_messages,
+                adapter=target.adapter,
+                model_id=target.model_id,
+                tools=tools,
+                scope=context.prompt_cache_affinity_id,
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 
@@ -3732,29 +3769,23 @@ class ChatLoop:
         agent: Any,
         run: Run,
         target: _ModelTarget,
+        *,
+        context_usage: JsonObject | None = None,
     ) -> None:
-        """Fail fast when measured Context Usage already fills the Model window.
+        """Fail fast when the projected request already fills the Model window.
 
-        The Adapter owns the estimate for the exact wire it renders. A durable
-        Provider measurement is an independent stronger signal when it is
-        higher, so the guard uses the larger of the two rather than adding
-        System Prompt or Tool overhead a second time to a measured request.
+        The same measured anchor plus request delta drives the indicator and
+        Compaction. Output-limit safety reserves belong to the Adapter and do
+        not inflate the displayed Context or override a measured anchor.
         """
 
         context_window = self.resolve_context_window(agent, target)
         if context_window is None:
             return
-        projection = latest_session_context_usage(session_messages)
+        projection = context_usage or latest_session_context_usage(session_messages)
         if projection is None or "provider_input_tokens" not in projection:
             return
-        wire_tokens = estimate_wire_request_input_tokens(
-            target.adapter,
-            request_messages,
-            model_id=target.model_id,
-            tools=tools,
-        )
-        measured_tokens = int(projection["tokens"])
-        projected_tokens = max(measured_tokens, wire_tokens)
+        projected_tokens = int(projection["tokens"])
         if projected_tokens < context_window:
             return
         _LOGGER.error(

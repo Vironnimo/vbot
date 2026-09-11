@@ -22,6 +22,7 @@ from core.sessions import SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
+from core.tools.availability import ToolAccess
 from core.utils.errors import ConfigError
 from server.app import create_app
 from server.rpc.methods import dispatch_rpc
@@ -39,6 +40,12 @@ class IntegrationAgent:
     thinking_effort: str = "medium"
     allowed_tools: list[str] | None = None
     current_session_id: str = ""
+
+    @property
+    def tool_access(self) -> ToolAccess:
+        if self.allowed_tools is None or "*" in self.allowed_tools:
+            return ToolAccess(mode="all")
+        return ToolAccess(mode="selected", allowed=tuple(self.allowed_tools))
 
 
 class IntegrationAgents:
@@ -752,6 +759,13 @@ def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> 
         )
         send_result = send_response.json()["result"]
         sse_response = client.get(f"/api/runs/{send_result['run_id']}/events")
+        history_result = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.history",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        ).json()["result"]
 
     assert create_response.json() == {
         "ok": True,
@@ -800,6 +814,10 @@ def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> 
     assert messages[-1].status == "completed"
     assert messages[-1].timing is not None
     assert messages[2].reasoning_meta == {"encrypted_content": "opaque"}
+    assert messages[4].usage is not None
+    assert history_result["context_usage"] == messages[4].usage["context_usage"]
+    assert history_result["context_usage"]["estimated"] is True
+    assert history_result["context_usage"]["tokens"] > 0
     tool_message_content = messages[3].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == {

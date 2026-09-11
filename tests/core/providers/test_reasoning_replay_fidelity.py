@@ -221,3 +221,28 @@ class TestMetaOnlyDeclaration:
         wire = adapter._format_assistant_message(dict(READABLE_ONLY_MESSAGE), model_id="m")
 
         assert "reasoning_content" not in wire
+
+
+@pytest.mark.parametrize("fidelity", ["meta_preferred", "meta_only", "readable_only"])
+def test_request_estimator_counts_only_the_serialized_reasoning_class(fidelity, monkeypatch):
+    from core.utils.tokens import estimate_structured_tokens
+
+    adapter = OpenAICompatibleAdapter(_config("minimal"), API_KEY)
+    monkeypatch.setattr(adapter, "reasoning_replay_fidelity", lambda _model: fidelity)
+    readable = "Readable accounting sentinel. " * 1000
+    opaque_text = "Metadata accounting sentinel. " * 500
+    message = {
+        "role": "assistant",
+        "content": "Answer",
+        "reasoning": readable,
+        "reasoning_meta": {"reasoning_details": [{"type": "reasoning.text", "text": opaque_text}]},
+    }
+    payload = adapter._build_payload([message], "model")
+    wire = payload["messages"][0]
+    assert ("reasoning_content" in wire) == (fidelity == "readable_only")
+    assert ("reasoning_details" in wire) == (fidelity != "readable_only")
+    estimate = adapter.estimate_request_input_tokens([message], model_id="model")
+    assert estimate == estimate_structured_tokens(payload["messages"])[0]
+    ignored_field = "reasoning_meta" if fidelity == "readable_only" else "reasoning"
+    without_ignored = {key: value for key, value in message.items() if key != ignored_field}
+    assert adapter.estimate_request_input_tokens([without_ignored], model_id="model") == estimate

@@ -338,6 +338,10 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 [dict(message) for message in messages],
                 tools=tools,
             )
+        if self._uses_anthropic_messages_path(model_id):
+            return self._messages.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tools
+            )
         return super().estimate_request_input_tokens(
             messages,
             model_id=model_id,

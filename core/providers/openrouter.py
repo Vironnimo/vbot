@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import quote
@@ -35,6 +35,7 @@ from core.providers.errors import (
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
+    estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
@@ -276,6 +277,19 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             request_kwargs.update(self._config.defaults)
         request_kwargs.update(kwargs)
         return request_kwargs
+
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        if self._uses_all_turns_responses(model_id):
+            return estimate_responses_input_tokens(
+                [dict(message) for message in messages], tools=tools
+            )
+        return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
 
     def _build_openrouter_responses_payload(
         self,

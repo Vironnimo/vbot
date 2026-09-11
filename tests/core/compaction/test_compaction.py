@@ -523,6 +523,7 @@ async def test_compaction_consumes_canonical_stream_without_raw_wire_normalizati
     strategy: str, adapter_class: type[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = object.__new__(adapter_class)
+    adapter._model_lookup = None
     requests: list[list[dict[str, Any]]] = []
 
     async def stream(

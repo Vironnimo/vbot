@@ -18,7 +18,7 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -51,6 +51,7 @@ from core.providers.adapter import (
     canonical_tool_result_is_error,
     normalize_tool_call_candidates,
     normalize_tool_call_ids,
+    resolve_request_input_budget,
     tool_result_content_blocks,
 )
 from core.providers.errors import NetworkError, ProviderError
@@ -81,7 +82,7 @@ from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter,
 from core.providers.tool_schema import render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
-from core.utils.tokens import estimate_request_input_tokens
+from core.utils.tokens import estimate_structured_tokens
 
 _LOGGER = get_logger("providers.anthropic_compatible")
 
@@ -540,6 +541,37 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             normalized["usage"] = usage
         return normalized
 
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the Messages wire without counting duplicate readable thinking."""
+        wire = normalize_tool_call_ids(
+            [dict(message) for message in messages], ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE
+        )
+        system = _merge_anthropic_system_parts(
+            [
+                message["content"]
+                for message in wire
+                if message.get("role") == "system"
+                and isinstance(message.get("content"), (str, list))
+            ]
+        )
+        payload: dict[str, Any] = {
+            "messages": _to_anthropic_messages(
+                [message for message in wire if message.get("role") != "system"],
+                include_thinking_blocks=self._model_reasoning_supported(model_id) is not False,
+            )
+        }
+        if system is not None:
+            payload["system"] = system
+        if tools:
+            _apply_anthropic_tools(payload, {"tools": list(tools)})
+        return estimate_structured_tokens(payload)[0]
+
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -590,7 +622,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             request_kwargs,
             model_id,
             wire_messages,
-            tools=payload.get("tools"),
+            tools=kwargs.get("tools"),
         )
         self._apply_reasoning(
             payload,
@@ -784,7 +816,10 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             request_kwargs.pop("max_tokens", None)
             explicit = None
         tool_definitions = tools if isinstance(tools, list) else None
-        estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+        estimated_input = self.estimate_request_input_tokens(
+            messages, model_id=model_id, tools=tool_definitions
+        )
+        estimated_input = resolve_request_input_budget(model_id, estimated_input)
         default = self._config.defaults.get("max_tokens") if self._config.defaults else None
         return resolve_request_output_limit(
             explicit_limit=explicit,

@@ -340,3 +340,22 @@ def test_normalize_tool_call_candidates_does_not_recover_ambiguous_suffix() -> N
     assert len(candidates) == 1
     assert candidates[0]["arguments"] == {}
     assert candidates[0]["rejection"]["code"] == "malformed_tool_arguments"
+
+
+@pytest.mark.asyncio
+async def test_request_input_budget_is_local_nested_and_never_reused_for_another_model():
+    import asyncio
+
+    from core.providers.adapter import request_input_budget, resolve_request_input_budget
+
+    async def one_budget(tokens):
+        with request_input_budget("model", tokens):
+            await asyncio.sleep(0)
+            assert resolve_request_input_budget("model", 280_000) == tokens
+            assert resolve_request_input_budget("other-model", 280_000) == 280_000
+            with request_input_budget("model", 123):
+                assert resolve_request_input_budget("model", 280_000) == 123
+            assert resolve_request_input_budget("model", 280_000) == tokens
+        assert resolve_request_input_budget("model", 280_000) == 280_000
+
+    await asyncio.gather(one_budget(150_000), one_budget(20_000))
