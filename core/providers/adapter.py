@@ -686,7 +686,7 @@ def estimate_wire_request_input_tokens(
 
     from core.utils.tokens import estimate_request_input_tokens
 
-    estimated, _ = estimate_request_input_tokens(messages, tools)
+    estimated, _ = estimate_request_input_tokens(messages, tools, model_id=model_id)
     return estimated
 
 
@@ -886,10 +886,9 @@ class ProviderAdapter(ABC):
         sent rather than the persisted canonical history.
         """
 
-        del model_id
         from core.utils.tokens import estimate_request_input_tokens
 
-        estimated, _ = estimate_request_input_tokens(messages, tools)
+        estimated, _ = estimate_request_input_tokens(messages, tools, model_id=model_id)
         return estimated
 
     # ------------------------------------------------------------------

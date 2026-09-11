@@ -1982,3 +1982,24 @@ def test_responses_bad_frames_preserve_evidence_without_foreign_provider(frame) 
     assert caught.value.retryable is False
     assert frame in str(caught.value)
     assert "GitHub Copilot" not in str(caught.value)
+
+
+def test_responses_image_estimate_receives_active_model():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": (
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lE"
+                        "QVR42mP8/x8AAwMCAO+aXfcAAAAASUVORK5CYII="
+                    ),
+                }
+            ],
+        }
+    ]
+    known = estimate_responses_input_tokens(messages, model_id="gpt-4o")
+    fallback = estimate_responses_input_tokens(messages, model_id="unknown")
+    assert fallback - known == 4096 - 255

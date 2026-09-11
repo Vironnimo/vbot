@@ -369,6 +369,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     if self._uses_platform_responses(model_id)
                     else frozenset()
                 ),
+                model_id=model_id,
                 tools=tools,
             )
         return super().estimate_request_input_tokens(
