@@ -1,7 +1,7 @@
 """Example extension: block obviously destructive ``bash`` commands.
 
 Copy this file into ``<data_dir>/extensions/`` (``~/.vbot/extensions/`` by
-default) to enable it on the next server start.
+default), then run ``vbot extensions reload`` to load it live.
 
 It demonstrates the ``tool_call`` **decision hook**. A handler inspects a
 pending tool call and returns one of:
