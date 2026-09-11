@@ -154,6 +154,11 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     owns only the Cloud chat wire and its verified response quirks.
     """
 
+    def request_body_limit(self, model_id: str) -> int | None:
+        """Direct Cloud Chat rejects bodies above 16 MiB (verified 2026-09-11)."""
+        del model_id
+        return 16 * 1024 * 1024
+
     def __init__(
         self,
         config: ProviderConfig,

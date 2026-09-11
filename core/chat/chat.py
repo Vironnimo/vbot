@@ -184,6 +184,7 @@ from core.providers.adapter import (
     TerminalOutcome,
     request_input_budget,
 )
+from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
@@ -3085,23 +3086,6 @@ class ChatLoop:
                 len(messages_for_request),
             )
             request_tools = [] if tool_finalization_reason is not None else tools
-            request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                context.context_usage.project,
-                messages_for_request,
-                adapter=target.adapter,
-                model_id=target.model_id,
-                tools=request_tools,
-                scope=context.prompt_cache_affinity_id,
-            )
-            self._raise_if_measured_context_exhausted(
-                context.session_snapshot.active_messages,
-                messages_for_request,
-                [] if tool_finalization_reason is not None else tools,
-                agent,
-                run,
-                target,
-                context_usage=request_context_usage,
-            )
             step_started_perf = time.perf_counter()
             workspace = getattr(agent, "workspace", None)
             output_cwd = (
@@ -3111,21 +3095,55 @@ class ChatLoop:
                 if workspace
                 else None
             )
-            with request_input_budget(target.model_id, int(request_context_usage["tokens"])):
-                assistant_step = await self._wire_requests.send_assistant_request(
-                    agent,
-                    target.adapter,
-                    target.model_id,
-                    target.model_reference,
+            while True:
+                run.raise_if_cancelled()
+                request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                    context.context_usage.project,
+                    messages_for_request,
+                    adapter=target.adapter,
+                    model_id=target.model_id,
+                    tools=request_tools,
+                    scope=context.prompt_cache_affinity_id,
+                )
+                self._raise_if_measured_context_exhausted(
+                    context.session_snapshot.active_messages,
                     messages_for_request,
                     [] if tool_finalization_reason is not None else tools,
+                    agent,
                     run,
-                    prompt_cache_affinity_id=context.prompt_cache_affinity_id,
-                    chunk_timeout_seconds=target.chunk_timeout_seconds,
-                    continuation_tracker=context.continuation_tracker,
-                    output_cwd=output_cwd,
-                    provider_id=target.provider_id,
+                    target,
+                    context_usage=request_context_usage,
                 )
+                try:
+                    with request_input_budget(
+                        target.model_id, int(request_context_usage["tokens"])
+                    ):
+                        assistant_step = await self._wire_requests.send_assistant_request(
+                            agent,
+                            target.adapter,
+                            target.model_id,
+                            target.model_reference,
+                            messages_for_request,
+                            [] if tool_finalization_reason is not None else tools,
+                            run,
+                            prompt_cache_affinity_id=context.prompt_cache_affinity_id,
+                            chunk_timeout_seconds=target.chunk_timeout_seconds,
+                            continuation_tracker=context.continuation_tracker,
+                            output_cwd=output_cwd,
+                            provider_id=target.provider_id,
+                        )
+                except ProviderRequestTooLargeError:
+                    smaller = await _CHAT_TRANSFORM_WORKERS.run(
+                        context.image_budget.project,
+                        messages_for_request,
+                        remember=True,
+                        force=True,
+                    )
+                    if smaller == messages_for_request:
+                        raise
+                    messages_for_request = smaller
+                    continue
+                break
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
             # Calls or readable Assistant blocks the response contains.
