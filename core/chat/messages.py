@@ -73,9 +73,7 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
 COMPACTION_SKILL_NOTE_PREFIX = "[compaction-skills] "
-COMPACTION_SUMMARY_END_MARKER = (
-    "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
-)
+COMPACTION_SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY ---"
 TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 HISTORY_COMPACTION_GUIDANCE = (
     "This is Compaction checkpoint {ordinal}. Some earlier original messages are no longer "

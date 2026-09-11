@@ -958,6 +958,7 @@ class StubCompactionService:
         self,
         messages: list[ChatMessage],
         settings: Any,
+        **_kwargs: Any,
     ) -> bool:
         self.compactable_context_calls.append((persisted_roles(messages), settings))
         return self._has_compactable_context

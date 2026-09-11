@@ -787,6 +787,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             self,
             _messages: list[ChatMessage],
             _settings: Any,
+            **_kwargs: Any,
         ) -> bool:
             return True
 
