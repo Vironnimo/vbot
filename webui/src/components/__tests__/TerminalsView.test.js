@@ -828,8 +828,14 @@ describe('TerminalsView', () => {
 
     findButtonByAriaLabel('New terminal').click();
     flushSync();
-    setField('#terminal-start-command', 'codex');
-    setField('#terminal-start-arguments', '--profile\nwork space');
+    expect(document.querySelector('#terminal-start-arguments')).toBeNull();
+    expect(
+      document.querySelectorAll('#terminal-start-form .form-field__help'),
+    ).toHaveLength(0);
+    expect(
+      document.querySelectorAll('#terminal-start-form .info-hint'),
+    ).toHaveLength(4);
+    setField('#terminal-start-command', 'codex --profile "work space"');
     setField('#terminal-start-workdir', 'C:\\repo');
     document
       .querySelector('#terminal-start-form')
@@ -849,6 +855,40 @@ describe('TerminalsView', () => {
     expect(
       document.querySelector('button[aria-label="Release control"]'),
     ).toBeNull();
+  });
+
+  it('keeps malformed commands editable and starts the default shell when cleared', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([]));
+    startTerminalMock.mockResolvedValue({
+      terminal: terminal({ owner: null }),
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() =>
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    );
+    findButtonByAriaLabel('New terminal').click();
+    flushSync();
+    setField('#terminal-start-command', 'codex "unfinished');
+    document
+      .querySelector('#terminal-start-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() =>
+      document.querySelector('#terminal-start-command[aria-invalid="true"]'),
+    );
+    expect(startTerminalMock).not.toHaveBeenCalled();
+    await waitFor(() => document.activeElement.id === 'terminal-start-command');
+    expect(document.querySelector('#terminal-start-command').value).toBe(
+      'codex "unfinished',
+    );
+    setField('#terminal-start-command', '   ');
+    flushSync();
+    expect(document.querySelector('#terminal-start-command-error')).toBeNull();
+    document
+      .querySelector('#terminal-start-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => startTerminalMock.mock.calls.length === 1);
+    expect(startTerminalMock).toHaveBeenCalledWith({});
   });
 
   it('prefills the last launch and can select an older persistent setup', async () => {
@@ -879,10 +919,7 @@ describe('TerminalsView', () => {
     findButtonByAriaLabel('New terminal').click();
     flushSync();
     expect(document.querySelector('#terminal-start-command').value).toBe(
-      'codex',
-    );
-    expect(document.querySelector('#terminal-start-arguments').value).toBe(
-      '--profile\ndaily',
+      'codex --profile daily',
     );
     expect(document.querySelector('#terminal-start-workdir').value).toBe(
       'C:\\Development\\vBot',
@@ -901,10 +938,7 @@ describe('TerminalsView', () => {
       .click();
     flushSync();
     expect(document.querySelector('#terminal-start-command').value).toBe(
-      'python',
-    );
-    expect(document.querySelector('#terminal-start-arguments').value).toBe(
-      '-m\nhttp.server\n8080',
+      'python -m http.server 8080',
     );
     expect(document.querySelector('#terminal-start-workdir').value).toBe(
       'C:\\Sites\\docs',

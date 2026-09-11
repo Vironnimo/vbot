@@ -347,23 +347,21 @@ export const englishCatalog = Object.freeze({
     'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
   'terminals.new': 'New terminal',
   'terminals.startTitle': 'New terminal',
-  'terminals.startIntro':
-    'Leave Command empty to open the server user’s default shell. Every command uses the same real PTY / ConPTY.',
   'terminals.historyLabel': 'Recent setup',
   'terminals.historyHelp':
-    'Saved on this vBot server. Choosing a setup fills Command, Arguments, and Working directory.',
-  'terminals.commandLabel': 'Command',
+    'Reuse a recent command and working directory saved on this server.',
+  'terminals.commandLabel': 'Command line',
   'terminals.commandHelp':
-    'Optional. Runs inside the interactive shell, like typed input. For example: codex, powershell, bash, or python.',
+    'Program and arguments, for example: codex --profile "work space". Quote values containing spaces. Arguments are literal; pipes and shell expansions are not evaluated. Leave empty for the default shell.',
   'terminals.commandPlaceholder': 'Default shell',
   'terminals.nameLabel': 'Name',
   'terminals.nameHelp':
-    'Optional. A label so you and the agent can talk about this terminal, for example joe.',
+    'Optional name to identify this terminal, for you and the Agent.',
   'terminals.namePlaceholder': 'Unnamed',
-  'terminals.argumentsLabel': 'Arguments',
-  'terminals.argumentsHelp':
-    'Optional. Enter one exact argument per line; spaces within a line are preserved.',
-  'terminals.argumentsPlaceholder': '--profile\nwork',
+  'terminals.commandError.unclosedQuote':
+    'Close the quotation marks before starting.',
+  'terminals.commandError.emptyArgument':
+    'The command and its arguments cannot be empty quoted values.',
   'terminals.workdirLabel': 'Working directory',
   'terminals.workdirHelp':
     'Optional. Defaults to the server user’s home directory.',
@@ -435,7 +433,7 @@ export const englishCatalog = Object.freeze({
     'Start a terminal in this group, or ask an agent to open one here.',
   'terminals.startGroupLabel': 'Group',
   'terminals.startGroupHelp':
-    'Optional. Start the terminal inside a group. Automatic groups are created for each agent and for manual terminals.',
+    'Choose where the terminal appears. Automatic uses the manual terminals group.',
   'terminals.groupAutomatic': 'Automatic',
   'terminals.kind.manual': 'Manual',
   'terminals.kind.agent': 'Agent',
