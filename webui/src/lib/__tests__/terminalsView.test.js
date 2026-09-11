@@ -10,6 +10,8 @@ import {
   createTerminalsController,
   createTerminalsViewState,
   layoutForCount,
+  parseTerminalCommandLine,
+  formatTerminalCommandLine,
   reconcileTerminalList,
   reconcileTerminalLaunchHistory,
   selectedTerminal,
@@ -1512,5 +1514,53 @@ describe('terminal group selection and reorder', () => {
     expect(group?.group_id).toBe('new-group');
     expect(state.selectedGroupId).toBe('new-group');
     controller.destroy();
+  });
+});
+
+describe('terminal command line editor', () => {
+  it.each([
+    ['  ', undefined, []],
+    ['codex --profile "work space"', 'codex', ['--profile', 'work space']],
+    ["python -c 'print(1 + 2)'", 'python', ['-c', 'print(1 + 2)']],
+    ['tool --name="work space"', 'tool', ['--name=work space']],
+    [
+      String.raw`C:\tools\app.exe C:\work\repo`,
+      String.raw`C:\tools\app.exe`,
+      [String.raw`C:\work\repo`],
+    ],
+    ['tool "$HOME" "a;b" "x|y"', 'tool', ['$HOME', 'a;b', 'x|y']],
+  ])('reads %s into literal API arguments', (line, command, args) => {
+    expect(parseTerminalCommandLine(line)).toEqual({ command, args });
+  });
+
+  it.each([
+    ['codex "unfinished', 'unclosedQuote'],
+    ["codex 'unfinished", 'unclosedQuote'],
+    ['"" argument', 'emptyArgument'],
+    ['codex "  "', 'emptyArgument'],
+  ])('rejects %s before starting a terminal', (line, error) => {
+    expect(parseTerminalCommandLine(line)).toEqual({ error });
+  });
+
+  it('round-trips saved setups with quotes, whitespace, paths and literal shell characters', () => {
+    const command = String.raw`C:\Program Files\tool.exe`;
+    const args = [
+      'work space',
+      ' leading and trailing ',
+      'a"b',
+      "it's",
+      '\\',
+      'C:\\my directory\\',
+      '\\\\server\\share\\',
+      '$HOME',
+      'x;y',
+      'a|b',
+      'tab\there',
+      'line\nbreak',
+    ];
+    expect(
+      parseTerminalCommandLine(formatTerminalCommandLine(command, args)),
+    ).toEqual({ command, args });
+    expect(formatTerminalCommandLine(null)).toBe('');
   });
 });
