@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skills, Memory, prompts, Providers and Models, Channels, scheduling, Extensions and MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself and for investigating its current configuration or health."
+description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skills, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself and for investigating its current configuration or health."
 ---
 
 # vBot CLI
@@ -19,6 +19,8 @@ Use `vbot` through Bash to inspect and configure the application. The server run
 | Agents, Project membership, permissions, Sessions | `references/agents-projects.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
+| Create or change an Extension, its Tools, hooks, Commands or pages | `references/extensions.md` |
+| Use bundled Swarm or Computer Use, or inspect Extension connection UI | `references/extension-usage.md` |
 | MCP installation, grants, discovery and application operations | `references/mcp.md` |
 | Telegram or Discord routing, tokens and group access | `references/channels.md` |
 | First Telegram setup and chat-id discovery | `references/telegram-setup.md` |
@@ -32,6 +34,12 @@ Use `vbot` through Bash to inspect and configure the application. The server run
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
 `vbot tool list` lists registered public Tools. An Agent's actual access also depends on its Tool policy, Project ceiling and runtime conditions; inspect its configuration before changing permissions.
+
+## Create Extensions
+
+Read [the Extension authoring guide](references/extensions.md) before creating or changing an Extension. It covers installation, declarations, lifecycle, permissions and verification. Copy or adapt the matching example under `assets/extensions/`: `word_count.py` for a Tool, `guard_bash.py` for a decision hook, or the complete `workflow_command/` directory for a Command with a bundled Skill. These are templates; install only the requested Extension into the target server's Extension directory.
+
+Read a template with the `skill` Tool using `name: "vbot-cli"` and its relative `file_path`, such as `assets/extensions/word_count.py`. To copy files on disk, resolve this bundled Skill under the `vbot_root` reported by `vbot home`: `resources/skills/vbot-cli/`. Preserve a directory example's manifest and nested Skill files.
 
 ## Keep the target and path roles clear
 

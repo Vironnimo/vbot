@@ -54,6 +54,8 @@ not become omission. Missing/non-text content still fails before writing
 - **RPC + user Accessors**: `skill.read/create/update/delete/write_file/remove_file` scoped `global` or `agent:<id>`, `author="human"`; Project/repo scopes reject. Global writes reload skills, Agent writes invalidate that agent's registry. The Agent-scope id validates traversal-safe and must name an **existing Identity Agent** - unknown ids reject with `invalid_request` rather than creating unowned homes.
 - **Project skills** stay repo-owned (authored with ordinary `write`/`edit`, validated at scan); **bundled** `resources/skills/` is read-only - the write core refuses it.
 
+The bundled `vbot-cli` Skill owns Extension authoring guidance in `references/extensions.md`, bundled operation guidance in `references/extension-usage.md`, and copyable templates in `assets/extensions/`. Assets are recursively readable Skill resources, not Extension scan roots; the nested `workflow` Skill becomes separately discoverable only after its containing Extension is installed and loaded. Coverage: `tests/core/tools/test_skill.py` and `tests/core/extensions/test_examples.py`.
+
 ## Data Model
 
 - `SkillMetadata`: normalized `name`/`description`, internal `path`, optional license/compatibility/metadata/`allowed_tools`, parsed vBot requirements. `SkillRegistry.always_allowed` is scoped metadata: Identity registries contain private names plus the active Project's effective names.
