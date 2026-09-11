@@ -118,7 +118,7 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
             "enum": ["unicode", "keyboard"],
             "description": (
                 "For foreground type on Windows: unicode inserts text; keyboard sends "
-                "characters as physical key presses for applications such as Blender that"
+                "characters as physical key presses for applications that"
                 " ignore Unicode input. Omit for unicode. Focus a text field first; in a "
                 "viewport, keyboard characters can trigger shortcuts. Keyboard mode "
                 "requires characters available on the active keyboard layout."
@@ -950,21 +950,28 @@ class ComputerUseService:
         result = tool_failure(error.code, str(error), retryable=False)
         if session is None:
             return result
-        target = _target(arguments) if arguments.keys() >= _WINDOW else None
+        target = _target(arguments) if _TARGET & arguments.keys() else None
         steps = arguments.get("steps")
-        for candidate in [arguments, *(steps if isinstance(steps, list) else [])]:
+        candidates = [arguments, *(steps if isinstance(steps, list) else [])]
+        # Conflicting explicit targets must not repurpose an owned stale reference.
+        for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
-            if target is None:
-                view_id = candidate.get("view_id")
-                view = session.views.get(view_id) if isinstance(view_id, str) else None
-                target = (
-                    view.target
-                    if view
-                    else (session.retired_views.get(view_id) if isinstance(view_id, str) else None)
-                )
-            if target is None and isinstance(candidate.get("element"), str):
-                target = session.issued_elements.get(candidate["element"])
+            view_id = candidate.get("view_id")
+            view = session.views.get(view_id) if isinstance(view_id, str) else None
+            owned_target = (
+                view.target
+                if view
+                else session.retired_views.get(view_id)
+                if isinstance(view_id, str)
+                else None
+            )
+            if owned_target is None and isinstance(candidate.get("element"), str):
+                owned_target = session.issued_elements.get(candidate["element"])
+            if owned_target is not None:
+                if target is not None and target != owned_target:
+                    return result
+                target = owned_target
         retained = session.observation_data.get(target) if target is not None else None
         if retained is not None:
             result["artifacts"].append(
@@ -979,7 +986,71 @@ class ComputerUseService:
                     ),
                 }
             )
+        elif target is not None:
+            # A retired reference can explain recovery, but never authorize input.
+            recovery_args: dict[str, Any] = {
+                "action": "capture",
+                **_target_fields(target),
+                "foreground": arguments.get(
+                    "foreground", session.foregrounds.get(target, target[0] != "window")
+                ),
+                "resolution": arguments.get("resolution", session.resolutions.get(target, "auto")),
+                "mode": arguments.get(
+                    "mode",
+                    "som"
+                    if "query" in arguments
+                    or "limit" in arguments
+                    or any("element" in candidate for candidate in candidates)
+                    else "vision",
+                ),
+                **{key: arguments[key] for key in ("query", "limit") if key in arguments},
+            }
+            result["artifacts"].append(
+                {
+                    "kind": "computer_observation",
+                    "applied": False,
+                    **self._recovery(context, recovery_args, error),
+                }
+            )
         return result
+
+    def _recovery(
+        self,
+        context: ToolContext,
+        args: dict[str, Any],
+        error: Exception | None = None,
+    ) -> dict[str, Any]:
+        """Return a read-only next call without reviving an observation or sending input."""
+        if args["action"] in {"status", "close", "launch", "apps", "windows", "monitors"}:
+            return {}
+        try:
+            self._check_access(context)
+        except ComputerUseError:
+            return {}
+        target = _target_fields(_target(args))
+        code = error.code if isinstance(error, ComputerUseError) else None
+        recovery: dict[str, Any] = {"action": "capture", **target, "foreground": args["foreground"]}
+        if args.get("mode", "vision") != "vision":
+            recovery["mode"] = args["mode"]
+            for field in ("query", "limit"):
+                if field in args:
+                    recovery[field] = args[field]
+        if args.get("resolution", "auto") != "auto":
+            recovery["resolution"] = args["resolution"]
+        if code == "stale_window":
+            recovery = {"action": "windows"}
+        elif code in {"target_not_foreground", "focus_refused", "window_not_visible"}:
+            return {
+                "target": target,
+                "foreground": args["foreground"],
+                "recovery": {"action": "capture"},
+                "recovery_note": (
+                    "The next observation is the desktop. Call computer with recovery as the "
+                    "complete arguments, without adding the window target or an old view_id. "
+                    "Select the intended window there before capturing it with foreground=true."
+                ),
+            }
+        return {"target": target, "foreground": args["foreground"], "recovery": recovery}
 
     def _observation(
         self, session: DesktopSession, target: tuple[Any, ...], view_id: str | None = None
@@ -1113,9 +1184,10 @@ class ComputerUseService:
                 }
             return {
                 **result,
+                **self._recovery(context, args),
                 "next_action": result.get(
                     "next_action",
-                    "Input was dispatched without a new observation. Capture the target "
+                    "Input was dispatched without a new observation. Use recovery to observe "
                     "before further input.",
                 ),
             }
@@ -1145,13 +1217,14 @@ class ComputerUseService:
                     else "observation_failed",
                     "message": str(error),
                 },
+                **self._recovery(context, args, error),
             )
             if result.get("applied"):
                 result["next_action"] = (
                     str(error)
-                    if isinstance(error, ComputerUseInterruptedError)
-                    else "Input was dispatched but its result could not be observed. Capture "
-                    "the target before deciding whether to repeat it."
+                    if "recovery" not in result
+                    else "Input was dispatched but its result could not be observed. Use "
+                    "recovery to inspect the current state before deciding what remains."
                 )
         return result
 
@@ -1296,6 +1369,7 @@ class ComputerUseService:
         except ComputerUseError as error:
             # A verified closed window cannot supply another window screenshot.
             verification["observation_error"] = {"code": error.code, "message": str(error)}
+            verification.update(self._recovery(context, args, error))
         return verification
 
     def _execute(
@@ -1502,15 +1576,21 @@ class ComputerUseService:
             except ComputerUseError as error:
                 if self._driver is not None and self._driver.broken:
                     self._sessions.clear()
-                return tool_failure(error.code, str(error), retryable=False)
+                failure = tool_failure(error.code, str(error), retryable=False)
+                if recovery := self._recovery(context, args, error):
+                    failure["artifacts"].append({"kind": "computer_observation", **recovery})
+                return failure
             except Exception:
                 self.api.logger.exception("Computer Use request failed")
-                return tool_failure(
+                failure = tool_failure(
                     "computer_use_failed",
                     "Computer Use could not complete the request. Check the Extension "
                     "diagnostics and capture the window before repeating input.",
                     retryable=False,
                 )
+                if recovery := self._recovery(context, args):
+                    failure["artifacts"].append({"kind": "computer_observation", **recovery})
+                return failure
             finally:
                 try:
                     if self._driver is not None and (self._driver.broken or not self._sessions):
