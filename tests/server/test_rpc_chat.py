@@ -197,7 +197,7 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
     }
     assert response["result"]["context_usage"] == {
         "tokens": 2100,
-        "estimated": False,
+        "estimated": True,
         "provider_input_tokens": 2000,
         "provider_output_tokens": 100,
     }

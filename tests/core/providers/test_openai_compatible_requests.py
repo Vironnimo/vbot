@@ -6,7 +6,6 @@ from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECO
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_request_output_limit
 from core.providers.tool_schema import render_tool_definitions
-from core.utils.tokens import estimate_request_input_tokens
 
 from .openai_compatible_test_support import (
     API_KEY,
@@ -1146,7 +1145,9 @@ class TestOutputLimitDefault:
         await adapter.send(messages, model_id="nvidia/nemotron-nano-9b-v2:free", tools=tools)
 
         request_body = json.loads(route.calls.last.request.content)
-        estimated_input, _ = estimate_request_input_tokens(messages, tools)
+        estimated_input = adapter.estimate_request_input_tokens(
+            messages, model_id="nvidia/nemotron-nano-9b-v2:free", tools=tools
+        )
         expected = resolve_request_output_limit(
             explicit_limit=None,
             model_output_limit=256_000,
@@ -1156,3 +1157,26 @@ class TestOutputLimitDefault:
         )
         assert request_body["max_tokens"] == expected
         assert 0 < request_body["max_tokens"] < 256_000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_output_capacity_uses_scoped_input_projection_and_separate_reserve():
+    from core.providers.adapter import request_input_budget
+
+    route = respx.post(MINIMAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenAICompatibleAdapter(
+        NO_DEFAULTS_CONFIG,
+        API_KEY,
+        model_lookup=lambda model_id: _model_with_output_ceiling(
+            model_id, 256_000, context_window=256_000
+        ),
+    )
+    messages = [{"role": "user", "content": "x" * 8_000}]
+    model_id = "nvidia/nemotron-nano-9b-v2:free"
+    with request_input_budget(model_id, 150_000):
+        await adapter.send(messages, model_id=model_id)
+    body = json.loads(route.calls.last.request.content)
+    # 256k window minus measured input minus the existing 25% output reserve.
+    assert body["max_tokens"] == 68_500
+    assert set(body) <= {"model", "messages", "max_tokens", "stream"}

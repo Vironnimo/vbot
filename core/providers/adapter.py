@@ -12,7 +12,9 @@ import hashlib
 import json
 import string
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -635,6 +637,30 @@ def _rewrite_responses_output_tool_call_ids(
         # from ``call_id``. Replaying it after changing the call identity can
         # falsely pair a foreign function item with opaque reasoning.
         item.pop("id", None)
+
+
+_REQUEST_INPUT_BUDGET: ContextVar[tuple[str, int] | None] = ContextVar(
+    "provider_request_input_budget", default=None
+)
+
+
+@contextmanager
+def request_input_budget(model_id: str, tokens: int) -> Iterator[None]:
+    """Scope Chat's complete Context projection to one send, including inner wire routing.
+
+    This local budget never enters request kwargs or a Provider payload. The
+    Adapter still adds its independent output-capacity uncertainty reserve.
+    """
+    token = _REQUEST_INPUT_BUDGET.set((model_id, max(0, tokens)))
+    try:
+        yield
+    finally:
+        _REQUEST_INPUT_BUDGET.reset(token)
+
+
+def resolve_request_input_budget(model_id: str, local_estimate: int) -> int:
+    budget = _REQUEST_INPUT_BUDGET.get()
+    return budget[1] if budget is not None and budget[0] == model_id else local_estimate
 
 
 def estimate_wire_request_input_tokens(

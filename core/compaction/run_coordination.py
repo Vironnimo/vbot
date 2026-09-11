@@ -14,8 +14,8 @@ from core.chat.messages import (
     has_unconsumed_skill_activation,
 )
 from core.chat.usage import (
+    RequestContextUsage,
     aggregate_session_usage,
-    build_model_step_context_usage,
     checkpoint_context_usage,
     latest_session_context_usage,
 )
@@ -265,16 +265,12 @@ class CompactionRunCoordinator:
                     model_id=request.active_model_id,
                     tools=request.request_state.tools,
                 )
-                if context_usage is None:
-                    context_usage = {
-                        "tokens": wire_context_tokens_before,
-                        "estimated": True,
-                    }
-                    run.terminal_payload_extras["context_usage"] = context_usage
-                context_tokens_before = max(
-                    int(context_usage["tokens"]),
-                    wire_context_tokens_before,
-                )
+                context_usage = {
+                    "tokens": wire_context_tokens_before,
+                    "estimated": True,
+                }
+                run.terminal_payload_extras["context_usage"] = context_usage
+                context_tokens_before = wire_context_tokens_before
                 checkpoint = await compaction_service.compact(
                     messages,
                     session_address=session.address,
@@ -443,39 +439,16 @@ class CompactionRunCoordinator:
             return current_state
 
         current_request_messages = continuation_request_messages or messages
-        wire_context_tokens = await self._host.run_transform(
-            estimate_wire_request_input_tokens,
-            target.adapter,
+        accounting = getattr(context, "context_usage", None) or RequestContextUsage()
+        effective_context_usage = await self._host.run_transform(
+            accounting.project,
             current_request_messages,
+            adapter=target.adapter,
             model_id=target.model_id,
             tools=tools,
+            scope=context.prompt_cache_affinity_id,
         )
-        resolved_context_usage = context_usage
-        if resolved_context_usage is None:
-            if usage is None:
-                resolved_context_usage = await self._host.run_transform(
-                    latest_session_context_usage,
-                    context.session_snapshot.active_messages,
-                )
-                if resolved_context_usage is None:
-                    resolved_context_usage = {
-                        "tokens": wire_context_tokens,
-                        "estimated": True,
-                    }
-            else:
-                resolved_context_usage = await self._host.run_transform(
-                    build_model_step_context_usage,
-                    usage,
-                    current_request_messages,
-                )
-        context_tokens = resolved_context_usage.get("tokens")
-        if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
-            raise AssertionError("Context Usage must carry an integer token count")
-        input_tokens = max(context_tokens, wire_context_tokens)
-        effective_context_usage = dict(resolved_context_usage)
-        if wire_context_tokens > context_tokens:
-            effective_context_usage["tokens"] = wire_context_tokens
-            effective_context_usage["estimated"] = True
+        input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
 
         should_compact = self._host.compaction_service.should_auto_compact(
@@ -667,6 +640,7 @@ class CompactionRunCoordinator:
                     )
             return current_state
         await context.session_snapshot.refresh(session)
+        accounting.reset()
         context.prompt_cache_affinity_id = await self._host.rotate_prompt_cache_affinity(run)
         if prompt_refresh is not None:
             try:

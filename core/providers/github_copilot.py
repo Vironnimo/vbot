@@ -17,7 +17,7 @@ from core.providers._http_shared import (
     post_json_with_retry,
     wrap_network_error,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, resolve_request_input_budget
 from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
@@ -271,6 +271,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 model_id=model_id,
                 tools=tool_definitions,
             )
+            estimated_input = resolve_request_input_budget(model_id, estimated_input)
             if estimated_input > max_prompt_tokens:
                 raise ProviderError(
                     "Request input exceeds the GitHub Copilot Model prompt limit "
