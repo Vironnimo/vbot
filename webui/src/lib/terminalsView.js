@@ -1305,9 +1305,17 @@ export function createTerminalsController({
         throw new Error('The server returned an invalid terminal.');
       }
       reconcileTerminalLaunchHistory(state, result);
-      if (groupId) {
-        state.selectedGroupId = groupId;
-      }
+      state.selectedGroupId =
+        terminal.group_id || groupId || state.selectedGroupId;
+      // The append tile marks the next position, including after a reload.
+      // Save through the existing group-order contract instead of relying on
+      // the catalog's default newest-first ordering.
+      reorderGroup(state.selectedGroupId, [
+        ...visibleTerminals(state)
+          .filter((item) => item.terminal_id !== terminal.terminal_id)
+          .map((item) => item.terminal_id),
+        terminal.terminal_id,
+      ]);
       state.selectedTerminalId = terminal.terminal_id;
       reconcileStreams();
       return terminal;
