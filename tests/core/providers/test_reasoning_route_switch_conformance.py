@@ -21,7 +21,7 @@ from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
-from core.providers.ollama import OllamaAdapter
+from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -340,7 +340,11 @@ def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: s
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "connection"),
-    [("openai", "gpt-6-astra", "subscription"), ("opencode-go", "deepseek-flash", "api-key")],
+    [
+        ("openai", "gpt-6-astra", "subscription"),
+        ("opencode-go", "deepseek-flash", "api-key"),
+        ("ollama-cloud", "deepseek-v4.1-flash", "api-key"),
+    ],
 )
 @pytest.mark.parametrize("route_change", [None, "provider", "model", "connection", "account"])
 async def test_new_models_replay_persisted_tool_history_only_on_its_original_route(
@@ -353,13 +357,18 @@ async def test_new_models_replay_persisted_tool_history_only_on_its_original_rou
     def lookup(candidate: str):
         return registry.get(provider_id, candidate)
 
-    adapter = (
-        OpenAIAdapter(
+    adapter: OpenAIAdapter | OpenCodeGoAdapter | OllamaCloudAdapter
+    if provider_id == "openai":
+        adapter = OpenAIAdapter(
             config, "test-token", model_lookup=lookup, connection_mode=CODEX_RESPONSES_MODE
         )
-        if provider_id == "openai"
-        else OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
-    )
+    elif provider_id == "ollama-cloud":
+        adapter = OllamaCloudAdapter(
+            config, "test-token", model_lookup=lookup, connection_mode="cloud"
+        )
+    else:
+        adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    readable_field = "reasoning" if provider_id == "ollama-cloud" else "reasoning_content"
     original_output = [
         {
             "type": "reasoning",
@@ -392,7 +401,7 @@ async def test_new_models_replay_persisted_tool_history_only_on_its_original_rou
                     "message": {
                         "role": "assistant",
                         "content": "Reading the file.",
-                        "reasoning_content": READABLE_REASONING,
+                        readable_field: READABLE_REASONING,
                         "reasoning_details": [
                             {"type": "reasoning.encrypted", "data": "foreign-encrypted"}
                         ],
@@ -474,9 +483,11 @@ async def test_new_models_replay_persisted_tool_history_only_on_its_original_rou
                 assert all(item.get("type") != "reasoning" for item in payload["input"])
         else:
             prior = next(item for item in payload["messages"] if item["role"] == "assistant")
-            assert prior.get("reasoning_content") == (
+            assert prior.get(readable_field) == (
                 READABLE_REASONING if route_change is None else None
             )
+            other_field = "reasoning_content" if readable_field == "reasoning" else "reasoning"
+            assert other_field not in prior
             assert "reasoning_details" not in prior
     finally:
         await adapter.aclose()

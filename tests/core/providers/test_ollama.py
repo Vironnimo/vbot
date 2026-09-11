@@ -8,6 +8,8 @@ and usage rides in ``prompt_eval_count``/``eval_count``.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,10 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from PIL import Image
 
+from core.attachments.images import ImageConverter
+from core.chat.block_resolver import ContentBlockResolver
 from core.chat.messages import ChatMessage
 from core.chat.wire_shaping import (
     _assemble_request_history,
@@ -397,15 +402,56 @@ CLOUD_REASONING_CONTENT_RESPONSE: dict[str, Any] = {
 class TestOllamaCloudChatWire:
     @respx.mock
     @pytest.mark.asyncio
+    async def test_v41_image_profile_converts_gif_before_cloud_request(self) -> None:
+        resources = Path(__file__).resolve().parents[3] / "resources"
+        models = ModelRegistry.load(resources)
+        config = ProviderRegistry.load(resources).get("ollama-cloud")
+        adapter = OllamaCloudAdapter(
+            config, "test-key", model_lookup=lambda mid: models.get("ollama-cloud", mid)
+        )
+        model_id = "deepseek-v4.1-flash"
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        source = io.BytesIO()
+        Image.new("RGB", (12, 8), "red").save(source, format="GIF")
+        original = {
+            "path": "fixture.gif",
+            "filename": "fixture.gif",
+            "media_type": "image/gif",
+            "base64": base64.b64encode(source.getvalue()).decode("ascii"),
+        }
+        try:
+            supported = adapter.wire_media_support(model_id)
+            assert supported == frozenset({"image/png", "image/jpeg", "image/webp"})
+            assert "image/gif" in adapter.wire_media_support("deepseek-v4-flash:0731")
+            parts = await ContentBlockResolver.resolve_tool_image(
+                original, frozenset({"text", "image"}), supported, ImageConverter()
+            )
+            assert parts[0]["media_type"] == "image/png"
+            assert original["media_type"] == "image/gif"
+            with Image.open(io.BytesIO(base64.b64decode(parts[0]["base64"]))) as converted:
+                assert converted.size == (12, 8)
+                assert converted.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+            await adapter.send([{"role": "user", "content": parts}], model_id=model_id)
+            payload = _last_request_payload(route)
+            assert payload["messages"][0]["content"][0]["image_url"]["url"].startswith(
+                "data:image/png;base64,"
+            )
+        finally:
+            await adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("current_run", [False, True])
     @pytest.mark.parametrize(
         ("effort", "wire_effort"),
         [("low", "low"), ("high", "high"), ("max", "max"), ("xhigh", "max"), ("none", "none")],
     )
-    async def test_v41_provisional_profile_replays_persisted_reasoning_on_fresh_adapter(
+    async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
         self, current_run: bool, effort: str, wire_effort: str
     ) -> None:
-        """Local continuity contract; this fixture is not live V4.1 evidence."""
+        """Protect the locally serialized contract verified live on 2026-09-11."""
         resources = Path(__file__).resolve().parents[3] / "resources"
         models = ModelRegistry.load(resources)
         config = ProviderRegistry.load(resources).get("ollama-cloud")
@@ -475,7 +521,7 @@ class TestOllamaCloudChatWire:
             replayed = payload["messages"][1]
             assert payload["model"] == model_id
             assert payload["reasoning_effort"] == wire_effort
-            assert payload["max_tokens"] == 65_536
+            assert payload["max_tokens"] == 393_216
             assert payload["tools"][0]["function"]["name"] == "get_weather"
             assert replayed["reasoning"] == "test-owned reasoning sentinel"
             assert "reasoning_content" not in replayed
