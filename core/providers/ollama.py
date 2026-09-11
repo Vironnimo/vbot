@@ -181,9 +181,16 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         )
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Ollama's compatible chat wire is verified for images, not audio."""
-
-        del model_id
+        """Return the Model's verified Cloud image formats when profiled."""
+        model = self._model_lookup(model_id.split("::", 1)[0]) if self._model_lookup else None
+        metadata = model.metadata.get("ollama_cloud") if model else None
+        media_types = metadata.get("image_media_types") if isinstance(metadata, Mapping) else None
+        if isinstance(media_types, tuple | list):
+            return frozenset(
+                media_type
+                for media_type in media_types
+                if isinstance(media_type, str) and media_type in IMAGE_WIRE_MEDIA_TYPES
+            )
         return IMAGE_WIRE_MEDIA_TYPES
 
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:

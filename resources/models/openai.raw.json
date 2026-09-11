@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-10T22:09:47.919354+00:00",
+  "fetched_at": "2026-09-11T09:16:16.534315+00:00",
   "provider_id": "openai",
   "raw_response": {
     "models": [
@@ -162,7 +162,7 @@
             "effort": "ultra"
           }
         ],
-        "supports_experimental_context": true,
+        "supports_experimental_context": false,
         "supports_image_detail_original": true,
         "supports_parallel_tool_calls": true,
         "supports_reasoning_summaries": true,
