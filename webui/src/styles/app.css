@@ -3755,12 +3755,6 @@ kbd {
 .agent-list-defaults .btn-tertiary.active {
   color: var(--accent);
 }
-.agent-list-defaults p {
-  margin: 6px 10px 0;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
-}
 .agent-defaults-card {
   flex: 0 0 auto;
   scroll-margin-top: 24px;
@@ -3856,14 +3850,8 @@ kbd {
   .agent-list-defaults .btn-tertiary {
     width: auto;
   }
-  .agent-list-defaults p {
-    margin: 0;
-  }
 }
 @media (max-width: 640px) {
-  .agent-list-defaults p {
-    display: none;
-  }
   .agent-shared-title {
     align-items: flex-start;
     flex-direction: column;
