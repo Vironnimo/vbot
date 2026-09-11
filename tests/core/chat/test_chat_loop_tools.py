@@ -415,7 +415,8 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     }
     assert adapter.requests[1]["messages"][2]["reasoning"] == "Need weather."
     # usage is persisted on the assistant turn but never sent to the provider.
-    assert persisted[1]["usage"] == {"input_tokens": 11, "output_tokens": 7}
+    assert persisted[1]["usage"]["input_tokens"] == 11
+    assert persisted[1]["usage"]["output_tokens"] == 7
     assert "usage" not in adapter.requests[1]["messages"][2]
     assert "timing" not in adapter.requests[1]["messages"][3]
     tool_result_events = [
@@ -434,8 +435,9 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         message["usage"] for message in assistant_turns
     ]
     assert usage_events[0].payload["context_usage"] == {
-        "tokens": 18,
-        "estimated": False,
+        "tokens": 45,
+        "estimated": True,
+        "estimated_delta_tokens": 34,
         "provider_input_tokens": 11,
         "provider_output_tokens": 7,
     }

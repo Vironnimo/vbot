@@ -36,6 +36,23 @@ describe('formatTokenUsageTooltip', () => {
     expect(lines[2]).toContain('515');
   });
 
+  it('preserves signed request deltas after context is removed', () => {
+    const tooltip = formatTokenUsageTooltip(
+      {
+        tokens: 20488,
+        estimated: true,
+        provider_input_tokens: 21000,
+        estimated_delta_tokens: -512,
+      },
+      null,
+      null,
+      128000,
+    );
+    const lines = tooltip.split('\n');
+    expect(lines[0]).toContain('~20,488');
+    expect(lines[2]).toContain('-512');
+  });
+
   it('renders the last turn with cache shares, uncached remainder and percent', () => {
     const tooltip = formatTokenUsageTooltip(
       null,

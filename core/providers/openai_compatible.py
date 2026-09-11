@@ -10,7 +10,7 @@ provider-specific behavior can subclass this adapter.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -43,6 +43,7 @@ from core.providers.adapter import (
     TerminalOutcome,
     normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
+    resolve_request_input_budget,
 )
 from core.providers.errors import (
     NetworkError,
@@ -80,6 +81,7 @@ from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import (
     continues_reasoning_text_block,
+    estimate_structured_tokens,
 )
 
 _LOGGER = get_logger("providers.openai_compatible")
@@ -399,6 +401,27 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Encode one canonical user content part for this provider's wire."""
         return _to_openai_user_content_part(part)
 
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Count the rendered Chat request, including only its selected reasoning class."""
+        projected = project_tool_result_content_fallbacks([dict(message) for message in messages])
+        wire = [self._format_message(message, model_id=model_id) for message in projected]
+        tokens, _ = estimate_structured_tokens(wire)
+        if tools:
+            tool_tokens, _ = estimate_structured_tokens(
+                render_tool_definitions(
+                    list(tools),
+                    profile="explicit_non_strict" if self._config.id == "openai" else "omit_strict",
+                )
+            )
+            tokens += tool_tokens
+        return tokens
+
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -484,6 +507,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
         else:
             estimated_input = max(0, int(estimated_input_tokens))
+        estimated_input = resolve_request_input_budget(model_id, estimated_input)
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
             model_output_limit=self._model_max_output_tokens(model_id),
