@@ -327,6 +327,28 @@ def test_vbot_tool_override_replaces_repository_denials_and_can_select_one_tool(
     }
 
 
+def test_image_vision_grant_survives_project_resolution_and_reset(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = projects.create("vision", "Vision", repo)
+    project = projects.update(project.project_id, allowed_tools=["analyze_image"])
+    policy = {"mode": "all", "granted": ["analyze_image"]}
+    projects.set_override(project.project_id, "builder", "tool_access", policy)
+    resolver = _resolver(agents, projects, _openai_configured())
+    assert resolver.resolve_agent(project.project_id, "builder").tool_access == ToolAccess(
+        mode="selected", allowed=("analyze_image",), granted=("analyze_image",)
+    )
+    assert resolver.effective_config(project.project_id, "builder")["tool_access"] == {
+        "value": policy,
+        "source": "override",
+    }
+    projects.clear_override(project.project_id, "builder", "tool_access")
+    assert resolver.resolve_agent(project.project_id, "builder").tool_access == ToolAccess(
+        mode="selected", allowed=("analyze_image",)
+    )
+
+
 def test_clearing_vbot_tool_override_restores_repository_policy(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:

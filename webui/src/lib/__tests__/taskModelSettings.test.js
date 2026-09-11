@@ -93,8 +93,8 @@ describe('taskModelSettings helpers', () => {
       (row) => row.taskType === TASK_IMAGE_UNDERSTANDING,
     );
     expect(imageUnderstandingRow.titleFallback).toBe('Image understanding');
-    expect(imageUnderstandingRow.descriptionFallback).toContain(
-      'active agent route',
+    expect(imageUnderstandingRow.descriptionKey).toBe(
+      'settings.specializedModels.imageUnderstandingDescription',
     );
     expect(
       TASK_MODEL_ROWS.find((row) => row.taskType === TASK_VIDEO_GENERATION)

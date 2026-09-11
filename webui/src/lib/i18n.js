@@ -862,7 +862,8 @@ export const englishCatalog = Object.freeze({
     'Available automatically when the Session grants it',
   'toolAccess.constraint.identity': 'Identity Agents only',
   'toolAccess.constraint.imageFallback':
-    'Used only when the main Model cannot analyze images directly',
+    'By default, available only when the main Model cannot view images. Enabling availability with vision lets this Agent request a second analysis. A configured, available image-understanding Model is required in either case.',
+  'toolAccess.imageAlwaysAvailable': 'Available with vision',
   'toolAccess.readiness.unregistered': 'Not registered right now',
   'agents.form.idHelp':
     'Used to address this Agent. Use Change ID to rename it and update its references.',
@@ -1866,7 +1867,7 @@ export const englishCatalog = Object.freeze({
     'Used by the agent text_to_speech tool.',
   'settings.specializedModels.imageUnderstanding': 'Image understanding',
   'settings.specializedModels.imageUnderstandingDescription':
-    'Used by analyze_image when the active agent route cannot accept images.',
+    'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
   'settings.specializedModels.imageGeneration': 'Image generation',
   'settings.specializedModels.imageGenerationDescription':
     'Used for image generation requests.',
