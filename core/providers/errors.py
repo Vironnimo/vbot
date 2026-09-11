@@ -34,6 +34,22 @@ class ProviderAuthError(ProviderError):
         super().__init__(message, retryable=False)
 
 
+class ProviderRequestTooLargeError(ProviderError):
+    """A locally measured request exceeds a verified wire limit; no I/O occurred."""
+
+    code = "provider_request_too_large"
+
+    def __init__(self, size_bytes: int, max_bytes: int) -> None:
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+        super().__init__(
+            f"The request body is {size_bytes} bytes; this Provider allows at most "
+            f"{max_bytes} bytes. Reduce the request size, for example by sending fewer "
+            "or smaller images. Nothing was sent.",
+            retryable=False,
+        )
+
+
 class ProviderStreamingUnsupportedError(ProviderError):
     """The provider/model cannot serve this request as a stream.
 

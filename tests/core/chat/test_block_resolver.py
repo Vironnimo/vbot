@@ -245,12 +245,12 @@ def test_image_pressure_reclaims_a_batch_then_preserves_the_prefix() -> None:
     budget.record_delivered(original)
     expanded = [*original, _resolved_image_result(50)]
     bounded = budget.project(expanded, remember=True)
-    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(26, 51)]
+    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(47, 51)]
     assert _native_image_calls(original) == [f"call-{i}" for i in range(50)]
     budget.record_delivered(bounded)
     continued = budget.project([*bounded, _resolved_image_result(51)], remember=True)
     assert continued[: len(bounded)] == bounded
-    assert _native_image_calls(continued) == [f"call-{i}" for i in range(26, 52)]
+    assert _native_image_calls(continued) == [f"call-{i}" for i in range(47, 52)]
     # Canonical attachment resolution may restore retired pixels. A same-Run
     # rebuild must keep their placeholders even with no current budget pressure.
     assert budget.project(expanded) == bounded
@@ -269,8 +269,49 @@ def test_image_projection_for_compaction_does_not_commit_retirement() -> None:
     budget = RequestImageBudget()
     original = [_resolved_image_result(i) for i in range(50)]
     budget.record_delivered(original)
-    assert len(_native_image_calls(budget.project([*original, _resolved_image_result(50)]))) == 25
+    assert len(_native_image_calls(budget.project([*original, _resolved_image_result(50)]))) == 4
     assert budget.project(original) == original
+
+
+def test_provider_pressure_keeps_four_newest_images_across_user_and_tool_roles() -> None:
+    budget = RequestImageBudget()
+    messages = [_resolved_image_result(i) for i in range(8)]
+    messages[0]["role"] = "user"
+    messages[0]["id"] = "reference"
+    messages[0]["content"] = messages[0].pop(TOOL_RESULT_CONTENT_BLOCKS_FIELD)
+    before = deepcopy(messages)
+    budget.record_delivered(messages[:-1])
+    bounded = budget.project(messages, force=True, remember=True)
+    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(4, 8)]
+    assert all(block["type"] != "media" for block in bounded[0]["content"])
+    assert messages == before
+    assert budget.project(messages) == bounded
+    # Another Provider/Compaction projection cannot reactivate retired pixels.
+    assert budget.project([messages[0]])[0] == bounded[0]
+
+
+def test_provider_pressure_obeys_four_mib_target_and_protects_fresh_images() -> None:
+    budget = RequestImageBudget()
+    messages = [_resolved_image_result(i, 2 * 1024 * 1024) for i in range(7)]
+    budget.record_delivered(messages[:-1])
+    assert _native_image_calls(budget.project(messages, force=True)) == ["call-5", "call-6"]
+    # A fresh image above the soft target must still reach the Model once.
+    fresh = _resolved_image_result(7, 5 * 1024 * 1024)
+    bounded = budget.project([*messages, fresh], force=True)
+    assert _native_image_calls(bounded) == ["call-6", "call-7"]
+    assert bounded[-1] == fresh
+
+
+def test_further_provider_pressure_retires_old_images_until_only_fresh_remain() -> None:
+    budget = RequestImageBudget()
+    messages = [_resolved_image_result(i) for i in range(3)]
+    budget.record_delivered(messages[:-1])
+    first = budget.project(messages, force=True, remember=True)
+    assert _native_image_calls(first) == ["call-1", "call-2"]
+    second = budget.project(first, force=True, remember=True)
+    assert _native_image_calls(second) == ["call-2"]
+    assert budget.project(second, force=True, remember=True) == second
+    assert budget.project(messages) == second
 
 
 def test_fresh_images_take_priority_over_delivered_user_references(
