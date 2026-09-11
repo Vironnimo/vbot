@@ -336,6 +336,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if self._model_protocol(model_id) == PROTOCOL_RESPONSES:
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages],
+                model_id=model_id,
                 tools=tools,
             )
         if self._uses_anthropic_messages_path(model_id):

@@ -297,7 +297,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
         if self._policy_for_model(model_id).endpoint_path == RESPONSES_ENDPOINT:
             return estimate_responses_input_tokens(
-                [dict(message) for message in messages], tools=tools
+                [dict(message) for message in messages], model_id=model_id, tools=tools
             )
         return super().estimate_request_input_tokens(
             messages,
