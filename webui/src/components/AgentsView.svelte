@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
 
   import {
     getSettings,
@@ -57,7 +57,7 @@
   let sharedSettings = $state(null);
   let sharedSettingsError = $state('');
   let sharedSettingsLoading = $state(false);
-  let sharedCompactionOpen = $state(false);
+  let sharedContent = $state(null);
   let defaultsRequestId = 0;
   let destroyed = false;
   $effect(() => {
@@ -70,9 +70,17 @@
   function openSharedDefaults(panelId = 'defaults') {
     return autosaveContext.requestTransition(async () => {
       sharedDefaultsOpen = true;
-      sharedCompactionOpen = panelId === 'compaction';
       if (!sharedSettings) await loadSharedSettings();
+      await tick();
+      if (panelId === 'compaction') jumpToDefaultsSection(panelId);
+      else sharedContent?.scrollTo?.({ top: 0 });
     });
+  }
+
+  function jumpToDefaultsSection(panelId) {
+    sharedContent
+      ?.querySelector(`[data-settings-section="${panelId}"]`)
+      ?.scrollIntoView?.({ block: 'start' });
   }
 
   async function loadSharedSettings() {
@@ -574,28 +582,50 @@
 
     {#if sharedDefaultsOpen || sharedSettings}
       <div class="agent-shared-pane" hidden={!sharedDefaultsOpen}>
-        <header class="management-header">
-          <div class="settings-page-eyebrow">{t('agents.title', 'Agents')}</div>
+        <div
+          class="agent-detail-scroll agent-shared-content"
+          bind:this={sharedContent}
+        >
+          <header class="agent-shared-header">
+            <div class="settings-page-eyebrow">
+              {t('agents.title', 'Agents')}
+            </div>
 
-          <div class="agent-shared-title">
-            <h2>{t('agents.shared.title', 'Shared defaults')}</h2>
+            <div class="agent-shared-title">
+              <h2>{t('agents.shared.title', 'Shared defaults')}</h2>
 
-            <Button
-              variant="secondary"
-              onClick={() => selectAgent(selectedAgentId)}
-              >{t('agents.shared.back', 'Back to Agent')}</Button
+              <Button
+                variant="secondary"
+                onClick={() => selectAgent(selectedAgentId)}
+                >{t('agents.shared.back', 'Back to Agent')}</Button
+              >
+            </div>
+
+            <p class="agent-shared-scope">
+              {t(
+                'agents.shared.scope',
+                'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
+              )}
+            </p>
+            <nav
+              class="agent-shared-jumps"
+              aria-label={t(
+                'agents.shared.sections',
+                'Default settings sections',
+              )}
             >
-          </div>
-
-          <p class="agent-shared-scope">
-            {t(
-              'agents.shared.scope',
-              'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
-            )}
-          </p>
-        </header>
-
-        <div class="agent-detail-scroll agent-shared-content">
+              <Button
+                variant="secondary"
+                onClick={() => jumpToDefaultsSection('defaults')}
+                >{t('agents.shared.modelTitle', 'Model & Thinking')}</Button
+              >
+              <Button
+                variant="secondary"
+                onClick={() => jumpToDefaultsSection('compaction')}
+                >{t('settings.compaction.title', 'Compaction')}</Button
+              >
+            </nav>
+          </header>
           {#if sharedSettingsLoading}
             <Banner variant="neutral"
               >{t('settings.loading', 'Loading settings…')}</Banner
@@ -638,7 +668,7 @@
               class="agent-defaults-card"
               data-settings-section="compaction"
             >
-              <header class="agent-shared-disclosure">
+              <header>
                 <div>
                   <h3>{t('settings.compaction.title', 'Compaction')}</h3>
                   <p>
@@ -648,26 +678,9 @@
                     )}
                   </p>
                 </div>
-
-                <Button
-                  variant="secondary"
-                  aria-expanded={sharedCompactionOpen}
-                  aria-controls="agent-shared-compaction"
-                  onClick={() => {
-                    sharedCompactionOpen = !sharedCompactionOpen;
-                  }}
-                  >{t(
-                    'agents.shared.configureCompaction',
-                    'Configure Compaction',
-                  )}</Button
-                >
               </header>
 
-              <div
-                id="agent-shared-compaction"
-                class="agent-defaults-form"
-                hidden={!sharedCompactionOpen}
-              >
+              <div id="agent-shared-compaction" class="agent-defaults-form">
                 <SettingsCompactionPanel
                   settings={sharedSettings}
                   onCommit={commitSharedSettings}

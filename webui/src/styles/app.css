@@ -3741,27 +3741,31 @@ kbd {
   max-width: 70ch;
 }
 .agent-list-defaults {
-  padding: 16px;
-  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
 }
-.agent-list-defaults .btn-secondary {
+.agent-list-defaults .btn-tertiary {
   width: 100%;
   justify-content: flex-start;
+  padding: 9px 10px;
+  color: var(--text-hi);
+  font: 500 var(--fs-label-md) var(--font-ui);
 }
-.agent-list-defaults .agent-defaults-active {
+.agent-list-defaults .btn-tertiary.active {
   color: var(--accent);
-  border-color: var(--accent-40);
-  background: var(--accent-06);
 }
 .agent-list-defaults p {
-  margin: 8px 0 0;
+  margin: 6px 10px 0;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
   line-height: 1.4;
 }
 .agent-defaults-card {
+  flex: 0 0 auto;
+  scroll-margin-top: 24px;
   max-width: var(--content-max-narrow);
-  margin: 0 auto 20px;
+  margin: 0 auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -3782,7 +3786,7 @@ kbd {
 }
 .agent-defaults-form {
   border-top: 1px solid var(--border);
-  padding: 0 20px 20px;
+  padding: 20px;
 }
 .agent-defaults-form[hidden] {
   display: none;
@@ -3796,8 +3800,10 @@ kbd {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  justify-content: flex-start;
   gap: 10px;
-  padding: 20px 0;
+  padding: 0;
+  border: 0;
   min-width: 0;
 }
 .agent-defaults-fields > .s-row:first-child,
@@ -3816,11 +3822,16 @@ kbd {
 .agent-defaults-fields .searchable-dropdown {
   width: 100%;
 }
-.agent-shared-disclosure {
+/* One scrollport keeps the page title and forms moving together. */
+.agents-view .agent-shared-content > * {
+  flex-shrink: 0;
+  max-width: var(--content-max-narrow);
+}
+.agent-shared-jumps {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
 }
 .agents-view__model-group .agents-view__model-fields {
   max-width: 100%;
@@ -3842,7 +3853,7 @@ kbd {
     align-items: center;
     gap: 16px;
   }
-  .agent-list-defaults .btn-secondary {
+  .agent-list-defaults .btn-tertiary {
     width: auto;
   }
   .agent-list-defaults p {
@@ -3853,8 +3864,7 @@ kbd {
   .agent-list-defaults p {
     display: none;
   }
-  .agent-shared-title,
-  .agent-shared-disclosure {
+  .agent-shared-title {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -3866,7 +3876,7 @@ kbd {
     padding: 16px;
   }
   .agent-defaults-form {
-    padding: 0 16px 16px;
+    padding: 16px;
   }
 }
 /* Keep related controls in a readable cluster instead of opposite card edges. */
@@ -3880,8 +3890,10 @@ kbd {
   justify-content: flex-start;
 }
 .agent-defaults-fields {
-  max-width: 760px;
+  max-width: 100%;
   grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 20px;
+  margin-bottom: 16px;
 }
 .agent-defaults-fields > .s-row:first-child {
   grid-column: auto;
@@ -3893,6 +3905,9 @@ kbd {
 .agent-defaults-fields > .s-row:last-child {
   grid-column: 1;
   grid-row: 2;
+}
+.agent-defaults-fields .s-row-info {
+  flex: none;
 }
 .agent-defaults-fields .s-row-desc {
   display: none;
@@ -3908,20 +3923,12 @@ kbd {
   align-self: flex-start;
   white-space: nowrap;
 }
-.agent-shared-disclosure .btn-secondary {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
 .agent-defaults-fields .s-row-control--number {
   flex: none;
 }
 .agent-defaults-form .s-footer {
   margin-top: 0;
   padding-top: 12px;
-}
-.agent-shared-pane > .management-header {
-  padding-top: 28px;
 }
 @media (max-width: 640px) {
   .agents-view .agents-view__model-group .agents-view__model-fields,
