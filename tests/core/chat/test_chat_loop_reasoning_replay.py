@@ -309,6 +309,7 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
             self,
             _messages: list[ChatMessage],
             _settings: Any,
+            **_kwargs: Any,
         ) -> bool:
             return True
 
