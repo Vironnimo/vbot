@@ -411,13 +411,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Count the rendered Chat request, including only its selected reasoning class."""
         projected = project_tool_result_content_fallbacks([dict(message) for message in messages])
         wire = [self._format_message(message, model_id=model_id) for message in projected]
-        tokens, _ = estimate_structured_tokens(wire)
+        tokens, _ = estimate_structured_tokens(wire, model_id=model_id)
         if tools:
             tool_tokens, _ = estimate_structured_tokens(
                 render_tool_definitions(
                     list(tools),
                     profile="explicit_non_strict" if self._config.id == "openai" else "omit_strict",
-                )
+                ),
+                model_id=model_id,
             )
             tokens += tool_tokens
         return tokens

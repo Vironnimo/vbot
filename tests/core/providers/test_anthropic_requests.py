@@ -1387,3 +1387,24 @@ class TestMaxTokensResolution:
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["max_tokens"] == 64000
         assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 8192}
+
+
+def test_request_image_estimate_receives_active_model(anthropic_adapter):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": (
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lE"
+                        "QVR42mP8/x8AAwMCAO+aXfcAAAAASUVORK5CYII="
+                    ),
+                }
+            ],
+        }
+    ]
+    known = anthropic_adapter.estimate_request_input_tokens(messages, model_id="claude-sonnet-4-6")
+    fallback = anthropic_adapter.estimate_request_input_tokens(messages, model_id="unknown")
+    assert fallback - known == 4096 - 1

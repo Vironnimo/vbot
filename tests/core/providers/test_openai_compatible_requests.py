@@ -1180,3 +1180,24 @@ async def test_output_capacity_uses_scoped_input_projection_and_separate_reserve
     # 256k window minus measured input minus the existing 25% output reserve.
     assert body["max_tokens"] == 68_500
     assert set(body) <= {"model", "messages", "max_tokens", "stream"}
+
+
+def test_request_image_estimate_receives_active_model(openai_adapter):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": (
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lE"
+                        "QVR42mP8/x8AAwMCAO+aXfcAAAAASUVORK5CYII="
+                    ),
+                }
+            ],
+        }
+    ]
+    known = openai_adapter.estimate_request_input_tokens(messages, model_id="gpt-4o")
+    fallback = openai_adapter.estimate_request_input_tokens(messages, model_id="unknown")
+    assert fallback - known == 4096 - 255
