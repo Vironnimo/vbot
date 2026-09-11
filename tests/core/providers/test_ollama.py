@@ -36,7 +36,7 @@ from core.models.models import (
     ReasoningCapabilities,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.ollama import (
     OLLAMA_CLOUD_MODE,
     OLLAMA_LOCAL_MODE,
@@ -400,6 +400,77 @@ CLOUD_REASONING_CONTENT_RESPONSE: dict[str, Any] = {
 
 
 class TestOllamaCloudChatWire:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize("delta", [-1, 0, 1])
+    async def test_request_body_limit_counts_exact_wire_bytes_before_io(
+        self, cloud_adapter: OllamaCloudAdapter, streaming: bool, delta: int
+    ) -> None:
+        limit = cloud_adapter.request_body_limit("glm-5.3-flash")
+        assert limit == 16 * 1024 * 1024
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": 'Grüße 😀 "\\\n'},
+                    {"type": "media", "media_type": "image/png", "base64": ""},
+                ],
+            }
+        ]
+        kwargs = {
+            "max_tokens": 1,
+            "tools": [
+                {
+                    "name": "test",
+                    "description": "Tool ä",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+        payload = cloud_adapter._build_payload(messages, "glm-5.3-flash", **kwargs)
+        if streaming:
+            cloud_adapter._prepare_stream_payload(payload)
+        overhead = len(httpx.Request("POST", OLLAMA_CLOUD_CHAT_URL, json=payload).content)
+        messages[0]["content"][1]["base64"] = "A" * (limit + delta - overhead)
+        sse = (
+            'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        with respx.mock(assert_all_called=False) as router:
+            route = router.post(OLLAMA_CLOUD_CHAT_URL).mock(
+                return_value=(
+                    httpx.Response(200, text=sse)
+                    if streaming
+                    else httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+                )
+            )
+
+            async def invoke() -> None:
+                if streaming:
+                    _ = [
+                        chunk
+                        async for chunk in cloud_adapter.stream(
+                            messages, model_id="glm-5.3-flash", **kwargs
+                        )
+                    ]
+                else:
+                    await cloud_adapter.send(messages, model_id="glm-5.3-flash", **kwargs)
+
+            try:
+                if delta > 0:
+                    with pytest.raises(ProviderRequestTooLargeError) as failure:
+                        await invoke()
+                    assert failure.value.size_bytes == limit + delta
+                    assert failure.value.max_bytes == limit
+                    assert failure.value.retryable is False
+                    assert route.call_count == 0
+                else:
+                    await invoke()
+                    assert route.call_count == 1
+                    assert len(route.calls.last.request.content) == limit + delta
+            finally:
+                await cloud_adapter.aclose()
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_v41_image_profile_converts_gif_before_cloud_request(self) -> None:
