@@ -870,6 +870,17 @@ class ProviderAdapter(ABC):
     # Request-context estimation
     # ------------------------------------------------------------------
 
+    def request_body_limit(self, model_id: str) -> int | None:
+        """Verified maximum serialized request bytes for this Model's wire, if known.
+
+        Concrete wires enforce this before network I/O and raise
+        ProviderRequestTooLargeError with the actual byte count. Chat may then
+        retire already delivered images and submit a smaller request. Unknown
+        limits stay absent; this is independent of tokens and harness image caps.
+        """
+        del model_id
+        return None
+
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],

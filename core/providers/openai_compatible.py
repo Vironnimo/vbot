@@ -48,6 +48,7 @@ from core.providers.adapter import (
 from core.providers.errors import (
     NetworkError,
     ProviderError,
+    ProviderRequestTooLargeError,
     classify_in_band_provider_error,
 )
 from core.providers.providers import (
@@ -762,6 +763,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # rejected parameter from the exact payload — provider ``defaults`` would
         # otherwise refill the key on a rebuild.
         payload = self._build_payload(messages, model_id, **kwargs)
+        self._check_payload_size(payload, model_id)
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
@@ -830,6 +832,17 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         payload["stream"] = True
         _merge_stream_usage_options(payload)
 
+    def _check_payload_size(self, payload: dict[str, Any], model_id: str) -> None:
+        """Measure the same UTF-8 JSON encoding httpx sends, including all fields."""
+        limit = self.request_body_limit(model_id)
+        if limit is None:
+            return
+        # Constructing a Request performs serialization only, never network I/O.
+        # Use httpx itself so Unicode, JSON escaping and framing cannot drift.
+        size = len(httpx.Request("POST", self._config.base_url, json=payload).content)
+        if size > limit:
+            raise ProviderRequestTooLargeError(size, limit)
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -865,6 +878,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         self._prepare_stream_payload(payload)
+        self._check_payload_size(payload, model_id)
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:

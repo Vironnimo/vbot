@@ -84,6 +84,8 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
 # image payloads, independently of visual token estimates and text compaction.
 REQUEST_IMAGE_BYTES_LIMIT = 150 * 1024 * 1024
 REQUEST_IMAGE_COUNT_LIMIT = 50
+REQUEST_IMAGE_BYTES_TARGET = 4 * 1024 * 1024
+REQUEST_IMAGE_COUNT_TARGET = 4
 _IMAGE_BUDGET_NOTE = (
     "[This image was supplied in an earlier Model request and has now been omitted "
     "to make room for more images. Its file path remains available. "
@@ -140,7 +142,13 @@ class RequestImageBudget:
     def record_delivered(self, messages: list[JsonObject]) -> None:
         self._delivered.update(key for _, _, _, key, _ in _request_images(messages) if key)
 
-    def project(self, messages: list[JsonObject], *, remember: bool = False) -> list[JsonObject]:
+    def project(
+        self,
+        messages: list[JsonObject],
+        *,
+        remember: bool = False,
+        force: bool = False,
+    ) -> list[JsonObject]:
         candidates = _request_images(messages)
         active = [item for item in candidates if item[3] not in self._omitted]
         fresh = [item for item in active if item[3] not in self._delivered]
@@ -151,32 +159,27 @@ class RequestImageBudget:
             )
         retained = {(item[0], item[1], item[2]) for item in active}
         if (
-            len(active) > REQUEST_IMAGE_COUNT_LIMIT
+            force
+            or len(active) > REQUEST_IMAGE_COUNT_LIMIT
             or sum(item[4] for item in active) > REQUEST_IMAGE_BYTES_LIMIT
         ):
             retained = {(item[0], item[1], item[2]) for item in fresh}
             used_bytes = fresh_bytes
-            # Fresh pixels first, then already delivered user references. References
-            # may consume the runway, but cannot starve a fresh Tool result.
+            # Fresh pixels must be delivered once. Fill remaining runway with
+            # the newest images regardless of origin, retaining at most 4 / 4 MiB.
             older = [item for item in reversed(active) if item[3] in self._delivered]
+            count_target = min(REQUEST_IMAGE_COUNT_TARGET, REQUEST_IMAGE_COUNT_LIMIT)
+            bytes_target = min(REQUEST_IMAGE_BYTES_TARGET, REQUEST_IMAGE_BYTES_LIMIT)
             for message_index, field_name, block_index, _, size in older:
-                if (
-                    field_name == "content"
-                    and len(retained) < REQUEST_IMAGE_COUNT_LIMIT
-                    and used_bytes + size <= REQUEST_IMAGE_BYTES_LIMIT
-                ):
+                if len(retained) < count_target and used_bytes + size <= bytes_target:
                     retained.add((message_index, field_name, block_index))
                     used_bytes += size
-            count_target = max(len(retained), REQUEST_IMAGE_COUNT_LIMIT // 2)
-            bytes_target = max(used_bytes, REQUEST_IMAGE_BYTES_LIMIT // 2)
-            for message_index, field_name, block_index, _, size in older:
-                if (
-                    field_name != "content"
-                    and len(retained) < count_target
-                    and used_bytes + size <= bytes_target
-                ):
-                    retained.add((message_index, field_name, block_index))
-                    used_bytes += size
+            # Text/Tools/framing may leave less than the soft image target. Each
+            # subsequent local size rejection must retire another delivered image
+            # or make no change, which tells Chat to surface the size error.
+            if force and len(retained) == len(active) and older:
+                oldest = older[-1]
+                retained.discard((oldest[0], oldest[1], oldest[2]))
         result = list(messages)
         copied: set[int] = set()
         for message_index, field_name, block_index, key, _ in candidates:
