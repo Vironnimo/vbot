@@ -568,11 +568,17 @@ def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refu
             client.call(action, request)
     else:
         client.call(action, request)
-    assert [name for name, _ in calls] == ["get_window_state", action]
+    assert [name for name, _ in calls] == [
+        "start_session",
+        "get_window_state",
+        "start_session",
+        action,
+    ]
+    previous_calls = len(calls)
     geometry[0] = 2
     with pytest.raises(ComputerUseError) as caught:
         client.call(action, request)
-    assert caught.value.code == "capture_required" and len(calls) == 2
+    assert caught.value.code == "capture_required" and len(calls) == previous_calls
 
 
 @pytest.mark.parametrize("foreign", [False, True])
@@ -637,7 +643,7 @@ def test_agent_cursor_uses_the_cua_target_contract_without_shared_pointer_fields
     sent = []
 
     def query(function, name, args):
-        validate(args, client.schemas[name])
+        validate(args, {"type": "object"} if name == "start_session" else client.schemas[name])
         sent.append(args)
         return SimpleNamespace(
             model_dump=lambda **kwargs: {"structuredContent": {"effect": "unverifiable"}}
@@ -657,12 +663,13 @@ def test_agent_cursor_uses_the_cua_target_contract_without_shared_pointer_fields
         },
     )
     assert sent == [
+        {"session": "owned"},
         {
             "target": {"kind": "window", "pid": 1, "window_id": 2},
             "x": 10,
             "y": 20,
             "session": "owned",
-        }
+        },
     ]
 
 

@@ -656,6 +656,7 @@ COMPUTER_CASE_ARGUMENTS.update(
         },
         "invalid_keyboard_background": {
             "action": "type",
+            "foreground": False,
             **_COMPUTER_WINDOW,
             "text": "draft",
             "text_mode": "keyboard",
@@ -668,6 +669,25 @@ COMPUTER_CASE_ARGUMENTS.update(
             "text": "draft",
             "text_mode": "keyboard",
         },
+    }
+)
+
+COMPUTER_CASE_ARGUMENTS.update(
+    {
+        "capture_view": {"action": "capture", "view_id": "vtest"},
+        "capture_view_query": {"action": "capture", "view_id": "vtest", "query": "Brush"},
+        "wait_view": {"action": "wait", "view_id": "vtest", "duration_ms": 0},
+        "verify_view": {
+            "action": "verify",
+            "view_id": "vtest",
+            "expect": [{"window": {"exists": True}}],
+        },
+        "element_target": {"action": "click", "element": "s00000001:1"},
+        "sequence_element_target": {
+            "action": "sequence",
+            "steps": [{"action": "click", "element": "s00000001:1"}],
+        },
+        "capture_reset_background": {"action": "capture", "view_id": "vtest", "foreground": False},
     }
 )
 
