@@ -1,6 +1,46 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'live.error.wakeword':
+    'Turn off wakeword Voice in Settings before starting the voice companion.',
+  'live.error.apiKey':
+    'Add and enable your OpenAI API key in Providers. GPT-Live access is required.',
+  'live.error.access':
+    'OpenAI rejected access. Check your API key and GPT-Live availability for your account.',
+  'live.error.microphone':
+    'Live voice needs microphone access over HTTPS or localhost.',
+  'live.error.permission': 'Allow microphone access, then start again.',
+  'live.error.unknown':
+    'OpenAI may have created the conversation, but its connection could not be confirmed. The request was not repeated.',
+  'live.error.finalization':
+    'Voice stopped. Final usage could not be confirmed.',
+  'live.error.notification':
+    'An Agent update could not be read. Check Chat for its latest reply.',
+  'live.error.backend':
+    'The voice companion could not finish that request. Check the action before repeating it.',
+  'live.error.limit': 'Start a new voice conversation to continue.',
+  'live.error.connection':
+    'Live voice could not continue. Check the connection and GPT-Live access. Actions were not automatically repeated.',
+  'live.label': 'Voice companion',
+  'live.connecting': 'Connecting…',
+  'live.closing': 'Ending…',
+  'live.muted': 'Microphone muted',
+  'live.listening': 'Listening',
+  'live.off': 'Off',
+  'live.unmute': 'Unmute',
+  'live.mute': 'Mute',
+  'live.end': 'End voice',
+  'live.start': 'Start voice',
+  'live.details': 'Details',
+  'live.providers': 'Open Providers',
+  'live.playback': 'Voice playback',
+  'live.description':
+    'Speak to operate Chat, Codex and Claude Code Terminals. The companion announces completed Runs and relays Agent questions. Voice time and the backend Model are billed separately by OpenAI.',
+  'live.you': 'You',
+  'live.companion': 'Companion',
+  'live.actions': 'Actions',
+  'live.failed': 'failed',
+  'live.finished': 'Conversation ended; final usage received.',
   'settings.specializedModels.resetOptions': 'Reset options',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',

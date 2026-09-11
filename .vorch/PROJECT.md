@@ -27,6 +27,8 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 **Data flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (orchestration via providers, models, tools, agents) -> external APIs. Agentic-only - no separate non-agentic streaming path.
 
+The optional voice companion adds a direct browser-to-OpenAI WebRTC media session, initialized through server RPC using the existing OpenAI API-key Connection. It delegates app actions to existing Chat/Terminal operations; details and current secure-context limits are in `model_tasks/live.md`.
+
 **Persistence:** Canonical Session history lives in normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`, marker `session-store.json` authorizes creation). Standard external-content FTS covers searchable Messages and a second trigram index excludes Tool-role bulk; no mirrored search-text table exists. Verified snapshots in `<data-dir>/session-snapshots/` provide auto-restore and are created only by explicit operator, update, or converter workflows; normal Runtime startup and operation never copy the database. `session-recovery.json` records incidents.
 
 **Tools:** Canonical schema contracts, argument normalization/validation, and concurrency policy live in `tools.md`; the design rules for agent-facing Tool definitions live in `tools/designing-agent-tools.md`.
