@@ -293,7 +293,7 @@ def test_window_target_mismatch_rejects_tokens(computer):
     capture(computer)
     assert (
         call(computer, "click", window_id=3, element="s00000001:1", apply=True)["error"]["code"]
-        == "capture_required"
+        == "invalid_arguments"
     )
 
 
@@ -656,6 +656,8 @@ def lifecycle_connection(computer, monkeypatch):
         "start_session": {"session": {"type": "string"}},
         "end_session": {"session": {"type": "string"}},
         # Cua 0.23.2 Windows discovery schemas do not accept session labels.
+        "get_window_state": {"session": {}, "pid": {}, "window_id": {}, "include_screenshot": {}},
+        "click": {"session": {}, "target": {}, "element_token": {}, "delivery_mode": {}},
         "list_apps": {},
         "list_windows": {"pid": {"type": "integer"}, "on_screen_only": {"type": "boolean"}},
     }
@@ -705,6 +707,7 @@ def lifecycle_connection(computer, monkeypatch):
                 raise ConnectionError("test-owned transport loss")
             session = arguments.get("session", "implicit")
             failed = False
+            revived = session in self.ended
             if name == "start_session":
                 failed = self.fail_start
                 if not failed:
@@ -720,7 +723,14 @@ def lifecycle_connection(computer, monkeypatch):
                     "content": [{"type": "text", "text": "test-owned ended session"}],
                 }
                 if failed
-                else {"structuredContent": {"max_image_dimension": 0, "apps": [], "windows": []}}
+                else {
+                    "structuredContent": {
+                        "max_image_dimension": 0,
+                        "apps": [],
+                        "windows": [],
+                        "revived": revived,
+                    }
+                }
             )
             return SimpleNamespace(model_dump=lambda **kwargs: payload)
 
@@ -981,7 +991,14 @@ def test_persistent_mcp_handshake_version_config_and_cleanup(
         else:
             client.call("click", {"session": "test-owned"})
             client.call("click", {"session": "test-owned"})
-            assert events == ["open", "get_config", "click", "click"]
+            assert events == [
+                "open",
+                "get_config",
+                "start_session",
+                "click",
+                "start_session",
+                "click",
+            ]
     finally:
         client.close()
     assert events.count("open") == events.count("close") == 1
@@ -998,6 +1015,10 @@ def test_transport_timeout_never_replays_uncertain_input():
     class Portal:
         def call(self, method, name, arguments):
             calls.append(name)
+            if name == "start_session":
+                return SimpleNamespace(
+                    model_dump=lambda **kwargs: {"structuredContent": {"revived": False}}
+                )
             raise TimeoutError()
 
     client._portal = Portal()
@@ -1005,7 +1026,7 @@ def test_transport_timeout_never_replays_uncertain_input():
     client.schemas = {"click": {"properties": {"target": {}}}}
     with pytest.raises(ComputerUseError):
         client.call("click", {"session": "test-owned"})
-    assert calls == ["click"] and client.broken and client._session is None
+    assert calls == ["start_session", "click"] and client.broken and client._session is None
 
 
 @pytest.mark.parametrize("source", ["tool_cancel", "control", "double_escape"])
@@ -1251,6 +1272,14 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             assert len(client.calls) == before, case
             continue
         target = {key: args[key] for key in ("pid", "window_id", "monitor") if key in args}
+        if case in {
+            "capture_view_query",
+            "verify_view",
+            "element_target",
+            "sequence_element_target",
+            "capture_reset_background",
+        }:
+            target = {"pid": 1, "window_id": 2}
         observed = service.handle(
             context,
             {
@@ -1265,6 +1294,10 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
             args["view_id"] = observed["data"]["view_id"]
         if ":" in args.get("element", ""):
             args["element"] = observed["data"]["elements"][0]["element"]
+        if case == "sequence_element_target":
+            args["steps"] = [
+                {"action": "click", "element": observed["data"]["elements"][0]["element"]}
+            ]
         result = service.handle(context, args)
         assert result["ok"], (case, result)
 
@@ -2092,3 +2125,235 @@ def test_stale_sequence_root_view_cannot_fall_back_to_the_desktop(computer):
         },
     )
     assert result["error"]["code"] == "stale_view" and client.inputs == 0
+
+
+@pytest.mark.parametrize(
+    "action,fields",
+    [
+        ("capture", {"mode": "som"}),
+        ("wait", {"duration_ms": 0}),
+        ("verify", {"expect": [{"window": {"exists": True}}]}),
+    ],
+)
+def test_observation_continuation_inherits_view_target_and_delivery(computer, action, fields):
+    service, context, client, _ = computer
+    first = capture(computer, foreground=True)["data"]
+    result = service.handle(context, {"action": action, "view_id": first["view_id"], **fields})
+    assert result["ok"]
+    current = result["data"].get("observation", result["data"])
+    assert current["target"] == first["target"] and current["foreground"] is True
+    assert current["view_id"] != first["view_id"] and client.inputs == 0
+    stale = service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": first["view_id"],
+            "coordinate": [0, 0],
+            "to_coordinate": [20, 20],
+        },
+    )
+    assert stale["error"]["code"] == "stale_view"
+    assert stale["artifacts"][0]["observation"]["view_id"] == current["view_id"]
+
+
+def test_target_delivery_persists_across_capture_and_skipped_observation(computer):
+    first = capture(computer, foreground=True)["data"]
+    assert call(computer, "key", shortcut="tab", view_id=first["view_id"], capture_after=False)[
+        "ok"
+    ]
+    assert capture(computer)["data"]["foreground"] is True
+    assert capture(computer, window_id=3)["data"]["foreground"] is False
+    assert capture(computer, foreground=False)["data"]["foreground"] is False
+    assert capture(computer)["data"]["foreground"] is False
+    service, context, _, _ = computer
+    other = replace(context, run_id="another-run")
+    assert (
+        service.handle(other, {"action": "capture", "pid": 1, "window_id": 2})["data"]["foreground"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_element_ref_continues_target_and_delivery_after_zoom(computer, sequence):
+    service, context, client, _ = computer
+    first = capture(computer, foreground=True)["data"]
+    assert service.handle(
+        context,
+        {
+            "action": "zoom",
+            "view_id": first["view_id"],
+            "coordinate": [0, 0],
+            "to_coordinate": [30, 30],
+        },
+    )["ok"]
+    element = first["elements"][0]["element"]
+    args = (
+        {"action": "sequence", "steps": [{"action": "click", "element": element}]}
+        if sequence
+        else {"action": "click", "element": element}
+    )
+    result = service.handle(context, args)
+    assert result["ok"] and result["data"]["observation"]["foreground"] is True
+    sent = next(args for name, args in client.calls if name == "click")
+    assert sent["pid"] == 1 and sent["window_id"] == 2 and sent["delivery_mode"] == "foreground"
+    assert client.inputs == 1
+
+
+def test_element_errors_distinguish_stale_from_invented_without_recapture(computer):
+    service, context, client, _ = computer
+    old = capture(computer)["data"]
+    current = capture(computer)["data"]
+    before = len(client.calls)
+    stale = service.handle(context, {"action": "click", "element": old["elements"][0]["element"]})
+    assert stale["error"]["code"] == "stale_element"
+    assert stale["artifacts"][0]["observation"] == {
+        key: value for key, value in current.items() if key != "action"
+    }
+    invented = call(
+        computer, "click", element=current["elements"][0]["element"].split(":")[0] + ":999"
+    )
+    assert invented["error"]["code"] == "unknown_element"
+    assert invented["artifacts"][0]["observation"] == stale["artifacts"][0]["observation"]
+    assert len(client.calls) == before and client.inputs == 0
+    assert service.handle(
+        context, {"action": "click", "element": current["elements"][0]["element"]}
+    )["ok"]
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [{"run_id": "other"}, {"agent_id": "other"}, {"session_id": "other"}, {"project_id": "other"}],
+)
+def test_element_refs_never_infer_another_owners_target(computer, identity):
+    service, context, client, _ = computer
+    element = capture(computer)["data"]["elements"][0]["element"]
+    other = replace(context, **identity)
+    result = service.handle(other, {"action": "click", "element": element})
+    assert not result["ok"] and not result["artifacts"] and client.inputs == 0
+
+
+def test_reference_recovery_does_not_expose_state_after_revocation(computer):
+    service, context, _, agent = computer
+    old = capture(computer)["data"]
+    capture(computer)
+    agent.tool_access = ToolAccess(mode="none")
+    result = service.handle(context, {"action": "capture", "view_id": old["view_id"]})
+    assert not result["ok"] and not result["artifacts"]
+
+
+def test_literal_query_is_forwarded_without_regex_or_or_expansion(computer):
+    client = computer[2]
+    assert capture(computer, query="Color 1|Color 2")["ok"]
+    request = next(args for name, args in reversed(client.calls) if name == "get_window_state")
+    assert request["query"] == "Color 1|Color 2"
+
+
+def test_session_expiry_is_actionable_without_exposing_a_driver_only_action():
+    from resources.extensions.computer_use.driver import unpack
+
+    for result in [
+        {"isError": True, "structuredContent": {"code": "session_ended"}},
+        {
+            "isError": True,
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "this session has ended; call start_session explicitly to reuse its label"
+                    ),
+                }
+            ],
+        },
+    ]:
+        with pytest.raises(ComputerUseError) as caught:
+            unpack(result)
+        assert caught.value.code == "computer_session_expired"
+        assert "start_session" not in str(caught.value)
+
+
+@pytest.mark.parametrize("action", ["get_window_state", "click"])
+def test_named_session_expiry_is_recovered_without_replaying_input(
+    computer, lifecycle_connection, action
+):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    connection = lifecycle_connection[0]
+    name = next(iter(service._sessions.values())).name
+    connection.ended.add(name)
+    before = len(connection.calls)
+    args = {"session": name, "pid": 1, "window_id": 2}
+    if action == "get_window_state":
+        service._driver.call(action, {**args, "include_screenshot": False})
+        assert [n for n, _ in connection.calls[before:]] == ["start_session", action]
+    else:
+        with pytest.raises(ComputerUseError) as caught:
+            service._driver.call(
+                action, {**args, "element_token": "s00000001:1", "delivery_mode": "background"}
+            )
+        assert caught.value.code == "computer_session_expired"
+        assert connection.calls[before:] == [("start_session", {"session": name})]
+    assert name not in connection.ended and len(lifecycle_connection) == 1
+
+
+def test_failed_named_renewal_never_dispatches_input(computer, lifecycle_connection):
+    service, context, _, _ = computer
+    assert service.handle(context, {"action": "apps"})["ok"]
+    connection = lifecycle_connection[0]
+    name = next(iter(service._sessions.values())).name
+    connection.fail_start = True
+    before = len(connection.calls)
+    with pytest.raises(ComputerUseError):
+        service._driver.call(
+            "click", {"session": name, "pid": 1, "window_id": 2, "delivery_mode": "background"}
+        )
+    assert connection.calls[before:] == [("start_session", {"session": name})]
+
+
+@pytest.mark.parametrize("field", ["pid", "window_id"])
+@pytest.mark.parametrize("value", [[], {}, True, 1.0, None])
+def test_element_resolution_rejects_malformed_target_before_lookup(computer, field, value):
+    service, context, client, _ = computer
+    current = capture(computer)["data"]
+    before = len(client.calls)
+    result = service.handle(
+        context,
+        {
+            "action": "click",
+            "pid": 1,
+            "window_id": 2,
+            "element": current["elements"][0]["element"],
+            field: value,
+        },
+    )
+    assert result["error"]["code"] == "invalid_arguments"
+    assert len(client.calls) == before
+
+
+def test_numeric_element_can_use_an_owned_window_view(computer):
+    service, context, client, _ = computer
+    current = capture(computer, foreground=True)["data"]
+    result = service.handle(
+        context, {"action": "click", "view_id": current["view_id"], "element": "1"}
+    )
+    assert result["ok"] and client.inputs == 1
+    assert result["data"]["observation"]["foreground"] is True
+
+
+def test_ambiguous_element_ref_requires_an_explicit_window(computer):
+    service, context, client, _ = computer
+    first = capture(computer)["data"]
+    # Model a Driver that reuses a token in another window's snapshot.
+    client.snapshots = 0
+    second = capture(computer, window_id=3)["data"]
+    element = first["elements"][0]["element"]
+    assert element == second["elements"][0]["element"]
+    before = len(client.calls)
+    ambiguous = service.handle(context, {"action": "click", "element": element})
+    assert ambiguous["error"]["code"] == "invalid_arguments"
+    assert len(client.calls) == before and client.inputs == 0
+    chosen = service.handle(
+        context, {"action": "click", "element": element, "view_id": second["view_id"]}
+    )
+    assert chosen["ok"] and client.inputs == 1
+    sent = next(args for name, args in client.calls if name == "click")
+    assert sent["window_id"] == 3

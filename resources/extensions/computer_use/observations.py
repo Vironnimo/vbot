@@ -66,7 +66,9 @@ class Observation:
             token = reference
         if token is None:
             raise ComputerUseError(
-                "Capture this target again before sending input.", "capture_required"
+                "This element was not returned in the selected observation. Use a complete "
+                "element ref from its element list, or capture with mode=som and a literal query.",
+                "unknown_element",
             )
         return token
 
