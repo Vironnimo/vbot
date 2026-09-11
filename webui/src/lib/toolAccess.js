@@ -204,6 +204,15 @@ export function setToolFamilyPreference(
   return next;
 }
 
+export function setAnalyzeImageAlwaysAvailable(value, enabled) {
+  const policy = normalizeToolAccess(value);
+  if (!toolAccessIncludes(policy, 'analyze_image')) return policy;
+  const granted = new Set(policy.granted ?? []);
+  if (enabled) granted.add('analyze_image');
+  else granted.delete('analyze_image');
+  return compactPolicy({ ...policy, granted: [...granted] });
+}
+
 export function toolAccessState(value, tool, catalog = [], context = {}) {
   const policy = normalizeToolAccess(value);
   if ((policy.denied ?? []).includes(tool.name)) {

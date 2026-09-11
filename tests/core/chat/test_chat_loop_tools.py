@@ -36,6 +36,7 @@ from core.tools import (
     BASH_TOOL_NAME,
     BASH_TOOL_PARAMETERS,
     HISTORY_TOOL_NAME,
+    ToolAccess,
     ToolContext,
     ToolDisplay,
     ToolRegistry,
@@ -285,6 +286,74 @@ async def test_analyze_image_hidden_without_usable_binding(tmp_path: Path) -> No
     await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
 
     assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "available", "visible"),
+    [
+        (ToolAccess(mode="all"), True, False),
+        (ToolAccess(mode="all", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, True),
+        (
+            ToolAccess(
+                mode="selected",
+                allowed=(ANALYZE_IMAGE_TOOL_NAME,),
+                granted=(ANALYZE_IMAGE_TOOL_NAME,),
+            ),
+            True,
+            True,
+        ),
+        (ToolAccess(mode="all", granted=(ANALYZE_IMAGE_TOOL_NAME,)), False, False),
+        (ToolAccess(mode="none", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, False),
+        (ToolAccess(mode="selected", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, False),
+        (
+            ToolAccess(
+                mode="selected",
+                denied=(ANALYZE_IMAGE_TOOL_NAME,),
+                granted=(ANALYZE_IMAGE_TOOL_NAME,),
+            ),
+            True,
+            False,
+        ),
+    ],
+)
+async def test_analyze_image_vision_grant_is_stable_and_respects_availability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    policy: ToolAccess,
+    available: bool,
+    visible: bool,
+) -> None:
+    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
+    agent = StubAgent(id="coder", model="openai/vision-model")
+    adapter = StubAdapter(
+        [{"content": "done", "tool_calls": None}] * 2,
+        wire_media_types=frozenset({"image/png"}),
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_analyze_image_registry(),
+        models=StubModels(
+            {("openai", "vision-model"): 128_000},
+            input_modalities={("openai", "vision-model"): ("text", "image")},
+        ),
+        available_task_models={TASK_IMAGE_UNDERSTANDING} if available else set(),
+    )
+    loop = build_chat_loop(runtime)
+    preview = await loop.preview_tool_definitions(agent)
+    assert not adapter.requests
+    assert (ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in preview}) is visible
+
+    for message in ("Read the handwriting with analyze_image", "What is two plus two?"):
+        await loop.send("coder", message, session_id="s1")
+        assert (
+            ANALYZE_IMAGE_TOOL_NAME in runtime.system_prompts.effective_tool_name_calls[-1]
+        ) is visible
+
+    assert adapter.requests[0]["kwargs"]["tools"] == preview
+    assert adapter.requests[1]["kwargs"]["tools"] == preview
 
 
 @pytest.mark.asyncio
