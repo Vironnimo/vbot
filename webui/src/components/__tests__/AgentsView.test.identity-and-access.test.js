@@ -351,6 +351,34 @@ describe('AgentsView', () => {
     });
   });
 
+  it('orders access sections as Tools, Skills, then Sub-Agents', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'worker' }],
+        tools: [{ name: 'subagent', description: 'Delegate work.' }],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.querySelector('button[aria-label="Toggle agent worker"]'),
+    );
+
+    getButton('Tools & Skills').click();
+    flushSync();
+    const panel = document.querySelector('#agent-detail-panel-access');
+    expect(panel.hidden).toBe(false);
+    const sections = Array.from(panel.querySelectorAll('.tl-section'));
+    expect(sections).toHaveLength(3);
+    expect(sections[0].contains(toolAccessToggle('subagent'))).toBe(true);
+    expect(
+      sections[1].contains(getButtonByAriaLabel('Toggle skill sample-skill')),
+    ).toBe(true);
+    expect(
+      sections[2].contains(getButtonByAriaLabel('Toggle agent worker')),
+    ).toBe(true);
+  });
+
   it('hides Sub-Agent settings when neither Sub-Agent tool is allowed', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -371,6 +399,162 @@ describe('AgentsView', () => {
     );
 
     expect(document.body.querySelectorAll('.tl-section')).toHaveLength(2);
+  });
+
+  it.each([
+    ['identity', 'all off', ['*'], ['builder@vbot', 'builder@demo']],
+    ['project', 'all off', ['*'], ['worker', 'helper']],
+    [
+      'identity',
+      'all on',
+      ['builder@vbot'],
+      ['builder@vbot', 'worker', 'helper'],
+    ],
+    [
+      'project',
+      'all on',
+      ['worker'],
+      ['worker', 'builder@vbot', 'builder@demo'],
+    ],
+    ['identity', 'all off', ['worker', 'builder@vbot'], ['builder@vbot']],
+    ['project', 'all off', ['worker', 'builder@vbot'], ['worker']],
+  ])(
+    'sets %s Agents %s while preserving the other group (%j)',
+    async (group, action, allowed, expected) => {
+      rpcMock.mockImplementation(
+        createAgentsRpcMock(agentGroupsFixture(allowed)),
+      );
+      mountedComponent = mount(AgentsView, { target: document.body });
+      await waitForText('builder@demo');
+      getButton('Tools & Skills').click();
+      flushSync();
+      vi.useFakeTimers();
+      if (group === 'project') {
+        document.getElementById('agent-project-targets-toggle').click();
+        flushSync();
+      }
+      const section =
+        group === 'identity'
+          ? document.querySelector(
+              'section[aria-labelledby="agent-identity-targets-label"]',
+            )
+          : document.getElementById('agent-project-targets');
+      getButtonWithin(section, action).click();
+      flushSync();
+      await vi.advanceTimersByTimeAsync(800);
+      await flushAsyncUpdates();
+      expect(getAgentUpdateCalls()).toHaveLength(1);
+      expect(getAgentUpdateCalls()[0][1]).toEqual({
+        id: 'alpha',
+        tools: {
+          bash: { allowed_env: ['TEST_GROUP_ACCESS'] },
+          subagent: { allowed_agents: expected },
+        },
+      });
+    },
+  );
+
+  it('starts Project Agents collapsed and keeps their full selection count through filtering and toggles', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock(agentGroupsFixture(['worker', 'builder@vbot'])),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForText('builder@demo');
+    const disclosure = document.getElementById('agent-project-targets-toggle');
+    const content = document.getElementById('agent-project-targets');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    expect(disclosure.textContent).toContain('(1/2)');
+    expect(content.hidden).toBe(true);
+    expect(
+      document
+        .querySelector(
+          'section[aria-labelledby="agent-identity-targets-label"]',
+        )
+        .contains(getButtonByAriaLabel('Toggle agent builder@vbot')),
+    ).toBe(false);
+
+    disclosure.click();
+    flushSync();
+    expect(content.hidden).toBe(false);
+    const search = content.querySelector('input');
+    search.value = 'demo';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(content.querySelectorAll('[role="switch"]')).toHaveLength(1);
+    expect(disclosure.textContent).toContain('(1/2)');
+    vi.useFakeTimers();
+    getButtonByAriaLabel('Toggle agent builder@demo').click();
+    flushSync();
+    expect(disclosure.textContent).toContain('(2/2)');
+    disclosure.click();
+    flushSync();
+    expect(content.hidden).toBe(true);
+    expect(disclosure.textContent).toContain('(2/2)');
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()[0][1].tools.subagent.allowed_agents).toEqual([
+      'worker',
+      'builder@vbot',
+      'builder@demo',
+    ]);
+  });
+
+  it('preserves unavailable targets in their respective groups', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock(
+        agentGroupsFixture(['missing-identity', 'missing@retired']),
+      ),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForText('builder@demo');
+    const identity = document.querySelector(
+      'section[aria-labelledby="agent-identity-targets-label"]',
+    );
+    const project = document.getElementById('agent-project-targets');
+    expect(
+      identity.contains(getButtonByAriaLabel('Toggle agent missing-identity')),
+    ).toBe(true);
+    expect(
+      project.contains(getButtonByAriaLabel('Toggle agent missing@retired')),
+    ).toBe(true);
+    expect(
+      document.getElementById('agent-project-targets-toggle').textContent,
+    ).toContain('(1/3)');
+    vi.useFakeTimers();
+    getButtonWithin(identity, 'all off').click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()[0][1].tools.subagent.allowed_agents).toEqual([
+      'missing@retired',
+    ]);
+  });
+
+  it('keeps an existing wildcard on no-op group actions and keeps new complete selections explicit', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock(agentGroupsFixture(['*'])));
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForText('builder@demo');
+    vi.useFakeTimers();
+    const identity = document.querySelector(
+      'section[aria-labelledby="agent-identity-targets-label"]',
+    );
+    getButtonWithin(identity, 'all on').click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+
+    getButtonWithin(identity, 'all off').click();
+    flushSync();
+    getButtonWithin(identity, 'all on').click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()[0][1].tools.subagent.allowed_agents).toEqual([
+      'builder@vbot',
+      'builder@demo',
+      'worker',
+      'helper',
+    ]);
   });
 
   it('does not clear Sub-Agent settings when its tool is temporarily disabled', async () => {
@@ -758,6 +942,35 @@ function memoryScopeNamed(name) {
   );
   expect(scope).toBeTruthy();
   return scope;
+}
+
+function agentGroupsFixture(allowed) {
+  return {
+    agents: [
+      {
+        ...baseAgent(),
+        tools: {
+          bash: { allowed_env: ['TEST_GROUP_ACCESS'] },
+          subagent: { allowed_agents: allowed },
+        },
+      },
+      { ...baseAgent(), id: 'worker' },
+      { ...baseAgent(), id: 'helper' },
+    ],
+    projects: ['vbot', 'demo'].map((project_id) => ({
+      project_id,
+      display_name: project_id,
+    })),
+    projectScans: Object.fromEntries(
+      ['vbot', 'demo'].map((project_id) => [
+        project_id,
+        {
+          project: { project_id, display_name: project_id },
+          scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
+        },
+      ]),
+    ),
+  };
 }
 
 function getButtonWithin(container, label) {

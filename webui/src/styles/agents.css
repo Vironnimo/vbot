@@ -346,6 +346,50 @@
   border-top: 1px solid var(--border);
 }
 
+.agents-view .agents-view__access-group-label {
+  margin: 0;
+  padding: 8px 16px;
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+}
+
+.agents-view .agents-view__project-targets {
+  margin: 0 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.agents-view .agents-view__access-group-toggle {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  min-height: 40px;
+  padding: 8px;
+  color: var(--text-hi);
+  font-family: var(--font-sans);
+  font-size: var(--fs-label-md);
+  text-align: left;
+}
+
+.agents-view .agents-view__access-chevron {
+  color: var(--text-med);
+}
+
+.agents-view .agents-view__access-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.agents-view .agents-view__access-group-count {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.agents-view #agent-project-targets {
+  border-left: 2px solid var(--border-2);
+}
+
 .agents-view .agents-view__memory-disclosure-toggle {
   display: flex;
   width: 100%;

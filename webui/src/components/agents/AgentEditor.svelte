@@ -94,6 +94,7 @@
   const editorAgentId = initialAgent?.id ?? '';
 
   let activeDetail = $state('overview');
+  let projectAgentsOpen = $state(false);
   let detailScroll = $state(null);
   let detailTabs = $derived([
     { id: 'overview', label: t('management.overview', 'Overview') },
@@ -169,6 +170,15 @@
       ...target,
       allowed: target.isAllowed,
     })),
+  );
+  let identityAgentChipItems = $derived(
+    agentTargetChipItems.filter((target) => target.kind !== 'project'),
+  );
+  let projectAgentChipItems = $derived(
+    agentTargetChipItems.filter((target) => target.kind === 'project'),
+  );
+  let selectedProjectAgentCount = $derived(
+    projectAgentChipItems.filter((target) => target.allowed).length,
   );
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
   let configuredAgentTargets = $derived(
@@ -662,18 +672,15 @@
     }
   }
 
-  function setAccessItems(fieldName, isAllowed) {
-    if (fieldName === 'allowed_skills') {
-      formValues.allowed_skills = isAllowed ? [WILDCARD_ACCESS] : [];
-      return;
-    }
-
-    if (fieldName === 'allowed_agents') {
-      formValues.tools = withSubagentAllowedAgents(
-        formValues.tools,
-        isAllowed ? [WILDCARD_ACCESS] : [],
-      );
-    }
+  function setAgentGroupAccess(items, isAllowed) {
+    if (items.every((item) => item.allowed === isAllowed)) return;
+    const groupNames = new Set(items.map((item) => item.name));
+    const selectedNames = agentsAreWildcard
+      ? agentTargetChipItems.map((item) => item.name)
+      : configuredAgentTargets;
+    const nextNames = selectedNames.filter((name) => !groupNames.has(name));
+    if (isAllowed) nextNames.push(...groupNames);
+    formValues.tools = withSubagentAllowedAgents(formValues.tools, nextNames);
   }
 
   function cloneTools(tools) {
@@ -714,7 +721,11 @@
       ? []
       : currentItems
           .filter((name) => !knownNames.has(name))
-          .map((name) => ({ name, unavailable: true }));
+          .map((name) => ({
+            name,
+            kind: name.includes('@') ? 'project' : 'identity',
+            unavailable: true,
+          }));
 
     return [...catalog, ...missingTargets].map((target) => ({
       ...target,
@@ -775,12 +786,7 @@
     } else if (!isAllowed && existingIndex !== -1) {
       nextItems.splice(existingIndex, 1);
     }
-    formValues.tools = withSubagentAllowedAgents(
-      formValues.tools,
-      allTargetNames.every((name) => nextItems.includes(name))
-        ? [WILDCARD_ACCESS]
-        : nextItems,
-    );
+    formValues.tools = withSubagentAllowedAgents(formValues.tools, nextItems);
   }
 
   function updateSkillAccessItem(itemName, isAllowed) {
@@ -1924,48 +1930,6 @@
           </div>
         </div>
 
-        {#if subagentToolEnabled}
-          <div class="tl-section">
-            <div class="tl-section-header">
-              <span class="tl-section-label">
-                {t('agents.form.subagentSettings', 'Sub-Agent settings')}
-                <InfoHint
-                  text={t(
-                    'agents.form.allowedAgentsHelp',
-                    'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
-                  )}
-                />
-              </span>
-            </div>
-            <ToggleChipList
-              items={agentTargetChipItems}
-              emptyLabel={t(
-                'agents.access.noAgentTargets',
-                'No additional Agent targets are available.',
-              )}
-              note={agentsAreWildcard && visibleAgentTargetItems.length > 0
-                ? t(
-                    'agents.form.agentWildcardNote',
-                    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
-                  )
-                : t(
-                    'agents.form.agentAddressNote',
-                    'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
-                  )}
-              ariaToggleLabel={(name) =>
-                t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
-              onToggle={(name, next) =>
-                updateAccessItem('allowed_agents', name, next)}
-              onSetAll={(next) => setAccessItems('allowed_agents', next)}
-            />
-            {#if agentTargetCatalogError}
-              <p class="agents-view__placeholder-row" role="status">
-                {agentTargetCatalogError}
-              </p>
-            {/if}
-          </div>
-        {/if}
-
         <div class="tl-section">
           <div class="tl-section-header">
             <span class="tl-section-label">
@@ -1988,7 +1952,8 @@
               t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
             onToggle={(name, next) =>
               updateAccessItem('allowed_skills', name, next)}
-            onSetAll={(next) => setAccessItems('allowed_skills', next)}
+            onSetAll={(next) =>
+              (formValues.allowed_skills = next ? [WILDCARD_ACCESS] : [])}
           />
           {#if invalidSkills.length > 0}
             <div class="agents-view__invalid-skills">
@@ -2030,6 +1995,99 @@
             </div>
           {/if}
         </div>
+
+        {#if subagentToolEnabled}
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">
+                {t('agents.form.subagentSettings', 'Sub-Agent settings')}
+                <InfoHint
+                  text={t(
+                    'agents.form.allowedAgentsHelp',
+                    'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
+                  )}
+                />
+              </span>
+            </div>
+            <section aria-labelledby="agent-identity-targets-label">
+              <h4
+                id="agent-identity-targets-label"
+                class="agents-view__access-group-label"
+              >
+                {t('agents.access.identityAgents', 'Identity Agents')}
+              </h4>
+              <ToggleChipList
+                items={identityAgentChipItems}
+                emptyLabel={t(
+                  'agents.access.noIdentityAgentTargets',
+                  'No additional Identity Agents are available.',
+                )}
+                note={agentsAreWildcard && visibleAgentTargetItems.length > 0
+                  ? t(
+                      'agents.form.agentWildcardNote',
+                      'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
+                    )
+                  : t(
+                      'agents.form.agentAddressNote',
+                      'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
+                    )}
+                ariaToggleLabel={(name) =>
+                  t('agents.access.toggleAgent', 'Toggle agent {name}', {
+                    name,
+                  })}
+                onToggle={(name, next) =>
+                  updateAccessItem('allowed_agents', name, next)}
+                onSetAll={(next) =>
+                  setAgentGroupAccess(identityAgentChipItems, next)}
+              />
+            </section>
+            {#if projectAgentChipItems.length > 0}
+              <section
+                class="agents-view__project-targets"
+                aria-labelledby="agent-project-targets-toggle"
+              >
+                <Button
+                  id="agent-project-targets-toggle"
+                  variant="tertiary"
+                  class="agents-view__access-group-toggle"
+                  aria-expanded={projectAgentsOpen}
+                  aria-controls="agent-project-targets"
+                  onClick={() => (projectAgentsOpen = !projectAgentsOpen)}
+                >
+                  <span
+                    class="agents-view__access-chevron"
+                    class:is-open={projectAgentsOpen}
+                    aria-hidden="true">▸</span
+                  >
+                  <span
+                    >{t('agents.access.projectAgents', 'Project Agents')}</span
+                  >
+                  <span class="agents-view__access-group-count"
+                    >({selectedProjectAgentCount}/{projectAgentChipItems.length})</span
+                  >
+                </Button>
+                <div id="agent-project-targets" hidden={!projectAgentsOpen}>
+                  <ToggleChipList
+                    items={projectAgentChipItems}
+                    ariaToggleLabel={(name) =>
+                      t('agents.access.toggleAgent', 'Toggle agent {name}', {
+                        name,
+                      })}
+                    onToggle={(name, next) =>
+                      updateAccessItem('allowed_agents', name, next)}
+                    onSetAll={(next) =>
+                      setAgentGroupAccess(projectAgentChipItems, next)}
+                  />
+                </div>
+              </section>
+            {/if}
+            {#if agentTargetCatalogError}
+              <p class="agents-view__placeholder-row" role="status">
+                {agentTargetCatalogError}
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
     <div
