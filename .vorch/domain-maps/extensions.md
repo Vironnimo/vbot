@@ -6,7 +6,7 @@
 
 An Extension is the unit of discovery, identity, configuration, enable/disable, and lifecycle. Extensions can contribute Chat hooks, Slash Commands, Tools, Recall backends, System Prompt blocks, channel interaction handlers, settings schemas, schema-described management operations, and live Tool catalogs. The owning backend domain still decides when a capability is used and what its business payload means: Chat owns hook fire-points, Command execution, and tool-result policy, Tools owns Tool execution contracts, Recall owns backend semantics, Prompts owns block assembly, Channels owns transport, and Runtime owns bootstrap/rebuild ordering.
 
-Extensions execute arbitrary code in the vBot process on the normal asyncio runtime. They are inside the kernel trust boundary, not sandboxed plugins. User-facing author guidance lives in `docs/extensions.md`; runnable examples live in `examples/extensions/`.
+Extensions execute arbitrary code in the vBot process on the normal asyncio runtime. They are inside the kernel trust boundary, not sandboxed plugins. Agent authoring guidance lives in the bundled `vbot-cli` Skill at `resources/skills/vbot-cli/references/extensions.md`; runnable examples live in `resources/skills/vbot-cli/assets/extensions/`.
 
 ## Terms
 
@@ -64,7 +64,7 @@ for explicit prompt composition; see `extensions/swarm.md` and
 - Settings field parsing and config validation: `core/extensions/settings_schema.py`
 - Bootstrap construction and cross-domain callback wiring: `core/runtime/runtime.py`; serialized rebuild, disable, registry swap, and lifecycle ordering: `core/extensions/runtime.py`
 - Management and secret RPC projection: `server/rpc/extensions_methods.py`, with disabled/config persistence in `server/rpc/settings_methods.py` and the Settings domain
-- Bundled implementations: `resources/extensions/`; examples: `examples/extensions/`
+- Bundled implementations: `resources/extensions/`; examples: `resources/skills/vbot-cli/assets/extensions/`
 
 ## Constraints and gotchas
 
@@ -78,6 +78,7 @@ for explicit prompt composition; see `extensions/swarm.md` and
 
 Read these only when your task matches - not by default.
 
+- Authoring an Extension or adapting a runnable template -> `resources/skills/vbot-cli/references/extensions.md` and `resources/skills/vbot-cli/assets/extensions/` (repository-relative); bundled usage guidance -> `resources/skills/vbot-cli/references/extension-usage.md`
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
 - Changing Computer Use, its opt-in Tool, driver sessions, capture ownership, or desktop input -> `extensions/computer-use.md`

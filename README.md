@@ -19,7 +19,7 @@
   <a href="#get-started">Get started</a> ·
   <a href="USAGE.md">User guide</a> ·
   <a href="#security">Security</a> ·
-  <a href="docs/extensions.md">Extension development</a>
+  <a href="resources/skills/vbot-cli/references/extensions.md">Extension development</a>
 </p>
 
 vBot is a local-first, self-hosted home for personal and project Agents. An Agent can keep durable Memory and Sessions, work with files and processes through Tools, use reusable Skills, delegate to Sub-Agents, and run on a schedule. Projects can also discover an existing OpenCode or Claude Code team directly from a repository without copying it into vBot.
@@ -105,7 +105,7 @@ Both commands preserve the distinction between the application and its runtime d
 | Use Agents, Projects, Sessions, Chat, and the Queue | [Agents, Projects, and Sessions](USAGE.md#agents-projects-and-sessions) · [Chat, Queue, and Built-in Commands](USAGE.md#chat-queue-and-built-in-commands) |
 | Configure Skills, Tools, Models, Channels, or schedules | [Skills, Tools, and Sub-Agents](USAGE.md#skills-tools-and-sub-agents) · [Settings and specialized Models](USAGE.md#settings-and-specialized-models) · [Channels](USAGE.md#channels) · [Cron](USAGE.md#cron) |
 | Operate or integrate the server | [Running the server](USAGE.md#running-the-server) · [CLI reference](USAGE.md#cli-reference) · [Server API](USAGE.md#server-api) |
-| Build an Extension | [Extension authoring guide](docs/extensions.md) · [Runnable examples](examples/extensions) |
+| Build an Extension | [Extension authoring guide](resources/skills/vbot-cli/references/extensions.md) · [Runnable examples](resources/skills/vbot-cli/assets/extensions) |
 | Develop and verify vBot itself | [Development and verification](USAGE.md#development-and-verification) |
 
 ## Project status

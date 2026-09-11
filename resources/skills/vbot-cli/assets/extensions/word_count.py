@@ -1,16 +1,16 @@
 """Example extension: a tiny ``word_count`` tool.
 
 Copy this file into ``<data_dir>/extensions/`` (``~/.vbot/extensions/`` by
-default) to enable it on the next server start.
+default), then run ``vbot extensions reload`` to load it live.
 
 It demonstrates ``api.register_tool``: extensions add their own agent tools
 without forking vBot. The handler signature ``(context, arguments)`` and the
 success/failure result envelope are identical to built-in tools — an
 extension tool is a *normal* tool once registered. It appears in provider tool
-definitions and is filtered by an agent's ``allowed_tools`` like any other.
+definitions and is filtered by the Agent's Tool Access Policy like any other.
 
 (Tools are code that does one thing; for teaching the agent a *workflow*, write
-a Skill instead — see ``.vorch/GLOSSARY.md`` Tool vs Skill.)
+a Skill instead.)
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from __future__ import annotations
 from core.tools import tool_failure, tool_success
 
 # JSON Schema for the tool's arguments — the same shape the model sees for
-# built-in tools. Keep descriptions short: every tool enlarges the system
-# prompt like any other.
+# built-in tools. Keep descriptions concise and sufficient for correct use:
+# every Tool definition consumes Model context.
 WORD_COUNT_NAME = "word_count"
 WORD_COUNT_DESCRIPTION = "Count whitespace-separated words in a piece of text."
 WORD_COUNT_PARAMETERS = {
