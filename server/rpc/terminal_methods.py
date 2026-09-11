@@ -40,6 +40,16 @@ def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"terminal_id"}, "terminal.read")
+    try:
+        return dict(
+            _terminal_manager(state).read_for_operator(_required_string(params, "terminal_id"))
+        )
+    except TerminalManagerError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
 def _terminal_group_create(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"name"}, "terminal.group.create")
     name = _group_name_param(params)
@@ -158,7 +168,9 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id", "data"}, "terminal.input")
+    _reject_unsupported(
+        params, {"terminal_id", "data", "expected_screen_revision"}, "terminal.input"
+    )
     terminal_id = _required_string(params, "terminal_id")
     data = _required_string(params, "data")
     if len(data) > TERMINAL_INPUT_MAX_CHARS:
@@ -167,7 +179,13 @@ async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
             f"params.data must not exceed {TERMINAL_INPUT_MAX_CHARS} characters",
         )
     try:
-        terminal = await _terminal_manager(state).send_operator_input(terminal_id, data)
+        kwargs = {}
+        if "expected_screen_revision" in params:
+            revision = _required_integer(params, "expected_screen_revision")
+            if revision < 0:
+                raise ValueError("expected_screen_revision must be non-negative")
+            kwargs["expected_screen_revision"] = revision
+        terminal = await _terminal_manager(state).send_operator_input(terminal_id, data, **kwargs)
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
@@ -267,6 +285,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "terminal.list": _terminal_list,
+        "terminal.read": _terminal_read,
         "terminal.start": _terminal_start,
         "terminal.input": _terminal_input,
         "terminal.resize": _terminal_resize,

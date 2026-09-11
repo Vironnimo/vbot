@@ -1,6 +1,33 @@
 const DEFAULT_LOCALE = 'en';
 
 export const englishCatalog = Object.freeze({
+  'live.error.wakeword':
+    'Turn off wakeword Voice in Settings before starting the voice companion.',
+  'live.error.apiKey':
+    'Add and enable your OpenAI API key in Providers. GPT-Live access is required.',
+  'live.error.access':
+    'OpenAI rejected access. Check your API key and GPT-Live availability for your account.',
+  'live.error.microphone':
+    'Live voice needs microphone access over HTTPS or localhost.',
+  'live.error.permission': 'Allow microphone access, then start again.',
+  'live.error.unknown':
+    'OpenAI may have created the conversation, but its connection could not be confirmed. The request was not repeated.',
+  'live.error.finalization':
+    'Voice stopped. Final usage could not be confirmed.',
+  'live.error.notification':
+    'An Agent update could not be read. Check Chat for its latest reply.',
+  'live.error.backend':
+    'The voice companion could not finish that request. Check the action before repeating it.',
+  'live.error.limit': 'Start a new voice conversation to continue.',
+  'live.error.connection':
+    'Live voice could not continue. Check the connection and GPT-Live access. Actions were not automatically repeated.',
+  'live.settings.label': 'Live voice',
+  'live.settings.description':
+    'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
+  'live.error.playback':
+    'Audio playback was blocked. Allow audio for this app and start Live again.',
+  'live.startButton': 'Start Live',
+  'live.stopButton': 'Stop Live',
   'settings.specializedModels.resetOptions': 'Reset options',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',
@@ -2367,7 +2394,7 @@ export const englishCatalog = Object.freeze({
 
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle':
-    'Transcription audio and wakeword command settings.',
+    'Live voice, transcription audio, and wakeword command settings.',
   'settings.voice.transcriptionProfile': 'Transcription audio',
   'settings.voice.transcriptionProfileDescription':
     'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',

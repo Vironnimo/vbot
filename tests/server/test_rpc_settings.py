@@ -43,6 +43,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     assert timezone in available_timezones
     assert "Europe/Berlin" in available_timezones
     assert response["result"] == {
+        "live_voice": {"enabled": False},
         "general": {
             "server": {
                 "listen_host": "0.0.0.0",

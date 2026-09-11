@@ -96,6 +96,30 @@ def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
     )
 
 
+async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
+    """Read the exact completed Run, even when the Session has already continued."""
+    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "chat.run_result")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    run_id = _required_string(params, "run_id")
+
+    def read() -> JsonObject:
+        session = state.runtime.chat_sessions.get(SessionAddress(project_id, agent_id, session_id))
+        result = session.load_run_result(run_id=run_id)
+        content = (result.assistant.content or "") if result and result.assistant else ""
+        return {
+            "run_id": run_id,
+            "found": result is not None,
+            "content": content[-6000:],
+            "truncated": len(content) > 6000,
+        }
+
+    try:
+        return await _CHAT_RPC_WORKERS.run(read)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "limit", "before"}
     _reject_unsupported(params, supported_fields, "chat.history")
@@ -852,6 +876,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "chat.history": _chat_history,
+        "chat.run_result": _chat_run_result,
         "chat.reflections": _chat_reflections,
         "chat.send": _send_chat,
         "chat.stream": _stream_chat,

@@ -19,9 +19,31 @@ from server.rpc.terminal_methods import (
     _terminal_input,
     _terminal_kill,
     _terminal_list,
+    _terminal_read,
     _terminal_resize,
     _terminal_start,
 )
+
+
+@pytest.mark.asyncio
+async def test_guarded_operator_input_forwards_revision_and_read_is_nonbinding():
+    from unittest.mock import AsyncMock, Mock
+
+    manager = SimpleNamespace(
+        read_for_operator=Mock(return_value={"screen": "prompt", "terminal": {"terminal_id": "t"}}),
+        send_operator_input=AsyncMock(return_value={"terminal_id": "t"}),
+    )
+    state = SimpleNamespace(runtime=SimpleNamespace(terminal_manager=manager))
+    assert _terminal_read(state, {"terminal_id": "t"})["screen"] == "prompt"
+    await _terminal_input(
+        state, {"terminal_id": "t", "data": "yes\r", "expected_screen_revision": 4}
+    )
+    manager.send_operator_input.assert_awaited_once_with("t", "yes\r", expected_screen_revision=4)
+    for revision in (True, -1, "4"):
+        with pytest.raises(RpcError):
+            await _terminal_input(
+                state, {"terminal_id": "t", "data": "yes", "expected_screen_revision": revision}
+            )
 
 
 class FakeTerminalManager:

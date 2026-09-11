@@ -31,6 +31,7 @@
     onNavigateToVoiceSettings = () => {},
     onStopWakewordRecording = () => {},
     onToast = () => {},
+    sidebarFooter,
     children,
   } = $props();
 
@@ -791,6 +792,7 @@
     </nav>
 
     <div class="sidebar-footer app-shell__footer">
+      {@render sidebarFooter?.()}
       {#if micVisible}
         <div class="sidebar-footer__row">
           <button

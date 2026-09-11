@@ -222,6 +222,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         default=False,
     ),
     _static(
+        "live_voice.enabled",
+        "boolean",
+        "Show the Live voice control in the sidebar.",
+        default=False,
+    ),
+    _static(
         "server.timezone",
         "string",
         "IANA timezone used by Agents, schedules, calendars, and Accessors.",
@@ -682,6 +688,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
             "timezone": effective_timezone_name(raw_settings),
         },
         "appearance": appearance,
+        "live_voice": {"enabled": raw_settings.get("live_voice", {}).get("enabled") is True},
         "skills": {
             "directories": normalize_skill_directories(raw_settings.get("skill_directories"))
         },

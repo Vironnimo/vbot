@@ -2480,3 +2480,30 @@ async def test_real_terminal_output_and_idle_reader_shutdown(tmp_path):
         assert not session.adapter.is_alive()
     finally:
         await asyncio.wait_for(manager.aclose(), 10)
+
+
+@pytest.mark.asyncio
+async def test_operator_read_preserves_binding_and_rejects_stale_guarded_input(
+    terminal_manager, tmp_path
+):
+    manager, factory = terminal_manager
+    session = await manager.spawn(
+        owner(), ["codex"], cwd=tmp_path, env=None, origin_run_id="run-live"
+    )
+    original_attachment = session.attachment
+    original_observation = session.observed_screen
+    snapshot = manager.read_for_operator(session.terminal_id)
+    assert snapshot["terminal"]["terminal_id"] == session.terminal_id
+    assert session.attachment == original_attachment
+    assert session.observed_screen == original_observation
+    revision = snapshot["terminal"]["screen_revision"]
+    await manager.send_operator_input(
+        session.terminal_id, "first", expected_screen_revision=revision
+    )
+    from core.tools.terminal_manager import TerminalStaleScreenError
+
+    with pytest.raises(TerminalStaleScreenError):
+        await manager.send_operator_input(
+            session.terminal_id, "second", expected_screen_revision=revision
+        )
+    assert session.attachment == original_attachment

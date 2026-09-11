@@ -55,6 +55,53 @@ from server.rpc.errors import RpcError
 
 
 @pytest.mark.asyncio
+async def test_run_result_keeps_exact_scope_when_session_has_continued(tmp_path):
+    from core.sessions import ChatSessionManager
+    from core.sessions.format import write_bootstrap_marker
+    from server.rpc.chat_methods import _chat_run_result
+
+    write_bootstrap_marker(tmp_path)
+    manager = ChatSessionManager(tmp_path)
+    try:
+        timing = {
+            "started_at": "2026-09-11T10:00:00Z",
+            "completed_at": "2026-09-11T10:00:01Z",
+            "duration_ms": 1000,
+        }
+        session = manager.create("joel", project_id="project")
+        session.append(ChatMessage.assistant(model="test/model", content="Which option?"))
+        session.append(
+            ChatMessage.run_summary(
+                run_id="first", status="completed", timing=timing, iteration_count=1
+            )
+        )
+        session.append(ChatMessage.assistant(model="test/model", content="Already continued"))
+        session.append(
+            ChatMessage.run_summary(
+                run_id="second", status="completed", timing=timing, iteration_count=1
+            )
+        )
+        state = SimpleNamespace(runtime=SimpleNamespace(chat_sessions=manager))
+        target = {
+            "agent_id": "joel@project",
+            "session_id": session.address.session_id,
+            "run_id": "first",
+        }
+        result = await _chat_run_result(state, target)
+        assert result == {
+            "run_id": "first",
+            "found": True,
+            "content": "Which option?",
+            "truncated": False,
+        }
+        assert not (await _chat_run_result(state, {**target, "run_id": "missing"}))["found"]
+        with pytest.raises(RpcError):
+            await _chat_run_result(state, {**target, "agent_id": "joel"})
+    finally:
+        manager.close()
+
+
+@pytest.mark.asyncio
 async def test_run_controls_validate_full_address_and_return_authoritative_state() -> None:
     from core.runs import Run
 

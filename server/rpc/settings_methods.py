@@ -863,6 +863,7 @@ def _settings_response(state: Any) -> JsonObject:
         },
         "reflection": dict(reflection),
         "speech": speech,
+        "live_voice": {"enabled": raw_settings.get("live_voice", {}).get("enabled") is True},
         "model_tasks": model_tasks,
         "session_titles": session_titles,
         "local_models": runtime.storage.load_local_models_settings(),

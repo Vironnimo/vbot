@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { CONNECTION_STATUS_CONNECTED } from '../../lib/connectionState.js';
@@ -62,6 +62,26 @@ describe('AppShell Desktop context menu', () => {
     flushSync();
     return document.querySelector('.app-shell__content');
   }
+
+  it('places the optional Live control above microphone and connection status', () => {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        items: [],
+        desktopCapabilities: { wakeword: true },
+        sidebarFooter: createRawSnippet(() => ({
+          render: () => '<button data-live>Start Live</button>',
+        })),
+      },
+    });
+    flushSync();
+    const footer = document.querySelector('.app-shell__footer');
+    expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
+    expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
+    expect(
+      document.querySelector('.app-shell__content [data-live]'),
+    ).toBeNull();
+  });
 
   it('keeps the inset toggle free of the shared button minimum height', () => {
     mountShell(false);

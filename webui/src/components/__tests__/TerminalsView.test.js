@@ -206,6 +206,72 @@ describe('TerminalsView', () => {
     document.body.innerHTML = '';
   });
 
+  it('lets voice select, maximize and restore the real Terminal layout', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([terminal(), terminal({ terminal_id: 'term-2' })]),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    await waitFor(() => terminalInstances.length === 2);
+    await mountedComponent.applyVoiceAction('maximize', {
+      terminal_id: 'term-2',
+    });
+    flushSync();
+    expect(mountedComponent.getVoiceContext().maximized_terminal_id).toBe(
+      'term-2',
+    );
+    expect(mountedComponent.getVoiceContext().selected_terminal_id).toBe(
+      'term-2',
+    );
+    await mountedComponent.applyVoiceAction('restore');
+    flushSync();
+    expect(mountedComponent.getVoiceContext().maximized_terminal_id).toBe('');
+    expect(mountedComponent.getVoiceContext().visible_order).toEqual([
+      'term-1',
+      'term-2',
+    ]);
+    expect(killTerminalMock).not.toHaveBeenCalled();
+    expect(sendTerminalInputMock).not.toHaveBeenCalled();
+  });
+
+  it('lets voice select an empty group and clears a previous maximize', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [terminal()],
+        [
+          manualGroup({ terminal_count: 1, live_count: 1 }),
+          {
+            group_id: 'review',
+            name: 'Review',
+            kind: 'user',
+            terminal_count: 0,
+            live_count: 0,
+            order: [],
+          },
+        ],
+      ),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    await waitFor(() => terminalInstances.length === 1);
+    await mountedComponent.applyVoiceAction('maximize', {
+      terminal_id: 'term-1',
+    });
+    await mountedComponent.applyVoiceAction('show_group', {
+      group_id: 'review',
+    });
+    flushSync();
+    expect(mountedComponent.getVoiceContext()).toMatchObject({
+      selected_group_id: 'review',
+      maximized_terminal_id: '',
+      visible_order: [],
+    });
+    expect(document.querySelector('.terminal-tile')).toBeNull();
+    await expect(
+      mountedComponent.applyVoiceAction('show_group', { group_id: 'missing' }),
+    ).rejects.toThrow('group_not_found');
+    expect(mountedComponent.getVoiceContext().selected_group_id).toBe('review');
+    expect(killTerminalMock).not.toHaveBeenCalled();
+  });
+
   it('records from the tile bar and pastes through xterm into the original terminal without Enter', async () => {
     const recorder = {
       start: vi.fn(),
