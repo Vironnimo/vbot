@@ -524,6 +524,10 @@ export function listChatCommands(params = {}, options = {}) {
   return rpc('chat.commands', params, options);
 }
 
+export function loadChatRunResult(params, options = {}) {
+  return rpc('chat.run_result', params, options);
+}
+
 export function loadChatHistory(params = {}, options = {}) {
   requirePlainObject(
     params,
@@ -1218,6 +1222,18 @@ export function listTerminals(options = {}) {
   return rpc('terminal.list', {}, options);
 }
 
+export function getLiveVoiceStatus(options = {}) {
+  return rpc('live.status', {}, options);
+}
+
+export function createLiveVoiceSession(sdp, options = {}) {
+  return rpc('live.create', { sdp }, options);
+}
+
+export function readTerminal(terminalId, options = {}) {
+  return rpc('terminal.read', { terminal_id: terminalId }, options);
+}
+
 export function startTerminal(params = {}, options = {}) {
   return rpc('terminal.start', params, options);
 }
@@ -1233,7 +1249,18 @@ export function sendTerminalInput(terminalId, data, options = {}) {
     'Terminal input must be a non-empty string',
     'terminal.input',
   );
-  return rpc('terminal.input', { terminal_id: terminalId, data }, options);
+  const { expectedScreenRevision, ...requestOptions } = options;
+  return rpc(
+    'terminal.input',
+    {
+      terminal_id: terminalId,
+      data,
+      ...(expectedScreenRevision === undefined
+        ? {}
+        : { expected_screen_revision: expectedScreenRevision }),
+    },
+    requestOptions,
+  );
 }
 
 export function resizeTerminal(terminalId, columns, rows, options = {}) {

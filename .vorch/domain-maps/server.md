@@ -57,4 +57,6 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 Read only when your task matches:
 
+- Live voice startup RPC or exact completed-Run projection (`chat.run_result`) -> `model_tasks/live.md`
+
 - Shared `/ws` events, reconnect/epoch replay, presence, `resource_changed`, Run bridging, SSE replay, log-socket handoff -> `server/events-and-reconnect.md`
