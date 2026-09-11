@@ -90,6 +90,12 @@
       (group) => group.group_id === viewState.selectedGroupId,
     ) ?? null,
   );
+  const canStartInGroup = $derived(selectedGroup?.kind !== 'finished');
+  const lastTileSpan = $derived(layout.spans[groupTerminals.length - 1]);
+  const appendSharesCell = $derived(
+    !!lastTileSpan &&
+      lastTileSpan.column + lastTileSpan.columnSpan === layout.columns,
+  );
   let groupReorderable = $derived(
     !!selectedGroup &&
       selectedGroup.kind !== 'finished' &&
@@ -718,6 +724,7 @@
       return;
     }
     startDialogOpen = false;
+    maximizedTerminalId = '';
     await tick();
     activateTerminal(started.terminal_id);
     onToast({
@@ -1098,6 +1105,8 @@
         <div
           class="terminals-view__group-tab-wrap"
           class:terminals-view__group-tab-wrap--editable={groupCanEdit(group)}
+          class:terminals-view__group-tab-wrap--start={group.group_id ===
+            viewState.selectedGroupId && canStartInGroup}
         >
           <button
             type="button"
@@ -1117,6 +1126,27 @@
               </span>
             </span>
           </button>
+          {#if group.group_id === viewState.selectedGroupId && canStartInGroup}
+            <span class="terminals-view__group-start">
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={t('terminals.new', 'New terminal')}
+                tooltip={t('terminals.new', 'New terminal')}
+                disabled={serverUnavailable}
+                onClick={openStartDialog}
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  width="18"
+                  height="18"
+                  aria-hidden="true"
+                >
+                  <path d="M11 16H3V4h14v5M6 8l3 2-3 2M15 11v8M11 15h8" />
+                </svg>
+              </Button>
+            </span>
+          {/if}
           {#if groupCanEdit(group)}
             <span class="terminals-view__group-actions">
               <button
@@ -1174,6 +1204,20 @@
           {/if}
         </div>
       {/each}
+      <span class="terminals-view__add-group">
+        <Button
+          variant="tertiary"
+          icon
+          ariaLabel={t('terminals.addGroup', 'Add group')}
+          tooltip={t('terminals.addGroup', 'Add group')}
+          disabled={serverUnavailable}
+          onClick={openCreateGroupDialog}
+        >
+          <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+            <path d="M7 1v12M1 7h12" />
+          </svg>
+        </Button>
+      </span>
       {#if viewState.loading && viewState.groups.length === 0}
         <span class="terminals-view__group-status">
           {t('terminals.loading', 'Loading terminal sessions…')}
@@ -1183,28 +1227,6 @@
           {t('terminals.emptyTitle', 'No terminal sessions')}
         </span>
       {/if}
-    </div>
-    <div class="terminals-view__toolbar-actions">
-      <Button
-        variant="secondary"
-        disabled={serverUnavailable}
-        onClick={openCreateGroupDialog}
-      >
-        <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-          <path d="M7 1v12M1 7h12" />
-        </svg>
-        {t('terminals.addGroup', 'Add group')}
-      </Button>
-      <Button
-        variant="primary"
-        disabled={serverUnavailable}
-        onClick={openStartDialog}
-      >
-        <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-          <path d="M7 1v12M1 7h12" />
-        </svg>
-        {t('terminals.new', 'New terminal')}
-      </Button>
     </div>
   </header>
 
@@ -1269,6 +1291,10 @@
               !maximizedTerminalId}
             class:terminals-view__tile--dragging={isDragged}
             class:terminals-view__tile--drop-target={isDropTarget}
+            class:terminals-view__tile--append-space={canStartInGroup &&
+              !maximizedTerminalId &&
+              appendSharesCell &&
+              itemIndex === groupTerminals.length - 1}
             data-terminal-id={item.terminal_id}
             style="grid-row: {span.row +
               1} / span {span.rowSpan}; grid-column: {span.column +
@@ -1491,6 +1517,24 @@
             </div>
           </div>
         {/each}
+        {#if canStartInGroup && !maximizedTerminalId && lastTileSpan}
+          <Button
+            variant="tertiary"
+            class={`terminals-view__append-tile ${appendSharesCell ? 'terminals-view__append-tile--shared' : ''}`}
+            style="grid-row: {lastTileSpan.row +
+              1}; grid-column: {appendSharesCell
+              ? lastTileSpan.column + 1
+              : lastTileSpan.column + lastTileSpan.columnSpan + 1};"
+            ariaLabel={t('terminals.new', 'New terminal')}
+            tooltip={t('terminals.new', 'New terminal')}
+            disabled={serverUnavailable}
+            onClick={openStartDialog}
+          >
+            <svg viewBox="0 0 14 14" width="18" height="18" aria-hidden="true">
+              <path d="M7 1v12M1 7h12" />
+            </svg>
+          </Button>
+        {/if}
       </div>
     {:else}
       <EmptyState
@@ -1507,7 +1551,20 @@
               'terminals.detailEmptyDescription',
               'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
             )}
-      />
+      >
+        {#snippet actions()}
+          {#if canStartInGroup}
+            <Button
+              variant="primary"
+              ariaLabel={t('terminals.new', 'New terminal')}
+              disabled={serverUnavailable}
+              onClick={openStartDialog}
+            >
+              {t('terminals.new', 'New terminal')}
+            </Button>
+          {/if}
+        {/snippet}
+      </EmptyState>
     {/if}
   </div>
 </section>
@@ -1918,6 +1975,32 @@
     padding-right: 30px;
   }
 
+  .terminals-view__group-tab-wrap--start .terminals-view__group-tab {
+    padding-right: 44px;
+  }
+
+  .terminals-view__group-tab-wrap--start.terminals-view__group-tab-wrap--editable
+    .terminals-view__group-tab {
+    padding-right: 68px;
+  }
+
+  .terminals-view__group-start {
+    position: absolute;
+    right: 4px;
+    align-self: center;
+  }
+
+  .terminals-view__group-tab-wrap--editable .terminals-view__group-start {
+    right: 28px;
+  }
+
+  .terminals-view__add-group {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    margin-left: var(--space-xs);
+  }
+
   .terminals-view__group-tab-name {
     min-width: 0;
     max-width: 180px;
@@ -2041,13 +2124,6 @@
     white-space: nowrap;
   }
 
-  .terminals-view__toolbar-actions {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-
   .terminals-view__detail {
     display: flex;
     min-width: 0;
@@ -2064,11 +2140,58 @@
   }
 
   .terminals-view__canvas {
+    --append-tile-width: 48px;
     display: grid;
     min-width: 0;
     min-height: 0;
     flex: 1;
     gap: 10px;
+  }
+
+  .terminals-view__tile--append-space {
+    margin-right: calc(var(--append-tile-width) + 10px);
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile) {
+    display: flex;
+    width: var(--append-tile-width);
+    min-height: 0;
+    align-items: center;
+    justify-content: center;
+    justify-self: start;
+    padding: 0;
+    border: 1px dashed var(--border);
+    border-radius: var(--r-lg);
+    color: var(--text-med);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile--shared) {
+    justify-self: end;
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile:hover:not(:disabled)),
+  :global(.btn-tertiary.terminals-view__append-tile:focus-visible) {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-06);
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile:focus-visible) {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile:disabled) {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  :global(.btn-tertiary.terminals-view__append-tile svg) {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
   }
 
   .terminals-view__tile {
@@ -2312,18 +2435,20 @@
       flex-basis: 100%;
     }
 
-    .terminals-view__toolbar-actions {
-      width: 100%;
-      justify-content: flex-end;
-    }
-
     .terminals-view__group-action-menu-trigger {
       width: 28px;
       height: 28px;
     }
 
-    .terminals-view__group-tab-wrap--editable .terminals-view__group-tab {
+    .terminals-view__group-tab-wrap--editable:not(
+        .terminals-view__group-tab-wrap--start
+      )
+      .terminals-view__group-tab {
       padding-right: 36px;
+    }
+
+    .terminals-view__group-tab-wrap--editable .terminals-view__group-start {
+      right: 34px;
     }
 
     .terminals-view__detail {

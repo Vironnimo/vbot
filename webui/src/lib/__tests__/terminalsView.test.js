@@ -686,6 +686,14 @@ describe('terminal live controller', () => {
     expect(api.startTerminal).toHaveBeenCalledWith({ command: 'codex' });
     expect(started).toMatchObject({ terminal_id: 'manual-1', owner: null });
     expect(state.selectedTerminalId).toBe('manual-1');
+    expect(state.terminals.map((item) => item.terminal_id)).toEqual([
+      'term-1',
+      'manual-1',
+    ]);
+    expect(api.setTerminalGroupOrder).toHaveBeenCalledWith('auto:manual', [
+      'term-1',
+      'manual-1',
+    ]);
     expect(state.startError).toBe('');
     expect(state.launchHistory).toEqual([
       launchHistory('codex', { command: 'codex' }),

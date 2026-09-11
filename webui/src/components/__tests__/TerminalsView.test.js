@@ -414,18 +414,102 @@ describe('TerminalsView', () => {
 
     expect(document.querySelector('.terminals-view__list-pane')).toBeNull();
     expect(
-      [...toolbar.querySelectorAll('button')].some(
-        (button) => button.textContent.trim() === 'Add group',
-      ),
-    ).toBe(true);
+      tabs.lastElementChild.querySelector('button[aria-label="Add group"]'),
+    ).toBeTruthy();
     expect(item.classList.contains('active')).toBe(true);
     expect(item.getAttribute('aria-current')).toBe('true');
     expect(
-      [...toolbar.querySelectorAll('button')].some(
-        (button) => button.textContent.trim() === 'New terminal',
-      ),
-    ).toBe(true);
+      item.parentElement.querySelector('button[aria-label="New terminal"]'),
+    ).toBeTruthy();
+    expect(
+      toolbar.querySelector('.terminals-view__toolbar-actions'),
+    ).toBeNull();
+    findButtonByAriaLabel('Add group').click();
+    flushSync();
+    expect(document.querySelector('#terminal-group-form')).toBeTruthy();
     expect(document.querySelector('.terminals-view__header')).toBeNull();
+  });
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
+    'places the narrow append tile after %i terminals without another row',
+    async (count) => {
+      listTerminalsMock.mockResolvedValue(
+        terminalListResponse(
+          Array.from({ length: count }, (_, index) =>
+            terminal({ terminal_id: `term-${index}` }),
+          ),
+        ),
+      );
+      mountedComponent = mount(TerminalsView, { target: document.body });
+      await waitFor(() => terminalInstances.length === count);
+      const canvas = document.querySelector('.terminals-view__canvas');
+      const tiles = [...canvas.querySelectorAll('.terminals-view__tile')];
+      const last = tiles.at(-1);
+      const append = canvas.querySelector('.terminals-view__append-tile');
+      expect(canvas.lastElementChild).toBe(append);
+      expect(append.style.gridRow).toBe(last.style.gridRow.split(' / ')[0]);
+      expect(canvas.style.gridTemplateRows).toBe(
+        `repeat(${count <= 2 ? 1 : Math.ceil(count / (count <= 4 ? 2 : count <= 6 ? 3 : 4))}, minmax(0, 1fr))`,
+      );
+      expect(
+        tiles
+          .slice(0, -1)
+          .some((tile) =>
+            tile.classList.contains('terminals-view__tile--append-space'),
+          ),
+      ).toBe(false);
+      append.click();
+      flushSync();
+      expect(document.querySelector('#terminal-start-form')).toBeTruthy();
+    },
+  );
+
+  it.each([
+    '.terminals-view__group-start button',
+    '.terminals-view__append-tile',
+    '.empty-state__actions button',
+  ])('starts in the selected group from %s', async (selector) => {
+    const empty = selector.includes('empty-state');
+    const group = {
+      group_id: 'work',
+      name: 'Work',
+      kind: 'user',
+      terminal_count: empty ? 0 : 1,
+      live_count: empty ? 0 : 1,
+      order: [],
+    };
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(empty ? [] : [terminal({ group_id: 'work' })], [
+        group,
+      ]),
+    );
+    startTerminalMock.mockResolvedValue({
+      terminal: terminal({ terminal_id: 'new-work', group_id: 'work' }),
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    await waitFor(() => document.querySelector(selector));
+    document.querySelector(selector).click();
+    flushSync();
+    document
+      .querySelector('#terminal-start-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => startTerminalMock.mock.calls.length === 1);
+    expect(startTerminalMock).toHaveBeenCalledWith({ group_id: 'work' });
+    await waitFor(() =>
+      document.querySelector('[data-terminal-id="new-work"]'),
+    );
+    const append = document.querySelector('.terminals-view__append-tile');
+    expect(append.previousElementSibling.dataset.terminalId).toBe('new-work');
+  });
+
+  it('disables both creation locations when the server is unavailable', async () => {
+    mountedComponent = mount(TerminalsView, {
+      target: document.body,
+      props: { serverUnavailable: true },
+    });
+    flushSync();
+    expect(findButtonByAriaLabel('Add group').disabled).toBe(true);
+    expect(findButton('New terminal').disabled).toBe(true);
   });
 
   it('switches the visible terminal group from the top group bar', async () => {
@@ -676,7 +760,7 @@ describe('TerminalsView', () => {
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
-    findButton('New terminal').click();
+    findButtonByAriaLabel('New terminal').click();
     flushSync();
     setField('#terminal-start-command', 'codex');
     setField('#terminal-start-arguments', '--profile\nwork space');
@@ -726,7 +810,7 @@ describe('TerminalsView', () => {
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
-    findButton('New terminal').click();
+    findButtonByAriaLabel('New terminal').click();
     flushSync();
     expect(document.querySelector('#terminal-start-command').value).toBe(
       'codex',
@@ -902,7 +986,7 @@ describe('TerminalsView', () => {
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
     const fitsBefore = fitAddons[0].fit.mock.calls.length;
 
-    findButton('New terminal').click();
+    findButtonByAriaLabel('New terminal').click();
     flushSync();
     document
       .querySelector('#terminal-start-form')
