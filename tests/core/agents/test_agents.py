@@ -315,6 +315,20 @@ def test_relative_default_workspace_follows_moved_data_dir(
     assert Path(loaded.workspace, "MEMORY.md").read_text(encoding="utf-8") == "portable memory"
 
 
+@pytest.mark.parametrize("mode", ["all", "selected"])
+def test_analyze_image_vision_grant_round_trips_and_can_be_revoked(
+    store: AgentStore, mode: str
+) -> None:
+    policy = {"mode": mode, "granted": ["analyze_image"]}
+    if mode == "selected":
+        policy["allowed"] = ["analyze_image"]
+    store.create("vision", "Vision Agent", tool_access=policy)
+    assert store.get("vision").tool_access.to_dict() == policy
+    policy.pop("granted")
+    store.update("vision", tool_access=policy)
+    assert store.get("vision").tool_access.to_dict() == policy
+
+
 def test_create_persists_memory_as_an_explicit_denial(
     store: AgentStore,
 ) -> None:

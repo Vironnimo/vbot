@@ -123,9 +123,22 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("vision_granted", [False, True])
+@pytest.mark.parametrize("fallback_vision", [False, True])
 async def test_fallback_rebuilds_route_gated_image_tool_visibility(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    vision_granted: bool,
+    fallback_vision: bool,
 ) -> None:
+    from core.tools import ToolAccess
+
+    policy = ToolAccess(
+        mode="selected",
+        allowed=(ANALYZE_IMAGE_TOOL_NAME,),
+        granted=(ANALYZE_IMAGE_TOOL_NAME,) if vision_granted else (),
+    )
+    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
     agent = StubAgent(
         id="coder",
         model="openai/vision-model",
@@ -136,7 +149,10 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
         [ProviderRateLimitError("primary rate limited")],  # type: ignore[list-item]
         wire_media_types=frozenset({"image/png"}),
     )
-    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    fallback_adapter = StubAdapter(
+        [{"content": "Recovered", "tool_calls": None}],
+        wire_media_types=frozenset({"image/png"}) if fallback_vision else frozenset(),
+    )
     tools = ToolRegistry()
     tools.register(
         ANALYZE_IMAGE_TOOL_NAME,
@@ -151,7 +167,7 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
         },
         input_modalities={
             ("openai", "vision-model"): ("text", "image"),
-            ("anthropic", "text-model"): ("text",),
+            ("anthropic", "text-model"): ("text", "image") if fallback_vision else ("text",),
         },
     )
     runtime: Any = StubRuntime(
@@ -172,8 +188,12 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
 
     primary_tools = primary_adapter.requests[0]["kwargs"]["tools"]
     fallback_tools = fallback_adapter.requests[0]["kwargs"]["tools"]
-    assert ANALYZE_IMAGE_TOOL_NAME not in {definition["name"] for definition in primary_tools}
-    assert ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in fallback_tools}
+    assert (
+        ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in primary_tools}
+    ) is vision_granted
+    assert (ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in fallback_tools}) is (
+        vision_granted or not fallback_vision
+    )
 
 
 @pytest.mark.asyncio

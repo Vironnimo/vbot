@@ -145,12 +145,66 @@ describe('ToolAccessEditor', () => {
     expect(readTip.dataset.floatingOpen).toBe('true');
 
     expect(document.body.textContent).toContain('Memory is currently off');
-    expect(document.body.textContent).toContain(
-      'Used only when the main Model cannot analyze images directly',
-    );
+    expect(buttonByAriaLabel('Available with vision').disabled).toBe(true);
     expect(document.body.textContent).toContain('Individual Tools');
     expect(document.body.textContent).not.toContain('Allow current');
     expect(document.body.textContent).not.toContain('Block current');
+  });
+
+  it.each([false, true])(
+    'edits the saved vision grant (%s) from the image Tool details',
+    (granted) => {
+      const onChange = vi.fn();
+      const value = {
+        mode: 'all',
+        granted: granted ? ['analyze_image', 'computer'] : ['computer'],
+      };
+      mountedComponent = mount(ToolAccessEditor, {
+        target: document.body,
+        props: { value, tools, onChange },
+      });
+      flushSync();
+      toolChip('analyze_image').focus();
+      const control = buttonByAriaLabel('Available with vision');
+      expect(control.closest('.tool-access-tip').dataset.floatingOpen).toBe(
+        'true',
+      );
+      expect(control.getAttribute('aria-checked')).toBe(String(granted));
+      control.click();
+      expect(onChange).toHaveBeenCalledWith({
+        mode: 'all',
+        granted: granted ? ['computer'] : ['computer', 'analyze_image'],
+      });
+    },
+  );
+
+  it.each([
+    { value: { mode: 'none', granted: ['analyze_image'] } },
+    { value: { mode: 'all', denied: ['analyze_image'] } },
+    { value: { mode: 'selected', allowed: [] } },
+    { value: { mode: 'all' }, disabled: true },
+  ])('disables the image override with disabled access: %j', (props) => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: { ...props, tools, onChange },
+    });
+    flushSync();
+    const control = buttonByAriaLabel('Available with vision');
+    expect(control.disabled).toBe(true);
+    control.click();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('omits the image override outside the Project ceiling', () => {
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: { value: { mode: 'all' }, tools, ceiling: ['read'] },
+    });
+    flushSync();
+    expect(
+      document.querySelector('button[aria-label="Available with vision"]'),
+    ).toBeNull();
   });
 
   it('uses one family switch for every member', () => {

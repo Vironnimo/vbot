@@ -4,6 +4,7 @@ import {
   changeToolAccessMode,
   groupToolCatalog,
   normalizeToolAccess,
+  setAnalyzeImageAlwaysAvailable,
   setToolAccessPreference,
   setToolFamilyPreference,
   setToolAccessState,
@@ -26,6 +27,54 @@ const catalog = [
   { name: 'memory', family: null, activation: 'memory_mode' },
   { name: 'status', family: null, activation: 'configurable' },
 ];
+
+describe('Image analysis availability', () => {
+  const image = { name: 'analyze_image', activation: 'configurable' };
+  const tools = [...catalog, image];
+
+  it.each(['all', 'selected'])(
+    'round trips the explicit grant in %s mode',
+    (mode) => {
+      const initial = normalizeToolAccess({
+        mode,
+        allowed: ['analyze_image'],
+        granted: ['computer'],
+      });
+      const enabled = setAnalyzeImageAlwaysAvailable(initial, true);
+      expect(enabled.granted).toEqual(['computer', 'analyze_image']);
+      expect(setAnalyzeImageAlwaysAvailable(enabled, false)).toEqual(initial);
+      expect(initial.granted).toEqual(['computer']);
+      expect(changeToolAccessMode(enabled, 'none', tools).granted).toEqual(
+        enabled.granted,
+      );
+    },
+  );
+
+  it.each([
+    { mode: 'none' },
+    { mode: 'selected', allowed: [] },
+    { mode: 'all', denied: ['analyze_image'] },
+  ])('does not grant an unavailable Tool: %j', (policy) => {
+    expect(setAnalyzeImageAlwaysAvailable(policy, true)).toEqual(policy);
+  });
+
+  it('never grants through ordinary Tool, family, or All selection', () => {
+    const policy = { mode: 'selected', allowed: [] };
+    expect(
+      setToolAccessPreference(policy, image, true, tools).granted,
+    ).toBeUndefined();
+    expect(
+      setToolFamilyPreference(policy, [image], true, tools).granted,
+    ).toBeUndefined();
+    expect(changeToolAccessMode(policy, 'all', tools).granted).toBeUndefined();
+  });
+
+  it('removes the special grant when the Tool is turned off', () => {
+    const policy = setAnalyzeImageAlwaysAvailable({ mode: 'all' }, true);
+    const off = setToolAccessPreference(policy, image, false, tools);
+    expect(off).toEqual({ mode: 'all', denied: ['analyze_image'] });
+  });
+});
 
 describe('Tool Access Policy UI helpers', () => {
   it('defaults missing policy data to explicit all mode', () => {
