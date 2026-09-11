@@ -1445,7 +1445,6 @@ export const englishCatalog = Object.freeze({
     'Choose the common starting point. Individual Agents can override it.',
   'agents.shared.compactionDescription':
     'The inherited policy for keeping long conversations within the Model context.',
-  'agents.shared.listHint': 'Common Model, Thinking & Compaction',
   'settings.title': 'Settings',
   'settings.loading': 'Loading settings…',
   'settings.loadError': 'Settings could not be loaded.',

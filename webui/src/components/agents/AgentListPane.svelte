@@ -135,8 +135,6 @@
       onClick={onOpenSharedDefaults}
       >{t('agents.shared.title', 'Shared defaults')}</Button
     >
-
-    <p>{t('agents.shared.listHint', 'Common Model, Thinking & Compaction')}</p>
   </div>
 
   <div
