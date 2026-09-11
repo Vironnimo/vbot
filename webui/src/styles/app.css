@@ -360,6 +360,15 @@ svg {
   padding: calc(var(--space-lg) + var(--space-md) - var(--space-xs)) 10px 10px;
 }
 
+.app-shell__navigation {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.app-shell__footer {
+  flex-shrink: 0;
+}
+
 /* Grouped navigation: expanded sections use their mono-xs labels for
    separation. The compact rail has no labels, so its short, low-contrast
    divider restores the same cadence hierarchy without competing with icons. */

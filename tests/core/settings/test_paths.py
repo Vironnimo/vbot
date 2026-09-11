@@ -336,3 +336,28 @@ def test_server_timezone_patch_maps_to_flat_raw_key() -> None:
     assert updated == {"timezone": "Europe/Berlin"}
     assert changed == ("server.timezone",)
     assert build_effective_settings(updated)["server"]["timezone"] == "Europe/Berlin"
+
+
+def test_live_voice_opt_in_defaults_off_and_round_trips() -> None:
+    assert build_effective_settings({})["live_voice"] == {"enabled": False}
+    assert setting_details({}, "live_voice.enabled")["value"] is False
+    operations = parse_patch_operations(
+        [{"op": "set", "path": "live_voice.enabled", "value": True}]
+    )
+    updated, changed = apply_settings_patch({}, operations)
+    assert updated == {"live_voice": {"enabled": True}}
+    assert changed == ("live_voice.enabled",)
+    assert build_effective_settings(updated)["live_voice"] == {"enabled": True}
+    cleared, _ = apply_settings_patch(
+        updated, parse_patch_operations([{"op": "unset", "path": "live_voice.enabled"}])
+    )
+    assert build_effective_settings(cleared)["live_voice"] == {"enabled": False}
+
+
+@pytest.mark.parametrize("value", ["true", 1, None, {}, []])
+def test_live_voice_opt_in_rejects_non_boolean_values(value: object) -> None:
+    with pytest.raises(SettingsPathError):
+        apply_settings_patch(
+            {},
+            parse_patch_operations([{"op": "set", "path": "live_voice.enabled", "value": value}]),
+        )
