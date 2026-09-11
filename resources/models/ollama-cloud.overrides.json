@@ -3,7 +3,7 @@
     "reasoning_replay": "full_history",
     "models": {
         "deepseek-v4.1-flash": {
-            "max_output_tokens": 65536,
+            "max_output_tokens": 393216,
             "recommended_temperature": 1.0,
             "recommended_top_p": 0.95,
             "capabilities": {
@@ -22,6 +22,7 @@
                     "remote": true
                 },
                 "ollama_cloud": {
+                    "image_media_types": ["image/jpeg", "image/png", "image/webp"],
                     "reasoning_response_field": "reasoning"
                 }
             }
