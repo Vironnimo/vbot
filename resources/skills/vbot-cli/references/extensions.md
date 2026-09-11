@@ -2,12 +2,27 @@
 
 An **extension** is in-process Python that adds capabilities to vBot without forking the app. One extension is the unit of discovery, identity, config, and enable/disable; it can contribute several **capabilities** — hooks, commands, tools, and recall backends — through a single `register(api)` entry point.
 
-This is the author guide. For the precise internal contract (composition rules,
-dispatch internals) see [`.vorch/domain-maps/extensions.md`](../.vorch/domain-maps/extensions.md);
-for runnable samples see [`examples/extensions/`](../examples/extensions/).
+Read this reference when creating or changing an Extension. For settings and enable/disable operations, read [configuration.md](configuration.md#extensions); for MCP setup, read [mcp.md](mcp.md). Swarm and Computer Use operation live in [extension-usage.md](extension-usage.md). Browser automation uses the separate `playwright-cli` Skill.
 
-Browser automation uses the bundled `playwright-cli` Skill; the former Browser Use
-Extension is archived. See [Browser automation](browser-use.md).
+Paths beginning with `core/`, `resources/` or `webui/` below are relative to the `vbot_root` reported by `vbot home` on the server machine. Templates are bundled with this Skill under `assets/extensions/`; read them through the `skill` Tool with `name: "vbot-cli"` and the relative file path, or copy from `<vbot_root>/resources/skills/vbot-cli/assets/extensions/`.
+
+## Build and verify
+
+1. Resolve the target instance on the server machine with `vbot home` and inspect `vbot extensions list`. Keep the same host/port target on subsequent management calls. The reported local `data_dir` does not describe a remote server.
+2. Choose one template and inspect it before adapting it. Copy only that file or directory into `<data_dir>/extensions/`, preserving nested files. For a new Extension, use a distinct filesystem name; existing names can shadow another Extension. Keep the identity when updating an installed Extension.
+3. Declare only the needed capabilities in `register(api)`. Acquire resources in startup and release them in shutdown. Put workflow guidance in a bundled Skill, standing Model instructions in a prompt block, and callable behavior in a Tool.
+4. Load the declarations with `vbot extensions reload`, then configure declared fields through `vbot extensions <name> set <field> ...`; send secrets through `--stdin`. See [configuration.md](configuration.md#extensions) for settings behavior.
+5. After code changes, run `vbot extensions reload`, then inspect `vbot extensions list` for the intended identity, loaded status and capability diagnostics. Reload rebuilds every loaded Extension; a failure in another Extension also makes the command fail.
+6. Verify the actual capability and its failure behavior in a disposable test context. For a Tool, exercise valid and invalid inputs through the real Tool registry and check its result envelope. For a hook, check both affected and unaffected calls. For a Command, check its outcome and follow-up Run address. Loading alone does not prove behavior.
+7. Check access for the intended Agent before a live call: its Tool Access Policy, any Project Tool Whitelist, explicit opt-in grants and bundled Skill availability still apply. Check reload/disable cleanup when the Extension owns resources or background work.
+
+| Template | Use when | Read/copy |
+|---|---|---|
+| Word count | Adding a parallel-safe Tool with input validation and a success-data schema | [word_count.py](../assets/extensions/word_count.py) |
+| Bash guard | Intercepting Tool calls with `Deny` and a System Reminder; illustrative, not a security boundary | [guard_bash.py](../assets/extensions/guard_bash.py) |
+| Workflow Command | Starting a Skill as a follow-up Run in the same Agent/Session/Project address | [workflow_command/](../assets/extensions/workflow_command/) |
+
+Read only the capability sections needed for the task: [entry point](#the-entry-point-registerapi), [hooks](#hooks), [Tools](#tools), [pages and owned Sessions](#pages-and-owned-sessions), [Commands](#slash-commands), [Recall](#recall-backends), [channel interactions](#channel-interaction-handlers), [settings](#settings-schema), [prompt blocks](#prompt-blocks), [lifecycle](#lifecycle-startup-and-shutdown), [managed operations](#managed-operations), and [explicit Tool permission](#explicit-tool-permission).
 
 > **Trust boundary.** Extensions run in-process with the **same trust as the
 > kernel** — arbitrary Python, no sandbox, no permission system. Only install
@@ -19,8 +34,7 @@ Extension is archived. See [Browser automation](browser-use.md).
 ## Install and discovery
 
 Copy a file or directory into the data directory's `extensions/` folder
-(`~/.vbot/extensions/` by default), or add extra roots via
-`settings.json` → `extension_directories`. Only the **immediate children** of
+(`~/.vbot/extensions/` by default), or configure additional roots through the public `extensions.directories` Settings path (see [configuration.md](configuration.md#settings)). The persisted storage key is `extension_directories`. Only the **immediate children** of
 each root are scanned. The extension's **name is its filesystem name** — that is
 its identity everywhere (settings, CLI, the WebUI panel).
 
@@ -49,7 +63,7 @@ def register(api):
     api.register_tool("word_count", "Count words.", PARAMETERS, my_tool)
 ```
 
-`register(api)` **only declares**. Nothing runs at import time; the runtime
+`register(api)` **only declares**. Keep import-time code free of side effects; the runtime
 applies your declarations at the correct bootstrap points (tools late, recall
 backends early, hooks after every extension has registered). Extensions never
 touch the live registries directly.
@@ -135,36 +149,7 @@ def guard(ctx, *, tool_name, tool_call_id, input):
 
 `catalog_visible=False` hides a Tool from public Tool catalogs, Extension capability lists, and Project Tool selection. It does not grant access or establish Session scope: ordinary policy and dispatch checks still apply. Hidden Tools remain registered for collision detection, identity-safe replacement, and teardown. The default is `True`, preserving existing catalogs.
 
-API 6 Extensions can register an isolated HTML page with `register_page` and private Session capabilities with `register_session_tool`, `register_session_prompt_block`, and `register_session_runtime`. Private Tools are absent from public catalogs and require the complete current owner grant set. Their handlers receive exact input types; ordinary Tools keep existing argument normalization. The two independently built examples in `tests/fixtures/extension-pages/` demonstrate generic pages without application-shell owner branches.
-
-A page does not require temporary Agents. For example, an inventory Extension can declare its own prebuilt dashboard:
-
-```python
-def register(api):
-    api.register_page("inventory", "Inventory", "web/page.html")
-```
-
-Its assets must be relative to that entry and stay beneath the registered build root. Bundled sources use `ui/page.html` and build to `web/` with `cd webui && npm run build`; arbitrary installed Python Extensions ship prebuilt assets. The same build and installer paths include these assets, with no Node requirement at runtime or separate npm dependency tree.
-
-The page runs in an opaque-origin sandbox. Its parent bridge validates the source window, nonce and loaded page epoch, and provides theme, locale, timezone and route. A bundled child imports `createExtensionPageClient` from `$lib/extensionPageClient.js`, calls `operation(name, arguments)` for its own registered operations, and uses `readHistory`, `subscribeRun`, `openLink` and `openMedia` for authorized history and references. Register context/invalidation callbacks, refresh read models on reconnect, and dispose the client on unmount. Reconnect never retries a mutation automatically. The child has no arbitrary RPC or application-origin fetch capability; stale page/Run tokens expire on reload or disposal.
-
-Bridge commands allow up to 64 KiB and host replies up to 8 MiB, including their envelopes. Oversized operation replies reject the request; requests without a reply time out after 30 seconds without replay. A timeout does not prove that a mutation failed: refresh its state before deciding whether to repeat it. Bundle fonts and other presentation assets with the page; external font stylesheets are blocked by its CSP.
-
-Startup receives an owner-bound `ExtensionHost`: `state_dir` is private persistent Extension data, `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
-
-`catalog()` also returns public System Prompt block metadata. When available,
-`await host.inspect_prompt(config, project_id)` previews a `TemporaryAgentConfig`
-without creating a Session or Run: `text` is the assembled System Prompt, `blocks`
-contains rendered content and enabled/active/included state, and `tools` contains
-the separately transmitted Model Tool definitions. Preview applies the ordinary
-Project ceilings, Model Tool routing and this Extension's private Tool grants.
-The optional configuration field `prompt_blocks` is an exhaustive block selection;
-omit it to inherit the normal layout. Include `core:agent_body` to retain the
-configuration's editable instructions. An explicit empty list emits no blocks.
-
-`register_session_runtime` declares `before_request`, `run_finished`, and `quiesce`, with optional `acknowledge_delivery` and `reconcile_tool_batch` callbacks. Return `PreparedSessionDelivery` from the request boundary; Chat commits its note and receipt together before acknowledgment. A successful Tool can request a receipt or graceful turn end through its host-installed `ToolContext` callbacks. Reconciliation runs after every sibling Tool Result is durable and returns `ToolBatchDecision`. Required callback errors propagate; quiesce must drain owned work before its capabilities disappear.
-
-`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the agent-facing design rules in `.vorch/domain-maps/tools/designing-agent-tools.md` and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
+`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a Model-facing schema that omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
 
 When at least two Tools form one user-recognizable capability, declare a Family once with `api.register_tool_family(family_id, label)` and pass its local id as `family=` on each Tool. Family ids are local to the Extension; vBot namespaces them automatically, so another Extension can use the same local id without merging the groups. A Family changes only how current Tools are grouped and switched in configuration screens. It does not grant access or change activation. A group with fewer than two members in the current catalog or Project ceiling falls back to Individual Tools; a search filter does not dissolve an established Family.
 
@@ -179,49 +164,43 @@ def register(api):
     )
 ```
 
-```python
-from core.tools import tool_failure, tool_success
+The complete [word-count template](../assets/extensions/word_count.py) demonstrates the open input schema, handler-owned unknown-field rejection, and a closed success-data schema. Return `tool_success(data)` or `tool_failure(code, message)` from `core.tools`; both create the standard `{ok, error, data, artifacts}` envelope.
 
-PARAMETERS = {
-    "type": "object",
-    "properties": {"text": {"type": "string", "description": "Text to count."}},
-    "required": ["text"],
-}
-
-RESULT = {
-    "type": "object",
-    "properties": {"word_count": {"type": "integer", "minimum": 0}},
-    "required": ["word_count"],
-    "additionalProperties": False,
-}
-
-
-def word_count(context, arguments):
-    unknown = sorted(set(arguments) - {"text"})
-    if unknown:
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {', '.join(unknown)}")
-    text = arguments.get("text")
-    if not isinstance(text, str):
-        return tool_failure("invalid_arguments", "`text` must be a string.")
-    return tool_success({"word_count": len(text.split())})
-
-
-def register(api):
-    api.register_tool(
-        "word_count",
-        "Count whitespace-separated words in a piece of text.",
-        PARAMETERS,
-        word_count,
-        result_schema=RESULT,
-        parallel_safe=True,
-        open_input_schema=True,
-    )
-```
-
-A Tool name that **collides** with a built-in or another Extension's Tool is skipped (built-in wins; between two Extensions the first-loaded wins) and the skip is recorded as a non-fatal diagnostic visible in `vbot extensions list` and the WebUI panel. An invalid Tool contract is likewise skipped and diagnosed without disabling the Extension's other capabilities. Keep descriptions short — every Tool enlarges the System Prompt.
+A Tool name that **collides** with a built-in or another Extension's Tool is skipped (built-in wins; between two Extensions the first-loaded wins) and the skip is recorded as a non-fatal diagnostic visible in `vbot extensions list` and the WebUI panel. An invalid Tool contract is likewise skipped and diagnosed without disabling the Extension's other capabilities. Make Tool descriptions concise and sufficient for correct use; they consume Model context.
 
 (Tools are code that does one thing. To teach the agent a *workflow*, write a
 Skill instead.)
+
+## Pages and owned Sessions
+
+API 6 Extensions can register an isolated HTML page with `register_page` and private Session capabilities with `register_session_tool`, `register_session_prompt_block`, and `register_session_runtime`. Private Tools are absent from public catalogs and require the complete current owner grant set. Their handlers receive exact input types; ordinary Tools keep existing argument normalization. For a complete built page and owned-Session implementation, inspect `resources/extensions/swarm/` in the installed source; the generic page client lives in `webui/src/lib/extensionPageClient.js`.
+
+A page does not require temporary Agents. For example, an inventory Extension can declare its own prebuilt dashboard:
+
+```python
+def register(api):
+    api.register_page("inventory", "Inventory", "web/page.html")
+```
+
+Its assets must be relative to that entry and stay beneath the registered build root. Bundled sources use `ui/page.html` and build to `web/` with `cd webui && npm run build`; arbitrary installed Python Extensions ship prebuilt assets. The same build and installer paths include these assets, with no Node requirement at runtime or separate npm dependency tree.
+
+The page runs in an opaque-origin sandbox. Its parent bridge validates the source window, nonce and loaded page epoch, and provides theme, locale, timezone and route. A bundled child imports `createExtensionPageClient` from `$lib/extensionPageClient.js`, calls `operation(name, arguments)` for its own registered operations, and uses `readHistory`, `subscribeRun`, `openLink` and `openMedia` for authorized history and references. Register context/invalidation callbacks, refresh read models on reconnect, and dispose the client on unmount. Reconnect never retries a mutation automatically. The child has no arbitrary RPC or application-origin fetch capability; stale page/Run tokens expire on reload or disposal.
+
+Bridge commands allow up to 64 KiB and host replies up to 8 MiB, including their envelopes. Oversized operation replies reject the request; requests without a reply time out after 30 seconds without replay. A timeout does not prove that a mutation failed: refresh its state before deciding whether to repeat it. Bundle fonts and other presentation assets with the page; external font stylesheets are blocked by its CSP.
+
+A callback appended to `api.operations.startup` receives an owner-bound `ExtensionHost`: `state_dir` is private persistent Extension data, `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its page. `temporary_agents` creates canonical bound Sessions without Identity workspaces, opens an admission group, starts initial or continuation inputs, closes/drains owned work, and exposes scoped history, Run, receipt and Statistics reads. Handles become invalid when the registration retires. The retained Sessions survive reload; reopening and admitting work is an explicit Extension decision.
+
+`catalog()` also returns public System Prompt block metadata. When available,
+`await host.inspect_prompt(config, project_id)` previews a `TemporaryAgentConfig`
+without creating a Session or Run: `text` is the assembled System Prompt, `blocks`
+contains rendered content and enabled/active/included state, and `tools` contains
+the separately transmitted Model Tool definitions. Preview applies the ordinary
+Project ceilings, Model Tool routing and this Extension's private Tool grants.
+The optional configuration field `prompt_blocks` is an exhaustive block selection;
+omit it to inherit the normal layout. Include `core:agent_body` to retain the
+configuration's editable instructions. An explicit empty list emits no blocks.
+
+`register_session_runtime` declares `before_request`, `run_finished`, and `quiesce`, with optional `acknowledge_delivery` and `reconcile_tool_batch` callbacks. Return `PreparedSessionDelivery` from the request boundary; Chat commits its note and receipt together before acknowledgment. A successful Tool can request a receipt or graceful turn end through its host-installed `ToolContext` callbacks. Reconciliation runs after every sibling Tool Result is durable and returns `ToolBatchDecision`. Required callback errors propagate; quiesce must drain owned work before its capabilities disappear.
 
 ## Slash commands
 
@@ -268,11 +247,13 @@ Names are lowercase slash tokens without `/`, using letters, digits, hyphens, or
 
 Reload, enable, disable, and deletion update the live dispatcher without replacing it, so RPC and existing Channel workers see the same catalog immediately. A command already running may finish. Queued work revalidates an opaque registration identity before execution, so a command removed or replaced meanwhile returns neutral “no longer available” feedback instead of running stale code. Handler exceptions and invalid outcomes are logged with Extension ownership and return neutral failure feedback without crashing the Extension layer or a Channel worker.
 
-The complete runnable example is [`examples/extensions/workflow_command/`](../examples/extensions/workflow_command/). It declares API v2, bundles the `workflow` Skill, and starts that Skill as a same-address follow-up Run.
+The complete runnable example is [workflow_command/](../assets/extensions/workflow_command/). It declares API v2, bundles the `workflow` Skill, and starts that Skill as a same-address follow-up Run.
+
+Bundle each Skill as `<extension>/skills/<skill-name>/SKILL.md`, with any helper files inside that Skill directory. Only loaded Extensions contribute their Skills; they enter the global Skill pool and still need to be available and allowed for the intended Agent. For a Project, enable the global Skill in its Skill selection. A user global Skill with the same name takes precedence. Reload, enable and disable refresh this pool live; starting `$workflow` does not bypass its Skill policy.
 
 ## Recall backends
 
-`api.register_recall_backend(name, factory)` adds a session-recall backend (`factory` is `RecallBackendContext -> RecallBackend`). The name must be lowercase snake_case and must not collide with a built-in. Once registered, a backend becomes selectable via `settings.recall.backend` (Settings → Recall). Implement `browse`, `overview`, `search`, and `scroll` as async methods so provider and other I/O can be cancelled naturally. Existing synchronous backends remain supported and are run outside the server event loop. See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend protocol.
+`api.register_recall_backend(name, factory)` adds a session-recall backend (`factory` is `RecallBackendContext -> RecallBackend`). The name must be lowercase snake_case and must not collide with a built-in. Once registered, a backend becomes selectable via `settings.recall.backend` (Settings → Recall). Implement `browse`, `overview`, `search`, and `scroll` as async methods so provider and other I/O can be cancelled naturally. Existing synchronous backends remain supported and are run outside the server event loop. Read the `RecallBackend` protocol in `core/recall/recall.py` before implementing a backend; its return types and pagination semantics are part of the contract.
 
 ## Channel interaction handlers
 
@@ -425,8 +406,7 @@ def register(api):
     api.on_shutdown(close_resources)  # fires during runtime shutdown
 ```
 
-Both may be sync or async and take no arguments. Startup handlers fire on the
-live serving event loop, so they may schedule background tasks. Accessors that
+Both may be sync or async and take no arguments. Coroutine startup handlers run on the serving event loop and may schedule background tasks. Synchronous handlers run in bounded workers; use an async handler for loop-owned resources, and keep blocking I/O out of it. Accessors that
 never serve (CLI local commands) do not fire startup. Both phases fail-open per
 handler.
 
@@ -471,7 +451,7 @@ def register(api):
 
 `api.logger` is a `vbot.extensions.<name>` logger through the normal logging pipeline (no `print`). Never log a secret value.
 
-### Secrets (in `.env`) {#secrets-in-env}
+### Secrets in env
 
 A `secret` field's value is stored in the data directory's `.env` (`~/.vbot/.env`) under the `env_key` you declared — **never** in `settings.json`. Read it live per call with `api.resolve_credential(env_key)`:
 
@@ -555,67 +535,11 @@ Because a reload cycles **every** extension through shutdown+startup, keep those
 handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
 `.py` file, then run `vbot extensions reload` to apply it.
 
-## Walkthrough: a tool extension from scratch
-
-1. Create `~/.vbot/extensions/word_count.py` with the `word_count` example
-   above.
-2. Load it: `vbot extensions reload`.
-3. Confirm it loaded: `vbot extensions list` shows
-   `word_count  loaded  …  tools: word_count`.
-4. Allow the Tool in the Agent's Tool Access Policy and ask it to count words — the Model calls `word_count` like any Built-in Tool.
-
-To turn the same idea into a hook instead, copy
-[`examples/extensions/guard_bash.py`](../examples/extensions/guard_bash.py),
-which denies destructive `bash` commands via the `tool_call` decision hook.
-
-
-## Swarm
-
-The bundled Swarm Extension contributes the **Swarms** page. Create a profile,
-select configured Models and participant counts, choose an explicit Project or
-working directory, and select ordinary Tools. An empty ordinary Tool selection
-still allows the three private coordination Tools in participant Sessions.
-Enter a goal and start from the page, or use `/swarm <profile-slug> "goal"`.
-The Command supplies only the entered goal; it does not import source Session
-history or attachments.
-
-Participants use separate durable Sessions and coordinate as peers on a public
-Board. Pings are public posts addressed to participant ids. Delivery mode and
-permission to wake idle participants are independent profile settings. Every
-automatic wake carries actual Board messages, including in pull mode; Inbox
-remains available for manual reads and batch overflow. Participants keep their
-assigned names; the state Tool is read-only. Profile edits apply to future
-Swarms; applying live communication changes records a revision and old/new values
-for inspection.
-
-Participant status comes from Run execution: idle, running, failed, cancelled,
-or interrupted. Agents cannot set it. Ending a reply normally returns a
-participant to idle while retaining its Session for later Board messages.
-Progress, results and requests for help belong on the Board. If everyone is idle,
-the Swarm rests without further Model calls; it is not automatically completed.
-
-Stop closes admission and drains owned execution. Resume continues inactive
-participants in their existing Sessions; Activity also offers Resume for one
-selected inactive participant, including after a failed Run. Usage comes from
-canonical Statistics. Disable/reload retains history; interrupted execution never
-restarts itself.
-
-After Stop, **Delete Swarm** opens a confirmation and permanently removes that
-Swarm's Board and participant Sessions. Its profile remains available for new
-Swarms. Failed deletion can be retried; a partially deleted Swarm cannot Resume.
-
-## Managed operations and MCP
+## Managed operations
 
 API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions <name> operations`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.
 
-The bundled MCP Extension uses these same interfaces. Use `vbot extensions mcp operations` to inspect its management surface, `save --stdin` to configure a connection on the vBot server machine, `grant <id> --agent <address>` for access, and `test` followed by an Agent-scoped `invoke` to verify it. Tools, Resources/templates, Prompts, completion, subscriptions, logging, progress, sampling, roots, elicitation, OAuth, and historical task results pass through the connection. Configuration grants do not override an Agent's explicit Tool denials or a Project's Tool Whitelist. The bundled vbot-cli Skill includes the full installation and diagnosis workflow.
-
-Each MCP connection presents one stable Tool with search, describe, call, and read actions. Remote Tool schemas are loaded in ordinary results only when requested; catalog changes do not add hundreds of definitions to the Model request. CLI automation uses `vbot extensions mcp explore <id> --agent <address> --action <action>` for the same workflow. Large results are preserved completely in files and returned as bounded receipts with `result_id` and `result_file`; JSON Pointer reads, pages, and field projection expose selected data. The bundled CLI Skill documents setup, discovery, and result handling. Existing context prefixes remain unchanged by discovery; actual prompt-cache hits and pricing remain Provider-dependent.
-
-The MCP row in Settings -> Connections -> Extensions also provides manual connection management: add/edit local programs or HTTP/SSE servers, select Agent grants, enter referenced credentials in a write-only dialog, enable/disable, test, and remove connections. Capabilities & access shows the discovered Tools, server guidance, Prompts, and effective access for granted Agents; inspection does not execute application Tools. Connection edits are explicitly saved and may interrupt the current connection. A connection test verifies the server; verify application-level access separately through the intended Agent. CLI operations remain available for automated setup, including `inspect <id>` for the same read-only inspection.
-
-Begin Agent discovery with an unfiltered search: application Tools appear first, alongside server guidance and available Prompts. Searches rank matching words; an empty result supplies a browse action because an application may expose an indirect capability through a general-purpose Tool. Search continuation arguments and saved-result reads preserve access to larger catalogs and guidance without inflating every Model request. Live behavior probes use `python scripts/probe_provider_tool_call.py --scenario mcp_workflow --mcp-workflow-case render|no_match|large_result` with the usual Provider options. They exercise the real MCP host against an inert application and verify discovery behavior, not real Blender rendering.
-
+For the management declaration and host types, read `core/extensions/operations.py`. Register an async startup callback by appending it to `api.operations.startup`; its argument is the injected host. For MCP configuration and discovery, read [mcp.md](mcp.md).
 
 ## Explicit Tool permission
 
@@ -624,27 +548,3 @@ Pass `requires_opt_in=True` to `api.register_tool(...)` (or the same field in a 
 The owning Agent policy stores these grants in `tool_access.granted`. All mode does not grant them, and selected mode requires both inclusion in `allowed` and an explicit grant. None and `denied` still take precedence. Missing Extensions do not erase stored grants. For Project Agents, the Project Tool Whitelist remains the outer ceiling and never implies a grant; configure grants through the Agent's vBot Tool override. The shared Tool editor performs these updates through its ordinary toggle and autosave flow.
 
 This is vBot Tool authorization. It does not sandbox an Agent's unrestricted Bash access or make Extension Python code untrusted. MCP connection grants remain an additional connection-specific restriction.
-
-## Computer Use
-
-The bundled `computer_use` Extension supplies the opt-in `computer` Tool on the vBot server host. Install published stable Cua Driver 0.23.2 or newer, reload Extensions, and enable `computer` under the Agent's Tools & Skills. Project Agents also need the Project whitelist and Tool override. Windows uses existing Pillow and Windows APIs for physical input and screenshots; no compiler, custom Driver build, or browser debugging setup is required. Other platforms use Cua and require `max_image_dimension=0`.
-
-The Extension bundles a `computer-use` Skill with guidance for target selection, drawing, dialogs, recovery, and saving. Start with `windows`, then `capture` the selected `pid`/`window_id`. On Windows, `monitors` discovers displays; `monitor` selects one and omission captures all displays when no window or view is targeted. Browser windows use the same mouse and keyboard actions as other applications.
-
-`move`, `click`, `type`, `key`, `scroll`, and `drag` execute by default. Set `apply: false` for a preview without input. Windows timed key holds and drags accept `duration_ms` up to 2000; background drags also support duration and default to 250 ms. Window element actions, menus, launch, resize, and verification remain available.
-
-Window capture and control use `foreground: false` by default. Cua uses window-directed input and its own window images; its `max_image_dimension` must be zero to preserve original coordinates. A `view_id` also supplies the target and delivery setting when omitted. Use `foreground: true` explicitly when foreground input is needed, capturing with that setting first. Support depends on the application: an independent cursor overlay is not an independent Windows input session, and some applications can activate themselves. An observed target activation is reported and stops remaining sequence steps. The Extension never retries a background action in the foreground automatically. Desktop input, timed holds, and held modifiers use the shared mouse/keyboard.
-
-Coordinates use `coordinate: [x, y]`; drag and zoom also take `to_coordinate: [x, y]`. A valid `view_id` is sufficient to identify a captured window, including for zoom; repeating its window ids is optional. Resize takes a screen position and `size: [width, height]`. Without a view or window ids, input selects the desktop. Windows foreground coordinate click, drag, and scroll accept `modifiers`, for example `["ctrl", "shift"]`; held keys release after the action or Stop.
-
-Input and `sequence` capture automatically after a one-second observation delay. This does not prove application completion and does not poll for changing or quiet pixels. Use `verify` for a concrete window/element condition or `wait` for a later image. Set `capture_after: false` to skip the final image and delay when unnecessary; capture again before further input. Partial sequences still attempt an observation. `wait` pauses for `duration_ms` (default 1000, maximum 10000) and then captures; within a sequence it adds no intermediate screenshot. Stop interrupts waits immediately.
-
-Observations default to screenshots without element lists. Request `mode: som` for a screenshot plus compact window elements, or `mode: ax` for elements only; supplying `query` or `limit` also requests elements. These options apply to the observation after input, avoiding a separate capture when the next step needs named controls. Overviews are bounded to 1600 pixels on the long edge and 1.5 million pixels. Originals remain available through `resolution: original` or native-resolution `zoom` crops. Zoom preserves recent parent/crop views until new capture or input retires them. Use coordinates from the displayed image. Negative monitor origins and physical DPI coordinates are handled internally; changed geometry requires a fresh capture. Foreground captures reject other foreground applications rather than mislabeling their pixels.
-
-`sequence` executes up to eight known mouse/key/text actions with one final observation. Set `view_id` once on the sequence to share it across coordinate steps. Only the first step may use an element reference. Results report completed/total steps, numbered effects, and the stopped step on failure, partial effect, or a suspected no-op. Zero-completion failures retain their recovery observation in `artifacts`. Windows modal dialogs are returned with their actual target, so the next action can address the dialog directly. Keep sequences short when the layout may change; uncertain input never retries automatically.
-
-On Windows, press **Esc twice within 600 ms**, releasing it between presses, to interrupt the active Computer Use call from any foreground application. Detection is armed only while a call runs. Single presses, key auto-repeat, and injected Agent keystrokes do not trigger interruption. The listener passes keys through and dispatches interruption outside the keyboard hook. A pending double-Esc ends remaining steps of that call; delayed callbacks cannot interrupt its successor.
-
-Chat's existing composer shows a **Stop computer control** icon during an active call and disables it while that call is stopping. There is no paused state or release control. Stop addresses the invocation shown by the latest status response, so a stale UI request cannot interrupt a later call. Stop, Tool/Run cancellation, and double-Esc interrupt the owned input worker, release held keys/buttons, and report interruption to the Agent through the Tool result. Completed sequence steps remain visible. Later Tool calls remain available, including after reload or restart; no stop state is persisted. Already delivered input cannot be rolled back.
-
-The Extension version remains 1.0.0. References: [Cua installation](https://cua.ai/docs/how-to-guides/driver/install), [Windows input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput), and [Pillow screenshots](https://pillow.readthedocs.io/en/stable/reference/ImageGrab.html).

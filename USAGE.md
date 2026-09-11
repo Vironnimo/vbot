@@ -904,7 +904,7 @@ vbot extensions homeassistant set url http://homeassistant.local:8123
 Get-Content .\hass-token.txt | vbot extensions homeassistant set token --stdin
 ```
 
-For the Extension API, hook contracts, capabilities, and examples, see [docs/extensions.md](docs/extensions.md) and [examples/extensions](examples/extensions).
+For the Extension API, hook contracts, capabilities, and examples, use the [vbot-cli Skill](resources/skills/vbot-cli/SKILL.md), its [Extension authoring guide](resources/skills/vbot-cli/references/extensions.md), and its [runnable templates](resources/skills/vbot-cli/assets/extensions). Bundled Swarm, MCP, and Computer Use operation is covered in the Skill's [Extension usage reference](resources/skills/vbot-cli/references/extension-usage.md).
 
 ### Home Assistant
 

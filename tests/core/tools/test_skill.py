@@ -1,6 +1,7 @@
 """Tests for the internal skill activation tool."""
 
 import asyncio
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -653,3 +654,50 @@ def test_bundled_playwright_activation_and_each_reference(tmp_path: Path) -> Non
         file_data = cast(dict[str, Any], result["data"])
         assert file_data["status"] == "file_loaded"
         assert file_data["content"] == (package / relative).read_text(encoding="utf-8")
+
+
+def test_vbot_skill_exposes_extension_templates_without_loading_their_skill(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    package = root / "resources/skills/vbot-cli"
+    registry = SkillRegistry.load(root / "resources/skills")
+    assert "workflow" not in {skill.name for skill in registry.list_all()}
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    context = _context(tmp_path)
+
+    result = asyncio.run(async_dispatch(tools, context, {"name": "vbot-cli"}))
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    assert data["status"] == "loaded"
+    resources = {
+        "references/extensions.md",
+        "references/extension-usage.md",
+        "assets/extensions/guard_bash.py",
+        "assets/extensions/word_count.py",
+        "assets/extensions/workflow_command/extension.py",
+        "assets/extensions/workflow_command/extension.json",
+        "assets/extensions/workflow_command/skills/workflow/SKILL.md",
+    }
+    assert resources <= set(data["resource_files"]["files"])
+    for relative in sorted(resources):
+        result = asyncio.run(
+            async_dispatch(tools, context, {"name": "vbot-cli", "file_path": relative})
+        )
+        assert result["ok"] is True
+        file_data = cast(dict[str, Any], result["data"])
+        assert file_data["status"] == "file_loaded"
+        assert file_data["file_path"] == relative
+        assert file_data["content"] == (package / relative).read_text(encoding="utf-8")
+
+
+def test_vbot_skill_extension_links_resolve_inside_the_package() -> None:
+    package = Path(__file__).resolve().parents[3] / "resources/skills/vbot-cli"
+    for relative in ("SKILL.md", "references/extensions.md", "references/extension-usage.md"):
+        source = package / relative
+        for link in re.findall(r"\]\(([^)]+)\)", source.read_text(encoding="utf-8")):
+            target = link.split("#", 1)[0]
+            if not target or "://" in target:
+                continue
+            resolved = (source.parent / target).resolve()
+            assert resolved.is_relative_to(package), (relative, link)
+            assert resolved.exists(), (relative, link)
