@@ -179,6 +179,7 @@ def build_responses_payload(
 def estimate_responses_input_tokens(
     messages: list[dict[str, Any]],
     *,
+    model_id: str | None = None,
     document_media_types: frozenset[str] = frozenset(),
     tools: Sequence[Mapping[str, Any]] | None = None,
 ) -> int:
@@ -197,10 +198,10 @@ def estimate_responses_input_tokens(
         wire_messages,
         document_media_types=document_media_types,
     )
-    total_tokens, _ = estimate_structured_tokens(input_items)
+    total_tokens, _ = estimate_structured_tokens(input_items, model_id=model_id)
     instructions = _system_instructions(wire_messages)
     if instructions:
-        instruction_tokens, _ = estimate_tokens(instructions)
+        instruction_tokens, _ = estimate_tokens(instructions, model_id=model_id)
         total_tokens += instruction_tokens
     if tools:
         tool_tokens, _ = estimate_structured_tokens(
@@ -210,7 +211,8 @@ def estimate_responses_input_tokens(
                     [tool for tool in tools if isinstance(tool, Mapping)],
                     profile="explicit_non_strict",
                 )
-            ]
+            ],
+            model_id=model_id,
         )
         total_tokens += tool_tokens
     return total_tokens

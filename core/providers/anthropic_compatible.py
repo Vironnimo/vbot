@@ -570,7 +570,10 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             payload["system"] = system
         if tools:
             _apply_anthropic_tools(payload, {"tools": list(tools)})
-        return estimate_structured_tokens(payload)[0]
+        # Separate the growing history from stable System Prompt/Tools so the
+        # shared per-item count cache also benefits the Messages wire.
+        history_tokens = estimate_structured_tokens(payload.pop("messages"), model_id=model_id)[0]
+        return history_tokens + estimate_structured_tokens(payload, model_id=model_id)[0]
 
     def _build_payload(
         self,

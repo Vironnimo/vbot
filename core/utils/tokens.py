@@ -1,24 +1,31 @@
 """Token estimation utilities.
 
-Provides model-neutral token counting for cases where a Provider does not
-report actual Usage. The estimate uses one fixed ``o200k_base`` tokenizer and
-signals to consumers that the number remains approximate rather than claiming
-Provider- or Model-specific precision. A character heuristic remains available
-only when the tokenizer data cannot be loaded.
+Estimates selected-wire requests with shared tiktoken encodings and local image
+headers. Counts remain approximate: private tokenizers, wire framing, opaque
+reasoning, and non-image media cannot be reproduced locally.
 
 Usage::
 
     count, is_estimate = estimate_tokens("Hello, world!")
 """
 
+import base64
+import binascii
+import hashlib
+import io
 import json
 import logging
 import math
+import re
+import warnings
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from threading import RLock
 from typing import Any
 
 import tiktoken
+from PIL import Image
 
 _LOGGER = logging.getLogger("vbot.utils.tokens")
 
@@ -36,15 +43,20 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
     "tool_result_content",
 )
 
-# Native media reaches providers as large base64/data-URL strings, but Models
-# account for decoded image/audio/document content rather than one text token per
-# few encoded characters. Request budgeting therefore replaces each encoded
-# payload with a conservative fixed reservation instead of letting transport
-# bytes consume the whole estimated context window.
+# Fallback for unknown image inputs and audio/documents. Known images use their
+# Model profile and header dimensions instead of counting base64 as text.
 # One payload must still leave usable output capacity under the conservative
 # 8192-token unknown-Model context floor; the separate 25% request reserve then
 # absorbs Provider-specific media accounting variance.
 NATIVE_MEDIA_TOKEN_RESERVE = 4096
+
+# Cache only digests and scalar results, never transcripts, base64 or pixels.
+_COUNT_CACHE_SIZE = 4096
+_IMAGE_CACHE_SIZE = 256
+_IMAGE_HEADER_BYTES = 256 * 1024
+_COUNT_CACHE: OrderedDict[tuple[str, bytes], int] = OrderedDict()
+_IMAGE_CACHE: OrderedDict[bytes, tuple[int, int] | None] = OrderedDict()
+_CACHE_LOCK = RLock()
 
 # Replayable reasoning metadata mixes compact identifiers with large opaque
 # continuity blobs (signatures, encrypted thinking state). Providers bill such
@@ -72,47 +84,77 @@ REASONING_META_REASONING_ITEMS_KEY = "reasoning_items"
 REASONING_META_ENCRYPTED_CONTENT_KEY = "encrypted_content"
 
 
-def estimate_tokens(text: str) -> tuple[int, bool]:
-    """Estimate the number of tokens in *text* with one fixed tokenizer.
-
-    ``o200k_base`` is deliberately used for every estimate: this path exists
-    only when Provider Usage is unavailable, so model-neutral consistency and
-    materially better multilingual/code estimates matter more than pretending
-    to reproduce each Provider's private tokenizer. If the encoding cannot be
-    loaded, the prior four-characters-per-token heuristic is retained as a
-    fail-soft fallback.
-
-    Args:
-        text: The string to estimate token count for.
-
-    Returns:
-        A ``(estimated_count, True)`` tuple where the boolean always
-        signals that the count is an estimate, not a precise measurement.
-    """
+def estimate_tokens(text: str, *, model_id: str | None = None) -> tuple[int, bool]:
+    """Count text with an available Model encoding; always mark it estimated."""
     if not text:
         return 0, True
-    encoding = _load_estimation_encoding()
-    if encoding is not None:
-        return len(encoding.encode_ordinary(text)), True
-    return math.ceil(len(text) / FALLBACK_CHARS_PER_TOKEN), True
+    encoding_name = _estimation_encoding_name(model_id)
+    key = (encoding_name, _content_digest(text))
+    with _CACHE_LOCK:
+        if key in _COUNT_CACHE:
+            _COUNT_CACHE.move_to_end(key)
+            return _COUNT_CACHE[key], True
+    encoding = _load_estimation_encoding(encoding_name)
+    count = (
+        len(encoding.encode_ordinary(text))
+        if encoding is not None
+        else math.ceil(len(text) / FALLBACK_CHARS_PER_TOKEN)
+    )
+    with _CACHE_LOCK:
+        _COUNT_CACHE[key] = count
+        _COUNT_CACHE.move_to_end(key)
+        if len(_COUNT_CACHE) > _COUNT_CACHE_SIZE:
+            _COUNT_CACHE.popitem(last=False)
+    return count, True
 
 
-@lru_cache(maxsize=1)
-def _load_estimation_encoding() -> tiktoken.Encoding | None:
-    """Load and cache the single model-neutral estimation encoding."""
+def _content_digest(text: str) -> bytes:
+    """Hash large media/text without another full-size UTF-8 allocation."""
+    digest = hashlib.sha256()
+    for start in range(0, len(text), 65536):
+        digest.update(text[start : start + 65536].encode("utf-8", errors="surrogatepass"))
+    return digest.digest()
+
+
+def _model_name(model_id: str | None) -> str:
+    # Gateways use vendor/model IDs; dated snapshots and route suffixes retain
+    # their identity. Do not fuzzy-match arbitrary custom model names.
+    return (model_id or "").lower().rsplit("/", 1)[-1].split(":", 1)[0]
+
+
+@lru_cache(maxsize=256)
+def _estimation_encoding_name(model_id: str | None) -> str:
+    try:
+        name = tiktoken.model.encoding_name_for_model(_model_name(model_id))
+    except KeyError:
+        return TOKEN_ESTIMATE_ENCODING
+    # This estimator supports modern chat encodings only. Unknown/private and
+    # legacy vocabularies use the shared default instead of loading more tables.
+    return name if name in {"o200k_base", "cl100k_base"} else TOKEN_ESTIMATE_ENCODING
+
+
+@lru_cache(maxsize=2)
+def _load_estimation_encoding(name: str = TOKEN_ESTIMATE_ENCODING) -> tiktoken.Encoding | None:
+    """One instance per encoding and process, shared across Agents and Sessions.
+
+    tiktoken's registry serializes first construction, including concurrent
+    misses in this wrapper's LRU cache.
+    """
 
     try:
-        return tiktoken.get_encoding(TOKEN_ESTIMATE_ENCODING)
+        return tiktoken.get_encoding(name)
     except (OSError, ValueError) as exc:
         _LOGGER.warning(
             "Token estimation encoding unavailable; using character fallback (encoding=%s): %s",
-            TOKEN_ESTIMATE_ENCODING,
+            name,
             exc,
         )
         return None
 
 
-def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:
+def estimate_message_tokens(
+    message: Mapping[str, Any], *, model_id: str | None = None
+) -> tuple[int, bool]:
     """Estimate tokens for provider-relevant message fields.
 
     Storage-only metadata such as message ids, timestamps, usage, and timing is
@@ -135,11 +177,11 @@ def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:
         rendered = _render_token_estimate_value(normalized_value)
         if rendered:
             chunks.append(rendered)
-    estimated_tokens, _ = estimate_tokens("\n".join(chunks))
+    estimated_tokens, _ = estimate_tokens("\n".join(chunks), model_id=model_id)
     return estimated_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE, True
 
 
-def estimate_json_tokens(value: Any) -> tuple[int, bool]:
+def estimate_json_tokens(value: Any, *, model_id: str | None = None) -> tuple[int, bool]:
     """Estimate tokens for a JSON-serializable value via its compact JSON size.
 
     Used for payloads that reach the provider as structured data rather than
@@ -147,28 +189,29 @@ def estimate_json_tokens(value: Any) -> tuple[int, bool]:
     Providers render such payloads into model context in provider-specific
     formats, so the compact JSON size is the provider-neutral approximation.
     """
-    return estimate_tokens(_render_token_estimate_value(value))
+    return estimate_tokens(_render_token_estimate_value(value), model_id=model_id)
 
 
-def estimate_structured_tokens(value: Any) -> tuple[int, bool]:
+def estimate_structured_tokens(value: Any, *, model_id: str | None = None) -> tuple[int, bool]:
     """Estimate tokens for a structured value, normalizing native media.
 
-    Like :func:`estimate_json_tokens`, but replaces encoded base64/data-URL
-    media payloads with the fixed :data:`NATIVE_MEDIA_TOKEN_RESERVE` first, so
-    transport encoding does not masquerade as prose tokens. Used for provider
-    payloads that reach the model as structured data rather than chat messages
-    — e.g. stateless Responses input items, which carry provider-owned
-    reasoning items with large encrypted continuity blobs. Opaque reasoning
-    blobs get the same treatment (see :func:`_normalize_opaque_reasoning_blobs`).
+    Images use known Model rules and header dimensions; unavailable dimensions,
+    unknown Models and other media use a fixed reserve. Top-level arrays count
+    items separately so growing requests reuse cached counts for unchanged
+    messages/Tools. JSON framing remains an approximation of Provider framing.
     """
 
-    normalized, media_payloads = _normalize_native_media(value)
+    if isinstance(value, (list, tuple)):
+        return (
+            sum(estimate_structured_tokens(item, model_id=model_id)[0] for item in value)
+            + (2 + max(0, len(value) - 1)),
+            True,
+        )
+    normalized, media_tokens = _normalize_native_media(value, model_id=model_id)
     normalized, blob_count = _normalize_opaque_reasoning_blobs(normalized)
-    estimated, _ = estimate_json_tokens(normalized)
+    estimated, _ = estimate_json_tokens(normalized, model_id=model_id)
     return (
-        estimated
-        + media_payloads * NATIVE_MEDIA_TOKEN_RESERVE
-        + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE,
+        estimated + media_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE,
         True,
     )
 
@@ -176,6 +219,8 @@ def estimate_structured_tokens(value: Any) -> tuple[int, bool]:
 def estimate_request_input_tokens(
     messages: Sequence[Mapping[str, Any]],
     tools: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    model_id: str | None = None,
 ) -> tuple[int, bool]:
     """Estimate one Provider request's input footprint, including Tools.
 
@@ -183,21 +228,21 @@ def estimate_request_input_tokens(
     counts the same Provider-visible message fields as
     :func:`estimate_message_tokens`, adds the structured Tool-definition array,
     and normalizes native base64/data-URL media so transport encoding does not
-    masquerade as prose tokens. Each removed media payload contributes the named
-    :data:`NATIVE_MEDIA_TOKEN_RESERVE` instead.
+    masquerade as prose tokens. Images use Model-specific estimates where known;
+    other media and unsupported image inputs retain the fixed reserve.
     """
 
     total_tokens = 0
-    media_payloads = 0
+    media_tokens = 0
     for message in messages:
-        normalized, message_media_payloads = _normalize_native_media(message)
-        estimated_tokens, _ = estimate_message_tokens(normalized)
+        normalized, message_media_tokens = _normalize_native_media(message, model_id=model_id)
+        estimated_tokens, _ = estimate_message_tokens(normalized, model_id=model_id)
         total_tokens += estimated_tokens
-        media_payloads += message_media_payloads
+        media_tokens += message_media_tokens
     if tools:
-        tool_tokens, _ = estimate_json_tokens(tools)
+        tool_tokens, _ = estimate_json_tokens(tools, model_id=model_id)
         total_tokens += tool_tokens
-    total_tokens += media_payloads * NATIVE_MEDIA_TOKEN_RESERVE
+    total_tokens += media_tokens
     return total_tokens, True
 
 
@@ -212,34 +257,241 @@ def _render_token_estimate_value(value: Any) -> str:
         return str(value)
 
 
-def _normalize_native_media(value: Any) -> tuple[Any, int]:
-    """Return a token-estimation copy with encoded native media replaced."""
+def _normalize_native_media(
+    value: Any, *, model_id: str | None = None, image: bool = False, detail: str = "auto"
+) -> tuple[Any, int]:
+    """Return a copy with native payloads replaced, plus their semantic tokens.
+
+    Carry image/detail context through Chat, Responses, Messages and canonical
+    Content Block wrappers. External images are reserved without fetching them.
+    """
 
     if isinstance(value, Mapping):
         normalized: dict[str, Any] = {}
-        media_payloads = 0
+        media_tokens = 0
         mapping_type = value.get("type")
+        image = (
+            image
+            or mapping_type in ("image", "image_url", "input_image")
+            or str(value.get("media_type", "")).startswith("image/")
+        )
+        if isinstance(value.get("detail"), str):
+            detail = value["detail"]
         for key, item in value.items():
-            if _is_native_media_payload(value, key, item, mapping_type):
+            if _is_native_media_payload(value, key, item, mapping_type) or (
+                image and key in {"url", "image_url", "file_id"} and isinstance(item, str)
+            ):
                 normalized[str(key)] = "<native-media>"
-                media_payloads += 1
+                is_image = image or (isinstance(item, str) and item.startswith("data:image/"))
+                media_tokens += (
+                    _image_tokens(item, model_id=model_id, detail=detail)
+                    if is_image
+                    else NATIVE_MEDIA_TOKEN_RESERVE
+                )
                 continue
-            normalized_item, nested_media_payloads = _normalize_native_media(item)
+            normalized_item, nested_media_tokens = _normalize_native_media(
+                item, model_id=model_id, image=image, detail=detail
+            )
             normalized[str(key)] = normalized_item
-            media_payloads += nested_media_payloads
-        return normalized, media_payloads
-    if isinstance(value, list):
+            media_tokens += nested_media_tokens
+        return normalized, media_tokens
+    if isinstance(value, (list, tuple)):
         normalized_items: list[Any] = []
-        media_payloads = 0
+        media_tokens = 0
         for item in value:
-            normalized_item, nested_media_payloads = _normalize_native_media(item)
+            normalized_item, nested_media_tokens = _normalize_native_media(
+                item, model_id=model_id, image=image, detail=detail
+            )
             normalized_items.append(normalized_item)
-            media_payloads += nested_media_payloads
-        return normalized_items, media_payloads
-    if isinstance(value, tuple):
-        normalized_items, media_payloads = _normalize_native_media(list(value))
-        return normalized_items, media_payloads
+            media_tokens += nested_media_tokens
+        return normalized_items, media_tokens
     return value, 0
+
+
+def _image_dimensions(payload: str) -> tuple[int, int] | None:
+    """Inspect at most 256 KiB of decoded header; never load pixels or URLs."""
+    key = _content_digest(payload)
+    with _CACHE_LOCK:
+        if key in _IMAGE_CACHE:
+            _IMAGE_CACHE.move_to_end(key)
+            return _IMAGE_CACHE[key]
+    dimensions = None
+    start = 0
+    if payload.startswith("data:"):
+        marker = payload.find(";base64,", 0, 128)
+        start = marker + len(";base64,") if marker >= 0 else len(payload)
+    try:
+        header = base64.b64decode(
+            payload[start : start + (_IMAGE_HEADER_BYTES // 3) * 4], validate=True
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(header)) as source:
+                if source.width > 0 and source.height > 0:
+                    dimensions = source.size
+    except (
+        ValueError,
+        OSError,
+        SyntaxError,
+        binascii.Error,
+        Image.DecompressionBombWarning,
+        Image.DecompressionBombError,
+    ):
+        pass
+    with _CACHE_LOCK:
+        _IMAGE_CACHE[key] = dimensions
+        _IMAGE_CACHE.move_to_end(key)
+        if len(_IMAGE_CACHE) > _IMAGE_CACHE_SIZE:
+            _IMAGE_CACHE.popitem(last=False)
+    return dimensions
+
+
+def _image_tokens(payload: str, *, model_id: str | None, detail: str) -> int:
+    """Apply documented image rules, with a fixed reserve for unknown inputs.
+
+    Sources (2026-09-11): developers.openai.com/api/docs/guides/images-vision,
+    platform.claude.com/docs/en/build-with-claude/{vision,vision-coordinates},
+    api-docs.deepseek.com/{guides/vision,quick_start/token_usage}.
+    """
+    model = _model_name(model_id)
+    if detail not in {"low", "high", "original", "auto"}:
+        return NATIVE_MEDIA_TOKEN_RESERVE
+    tile = re.fullmatch(
+        r"(gpt-4o-mini|gpt-4o|gpt-4\.1|gpt-5\.1|gpt-5|o1-pro|o1|o3)(?:-\d{4}-\d{2}-\d{2})?",
+        model,
+    )
+    patch = re.fullmatch(
+        r"(gpt-6-astra|gpt-5\.6-(?:sol|terra|luna)|gpt-5\.5|gpt-5\.4(?:-mini|-nano)?|gpt-5\.2|gpt-4\.1-mini)(?:-\d{4}-\d{2}-\d{2})?",
+        model,
+    )
+    claude = re.fullmatch(
+        r"claude-(?:(?:opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?|(\d+)[.-](\d+)-(?:opus|sonnet|haiku))(?:-\d{8}|-latest)?",
+        model,
+    )
+    deepseek = model in {"deepseek-flash", "deepseek-v4.1-flash", "deepseek-v4-flash-vision-exp"}
+    if tile:
+        family = tile[1]
+        base, per_tile = (
+            (2833, 5667)
+            if family == "gpt-4o-mini"
+            else (70, 140)
+            if family.startswith("gpt-5")
+            else (75, 150)
+            if family.startswith("o")
+            else (85, 170)
+        )
+        if detail == "low":
+            return base
+        if detail == "original":
+            return NATIVE_MEDIA_TOKEN_RESERVE
+    if not (tile or patch or claude or deepseek):
+        return NATIVE_MEDIA_TOKEN_RESERVE
+    dimensions = _image_dimensions(payload)
+    if dimensions is None:
+        return NATIVE_MEDIA_TOKEN_RESERVE
+    width, height = dimensions
+    if tile:
+        scale = min(1, 2048 / max(width, height), 768 / min(width, height))
+        width, height = max(1, math.floor(width * scale)), max(1, math.floor(height * scale))
+        return base + per_tile * math.ceil(width / 512) * math.ceil(height / 512)
+    if patch:
+        family = patch[1]
+        multiplier = 1.62 if family == "gpt-4.1-mini" else 1.2
+        budget: int | None
+        if family in {"gpt-5.2", "gpt-4.1-mini"}:
+            if detail == "original":
+                return NATIVE_MEDIA_TOKEN_RESERVE
+            edge, budget = 2048, 6144
+        else:
+            modern = family in {"gpt-6-astra", "gpt-5.5"} or family.startswith("gpt-5.6-")
+            if detail == "auto":
+                detail = "original" if modern else "high"
+            if detail == "low":
+                edge, budget = (512, None) if modern else (2048, 6144)
+            elif detail == "original":
+                edge, budget = (65535, None) if family != "gpt-5.5" and modern else (6000, 10000)
+            else:
+                edge, budget = (65535 if family == "gpt-6-astra" else 2048), 2500
+        return math.ceil(_patch_count(width, height, edge=edge, budget=budget) * multiplier)
+    if claude:
+        version = (int(claude[1] or claude[3]), int(claude[2] or claude[4] or 0))
+        return _claude_image_tokens(width, height, high_resolution=version >= (4, 7))
+    if detail == "low":
+        scale = min(1, 512 / max(width, height))
+        width, height = max(1, int(width * scale)), max(1, int(height * scale))
+    return _deepseek_image_tokens(width, height)
+
+
+def _patch_count(width: int, height: int, *, edge: int, budget: int | None) -> int:
+    scale = min(1, edge / max(width, height))
+    width, height = max(1, round(width * scale)), max(1, round(height * scale))
+    if budget is not None and math.ceil(width / 32) * math.ceil(height / 32) > budget:
+        scale = math.sqrt(32 * 32 * budget / (width * height))
+        scaled_w, scaled_h = width * scale / 32, height * scale / 32
+        # Extreme aspect ratios need at least one patch on the short edge.
+        if min(scaled_w, scaled_h) < 1:
+            return budget
+        scale *= min(math.floor(scaled_w) / scaled_w, math.floor(scaled_h) / scaled_h)
+        width, height = max(1, math.floor(width * scale)), max(1, math.floor(height * scale))
+    return math.ceil(width / 32) * math.ceil(height / 32)
+
+
+def _claude_image_tokens(width: int, height: int, *, high_resolution: bool) -> int:
+    edge, budget = (2576, 4784) if high_resolution else (1568, 1568)
+    width, height = max(width, height), min(width, height)
+
+    def fits(w: int, h: int) -> bool:
+        columns, rows = math.ceil(w / 28), math.ceil(h / 28)
+        return columns * 28 <= edge and rows * 28 <= edge and columns * rows <= budget
+
+    if not fits(width, height):
+        aspect = width / height
+        low, high = 1, width
+        while low + 1 < high:
+            middle = (low + high) // 2
+            if fits(middle, max(round(middle / aspect), 1)):
+                low = middle
+            else:
+                high = middle
+        width, height = low, max(round(low / aspect), 1)
+    return math.ceil(width / 28) * math.ceil(height / 28)
+
+
+def _deepseek_image_tokens(width: int, height: int) -> int:
+    """V4.1/Flash calculator: 14px patches, 3x downsampling, row separators.
+
+    Repeat preprocessing until dimensions stabilize, as in the official local
+    calculator. An unexpected non-convergence keeps the documented 1024 ceiling.
+    """
+    previous = None
+    for _ in range(10):
+        if width * height < 544 * 544:
+            scale = math.sqrt(544 * 544 / (width * height))
+            width, height = max(1, int(width * scale)), max(1, int(height * scale))
+        width, height = math.ceil(width / 14) * 14, math.ceil(height / 14) * 14
+        rows, columns = math.ceil(height / 42), math.ceil(width / 42)
+        count = rows * (columns + 1) + 2
+        if count > 1024:
+            aspect = height / width
+            columns_f = math.sqrt(1022 / aspect + 0.25) - 0.5
+            rows_f = columns_f * aspect
+            if columns_f < 1:
+                width, height = 42, 511 * 42
+            elif rows_f < 1:
+                width, height = 1021 * 42, 42
+            else:
+                scale = min(int(columns_f) * 42 / width, int(rows_f) * 42 / height)
+                width, height = (
+                    max(14, int(width * scale / 14) * 14),
+                    max(14, int(height * scale / 14) * 14),
+                )
+            rows, columns = math.ceil(height / 42), math.ceil(width / 42)
+            count = rows * (columns + 1) + 2
+        current = (width, height, count)
+        if current == previous:
+            return min(1024, count)
+        previous = current
+    return 1024
 
 
 def _normalize_opaque_reasoning_blobs(value: Any) -> tuple[Any, int]:
