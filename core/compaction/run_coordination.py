@@ -495,6 +495,9 @@ class CompactionRunCoordinator:
             self._host.compaction_service.has_new_compactable_context,
             session_messages,
             settings,
+            request_messages=continuation_request_messages or messages,
+            active_adapter=target.adapter,
+            active_model_id=target.model_id,
         )
         if not has_new_context:
             if forced:

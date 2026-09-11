@@ -357,6 +357,7 @@ class _BlockingOnceCompactionService:
         self,
         _messages: list[ChatMessage],
         _settings: Any,
+        **_kwargs: Any,
     ) -> bool:
         return True
 
@@ -1233,7 +1234,8 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
 async def test_real_compaction_repeats_between_complete_tool_iterations(
     tmp_path: Path,
 ) -> None:
-    current_user = "CURRENT_USER_MARKER " + ("current task " * 5_000)
+    current_user = "CURRENT_USER_MARKER: continue the agreed work"
+    first_payload = "FIRST_TOOL_PAYLOAD " + ("alpha " * 8_000)
     second_payload = "SECOND_TOOL_PAYLOAD " + ("beta " * 8_000)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"])
     adapter = _RealCompactionAdapter(
@@ -1245,7 +1247,7 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
                     {
                         "id": "call-one",
                         "name": "word_count",
-                        "arguments": {"text": "alpha words"},
+                        "arguments": {"text": first_payload},
                     }
                 ],
             },
@@ -1362,14 +1364,15 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
 
     compaction_requests = [json.dumps(call["messages"]) for call in adapter.stream_requests]
     assert all("<retained_tail>" not in request for request in compaction_requests)
-    assert "CURRENT_USER_MARKER" not in compaction_requests[0]
+    assert "CURRENT_USER_MARKER" in compaction_requests[0]
+    assert "FIRST_TOOL_PAYLOAD" not in compaction_requests[0]
+    assert "FIRST_TOOL_PAYLOAD" in compaction_requests[1]
     assert "SECOND_TOOL_PAYLOAD" not in compaction_requests[1]
-    assert "SECOND_TOOL_PAYLOAD" not in compaction_requests[2]
+    assert "SECOND_TOOL_PAYLOAD" in compaction_requests[2]
 
     third_agent_request = json.dumps(adapter.requests[2]["messages"])
-    assert "CURRENT_USER_MARKER" not in third_agent_request
+    assert "CURRENT_USER_MARKER" in third_agent_request
     assert "SECOND_TOOL_PAYLOAD" in third_agent_request
-    assert "continue that iteration normally" in third_agent_request
     assert [message["role"] for message in adapter.requests[2]["messages"]][-3:] == [
         "user",
         "assistant",
@@ -1501,6 +1504,7 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
             self,
             _messages: list[ChatMessage],
             _settings: Any,
+            **_kwargs: Any,
         ) -> bool:
             return True
 
