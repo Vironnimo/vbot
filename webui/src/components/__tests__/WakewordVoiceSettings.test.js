@@ -27,10 +27,11 @@ vi.mock('$lib/desktopBridge.js', () => ({
 }));
 vi.mock('$lib/api.js', () => ({
   updateSettings: vi.fn(),
+  setLiveVoiceEnabled: vi.fn(),
 }));
 
 const desktopBridge = await import('$lib/desktopBridge.js');
-const { updateSettings } = await import('$lib/api.js');
+const { updateSettings, setLiveVoiceEnabled } = await import('$lib/api.js');
 const { default: WakewordVoiceSettings } =
   await import('../WakewordVoiceSettings.svelte');
 
@@ -671,6 +672,48 @@ describe('WakewordVoiceSettings', () => {
       customModel.id,
     );
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
+  });
+
+  it('persists the Live opt-in and publishes the saved settings', async () => {
+    desktopBridge.isDesktop.mockReturnValue(false);
+    const onCommit = vi.fn();
+    const saved = { live_voice: { enabled: true } };
+    const pending = deferred();
+    setLiveVoiceEnabled.mockReturnValueOnce(pending.promise);
+    await mountPanel({
+      settings: { live_voice: { enabled: false } },
+      onCommit,
+    });
+    const toggle = switchByLabel('Live voice');
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    toggle.click();
+    await settle();
+    expect(setLiveVoiceEnabled).toHaveBeenCalledWith(true);
+    expect(toggle.disabled).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
+    pending.resolve(saved);
+    await waitForCondition(() => onCommit.mock.calls.length === 1);
+    expect(onCommit).toHaveBeenCalledWith(saved);
+    expect(toggle.disabled).toBe(false);
+  });
+
+  it('keeps Live enabled when saving its deactivation fails', async () => {
+    const onCommit = vi.fn();
+    const onError = vi.fn();
+    setLiveVoiceEnabled.mockRejectedValueOnce(new Error('Cannot save'));
+    await mountPanel({
+      settings: { live_voice: { enabled: true } },
+      onCommit,
+      onError,
+    });
+    switchByLabel('Live voice').click();
+    await waitForCondition(() => onError.mock.calls.length === 1);
+    expect(setLiveVoiceEnabled).toHaveBeenCalledWith(false);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(switchByLabel('Live voice').getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(switchByLabel('Live voice').disabled).toBe(false);
   });
 
   async function mountPanel(props = {}) {

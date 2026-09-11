@@ -21,26 +21,13 @@ export const englishCatalog = Object.freeze({
   'live.error.limit': 'Start a new voice conversation to continue.',
   'live.error.connection':
     'Live voice could not continue. Check the connection and GPT-Live access. Actions were not automatically repeated.',
-  'live.label': 'Voice companion',
-  'live.connecting': 'Connecting…',
-  'live.closing': 'Ending…',
-  'live.muted': 'Microphone muted',
-  'live.listening': 'Listening',
-  'live.off': 'Off',
-  'live.unmute': 'Unmute',
-  'live.mute': 'Mute',
-  'live.end': 'End voice',
-  'live.start': 'Start voice',
-  'live.details': 'Details',
-  'live.providers': 'Open Providers',
-  'live.playback': 'Voice playback',
-  'live.description':
-    'Speak to operate Chat, Codex and Claude Code Terminals. The companion announces completed Runs and relays Agent questions. Voice time and the backend Model are billed separately by OpenAI.',
-  'live.you': 'You',
-  'live.companion': 'Companion',
-  'live.actions': 'Actions',
-  'live.failed': 'failed',
-  'live.finished': 'Conversation ended; final usage received.',
+  'live.settings.label': 'Live voice',
+  'live.settings.description':
+    'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
+  'live.error.playback':
+    'Audio playback was blocked. Allow audio for this app and start Live again.',
+  'live.startButton': 'Start Live',
+  'live.stopButton': 'Stop Live',
   'settings.specializedModels.resetOptions': 'Reset options',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',
@@ -2406,7 +2393,7 @@ export const englishCatalog = Object.freeze({
 
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle':
-    'Transcription audio and wakeword command settings.',
+    'Live voice, transcription audio, and wakeword command settings.',
   'settings.voice.transcriptionProfile': 'Transcription audio',
   'settings.voice.transcriptionProfileDescription':
     'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',

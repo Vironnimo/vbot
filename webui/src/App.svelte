@@ -1313,16 +1313,19 @@
     </Banner>
   {/if}
   <ExtensionRequests />
-  <LiveVoice
-    bind:this={liveVoiceView}
-    getContext={liveContext}
-    navigate={liveNavigate}
-    terminalView={liveTerminalAction}
-    runEvents={runServerEvents}
-    wakewordEnabled={wakewordStatus.enabled}
-    {serverUnavailable}
-    onSetup={navigateToProviders}
-  />
+  {#snippet sidebarFooter()}
+    <LiveVoice
+      bind:this={liveVoiceView}
+      getContext={liveContext}
+      navigate={liveNavigate}
+      terminalView={liveTerminalAction}
+      runEvents={runServerEvents}
+      wakewordEnabled={wakewordStatus.enabled}
+      {serverUnavailable}
+      enabled={settings?.live_voice?.enabled === true}
+      onToast={showToast}
+    />
+  {/snippet}
   {#if sessionStoreIncident}
     <Banner variant="error" role="alert" class="app-session-store-incident">
       <div class="app-session-store-incident__copy">
@@ -1479,6 +1482,7 @@
       {:else if activeViewId === 'settings'}
         <SettingsView
           bind:this={settingsView}
+          onSettingsCommit={(nextSettings) => (settings = nextSettings)}
           onNavigateToAgentDefaults={navigateToAgentDefaults}
           {providerAuthEvent}
           onToast={showToast}

@@ -1,6 +1,6 @@
 <script>
   import { onMount, untrack } from 'svelte';
-  import Button from './ui/Button.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
   import {
     isDesktopAccessor,
@@ -20,12 +20,13 @@
     runEvents = [],
     serverUnavailable = false,
     wakewordEnabled = false,
-    onSetup = () => {},
+    enabled = false,
+    onToast = () => {},
   } = $props();
   let state = $state(createLiveVoiceState());
   let controller;
   let audioElement;
-  let expanded = $state(false);
+
   const running = $derived(
     ['connecting', 'listening', 'closing'].includes(state.phase),
   );
@@ -126,6 +127,7 @@
       });
   });
   async function startVoice() {
+    if (!enabled || serverUnavailable) return;
     if (isDesktopAccessor()) {
       try {
         if (!(await waitForDesktopBridge()))
@@ -139,7 +141,7 @@
         return;
       }
     }
-    await controller.start();
+    if (enabled && !serverUnavailable) await controller.start();
   }
   $effect(() => {
     if (serverUnavailable)
@@ -147,143 +149,103 @@
         if (running) controller?.stop();
       });
   });
+  $effect(() => {
+    if (!enabled)
+      untrack(() => {
+        if (running) controller?.stop();
+      });
+  });
+  $effect(() => {
+    const message = errorText;
+    if (message)
+      untrack(() =>
+        onToast({
+          title: t('live.settings.label', 'Live voice'),
+          message,
+          variant: 'error',
+        }),
+      );
+  });
+  $effect(() => {
+    if (state.playbackBlocked)
+      untrack(() => {
+        controller?.stop();
+        onToast({
+          title: t('live.settings.label', 'Live voice'),
+          message: t(
+            'live.error.playback',
+            'Audio playback was blocked. Allow audio for this app and start Live again.',
+          ),
+          variant: 'error',
+        });
+      });
+  });
+  const buttonLabel = $derived(
+    running
+      ? t('live.stopButton', 'Stop Live')
+      : t('live.startButton', 'Start Live'),
+  );
   export function isActive() {
     return controller?.active() === true;
   }
 </script>
 
-<section class="live-voice" aria-label={t('live.label', 'Voice companion')}>
-  <div class="live-voice__bar">
-    <span
-      class:live-voice__active={state.phase === 'listening'}
-      class="live-voice__label">{t('live.label', 'Voice companion')}</span
+{#if enabled}
+  <div class="sidebar-footer__row live-voice">
+    <button
+      type="button"
+      class="live-voice__button"
+      class:live-voice__button--active={running}
+      aria-label={buttonLabel}
+      aria-pressed={running}
+      use:tooltip={buttonLabel}
+      disabled={state.phase === 'closing' || (!running && serverUnavailable)}
+      onclick={() => (running ? controller.stop() : startVoice())}
     >
-    <span role="status" class="live-voice__status"
-      >{state.phase === 'connecting'
-        ? t('live.connecting', 'Connecting…')
-        : state.phase === 'closing'
-          ? t('live.closing', 'Ending…')
-          : state.phase === 'listening'
-            ? state.muted
-              ? t('live.muted', 'Microphone muted')
-              : t('live.listening', 'Listening')
-            : t('live.off', 'Off')}</span
-    >
-    {#if running}
-      {#if state.phase === 'listening'}
-        <Button variant="secondary" onClick={() => controller.mute()}
-          >{state.muted
-            ? t('live.unmute', 'Unmute')
-            : t('live.mute', 'Mute')}</Button
-        >
-      {/if}
-      <Button
-        variant="secondary"
-        onClick={() => controller.stop()}
-        disabled={state.phase === 'closing'}
-        >{t('live.end', 'End voice')}</Button
-      >
-    {:else}
-      <Button
-        variant="secondary"
-        onClick={startVoice}
-        disabled={serverUnavailable}>{t('live.start', 'Start voice')}</Button
-      >
-    {/if}
-    <Button
-      variant="ghost"
-      onClick={() => (expanded = !expanded)}
-      aria-expanded={expanded}>{t('live.details', 'Details')}</Button
-    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        {#if running}<rect x="4" y="4" width="8" height="8" rx="1" />
+        {:else}<path d="M5 3.5 12 8l-7 4.5Z" />{/if}
+      </svg>
+      <span class="sidebar-footer__label">{buttonLabel}</span>
+    </button>
   </div>
-  {#if errorText}<div class="live-voice__error" role="alert">
-      {errorText}
-      <Button variant="ghost" onClick={onSetup}
-        >{t('live.providers', 'Open Providers')}</Button
-      >
-    </div>{/if}
-  <audio
-    bind:this={audioElement}
-    controls={state.playbackBlocked}
-    aria-label={t('live.playback', 'Voice playback')}
-  ></audio>
-  {#if expanded}
-    <div class="live-voice__details">
-      <p>
-        {t(
-          'live.description',
-          'Speak to operate Chat, Codex and Claude Code Terminals. The companion announces completed Runs and relays Agent questions. Voice time and the backend Model are billed separately by OpenAI.',
-        )}
-      </p>
-      {#each state.transcript as line, index (index)}
-        <p>
-          <strong
-            >{line.role === 'user'
-              ? t('live.you', 'You')
-              : t('live.companion', 'Companion')}:</strong
-          >
-          {line.text}
-        </p>
-      {/each}
-      {#if state.actions.length}<p>
-          {t('live.actions', 'Actions')}: {state.actions.length} · {state.actions.filter(
-            (item) => !item.ok,
-          ).length}
-          {t('live.failed', 'failed')}
-        </p>{/if}
-      {#if state.finalized}<p>
-          {t('live.finished', 'Conversation ended; final usage received.')}
-        </p>{/if}
-    </div>
-  {/if}
-</section>
+{/if}
+<audio bind:this={audioElement} hidden></audio>
 
 <style>
-  .live-voice {
-    flex: 0 0 auto;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-  .live-voice__bar {
+  .live-voice__button {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 7px 14px;
-    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-med);
+    font: inherit;
+    font-size: var(--fs-label-sm);
+    text-align: left;
+    cursor: pointer;
   }
-  .live-voice__label {
-    font-size: var(--fs-label-md);
-    color: var(--text-hi);
+  .live-voice__button svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    fill: currentColor;
   }
-  .live-voice__active {
+  .live-voice__button:hover,
+  .live-voice__button--active {
     color: var(--accent);
   }
-  .live-voice__status {
-    font-size: var(--fs-body-sm);
-    color: var(--text-med);
-    margin-right: auto;
+  .live-voice__button:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 3px;
   }
-  .live-voice__error {
-    color: var(--red);
-    padding: 0 14px 8px;
-    font-size: var(--fs-body-sm);
+  .live-voice__button:disabled {
+    cursor: default;
   }
-  .live-voice__details {
-    max-height: 220px;
-    overflow: auto;
-    padding: 0 14px 10px;
-    font-size: var(--fs-body-sm);
-    color: var(--text-med);
-  }
-  .live-voice__details p {
-    margin: 7px 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-  audio:not([controls]) {
-    display: none;
-  }
-  audio {
-    max-width: 100%;
+  :global(.app-shell[data-sidebar-collapsed='true']) .live-voice__button {
+    justify-content: center;
   }
 </style>
