@@ -31,14 +31,19 @@
   ]);
   const strategyOptions = $derived([
     {
-      value: 'summary_tail',
-      label: t('compaction.strategy.summaryTail', 'Summary + verbatim tail'),
+      value: 'continuation',
+      label: t('compaction.strategy.continuation', 'Classic'),
+      description: t(
+        'compaction.strategy.continuationDescription',
+        'Summarize the conversation with the active Model. Continue from the summary.',
+      ),
     },
     {
-      value: 'continuation',
-      label: t(
-        'compaction.strategy.continuation',
-        'Cache-preserving continuation',
+      value: 'summary_tail',
+      label: t('compaction.strategy.summaryTail', 'With tail'),
+      description: t(
+        'compaction.strategy.summaryTailDescription',
+        'Summarize older messages and keep the most recent messages unchanged.',
       ),
     },
   ]);
@@ -68,6 +73,7 @@
   }
 
   function changeStrategyType(type) {
+    if (type === policy.strategy.type) return;
     onChange({
       ...policy,
       strategy:
@@ -83,6 +89,84 @@
 </script>
 
 <div class="compaction-policy-editor" data-testid={`${idPrefix}-editor`}>
+  <fieldset class="compaction-policy-editor__mode" {disabled}>
+    <legend>{t('compaction.strategy.label', 'Compaction mode')}</legend>
+    <div class="compaction-policy-editor__choices">
+      {#each strategyOptions as option (option.value)}
+        <label
+          class="compaction-policy-editor__choice"
+          class:compaction-policy-editor__choice--selected={policy.strategy
+            .type === option.value}
+        >
+          <input
+            type="radio"
+            name={`${idPrefix}-strategy`}
+            value={option.value}
+            checked={policy.strategy.type === option.value}
+            onchange={() => changeStrategyType(option.value)}
+          />
+          <span>
+            <strong>{option.label}</strong>
+            <span class="compaction-policy-editor__description"
+              >{option.description}</span
+            >
+          </span>
+        </label>
+      {/each}
+    </div>
+  </fieldset>
+  <div
+    class="compaction-policy-editor__grid"
+    hidden={policy.strategy.type !== 'summary_tail'}
+  >
+    {#if policy.strategy.type === 'summary_tail'}
+      <FormField
+        label={t('compaction.strategy.tailTokens', 'Verbatim tail tokens')}
+      >
+        <TextField
+          type="number"
+          value={policy.strategy.tail_tokens}
+          {disabled}
+          ariaLabel={t(
+            'compaction.strategy.tailTokens',
+            'Verbatim tail tokens',
+          )}
+          onInput={(next) => changeStrategyField('tail_tokens', next)}
+        />
+      </FormField>
+      <FormField label={t('compaction.strategy.summaryModel', 'Summary model')}>
+        {#if Array.isArray(summaryModelOptions)}
+          <SearchableDropdown
+            id={`${idPrefix}-summary-model`}
+            value={summaryModelSelectValue}
+            options={summaryModelOptions}
+            {disabled}
+            placeholder={t(
+              'settings.compaction.summaryModelPlaceholder',
+              'Active agent model',
+            )}
+            searchPlaceholder={t(
+              'agents.form.modelSearchPlaceholder',
+              'Filter models…',
+            )}
+            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
+            ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
+            onOpenChange={onSummaryModelOpenChange}
+            onValueChange={onSummaryModelSelect}
+          />
+        {:else}
+          <TextField
+            value={policy.strategy.summary_model ?? ''}
+            {disabled}
+            placeholder={t('compaction.strategy.activeModel', 'Active Model')}
+            ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
+            onInput={(next) => changeStrategyField('summary_model', next)}
+          />
+        {/if}
+      </FormField>
+    {/if}
+  </div>
+
   <div class="compaction-policy-editor__enabled">
     <div>
       <div class="compaction-policy-editor__label">
@@ -91,7 +175,7 @@
       <div class="compaction-policy-editor__description">
         {t(
           'compaction.enabledDescription',
-          'Compact before a Model request or after complete Tool Results when the configured ratio or token limit is reached.',
+          'Compact automatically when a limit is reached. Manual Compaction remains available when this is off.',
         )}
       </div>
     </div>
@@ -154,71 +238,6 @@
         />
       </FormField>
     {/if}
-
-    <FormField label={t('compaction.strategy.label', 'Strategy')} full>
-      <Dropdown
-        id={`${idPrefix}-strategy`}
-        value={policy.strategy.type}
-        options={strategyOptions}
-        {disabled}
-        ariaLabel={t('compaction.strategy.label', 'Strategy')}
-        onValueChange={changeStrategyType}
-      />
-    </FormField>
-
-    {#if policy.strategy.type === 'summary_tail'}
-      <FormField
-        label={t('compaction.strategy.tailTokens', 'Verbatim tail tokens')}
-      >
-        <TextField
-          type="number"
-          value={policy.strategy.tail_tokens}
-          {disabled}
-          ariaLabel={t(
-            'compaction.strategy.tailTokens',
-            'Verbatim tail tokens',
-          )}
-          onInput={(next) => changeStrategyField('tail_tokens', next)}
-        />
-      </FormField>
-      <FormField label={t('compaction.strategy.summaryModel', 'Summary model')}>
-        {#if Array.isArray(summaryModelOptions)}
-          <SearchableDropdown
-            id={`${idPrefix}-summary-model`}
-            value={summaryModelSelectValue}
-            options={summaryModelOptions}
-            {disabled}
-            placeholder={t(
-              'settings.compaction.summaryModelPlaceholder',
-              'Active agent model',
-            )}
-            searchPlaceholder={t(
-              'agents.form.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-            ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
-            onOpenChange={onSummaryModelOpenChange}
-            onValueChange={onSummaryModelSelect}
-          />
-        {:else}
-          <TextField
-            value={policy.strategy.summary_model ?? ''}
-            {disabled}
-            placeholder={t('compaction.strategy.activeModel', 'Active Model')}
-            ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
-            onInput={(next) => changeStrategyField('summary_model', next)}
-          />
-        {/if}
-      </FormField>
-    {:else}
-      <p class="compaction-policy-editor__note">
-        {t(
-          'compaction.strategy.continuationDescription',
-          'Reuses the active Model request prefix and turns one text response directly into the next checkpoint.',
-        )}
-      </p>
-    {/if}
   </div>
 </div>
 
@@ -234,22 +253,20 @@
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: 8px;
-    background: var(--surface-2);
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
   }
 
   .compaction-policy-editor__label {
     color: var(--text-hi);
-    font: 500 13px var(--font-ui);
+    font: 500 var(--fs-label-md) var(--font-ui);
   }
 
-  .compaction-policy-editor__description,
-  .compaction-policy-editor__note {
+  .compaction-policy-editor__description {
+    display: block;
     margin: 3px 0 0;
     color: var(--text-med);
-    font: 12px/1.45 var(--font-ui);
+    font: var(--fs-body-sm)/1.45 var(--font-ui);
   }
 
   .compaction-policy-editor__grid {
@@ -258,15 +275,68 @@
     gap: 14px;
   }
 
-  .compaction-policy-editor__note {
-    grid-column: 1 / -1;
-    padding: 10px 12px;
-    border-left: 2px solid var(--accent);
+  .compaction-policy-editor__grid[hidden] {
+    display: none;
+  }
+
+  .compaction-policy-editor__mode {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .compaction-policy-editor__mode legend {
+    padding: 0;
+    margin-bottom: 10px;
+    color: var(--text-hi);
+    font: 600 var(--fs-body-md) var(--font-ui);
+  }
+
+  .compaction-policy-editor__choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .compaction-policy-editor__choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    cursor: pointer;
+  }
+
+  .compaction-policy-editor__choice--selected {
+    border-color: var(--accent-40);
     background: var(--accent-08);
   }
 
+  .compaction-policy-editor__choice:focus-within {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .compaction-policy-editor__choice input {
+    margin: 3px 0 0;
+    accent-color: var(--accent);
+  }
+
+  .compaction-policy-editor__choice strong {
+    font: 600 var(--fs-body-md) var(--font-ui);
+    color: var(--text-hi);
+  }
+
+  .compaction-policy-editor__mode:disabled .compaction-policy-editor__choice {
+    cursor: default;
+    opacity: 0.6;
+  }
+
   @media (max-width: 760px) {
-    .compaction-policy-editor__grid {
+    .compaction-policy-editor__grid,
+    .compaction-policy-editor__choices {
       grid-template-columns: 1fr;
     }
   }
