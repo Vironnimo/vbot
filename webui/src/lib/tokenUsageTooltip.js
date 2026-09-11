@@ -77,7 +77,7 @@ function contextUsageLines(contextUsage, contextWindow, format) {
     lines.push(
       t(
         'chat.tokenTooltipContextDelta',
-        '  · estimated newer messages: {tokens}',
+        '  · estimated request changes: {tokens}',
         { tokens: format(estimatedDelta) },
       ),
     );

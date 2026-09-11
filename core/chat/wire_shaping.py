@@ -789,6 +789,8 @@ def _assistant_message_from_response(
 def _complete_usage_with_estimates(
     message: ChatMessage,
     request_messages: list[JsonObject],
+    *,
+    estimated_input_tokens: int | None = None,
 ) -> ChatMessage:
     """Fill only missing usage counters and preserve field-level provenance."""
 
@@ -798,7 +800,9 @@ def _complete_usage_with_estimates(
 
     reported_input_tokens = _optional_usage_token_count(usage.get("input_tokens"))
     if reported_input_tokens is None or (reported_input_tokens == 0 and request_messages):
-        estimated_input, _ = estimate_request_input_tokens(request_messages)
+        estimated_input = estimated_input_tokens
+        if estimated_input is None:
+            estimated_input, _ = estimate_request_input_tokens(request_messages)
         usage["input_tokens"] = estimated_input
         usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
     elif legacy_estimated:

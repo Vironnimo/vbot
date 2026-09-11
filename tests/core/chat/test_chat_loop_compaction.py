@@ -412,6 +412,15 @@ async def _maybe_auto_compact(
     )
     assert context.primary_target.adapter is adapter
     context.request_state = _RequestState(messages, [], (), ())
+    if usage is not None:
+        context.context_usage.observe(
+            usage,
+            messages,
+            adapter=adapter,
+            model_id=context.primary_target.model_id,
+            tools=[],
+            scope=context.prompt_cache_affinity_id,
+        )
     state = await loop._compaction_runs.maybe_auto_compact_state(
         context,
         context.primary_target,
@@ -636,7 +645,9 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
-async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(tmp_path: Path) -> None:
+async def test_compaction_keeps_measured_anchor_despite_higher_wire_estimate(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
 
     class HighEstimateAdapter(StubAdapter):
@@ -680,12 +691,12 @@ async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(tmp_p
         run=run,
     )
 
-    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
+    assert compaction_service.should_auto_calls == [(20, 100, 0.8)]
     assert compaction_service.estimate_calls == []
 
 
 @pytest.mark.asyncio
-async def test_compaction_preflight_uses_durable_projection_instead_of_generic_request_estimate(
+async def test_compaction_new_run_estimates_selected_wire_instead_of_reusing_old_measurement(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -792,7 +803,7 @@ async def test_compaction_records_post_projection_with_selected_wire_estimator(
         "gpt-5.2",
         session,
         messages,
-        usage={"input_tokens": 90},
+        usage=None,
         run=run,
     )
 
@@ -806,8 +817,6 @@ async def test_compaction_records_post_projection_with_selected_wire_estimator(
     assert started_event.payload["context_usage"] == {
         "tokens": 95,
         "estimated": True,
-        "provider_input_tokens": 90,
-        "provider_output_tokens": 0,
     }
 
 
@@ -1093,7 +1102,6 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
             "tokens": 90,
             "estimated": False,
             "provider_input_tokens": 90,
-            "provider_output_tokens": 0,
         },
     }
     compaction_event = next(
