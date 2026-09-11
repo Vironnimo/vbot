@@ -17,6 +17,10 @@ const TERMINAL_FIELDS = {
   restore: [],
   reorder: ['group_id', 'order'],
   create_group: ['name'],
+  show_group: ['group_id'],
+  rename_group: ['group_id', 'name'],
+  delete_group: ['group_id'],
+  close: ['terminal_id'],
 };
 const KEYS = {
   enter: '\r',
@@ -162,24 +166,57 @@ export function createLiveActions({
       input_origin: 'speech_transcription',
     });
   }
+  async function refreshAfterMutation(
+    result,
+    guard,
+    action = 'refresh',
+    args = {},
+  ) {
+    try {
+      ensureActive(guard);
+      await terminalView(action, args);
+      return result;
+    } catch {
+      return { ...result, layout_error: 'refresh_failed' };
+    }
+  }
   async function terminalAction(args, guard) {
     if (args.action === 'create_group') {
       const name = required(args.name);
       if (name.length > 80) fail('invalid_name');
-      return api.createTerminalGroup(name);
+      const result = await api.createTerminalGroup(name);
+      return refreshAfterMutation(result, guard, 'show_group', {
+        group_id: result.group.group_id,
+      });
     }
     const catalog = await api.listTerminals();
     ensureActive(guard);
     if (args.action === 'list')
       return {
-        terminals: (catalog.terminals || []).slice(0, 40).map(terminalSummary),
-        groups: (catalog.groups || []).slice(0, 40),
-        truncated:
-          (catalog.terminals || []).length > 40 ||
-          (catalog.groups || []).length > 40,
+        terminals: (catalog.terminals || []).map(terminalSummary),
+        groups: catalog.groups || [],
         layout: await terminalView('context'),
       };
     if (args.action === 'restore') return terminalView('restore');
+    if (['show_group', 'rename_group', 'delete_group'].includes(args.action)) {
+      const groupId = required(args.group_id);
+      const group = (catalog.groups || []).find(
+        (item) => item.group_id === groupId,
+      );
+      if (!group) fail('group_not_found');
+      if (args.action === 'show_group')
+        return terminalView('show_group', { group_id: groupId });
+      if (!['user', 'agent'].includes(group.kind)) fail('group_not_editable');
+      let result;
+      if (args.action === 'rename_group') {
+        const name = required(args.name);
+        if (name.length > 80) fail('invalid_name');
+        result = await api.renameTerminalGroup(groupId, name);
+      } else {
+        result = await api.deleteTerminalGroup(groupId);
+      }
+      return refreshAfterMutation(result, guard);
+    }
     if (args.action === 'reorder') {
       const group = (catalog.groups || []).find(
         (g) => g.group_id === args.group_id,
@@ -212,8 +249,7 @@ export function createLiveActions({
       if (!['codex', 'claude'].includes(args.program))
         fail('unsupported_program');
       const count = args.count ?? 1;
-      if (!Number.isInteger(count) || count < 1 || count > 4)
-        fail('invalid_count');
+      if (!Number.isSafeInteger(count) || count < 1) fail('invalid_count');
       const workdir = required(args.workdir);
       if (
         args.name !== undefined &&
@@ -253,10 +289,12 @@ export function createLiveActions({
       } catch (error) {
         return {
           ok: false,
+          requested_count: count,
           completed,
           group_id: groupId,
           error: {
             code: error.code || 'operation_failed',
+            message: error.message,
             delivery_uncertain: true,
           },
         };
@@ -277,6 +315,36 @@ export function createLiveActions({
     if (!terminal) fail('terminal_not_found');
     if (['show', 'maximize'].includes(args.action))
       return terminalView(args.action, args);
+    if (args.action === 'close') {
+      const result = {
+        terminal_id: terminal.terminal_id,
+        stopped: ['exited', 'error'].includes(terminal.state),
+        removed: false,
+      };
+      try {
+        if (!result.stopped) {
+          await api.killTerminal(terminal.terminal_id);
+          result.stopped = true;
+        }
+        ensureActive(guard);
+        await api.forgetTerminal(terminal.terminal_id);
+        result.removed = true;
+      } catch (error) {
+        return {
+          ...result,
+          stopped: result.stopped || null,
+          removed:
+            result.stopped && error.code !== 'voice_stopped' ? null : false,
+          ok: false,
+          error: {
+            code: error.code || 'operation_failed',
+            message: error.message,
+            delivery_uncertain: true,
+          },
+        };
+      }
+      return refreshAfterMutation(result, guard);
+    }
     if (!codingTerminal(terminal)) fail('not_a_coding_terminal');
     if (args.action === 'read') {
       const snapshot = await api.readTerminal(terminal.terminal_id);
