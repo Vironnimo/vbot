@@ -23,6 +23,10 @@ from mcp.types import jsonrpc_message_adapter
 
 MINIMUM_VERSION = (0, 23, 2)
 TIMEOUT = 45
+SESSION_EXPIRED = (
+    "The computer connection expired. Capture the target again before further input. "
+    "Do not repeat input that may already have taken effect."
+)
 SAFE_ENVIRONMENT_KEYS = {
     "APPDATA",
     "COMSPEC",
@@ -242,6 +246,11 @@ class ComputerUseInterruptedError(ComputerUseError):
 def unpack(result: dict[str, Any]) -> dict[str, Any]:
     """Retain structured data and image blocks, rejecting explicit refusals."""
     if result.get("isError") or result.get("is_error"):
+        details = result.get("structuredContent") or {}
+        if (isinstance(details, dict) and details.get("code") == "session_ended") or (
+            "this session has ended; call start_session" in _error_text(result).lower()
+        ):
+            raise ComputerUseError(SESSION_EXPIRED, "computer_session_expired")
         raise ComputerUseError(_error_text(result))
     payload = result.get("structuredContent")
     if not isinstance(payload, dict):
@@ -611,12 +620,33 @@ class CuaDriver:
                 request.pop("delivery_mode", None)
         try:
             assert self._session is not None
-            if "session" not in request and name not in {"start_session", "end_session"}:
-                # Tools such as list_apps/list_windows cannot accept a public label.
-                # Explicitly revive their implicit transport session after idle expiry;
-                # do this before dispatch, never by replaying a failed action.
-                started = self._portal.call(self._session.call_tool, "start_session", {})
-                unpack(started.model_dump(by_alias=True, exclude_none=True))
+            if name not in {"start_session", "end_session"}:
+                # Native input can leave the named MCP session idle for minutes.
+                # Renew both named and implicit sessions before their next MCP call.
+                label = {"session": request["session"]} if "session" in request else {}
+                started = self._portal.call(self._session.call_tool, "start_session", label)
+                lifecycle = unpack(started.model_dump(by_alias=True, exclude_none=True))
+                if lifecycle.get("revived"):
+                    self._background_frames = {
+                        key: value
+                        for key, value in self._background_frames.items()
+                        if key[0] != request.get("session")
+                    }
+                    if name in {
+                        "move_cursor",
+                        "click",
+                        "double_click",
+                        "right_click",
+                        "drag",
+                        "scroll",
+                        "type_text",
+                        "press_key",
+                        "hotkey",
+                        "set_value",
+                        "invoke_menu",
+                        "set_window_frame",
+                    }:
+                        raise ComputerUseError(SESSION_EXPIRED, "computer_session_expired")
             response = self._portal.call(self._session.call_tool, name, request)
         except ComputerUseError:
             raise

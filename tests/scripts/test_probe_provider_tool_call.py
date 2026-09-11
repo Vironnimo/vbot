@@ -1784,6 +1784,7 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
         InvalidComputerArgumentsError,
         _validate_arguments,
     )
+    from resources.extensions.computer_use.observations import Observation
 
     for case, expected in PROBE.COMPUTER_CASE_ARGUMENTS.items():
         args = PROBE._parser().parse_args(["--scenario", "computer", "--computer-case", case])
@@ -1791,7 +1792,20 @@ def test_computer_probe_uses_production_definition_and_validates_matrix():
         assert scenario.tools[0]["parameters"] is COMPUTER_PARAMETERS
         assert scenario.expected_arguments == expected
         try:
-            _validate_arguments(expected)
+            # These cases consume a previously returned window observation.
+            reference = (
+                Observation(target=("window", 1, 2), foreground=True)
+                if case
+                in {
+                    "capture_view_query",
+                    "verify_view",
+                    "element_target",
+                    "sequence_element_target",
+                    "capture_reset_background",
+                }
+                else None
+            )
+            _validate_arguments(expected, reference)
         except InvalidComputerArgumentsError:
             assert case.startswith("invalid_")
         else:

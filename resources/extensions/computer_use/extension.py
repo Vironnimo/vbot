@@ -94,7 +94,9 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
         "element": {
             "type": "string",
             "description": (
-                "Current window element index or token. Omit for coordinate or focused input."
+                "Complete element ref from the current observation. It selects its window and "
+                "foreground setting. Omit for coordinates or focused input; numeric indices "
+                "require pid/window_id or a window view_id."
             ),
         },
         "button": {
@@ -146,20 +148,20 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
         "foreground": {
             "type": "boolean",
             "description": (
-                "Input delivery. Omit to preserve an explicit view's setting; without"
-                " a view, windows default to background and the desktop uses the "
-                "shared mouse and keyboard. Set true for foreground window control "
-                "when needed and capture with that setting first. Zoom preserves its "
-                "view's setting. Background input never retries in the foreground."
+                "Input and capture delivery. Omit to use the explicit view or element setting, "
+                "otherwise the target's last setting in this Run. New windows start in "
+                "background; desktop control shares the mouse and keyboard. Set true or false to "
+                "change delivery; coordinate input needs a matching capture. Zoom preserves its "
+                "view's setting. Background input never retries in foreground."
             ),
         },
         "view_id": {
             "type": "string",
             "description": (
-                "Image reference from capture or zoom. Required with image coordinates; "
-                "also selects the target and delivery setting for type, key and other "
-                "input. Sequence coordinate steps inherit it. Omit when selecting a "
-                "target by pid/window_id without image coordinates."
+                "Observation reference from capture, input, wait, verify, or zoom. Required with "
+                "image coordinates; also selects target and delivery for input, capture, wait, "
+                "and verify. Sequence coordinate steps inherit it. Omit when a returned element "
+                "ref or pid/window_id selects the target."
             ),
         },
         "resolution": {
@@ -174,8 +176,11 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
         },
         "query": {
             "type": "string",
-            "description": "Text filter for window elements in the returned observation, "
-            "including after input. Omit for the overview.",
+            "description": (
+                "Case-insensitive literal substring for window elements, "
+                "including after input. Matches include ancestors. Regex and OR "
+                "expressions are not supported. Omit for the overview."
+            ),
         },
         "limit": {
             "type": "integer",
@@ -343,7 +348,7 @@ _FIELDS = {
     "apps": set(),
     "windows": set(),
     "close": set(),
-    "capture": _TARGET | _OBSERVE | {"foreground"},
+    "capture": _TARGET | _OBSERVE | {"foreground", "view_id"},
     "zoom": _TARGET | {"view_id", "coordinate", "to_coordinate", "foreground"},
     "click": _INPUT | {"element", "view_id", "coordinate", "button", "count", "modifiers"},
     "type": _INPUT | {"text", "element", "view_id", "text_mode"},
@@ -355,9 +360,9 @@ _FIELDS = {
     "menu": _WINDOW | _OBSERVE | {"menu_path", "apply", "capture_after"},
     "resize": _WINDOW | _OBSERVE | {"coordinate", "size", "apply", "capture_after"},
     "launch": {"app", "apply"},
-    "verify": _WINDOW | _OBSERVE | {"expect", "timeout_ms", "foreground"},
+    "verify": _WINDOW | _OBSERVE | {"expect", "timeout_ms", "foreground", "view_id"},
     "sequence": _INPUT | {"steps", "view_id"},
-    "wait": _TARGET | _OBSERVE | {"duration_ms", "foreground"},
+    "wait": _TARGET | _OBSERVE | {"duration_ms", "foreground", "view_id"},
 }
 _MUTATIONS = set(_FIELDS) - {
     "monitors",
@@ -414,7 +419,11 @@ def _required(arguments: dict[str, Any], fields: set[str]) -> None:
 
 
 def _validate_arguments(
-    arguments: dict[str, Any], reference: observations.Observation | None = None
+    arguments: dict[str, Any],
+    reference: observations.Observation | None = None,
+    foreground: bool | None = None,
+    *,
+    unresolved_reference: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(arguments, dict):
         _invalid("arguments")
@@ -475,7 +484,10 @@ def _validate_arguments(
                 "invalid_arguments",
             )
     args.setdefault(
-        "foreground", reference.foreground if reference else not bool(_WINDOW & args.keys())
+        "foreground",
+        reference.foreground
+        if reference
+        else (foreground if foreground is not None else not bool(_WINDOW & args.keys())),
     )
     targeted = action in {
         "capture",
@@ -494,7 +506,9 @@ def _validate_arguments(
         "wait",
     }
     desktop = not bool(_WINDOW & args.keys())
-    if targeted and desktop:
+    # A missing reference cannot establish desktop/window scope. Validate the remaining
+    # shape first; handle() then returns the reference error without dispatching.
+    if targeted and desktop and not unresolved_reference:
         if (
             action in {"set_value", "menu", "resize", "verify"}
             or _WINDOW & arguments.keys()
@@ -511,7 +525,7 @@ def _validate_arguments(
             _invalid("target or mode")
         if not args["foreground"]:
             _invalid("foreground")
-    elif targeted:
+    elif targeted and not desktop:
         _required(args, _WINDOW)
         if "monitor" in arguments:
             _invalid("monitor")
@@ -623,7 +637,8 @@ def _validate_arguments(
                         else {}
                     ),
                     **step,
-                }
+                },
+                unresolved_reference=unresolved_reference,
             )
             args["steps"] = [*args["steps"]]
             args["steps"][index] = {
@@ -639,6 +654,10 @@ class DesktopSession:
     observations: dict[tuple[Any, ...], Observation] = field(default_factory=dict)
     views: dict[str, Observation] = field(default_factory=dict)
     resolutions: dict[tuple[Any, ...], str] = field(default_factory=dict)
+    foregrounds: dict[tuple[Any, ...], bool] = field(default_factory=dict)
+    issued_elements: dict[str, tuple[Any, ...]] = field(default_factory=dict)
+    retired_views: dict[str, tuple[Any, ...]] = field(default_factory=dict)
+    observation_data: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)
 
 
 def _target(args: dict[str, Any]) -> tuple[Any, ...]:
@@ -785,18 +804,35 @@ class ComputerUseService:
 
     def _invalidate(self, target: tuple[Any, ...] | None = None) -> None:
         for session in self._sessions.values():
+            session.retired_views.update(
+                (key, view.target)
+                for key, view in session.views.items()
+                if target is None or view.target == target
+            )
+            while len(session.retired_views) > 32:
+                del session.retired_views[next(iter(session.retired_views))]
             if target is None:
                 session.observations.clear()
                 session.views.clear()
+                session.observation_data.clear()
             else:
                 session.observations.pop(target, None)
+                session.observation_data.pop(target, None)
                 session.views = {
                     key: view for key, view in session.views.items() if view.target != target
                 }
 
     @staticmethod
-    def _remember(session: DesktopSession, observation: observations.Observation) -> None:
-        session.observations[observation.target] = observation
+    def _remember(
+        session: DesktopSession, observation: observations.Observation, *, crop: bool = False
+    ) -> None:
+        if not crop:
+            session.observations[observation.target] = observation
+            session.issued_elements.update(
+                (token, observation.target) for token in observation.elements.values()
+            )
+            while len(session.issued_elements) > 2000:
+                del session.issued_elements[next(iter(session.issued_elements))]
         if observation.view_id:
             session.views[observation.view_id] = observation
         # Cropping is read-only: retain the parent and recent sibling crops.
@@ -838,10 +874,111 @@ class ComputerUseService:
         )
         observation.foreground = args["foreground"]
         session.resolutions[target] = observation.resolution
+        session.foregrounds[target] = observation.foreground
         self._remember(session, observation)
         result.update(target=_target_fields(target), foreground=observation.foreground, mode=mode)
         if requested_target != target:
             result["requested_target"] = _target_fields(requested_target)
+        session.observation_data[target] = result
+        return result
+
+    @staticmethod
+    def _reference(session: DesktopSession | None, arguments: dict[str, Any]) -> Observation | None:
+        candidates = [arguments]
+        if isinstance(arguments.get("steps"), list):
+            candidates.extend(item for item in arguments["steps"] if isinstance(item, dict))
+        reference = None
+        for candidate in candidates:
+            view_id = candidate.get("view_id")
+            if isinstance(view_id, str):
+                reference = session.views.get(view_id) if session else None
+                if reference is None:
+                    raise ComputerUseError(
+                        "This view is stale. Capture the target again or zoom the current view.",
+                        "stale_view",
+                    )
+                break
+        element = arguments.get("element")
+        if element is None and arguments.get("action") == "sequence" and len(candidates) > 1:
+            element = candidates[1].get("element")
+        if isinstance(element, str) and _ELEMENT.fullmatch(element) and session:
+            selected = reference
+            if (
+                selected is None
+                and arguments.keys() >= _WINDOW
+                and all(type(arguments[key]) is int for key in _WINDOW)
+            ):
+                selected = session.observations.get(_target(arguments))
+            if selected is None and ":" in element:
+                matches = [
+                    obs for obs in session.observations.values() if element in obs.elements.values()
+                ]
+                if len(matches) > 1:
+                    raise InvalidComputerArgumentsError(
+                        "This element ref occurs in more than one current window. "
+                        "Supply pid and window_id or that window's view_id.",
+                        "invalid_arguments",
+                    )
+                selected = matches[0] if matches else None
+            if selected is not None and (
+                element in selected.elements or element in selected.elements.values()
+            ):
+                return reference or selected
+            if element in session.issued_elements:
+                raise ComputerUseError(
+                    "This element belongs to an earlier observation. Input or a new capture "
+                    "replaced its refs. Use the current observation or capture with mode=som; "
+                    "do not construct a replacement token.",
+                    "stale_element",
+                )
+            raise ComputerUseError(
+                "This element is not in your current observations. Supply a complete returned "
+                "element ref, or capture the intended pid and window_id with mode=som.",
+                "unknown_element",
+            )
+        return reference
+
+    def _reference_failure(
+        self,
+        context: ToolContext,
+        session: DesktopSession | None,
+        arguments: dict[str, Any],
+        error: ComputerUseError,
+    ) -> dict[str, Any]:
+        # Only the requesting Run's retained observations can supply recovery context.
+        self._check_access(context)
+        result = tool_failure(error.code, str(error), retryable=False)
+        if session is None:
+            return result
+        target = _target(arguments) if arguments.keys() >= _WINDOW else None
+        steps = arguments.get("steps")
+        for candidate in [arguments, *(steps if isinstance(steps, list) else [])]:
+            if not isinstance(candidate, dict):
+                continue
+            if target is None:
+                view_id = candidate.get("view_id")
+                view = session.views.get(view_id) if isinstance(view_id, str) else None
+                target = (
+                    view.target
+                    if view
+                    else (session.retired_views.get(view_id) if isinstance(view_id, str) else None)
+                )
+            if target is None and isinstance(candidate.get("element"), str):
+                target = session.issued_elements.get(candidate["element"])
+        retained = session.observation_data.get(target) if target is not None else None
+        if retained is not None:
+            result["artifacts"].append(
+                {
+                    "kind": "computer_observation",
+                    "applied": False,
+                    "observation": retained,
+                    "observation_note": (
+                        "No input was sent. This is the retained observation, not a new capture. "
+                        "Capture its target again for fresh state, or use its returned refs "
+                        "if the application has not changed."
+                    ),
+                }
+            )
         return result
 
     def _observation(
@@ -962,6 +1099,8 @@ class ComputerUseService:
         result: dict[str, Any],
     ) -> dict[str, Any]:
         session.resolutions[target] = args["resolution"]
+        if result.get("applied"):
+            session.foregrounds[target] = args["foreground"]
         if not args["capture_after"] and not result.get("partial"):
             try:
                 self._check_access(context)
@@ -1186,7 +1325,7 @@ class ComputerUseService:
             zoomed, result = observations.zoom(
                 context, current, args["view_id"], *args["coordinate"], *args["to_coordinate"]
             )
-            self._remember(session, zoomed)
+            self._remember(session, zoomed, crop=True)
             return {
                 "action": action,
                 **result,
@@ -1267,19 +1406,37 @@ class ComputerUseService:
         with self._lock:
             key = (context.project_id, context.agent_id, context.session_id, context.run_id)
             session = self._sessions.get(key)
-            reference = None
-            if session is not None and isinstance(arguments, dict):
-                candidates = [arguments]
-                if isinstance(arguments.get("steps"), list):
-                    candidates.extend(arguments["steps"])
-                for candidate in candidates:
-                    if isinstance(candidate, dict) and isinstance(candidate.get("view_id"), str):
-                        reference = session.views.get(candidate["view_id"])
-                        break
             try:
-                args = _validate_arguments(arguments, reference)
+                reference = None
+                reference_error = None
+                if isinstance(arguments, dict):
+                    try:
+                        reference = self._reference(session, arguments)
+                    except ComputerUseError as error:
+                        reference_error = error
+                foreground = (
+                    session.foregrounds.get(_target(arguments))
+                    if session is not None
+                    and isinstance(arguments, dict)
+                    and ("pid" not in arguments or arguments.keys() >= _WINDOW)
+                    and all(type(arguments[k]) is int for k in _TARGET & arguments.keys())
+                    else None
+                )
+                args = _validate_arguments(
+                    arguments,
+                    reference,
+                    foreground,
+                    unresolved_reference=reference_error is not None,
+                )
+                if reference_error is not None:
+                    raise reference_error
             except InvalidComputerArgumentsError as error:
                 return tool_failure("invalid_arguments", str(error))
+            except ComputerUseError as error:
+                try:
+                    return self._reference_failure(context, session, arguments, error)
+                except ComputerUseError as denied:
+                    return tool_failure(denied.code, str(denied), retryable=False)
             if "resolution" not in arguments and reference is None and session is not None:
                 args["resolution"] = session.resolutions.get(_target(args), args["resolution"])
             owner = new_id("ctl")
