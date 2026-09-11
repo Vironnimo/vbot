@@ -1724,8 +1724,8 @@ class TestModelRegistryRealResources:
             assert deepseek.capabilities.reasoning.control == "levels"
             assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
 
-    def test_ollama_cloud_deepseek_v41_provisional_profile(self):
-        """Pin the user-approved V4 Flash assumptions until live rollout verification."""
+    def test_ollama_cloud_deepseek_v41_verified_profile(self):
+        """Pin the Cloud profile verified on 2026-09-11, including its larger output cap."""
         registry = ModelRegistry.load(RESOURCES_DIR)
         model = registry.get("ollama-cloud", "deepseek-v4.1-flash")
         previous = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
@@ -1736,7 +1736,7 @@ class TestModelRegistryRealResources:
         assert model.capabilities.vision is True
         assert model.capabilities.tools is True
         assert model.capabilities.reasoning == previous.capabilities.reasoning
-        assert model.max_output_tokens == previous.max_output_tokens == 65_536
+        assert model.max_output_tokens == 393_216
         assert model.recommended_temperature == previous.recommended_temperature == 1.0
         assert model.recommended_top_p == previous.recommended_top_p == 0.95
         assert model.metadata["ollama"]["remote"] is True

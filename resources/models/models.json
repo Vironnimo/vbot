@@ -1433,10 +1433,11 @@
       },
       "context_window": 1000000,
       "family": "nova",
+      "knowledge": "2025-10",
       "last_updated": "2025-12-01",
-      "max_output_tokens": 64000,
+      "max_output_tokens": 65536,
       "name": "Nova 2 Lite",
-      "release_date": "2025-12-01",
+      "release_date": "2025-12-02",
       "temperature": true
     },
     "amazon/nova-lite": {
@@ -1444,7 +1445,8 @@
         "input_modalities": [
           "text",
           "image",
-          "video"
+          "video",
+          "pdf"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1463,7 +1465,7 @@
       "family": "nova-lite",
       "knowledge": "2024-10",
       "last_updated": "2024-12-03",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 10000,
       "name": "Nova Lite",
       "release_date": "2024-12-03",
       "temperature": true
@@ -1490,9 +1492,39 @@
       "family": "nova-micro",
       "knowledge": "2024-10",
       "last_updated": "2024-12-03",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 10000,
       "name": "Nova Micro",
       "release_date": "2024-12-03",
+      "temperature": true
+    },
+    "amazon/nova-premier": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "nova",
+      "knowledge": "2024-10",
+      "last_updated": "2025-04-30",
+      "max_output_tokens": 10000,
+      "name": "Nova Premier",
+      "release_date": "2025-04-30",
       "temperature": true
     },
     "amazon/nova-pro": {
@@ -1500,7 +1532,8 @@
         "input_modalities": [
           "text",
           "image",
-          "video"
+          "video",
+          "pdf"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1519,7 +1552,7 @@
       "family": "nova-pro",
       "knowledge": "2024-10",
       "last_updated": "2024-12-03",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 10000,
       "name": "Nova Pro",
       "release_date": "2024-12-03",
       "temperature": true
@@ -3524,6 +3557,33 @@
       "release_date": "2026-04-24",
       "temperature": true
     },
+    "deepseek/deepseek-v4-flash-0423": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "knowledge": "2025-05",
+      "last_updated": "2026-04-23",
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4 Flash 0423",
+      "release_date": "2026-04-23",
+      "temperature": true
+    },
     "deepseek/deepseek-v4-flash-0731": {
       "capabilities": {
         "input_modalities": [
@@ -4889,6 +4949,90 @@
       "max_output_tokens": 65536,
       "name": "Gemini Robotics-ER 1.6 Preview",
       "release_date": "2026-04-14",
+      "temperature": true
+    },
+    "google/gemma-3-12b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemma",
+      "knowledge": "2024-08",
+      "last_updated": "2025-03-12",
+      "max_output_tokens": 131072,
+      "name": "Gemma 3 12B IT",
+      "release_date": "2025-03-12",
+      "temperature": true
+    },
+    "google/gemma-3-27b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemma",
+      "knowledge": "2024-08",
+      "last_updated": "2025-03-12",
+      "max_output_tokens": 131072,
+      "name": "Gemma 3 27B IT",
+      "release_date": "2025-03-12",
+      "temperature": true
+    },
+    "google/gemma-3-4b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemma",
+      "knowledge": "2024-08",
+      "last_updated": "2025-03-12",
+      "max_output_tokens": 131072,
+      "name": "Gemma 3 4B IT",
+      "release_date": "2025-03-12",
       "temperature": true
     },
     "google/gemma-4-26b-a4b-it": {
@@ -8726,6 +8870,32 @@
       "last_updated": "2025-10-29",
       "max_output_tokens": 32768,
       "name": "GPT OSS Safeguard 120B",
+      "release_date": "2025-10-29",
+      "temperature": true
+    },
+    "openai/gpt-oss-safeguard-20b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "gpt-oss",
+      "last_updated": "2025-10-29",
+      "max_output_tokens": 131072,
+      "name": "GPT OSS Safeguard 20B",
       "release_date": "2025-10-29",
       "temperature": true
     },
