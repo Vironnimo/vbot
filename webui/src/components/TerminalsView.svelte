@@ -194,6 +194,14 @@
       if (maximizedTerminalId) await toggleMaximize(maximizedTerminalId);
       return getVoiceContext();
     }
+    if (action === 'show_group') {
+      if (!viewState.groups.some((group) => group.group_id === args.group_id))
+        throw new Error('group_not_found');
+      controller.selectGroup(args.group_id);
+      maximizedTerminalId = '';
+      await tick();
+      return getVoiceContext();
+    }
     const target = viewState.terminals.find(
       (item) => item.terminal_id === args.terminal_id,
     );

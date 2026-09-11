@@ -86,14 +86,18 @@ def live_tools() -> list[dict[str, Any]]:
             "type": "function",
             "name": "vbot_terminal",
             "description": (
-                "Operate coding-agent Terminals and their visible layout. list returns Terminals, "
-                "groups, and the current visible order. start launches one to four Codex or Claude "
-                "Code Terminals. read returns a bounded rendered screen. input sends text and "
-                "optionally Enter, or one named key. show selects a Terminal and its group; "
-                "maximize shows it alone; restore returns to the group layout. reorder sets the "
-                "order within a user or Agent group using the exact ids returned by list. "
-                "create_group creates a named group for new Terminals. Existing Agent bindings "
-                "and process lifetimes are preserved."
+                "Operate coding-agent Terminals and their visible layout. list returns "
+                "Terminals, groups, and the current visible order. start launches the "
+                "requested number of Codex or Claude Code Terminals. read returns a bounded "
+                "rendered screen. input sends text and optionally Enter, or one named key. "
+                "show selects a Terminal and its group; maximize shows it alone; restore "
+                "returns to the group layout. close stops a Terminal and removes its tile, "
+                "matching the app's close button. reorder sets the order within a user or "
+                "Agent group using the exact ids returned by list. create_group creates a "
+                "named group for new Terminals. show_group selects a group, including an empty "
+                "one. rename_group changes a user or Agent group's name. delete_group removes "
+                "a user or Agent group and stops every running Terminal in it. Showing or "
+                "arranging Terminals preserves their Agent bindings and process lifetimes."
             ),
             "strict": False,
             "parameters": {
@@ -111,6 +115,10 @@ def live_tools() -> list[dict[str, Any]]:
                             "restore",
                             "reorder",
                             "create_group",
+                            "show_group",
+                            "rename_group",
+                            "delete_group",
+                            "close",
                         ],
                     ),
                     "terminal_id": _field("Exact Terminal id returned by list or start."),
@@ -119,7 +127,6 @@ def live_tools() -> list[dict[str, Any]]:
                         "Number of Terminals to launch; defaults to one.",
                         type="integer",
                         minimum=1,
-                        maximum=4,
                     ),
                     "workdir": _field("Working directory on the vBot server."),
                     "text": _field("Text to send to the coding agent.", maxLength=16000),
@@ -136,7 +143,10 @@ def live_tools() -> list[dict[str, Any]]:
                         type="array",
                         items={"type": "string"},
                     ),
-                    "name": _field("Name for a new group or Terminal.", maxLength=80),
+                    "name": _field(
+                        "Name for a new group or Terminal, or the new name for rename_group.",
+                        maxLength=80,
+                    ),
                 },
                 "required": ["action"],
             },
