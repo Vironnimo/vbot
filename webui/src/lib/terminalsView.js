@@ -15,6 +15,58 @@ import {
 import { createAudioRecorder } from './audioRecorder.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
+// This editor represents the operator API's executable and literal arguments,
+// not shell syntax. Keep Windows path separators intact outside quoted values.
+export function parseTerminalCommandLine(value) {
+  const words = [];
+  let word = '';
+  let quote = '';
+  let started = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote) {
+      if (char === quote) {
+        quote = '';
+      } else if (
+        char === '\\' &&
+        (value[index + 1] === quote || value[index + 1] === '\\')
+      ) {
+        word += value[++index];
+      } else {
+        word += char;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) {
+        words.push(word);
+        word = '';
+        started = false;
+      }
+    } else {
+      word += char;
+      started = true;
+    }
+  }
+  if (quote) return { error: 'unclosedQuote' };
+  if (started) words.push(word);
+  if (words.some((part) => !part.trim())) return { error: 'emptyArgument' };
+  const [command, ...args] = words;
+  return { command, args };
+}
+
+export function formatTerminalCommandLine(command, args = []) {
+  if (!command) return '';
+  return [command, ...args]
+    .map((part) =>
+      /[\s"']/.test(part)
+        ? `"${part.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        : part,
+    )
+    .join(' ');
+}
+
 // A WS frame boundary can split an ANSI escape sequence or a UTF-8 code
 // point in two. Feeding xterm the torn half corrupts its parser (it can
 // swallow the output after a reconnect), so a trailing partial escape is

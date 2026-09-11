@@ -9,7 +9,7 @@
   import EmptyState from './ui/EmptyState.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
-  import TextArea from './ui/TextArea.svelte';
+  import InfoHint from './ui/InfoHint.svelte';
   import TextField from './ui/TextField.svelte';
   import { t } from '$lib/i18n.js';
   import {
@@ -22,6 +22,8 @@
     createTerminalsController,
     createTerminalsViewState,
     layoutForCount,
+    parseTerminalCommandLine,
+    formatTerminalCommandLine,
     terminalIsFinished,
     visibleTerminals,
   } from '$lib/terminalsView.js';
@@ -41,7 +43,7 @@
   let startDialogOpen = $state(false);
   let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
-  let startArguments = $state('');
+  let startCommandError = $state('');
   let startWorkdir = $state('');
   let startName = $state('');
   let startGroupId = $state('');
@@ -696,8 +698,8 @@
 
   function applyLaunchHistory(entry) {
     selectedLaunchHistoryId = entry?.id ?? '';
-    startCommand = entry?.command ?? '';
-    startArguments = Array.isArray(entry?.args) ? entry.args.join('\n') : '';
+    startCommand = formatTerminalCommandLine(entry?.command, entry?.args);
+    startCommandError = '';
     startWorkdir = entry?.workdir ?? '';
     viewState.startError = '';
   }
@@ -710,16 +712,16 @@
   }
 
   function markLaunchHistoryEdited() {
+    startCommandError = '';
     selectedLaunchHistoryId = '';
     viewState.startError = '';
   }
 
   function launchHistoryLabel(entry) {
-    const command =
-      String(entry?.command || '').trim() ||
-      t('terminals.commandPlaceholder', 'Default shell');
-    const argumentsList = Array.isArray(entry?.args) ? entry.args : [];
-    return [command, ...argumentsList].join(' ');
+    return (
+      formatTerminalCommandLine(entry?.command, entry?.args) ||
+      t('terminals.commandPlaceholder', 'Default shell')
+    );
   }
 
   function launchHistoryWorkdir(entry) {
@@ -739,12 +741,17 @@
 
   async function submitStartTerminal(event) {
     event.preventDefault();
-    const command = startCommand.trim();
+    const parsed = parseTerminalCommandLine(startCommand);
+    if (parsed.error) {
+      startCommandError = t(`terminals.commandError.${parsed.error}`);
+      await tick();
+      document.getElementById('terminal-start-command')?.focus();
+      return;
+    }
+    startCommandError = '';
+    const { command, args } = parsed;
     const workdir = startWorkdir.trim();
     const name = startName.trim();
-    const args = startArguments
-      .split(/\r?\n/)
-      .filter((argument) => argument.length > 0);
     const params = {};
     if (command) {
       params.command = command;
@@ -1622,28 +1629,26 @@
     {#snippet body()}
       <form id="terminal-start-form" onsubmit={submitStartTerminal}>
         <div class="modal-body terminals-view__start-form">
-          <p class="terminals-view__start-intro">
-            {t(
-              'terminals.startIntro',
-              'Every manual terminal opens the server user’s default shell. A Command is entered into that shell like typed input, so the terminal keeps working after the command ends.',
-            )}
-          </p>
-
           {#if viewState.startError && !serverUnavailable}
-            <Banner variant="error" role="alert">
+            <Banner
+              variant="error"
+              role="alert"
+              class="terminals-view__start-error"
+            >
               {terminalError(viewState.startError)}
             </Banner>
           {/if}
 
           {#if viewState.launchHistory.length > 0}
-            <FormField
-              controlId="terminal-start-history"
-              label={t('terminals.historyLabel', 'Recent setup')}
-              help={t(
-                'terminals.historyHelp',
-                'Saved on this vBot server. Choosing a setup fills Command, Arguments, and Working directory.',
-              )}
-            >
+            <FormField controlId="terminal-start-history" full>
+              {#snippet labelContent()}
+                <span>{t('terminals.historyLabel', 'Recent setup')}</span>
+                <InfoHint
+                  text={t('terminals.historyHelp')}
+                  ariaLabel={t('terminals.historyLabel', 'Recent setup')}
+                />
+              {/snippet}
+
               {#snippet children(field)}
                 <Dropdown
                   id={field.controlId}
@@ -1662,18 +1667,25 @@
 
           <FormField
             controlId="terminal-start-command"
-            label={t('terminals.commandLabel', 'Command')}
-            help={t(
-              'terminals.commandHelp',
-              'Optional. For example: codex, powershell, bash, or python.',
-            )}
+            full
+            error={startCommandError}
           >
+            {#snippet labelContent()}
+              <span>{t('terminals.commandLabel', 'Command line')}</span>
+              <InfoHint
+                text={t('terminals.commandHelp')}
+                ariaLabel={t('terminals.commandLabel', 'Command line')}
+              />
+            {/snippet}
+
             {#snippet children(field)}
               <TextField
                 id={field.controlId}
                 variant="modal"
                 aria-describedby={field.describedBy}
+                ariaLabel={t('terminals.commandLabel', 'Command line')}
                 value={startCommand}
+                invalid={field.invalid}
                 disabled={viewState.startingTerminal}
                 placeholder={t('terminals.commandPlaceholder', 'Default shell')}
                 onInput={(next) => {
@@ -1684,19 +1696,50 @@
             {/snippet}
           </FormField>
 
-          <FormField
-            controlId="terminal-start-name"
-            label={t('terminals.nameLabel', 'Name')}
-            help={t(
-              'terminals.nameHelp',
-              'Optional. A label so you and the agent can talk about this terminal, for example joe.',
-            )}
-          >
+          <FormField controlId="terminal-start-workdir" full>
+            {#snippet labelContent()}
+              <span>{t('terminals.workdirLabel', 'Working directory')}</span>
+              <InfoHint
+                text={t('terminals.workdirHelp')}
+                ariaLabel={t('terminals.workdirLabel', 'Working directory')}
+              />
+            {/snippet}
+
             {#snippet children(field)}
               <TextField
                 id={field.controlId}
                 variant="modal"
                 aria-describedby={field.describedBy}
+                ariaLabel={t('terminals.workdirLabel', 'Working directory')}
+                value={startWorkdir}
+                disabled={viewState.startingTerminal}
+                placeholder={t(
+                  'terminals.workdirPlaceholder',
+                  'User home directory',
+                )}
+                onInput={(next) => {
+                  startWorkdir = next;
+                  markLaunchHistoryEdited();
+                }}
+              />
+            {/snippet}
+          </FormField>
+
+          <FormField controlId="terminal-start-name">
+            {#snippet labelContent()}
+              <span>{t('terminals.nameLabel', 'Name')}</span>
+              <InfoHint
+                text={t('terminals.nameHelp')}
+                ariaLabel={t('terminals.nameLabel', 'Name')}
+              />
+            {/snippet}
+
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                ariaLabel={t('terminals.nameLabel', 'Name')}
                 value={startName}
                 disabled={viewState.startingTerminal}
                 placeholder={t('terminals.namePlaceholder', 'Unnamed')}
@@ -1707,42 +1750,15 @@
             {/snippet}
           </FormField>
 
-          <FormField
-            controlId="terminal-start-arguments"
-            label={t('terminals.argumentsLabel', 'Arguments')}
-            help={t(
-              'terminals.argumentsHelp',
-              'Optional. Enter one exact argument per line; spaces within a line are preserved.',
-            )}
-          >
-            {#snippet children(field)}
-              <TextArea
-                id={field.controlId}
-                code
-                rows={4}
-                aria-describedby={field.describedBy}
-                value={startArguments}
-                disabled={viewState.startingTerminal}
-                placeholder={t(
-                  'terminals.argumentsPlaceholder',
-                  '--profile\nwork',
-                )}
-                onInput={(next) => {
-                  startArguments = next;
-                  markLaunchHistoryEdited();
-                }}
+          <FormField controlId="terminal-start-group">
+            {#snippet labelContent()}
+              <span>{t('terminals.startGroupLabel', 'Group')}</span>
+              <InfoHint
+                text={t('terminals.startGroupHelp')}
+                ariaLabel={t('terminals.startGroupLabel', 'Group')}
               />
             {/snippet}
-          </FormField>
 
-          <FormField
-            controlId="terminal-start-group"
-            label={t('terminals.startGroupLabel', 'Group')}
-            help={t(
-              'terminals.startGroupHelp',
-              'Optional. Start the terminal inside a group. Automatic groups are created for each agent and for manual terminals.',
-            )}
-          >
             {#snippet children(field)}
               <Dropdown
                 id={field.controlId}
@@ -1755,33 +1771,6 @@
                 listClass="terminals-view__group-dropdown-list"
                 onValueChange={(next) => {
                   startGroupId = next;
-                }}
-              />
-            {/snippet}
-          </FormField>
-
-          <FormField
-            controlId="terminal-start-workdir"
-            label={t('terminals.workdirLabel', 'Working directory')}
-            help={t(
-              'terminals.workdirHelp',
-              'Optional. Defaults to the server user’s home directory.',
-            )}
-          >
-            {#snippet children(field)}
-              <TextField
-                id={field.controlId}
-                variant="modal"
-                aria-describedby={field.describedBy}
-                value={startWorkdir}
-                disabled={viewState.startingTerminal}
-                placeholder={t(
-                  'terminals.workdirPlaceholder',
-                  'User home directory',
-                )}
-                onInput={(next) => {
-                  startWorkdir = next;
-                  markLaunchHistoryEdited();
                 }}
               />
             {/snippet}
@@ -2430,15 +2419,29 @@
   }
 
   .terminals-view__start-form {
-    max-height: min(640px, 70vh);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-md);
+    max-height: calc(100dvh - 180px);
     overflow-y: auto;
   }
 
-  .terminals-view__start-intro {
-    margin: 0;
-    color: var(--text-med);
+  :global(.terminals-view__start-form .form-field__label) {
+    color: var(--text-hi);
+    font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
-    line-height: 1.5;
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  :global(.terminals-view__start-error) {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 640px) {
+    .terminals-view__start-form {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   :global(.terminals-view__history-dropdown) {
