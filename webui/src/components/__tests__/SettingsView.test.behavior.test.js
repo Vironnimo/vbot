@@ -209,6 +209,58 @@ describe('SettingsView', () => {
     });
   });
 
+  it('saves Classic without tail fields and keeps automatic triggering independent', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await openCompactionPanel();
+    const classic = document.querySelector(
+      'input[name="settings-compaction-strategy"][value="continuation"]',
+    );
+    classic.click();
+    flushSync();
+    expect(
+      document.querySelector('#settings-compaction-summary-model'),
+    ).toBeNull();
+    expect(
+      document.querySelector('input[aria-label="Verbatim tail tokens"]'),
+    ).toBeNull();
+    const automatic = document.querySelector(
+      '#agent-shared-compaction [role="switch"]',
+    );
+    automatic.click();
+    flushSync();
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      compaction: {
+        enabled: false,
+        trigger: { type: 'context_ratio', threshold: 0.8 },
+        strategy: { type: 'continuation' },
+      },
+    });
+    document
+      .querySelector(
+        'input[name="settings-compaction-strategy"][value="summary_tail"]',
+      )
+      .click();
+    flushSync();
+    expect(
+      document.querySelector('#settings-compaction-summary-model'),
+    ).toBeTruthy();
+    expect(automatic.getAttribute('aria-checked')).toBe('false');
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
+    expect(getSettingsUpdateCalls()[1][1].compaction).toMatchObject({
+      enabled: false,
+      strategy: {
+        type: 'summary_tail',
+        tail_tokens: 15000,
+        summary_model: null,
+      },
+    });
+  });
+
   it('renders and saves the Recall backend dropdown', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
