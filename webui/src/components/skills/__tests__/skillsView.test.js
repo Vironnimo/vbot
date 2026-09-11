@@ -115,6 +115,42 @@ async function render() {
 }
 
 describe('Skills manager', () => {
+  it('puts global and bundled before shared skills and filters each source', async () => {
+    await render();
+    const names = [...document.querySelectorAll('.skills-collection-name')].map(
+      (el) => el.textContent,
+    );
+    expect(names).toEqual([
+      'All skills',
+      'Global',
+      'Bundled',
+      'Shared skills',
+      'Main',
+      'Reviewer',
+    ]);
+    expect(
+      [...document.querySelectorAll('.skills-nav-label')].map(
+        (el) => el.textContent,
+      ),
+    ).toEqual(['Agents']);
+    collection('Global');
+    expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
+    collection('Bundled');
+    expect(rows().map((row) => row.dataset.skillId)).toEqual(['bundled']);
+    collection('All skills');
+    expect(rows()).toHaveLength(4);
+
+    click(button('Skill collections'));
+    const options = [...document.querySelectorAll('[role="option"]')];
+    expect(options.slice(0, 4).map((el) => el.textContent.trim())).toEqual([
+      'All skills (4)',
+      'Global (1)',
+      'Bundled (1)',
+      'Shared skills (1)',
+    ]);
+    click(options[1]);
+    expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
+  });
   it('shows direct actions and exposes descriptions only through hover or focus', async () => {
     await render();
     expect(rows()).toHaveLength(4);

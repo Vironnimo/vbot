@@ -15,10 +15,9 @@ export function skillSourceLabel(entry, translate, agents) {
       name: entry.origin.slice(8),
     });
   if (entry.origin === 'bundled')
-    return translate('skills.library.bundled', 'Included with vBot');
+    return translate('skills.library.bundled', 'Bundled');
   return translate('skills.sourceLabel', 'Source: {name}', {
-    name:
-      entry.source_label || translate('skills.library.global', 'Global skills'),
+    name: entry.source_label || translate('skills.library.global', 'Global'),
   });
 }
 
@@ -37,6 +36,16 @@ export function skillCollections(entries, agents, translate) {
       section: 'library',
     },
     {
+      key: 'global',
+      label: translate('skills.library.global', 'Global'),
+      section: 'library',
+    },
+    {
+      key: 'bundled',
+      label: translate('skills.library.bundled', 'Bundled'),
+      section: 'library',
+    },
+    {
       key: 'shared',
       label: translate('skills.library.shared', 'Shared skills'),
       section: 'library',
@@ -46,16 +55,6 @@ export function skillCollections(entries, agents, translate) {
       label: agent.name || agent.id,
       section: 'agents',
     })),
-    {
-      key: 'global',
-      label: translate('skills.library.global', 'Global skills'),
-      section: 'sources',
-    },
-    {
-      key: 'bundled',
-      label: translate('skills.library.bundled', 'Included with vBot'),
-      section: 'sources',
-    },
     ...[
       ...new Set(
         entries

@@ -1,6 +1,6 @@
 ---
 name: home-assistant
-description: Inspect and safely change advanced Home Assistant configuration through the bundled WebSocket script, especially Lovelace dashboards, dashboard metadata, and registry-backed planning. Use when the user asks to create, redesign, back up, export, restore, or deeply edit Home Assistant dashboards or needs Home Assistant configuration beyond entity state inspection and service calls. Do not use for ordinary device control when the ha_* Tools suffice.
+description: Create, edit, back up, or restore Home Assistant dashboards and inspect configuration registries. Use for advanced configuration; use ha_* Tools for ordinary device control.
 metadata:
   vbot:
     requirements:

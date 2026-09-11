@@ -543,7 +543,7 @@
   >
     <div class="skills-nav-title">{t('skills.library', 'Library')}</div>
     <nav class="secondary-list">
-      {#each ['library', 'agents', 'sources', 'projects'] as section (section)}
+      {#each ['library', 'agents', 'projects'] as section (section)}
         {#if collections.some((item) => item.section === section)}
           {#if section !== 'library'}
             <h3 class="skills-nav-label">{t(`skills.section.${section}`)}</h3>

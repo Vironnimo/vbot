@@ -69,7 +69,7 @@ Prompt-facing metadata is XML in the agentskills.io-compatible shape:
 ```xml
 <available_skills>
   <skill_group label="Bundled skills">
-    <skill><name>teach</name><description>Teach a topic.</description></skill>
+    <skill><name>weather</name><description>Get weather forecasts.</description></skill>
   </skill_group>
 </available_skills>
 ```
