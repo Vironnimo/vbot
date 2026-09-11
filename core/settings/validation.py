@@ -73,6 +73,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "extension_directories",
         "extensions",
         "keep_awake",
+        "live_voice",
         "local_models",
         "max_subagent_depth",
         "max_subagents_per_turn",
@@ -240,6 +241,16 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_port_settings(diagnostics, data)
     _validate_timezone(diagnostics, data.get("timezone"))
     _validate_appearance(diagnostics, data.get("appearance"))
+    if "live_voice" in data:
+        live_voice = data["live_voice"]
+        if not isinstance(live_voice, dict):
+            _error(diagnostics, "$.live_voice", "must be an object")
+        else:
+            _warn_unknown_keys(
+                diagnostics, "$.live_voice", live_voice, frozenset({"enabled"}), "Live voice field"
+            )
+            if "enabled" in live_voice and not isinstance(live_voice["enabled"], bool):
+                _error(diagnostics, "$.live_voice.enabled", "must be a boolean")
     _validate_directory_list(diagnostics, "$.skill_directories", data.get("skill_directories"))
     _validate_directory_list(
         diagnostics,

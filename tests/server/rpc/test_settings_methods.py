@@ -429,3 +429,24 @@ async def test_extensions_unchanged_disabled_set_touches_neither_seam(
     # No disabled-set delta: neither the reload nor the live-disable path runs.
     assert state.runtime.extension_reload_count == 0
     assert state.runtime.extension_disabled_changes == []
+
+
+@pytest.mark.asyncio
+async def test_live_voice_visibility_setting_persists_and_is_returned(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    initial = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+    assert initial["result"]["live_voice"] == {"enabled": False}
+    for enabled in (True, False):
+        patched = await dispatch_rpc(
+            state,
+            {
+                "method": "settings.patch",
+                "params": {
+                    "operations": [{"op": "set", "path": "live_voice.enabled", "value": enabled}]
+                },
+            },
+        )
+        assert patched["ok"] is True
+        assert state.runtime.storage.load_settings()["live_voice"] == {"enabled": enabled}
+        loaded = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+        assert loaded["result"]["live_voice"] == {"enabled": enabled}

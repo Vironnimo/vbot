@@ -33,6 +33,7 @@
     connectProvider = null,
     disconnectProvider = null,
     onToast = noop,
+    onSettingsCommit = noop,
     onNavigateToAgentDefaults = noop,
     agents = [],
     desktopCapabilities = null,
@@ -120,7 +121,7 @@
           subtitle: () =>
             t(
               'settings.voice.subtitle',
-              'Transcription audio and wakeword command settings.',
+              'Live voice, transcription audio, and wakeword command settings.',
             ),
         },
         {
@@ -559,6 +560,7 @@
   function commitSettings(nextSettings) {
     settings = nextSettings;
     setApplicationTimeZone(nextSettings?.general?.timezone);
+    onSettingsCommit(nextSettings);
   }
 
   async function loadSettings() {

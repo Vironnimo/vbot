@@ -176,6 +176,48 @@
     },
   });
 
+  export function getVoiceContext() {
+    return {
+      selected_group_id: viewState.selectedGroupId,
+      selected_terminal_id: viewState.selectedTerminalId,
+      maximized_terminal_id: maximizedTerminalId,
+      visible_order: groupTerminals.map((item) => item.terminal_id),
+    };
+  }
+
+  export async function applyVoiceAction(action, args = {}) {
+    if (serverUnavailable) throw new Error('server_unavailable');
+    await controller.loadTerminals();
+    if (viewState.listError) throw new Error('terminal_refresh_failed');
+    if (action === 'context' || action === 'refresh') return getVoiceContext();
+    if (action === 'restore') {
+      if (maximizedTerminalId) await toggleMaximize(maximizedTerminalId);
+      return getVoiceContext();
+    }
+    if (action === 'show_group') {
+      if (!viewState.groups.some((group) => group.group_id === args.group_id))
+        throw new Error('group_not_found');
+      controller.selectGroup(args.group_id);
+      maximizedTerminalId = '';
+      await tick();
+      return getVoiceContext();
+    }
+    const target = viewState.terminals.find(
+      (item) => item.terminal_id === args.terminal_id,
+    );
+    if (!target) throw new Error('terminal_not_found');
+    controller.selectGroup(target.group_id);
+    controller.selectTerminal(target.terminal_id);
+    if (action === 'maximize' && maximizedTerminalId !== target.terminal_id) {
+      await toggleMaximize(target.terminal_id);
+    } else if (action === 'show' && maximizedTerminalId) {
+      await toggleMaximize(maximizedTerminalId);
+    }
+    await tick();
+    activateTerminal(target.terminal_id);
+    return getVoiceContext();
+  }
+
   $effect(() => {
     void terminalsRefreshToken;
     if (mounted && !serverUnavailable) {

@@ -13,6 +13,8 @@ Execution details live in child maps (`model_tasks/speech.md`, `image.md`, `embe
 
 ## Data Model
 
+The fixed accessor voice companion is a specialized execution client without a configurable Task Model binding; its separate transport and app-operation contract is in `model_tasks/live.md`.
+
 Supported task types (`constants.SUPPORTED_TASK_TYPES`): `speech_to_text`, `text_to_speech`, `image_understanding` (the text-output-from-image task behind route-gated `analyze_image`), `image_generation`, `video_generation`, `music_generation`, `text_embedding`.
 
 Bindings persist under `model_tasks` keyed by task type: non-empty `target` + options object. Public updates are sparse (options-only updates keep the existing target; empty target removes; Storage drops the section when empty); validation runs on each changed complete resulting binding before persistence; unchanged bindings are no-ops even if live catalog changes have made their options stale, and a changed target starts options at `{}` rather than inheriting incompatible ones.
@@ -45,3 +47,7 @@ Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_
 - Video/Music currently require OpenRouter (details in their child maps). Runtime registers STT `local/qwen3-asr` / `local/parakeet` and TTS `local/qwen3-tts` / `local/chatterbox` from the optional speech executor's catalog. Descriptors require a live availability callback for `usable`; registration alone does not imply an executable target. Imports and preflight never load ML runtimes or weights. Covered by `test_model_tasks.py` and `test_speech_local.py`.
 - `audio_generation` is a capability, not a configurable binding - generic audio output must not route as TTS or Music.
 - Loaded `task_options` freeze into read-only views/tuples; schema builders accept both sequence forms.
+
+## References
+
+- Changing GPT-Live session creation, spoken app operation, or proactive Agent announcements -> `model_tasks/live.md`

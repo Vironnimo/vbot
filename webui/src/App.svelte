@@ -76,7 +76,7 @@
 </script>
 
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import ExtensionPage from './components/ExtensionPage.svelte';
@@ -98,6 +98,7 @@
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import TerminalsView from './components/TerminalsView.svelte';
+  import LiveVoice from './components/LiveVoice.svelte';
   import OnboardingView from './components/OnboardingView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import Banner from './components/ui/Banner.svelte';
@@ -119,6 +120,7 @@
     listExtensionPages,
     listAgents,
     listProjects,
+    showProject,
   } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import {
@@ -342,6 +344,9 @@
   // Project context for the two-bar chat. `projects` feeds the chat dropdown;
   // `selectedProjectId` is the chosen project (empty = Personal/identity path).
   let projects = $state([]);
+  let liveVoiceView;
+  let terminalsView = $state();
+  let voiceChatSelection = null;
   let projectsLoadRequestId = 0;
   let selectedProjectId = $state(initialSelectedProjectId);
   // Projects-tab selection is remembered independently so browsing project
@@ -717,8 +722,60 @@
       }
       return appController.selectView(viewId);
     });
-  const handleChatSessionNavigation = (override) =>
-    appController.handleChatSessionNavigation(override);
+  const handleChatSessionNavigation = (override) => {
+    voiceChatSelection = override;
+    return appController.handleChatSessionNavigation(override);
+  };
+
+  const liveContext = async () => {
+    const projectId = selectedProjectId;
+    const context = {
+      view: activeViewId,
+      selected_agent_id: selectedAgentId,
+      selected_project_id: selectedProjectId,
+      selected_project_agent_id: selectedProjectAgentId,
+      chat_selection: voiceChatSelection,
+      agents: agents.map((agent) => ({ agent_id: agent.id, name: agent.name })),
+      projects: projects.map((project) => ({
+        project_id: project.project_id,
+        name: project.display_name,
+        cwd: project.cwd,
+      })),
+    };
+    return {
+      ...context,
+      selected_project_team: projectId
+        ? ((await showProject(projectId)).scan?.team || []).map((agent) => ({
+            agent_id: `${agent.agent_id}@${projectId}`,
+            name: agent.display_name,
+          }))
+        : [],
+    };
+  };
+
+  const liveNavigate = (view, target = {}) =>
+    requestAutosaveTransition(() => {
+      if (!liveVoiceView?.isActive()) return false;
+      if (view === 'chat' && target.session_id) {
+        return appController.navigateToSession(
+          target.agent_id,
+          target.session_id,
+        );
+      }
+      if (activeViewId !== view) return appController.selectView(view);
+      return true;
+    });
+
+  const liveTerminalAction = async (action, args = {}) => {
+    if (action === 'context')
+      return terminalsView?.getVoiceContext() ?? { visible_order: [] };
+    if ((await liveNavigate('terminals')) === false)
+      throw new Error('navigation_not_applied');
+    await tick();
+    if (!terminalsView || !liveVoiceView?.isActive())
+      throw new Error('terminal_view_unavailable');
+    return terminalsView.applyVoiceAction(action, args);
+  };
 
   const syncAgents = (nextAgents = []) => {
     agents = Array.isArray(nextAgents) ? nextAgents : [];
@@ -1256,6 +1313,19 @@
     </Banner>
   {/if}
   <ExtensionRequests />
+  {#snippet sidebarFooter()}
+    <LiveVoice
+      bind:this={liveVoiceView}
+      getContext={liveContext}
+      navigate={liveNavigate}
+      terminalView={liveTerminalAction}
+      runEvents={runServerEvents}
+      wakewordEnabled={wakewordStatus.enabled}
+      {serverUnavailable}
+      enabled={settings?.live_voice?.enabled === true}
+      onToast={showToast}
+    />
+  {/snippet}
   {#if sessionStoreIncident}
     <Banner variant="error" role="alert" class="app-session-store-incident">
       <div class="app-session-store-incident__copy">
@@ -1362,6 +1432,7 @@
         />
       {:else if activeViewId === 'terminals'}
         <TerminalsView
+          bind:this={terminalsView}
           {terminalsRefreshToken}
           {serverUnavailable}
           onToast={showToast}
@@ -1411,6 +1482,7 @@
       {:else if activeViewId === 'settings'}
         <SettingsView
           bind:this={settingsView}
+          onSettingsCommit={(nextSettings) => (settings = nextSettings)}
           onNavigateToAgentDefaults={navigateToAgentDefaults}
           {providerAuthEvent}
           onToast={showToast}

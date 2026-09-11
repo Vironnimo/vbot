@@ -50,6 +50,8 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 
 Read only when your task matches:
 
+- Global voice companion, GPT-Live WebRTC, voice Chat/Terminal actions, or spoken Run updates -> `model_tasks/live.md`
+
 - Finding the owning file/component/controller/style/test -> `webui/source-map.md`
 - App startup, navigation, connection/reconnect, global events, invalidation -> `webui/app-shell.md`
 - Chat selection/Sessions/history/streaming/Queue/timeline/composer/attachments/speech -> `webui/chat.md`

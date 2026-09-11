@@ -936,7 +936,19 @@ class TerminalManager:
             async for event in events:
                 yield event
 
-    async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
+    def read_for_operator(self, terminal_id: str) -> dict[str, Any]:
+        """Read a bounded screen without changing any Agent's observation or binding."""
+        session = self._get_for_operator(terminal_id)
+        return {
+            "terminal": self._operator_summary(session),
+            "screen": session.renderer.screen_text(),
+            "scrollback": session.renderer.page(before=None, limit=30),
+            "bracketed_paste": session.renderer.bracketed_paste_enabled,
+        }
+
+    async def send_operator_input(
+        self, terminal_id: str, data: str, *, expected_screen_revision: int | None = None
+    ) -> dict[str, Any]:
         """Write exact user-controlled terminal bytes through the existing PTY."""
         if not isinstance(data, str) or not data:
             raise ValueError("Terminal input must be a non-empty string")
@@ -959,6 +971,13 @@ class TerminalManager:
         write_error: BaseException | None = None
         async with session.lock:
             self._require_live(session)
+            if (
+                expected_screen_revision is not None
+                and expected_screen_revision != session.renderer.revision
+            ):
+                raise TerminalStaleScreenError(
+                    "Terminal screen changed; inspect status before sending this input"
+                )
             initial_task = session.initial_input_task
             if initial_task is not None and not initial_task.done():
                 initial_task.cancel()
