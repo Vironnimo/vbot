@@ -65,7 +65,7 @@ const IMAGE_TASK_ROWS = Object.freeze([
     titleFallback: 'Image understanding',
     descriptionKey: 'settings.specializedModels.imageUnderstandingDescription',
     descriptionFallback:
-      'Used by analyze_image when the active agent route cannot accept images.',
+      'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
   },
   {
     taskType: TASK_IMAGE_GENERATION,

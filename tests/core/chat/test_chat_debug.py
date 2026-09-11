@@ -22,7 +22,7 @@ from core.providers.accounts import ConnectionRef
 from core.runs import ChatRunManager
 from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SkillRegistry
-from core.tools import ToolRegistry, tool_success
+from core.tools import ToolAccess, ToolRegistry, tool_success
 from core.tools.file_state import FileReadState
 from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import StubModels, StubProjects
@@ -126,6 +126,7 @@ class DebugTrackingStreamingStubAdapter(DebugTrackingStubAdapter):
 
 @dataclass(frozen=True)
 class StubAgent:
+    tool_access: ToolAccess = field(default_factory=ToolAccess, init=False)
     id: str
     model: str
     fallback_models: list[str] = field(default_factory=list)

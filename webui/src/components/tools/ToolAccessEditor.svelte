@@ -1,6 +1,8 @@
 <script>
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import FormField from '../ui/FormField.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import ToolReadinessNotice from '../ui/ToolReadinessNotice.svelte';
   import {
     TOOL_ACCESS_MODE_ALL,
@@ -10,6 +12,7 @@
     groupToolCatalog,
     normalizeToolAccess,
     policyNamesNotInCatalog,
+    setAnalyzeImageAlwaysAvailable,
     setToolAccessPreference,
     setToolFamilyPreference,
     toolAccessPreferenceEnabled,
@@ -211,7 +214,7 @@
       notes.push(
         t(
           'toolAccess.constraint.imageFallback',
-          'Used only when the main Model cannot analyze images directly',
+          'By default, available only when the main Model cannot view images. Enabling availability with vision lets this Agent request a second analysis. A configured, available image-understanding Model is required in either case.',
         ),
       );
     }
@@ -370,6 +373,28 @@
                     {#each toolNotes(tool) as note (`${tool.name}-${note}`)}
                       <p>{note}</p>
                     {/each}
+                    {#if tool.name === 'analyze_image'}
+                      <FormField
+                        label={t(
+                          'toolAccess.imageAlwaysAvailable',
+                          'Available with vision',
+                        )}
+                      >
+                        <Toggle
+                          size="sm"
+                          checked={(policy.granted ?? []).includes(tool.name)}
+                          disabled={disabled || !preferenceEnabled(tool)}
+                          ariaLabel={t(
+                            'toolAccess.imageAlwaysAvailable',
+                            'Available with vision',
+                          )}
+                          onChange={(next) =>
+                            onChange(
+                              setAnalyzeImageAlwaysAvailable(policy, next),
+                            )}
+                        />
+                      </FormField>
+                    {/if}
                     <ToolReadinessNotice
                       ready={tool.ready}
                       readinessHint={tool.readiness_hint}
@@ -656,6 +681,21 @@
 
   .tool-access-tip p + p {
     margin-top: 4px;
+  }
+
+  .tool-access-tip :global(.form-field) {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  .tool-access-tip :global(.form-field__label) {
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    text-transform: none;
+    letter-spacing: normal;
   }
 
   .tool-access-description {

@@ -24,7 +24,7 @@ from core.chat.wire_shaping import RequestImageBudget, limit_request_images
 from core.model_tasks import SpeechExecutionError
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.sessions import ChatSessionManager
-from core.tools import ToolRegistry
+from core.tools import ToolAccess, ToolRegistry
 from core.tools.file_state import FileReadState
 from core.tools.read import render_text_file
 from core.utils.paths import model_path
@@ -362,6 +362,7 @@ class _StubRuntime:
 class _StubAgent:
     def __init__(self, model: str = "openai/gpt-5.2") -> None:
         self.model = model
+        self.tool_access = ToolAccess()
 
 
 class _StubTranscriber:

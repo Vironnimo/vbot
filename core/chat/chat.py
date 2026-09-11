@@ -219,6 +219,7 @@ from core.sessions.errors import SessionNotFoundError
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
+    ToolAccess,
     ToolContract,
     ToolNotFoundError,
     project_bash_tool_definitions,
@@ -2654,6 +2655,7 @@ class ChatLoop:
         )
         tools = await self._route_tool_definitions(
             tools,
+            tool_access=agent.tool_access,
             input_modalities=effective_input_modalities,
             wire_media_types=inputs.wire_media_types,
         )
@@ -2841,6 +2843,7 @@ class ChatLoop:
         self,
         tools: list[JsonObject],
         *,
+        tool_access: ToolAccess,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
@@ -2854,7 +2857,7 @@ class ChatLoop:
         )
         image_task_available = (
             False
-            if route_can_view_images
+            if route_can_view_images and ANALYZE_IMAGE_TOOL_NAME not in tool_access.granted
             else await self._dependencies.image_understanding_available()
         )
         if image_task_available:
@@ -2876,7 +2879,10 @@ class ChatLoop:
         )
         if not any(tool.get("name") == ANALYZE_IMAGE_TOOL_NAME for tool in tools):
             return await self._route_tool_definitions(
-                tools, input_modalities=frozenset(), wire_media_types=frozenset()
+                tools,
+                tool_access=agent.tool_access,
+                input_modalities=frozenset(),
+                wire_media_types=frozenset(),
             )
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         _, model_id = _split_agent_model(agent.model)
@@ -2884,6 +2890,7 @@ class ChatLoop:
         try:
             return await self._route_tool_definitions(
                 tools,
+                tool_access=agent.tool_access,
                 input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
             )
@@ -2934,6 +2941,7 @@ class ChatLoop:
                 )
                 tools = await self._route_tool_definitions(
                     refreshed,
+                    tool_access=agent.tool_access,
                     input_modalities=target.input_modalities,
                     wire_media_types=target.wire_media_types,
                 )
