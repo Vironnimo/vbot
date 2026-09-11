@@ -1,6 +1,6 @@
 ---
 name: free-models
-description: Conserve budget by delegating suitable Sub-Agent work to free-of-charge Models (OpenRouter free variants, OpenCode Zen free tier) and by helping the user set up a free-capable Provider when none is configured. Use when the user asks to save costs or mentions free models, a low budget, or spending nothing, when many small independent subtasks can run on weaker Models, or before fanning out bulk Sub-Agent work. Do not use for critical, security-sensitive, or irreversible work that needs top-tier quality, and never as a license to downgrade the main conversation's own Model.
+description: Use free Models for suitable low-risk Sub-Agent work or help set up a free Provider. Use for cost-saving requests or bulk delegation; keep the main Agent's Model unchanged.
 ---
 
 # Free Models

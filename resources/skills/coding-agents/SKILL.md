@@ -1,6 +1,6 @@
 ---
 name: coding-agents
-description: Operate Codex, Claude Code, OpenCode, and other interactive coding-agent CLIs as persistent shared TUI sessions through terminal, including explicit model, reasoning or effort, Agent, profile, permission, sandbox, and other startup settings. Use when delegating coding work, selecting how a coding agent should start, supervising it, answering its questions or approvals, checking progress, or continuing an existing coding-agent session. Do not use to operate vBot itself; that is the vbot-cli skill.
+description: Start, supervise, and resume Codex, Claude Code, or OpenCode in interactive Terminal Sessions. Use for delegating coding work and handling CLI setup, progress, questions, or approvals.
 ---
 
 # Coding Agents

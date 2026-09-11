@@ -1,6 +1,6 @@
 ---
 name: weather
-description: Get current weather conditions and multi-day forecasts for any city, region, airport code, landmark, or coordinates via the free wttr.in service (no API key), using the web_fetch tool. Use when the user asks what the weather is like, whether it will rain, how hot or cold it is, or wants a forecast for travel planning. Examples — "what's the weather in Berlin", "will it rain in Paris tomorrow", "how hot is it in Tokyo right now", "weather forecast for my trip to London".
+description: Get current weather and short-range forecasts for a location. Use for weather, rain, temperature, or travel forecast questions.
 ---
 
 # Weather
