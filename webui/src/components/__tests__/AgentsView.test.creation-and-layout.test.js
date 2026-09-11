@@ -122,6 +122,40 @@ describe('AgentsView', () => {
     expect(document.querySelector('#agent-model')).toBe(model);
   });
 
+  it('places shared defaults before the roster and exposes mode controls without a disclosure', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('.agent-item'));
+    const entry = document.querySelector('.agent-list-defaults button');
+    expect(
+      entry.compareDocumentPosition(
+        document.querySelector('.agent-list-scroll'),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    entry.click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('#agent-shared-compaction'),
+    );
+    const scrollport = document.querySelector('.agent-shared-content');
+    expect(
+      scrollport.contains(document.querySelector('.agent-shared-title')),
+    ).toBe(true);
+    const editor = document.querySelector('#agent-shared-compaction');
+    expect(editor.closest('[hidden]')).toBeNull();
+    const modes = editor.querySelectorAll('input[type="radio"]');
+    expect(Array.from(modes, (input) => input.value)).toEqual([
+      'continuation',
+      'summary_tail',
+    ]);
+    expect(
+      modes[0].compareDocumentPosition(
+        editor.querySelector('[role="switch"]'),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('reloads authoritative inherited values after saving shared defaults without changing Agent overrides', async () => {
     const handler = createAgentsRpcMock();
     let savedTemperature = 0.4;

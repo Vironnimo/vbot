@@ -127,6 +127,18 @@
     </Button>
   </div>
 
+  <div class="agent-list-defaults">
+    <Button
+      variant="tertiary"
+      class={`secondary-list__item ${sharedDefaultsOpen ? 'active' : ''}`}
+      aria-pressed={sharedDefaultsOpen}
+      onClick={onOpenSharedDefaults}
+      >{t('agents.shared.title', 'Shared defaults')}</Button
+    >
+
+    <p>{t('agents.shared.listHint', 'Common Model, Thinking & Compaction')}</p>
+  </div>
+
   <div
     class="agent-list-scroll secondary-pane__scroll secondary-list"
     role={!isLoading && agents.length > 0 ? 'list' : undefined}
@@ -211,17 +223,6 @@
     {/if}
   </div>
 
-  <div class="agent-list-defaults">
-    <Button
-      variant="secondary"
-      class={sharedDefaultsOpen ? 'agent-defaults-active' : ''}
-      aria-pressed={sharedDefaultsOpen}
-      onClick={onOpenSharedDefaults}
-      >{t('agents.shared.title', 'Shared defaults')}</Button
-    >
-
-    <p>{t('agents.shared.listHint', 'Common Model, Thinking & Compaction')}</p>
-  </div>
   <div class="agent-list-pane__sr-only" aria-live="polite" role="status">
     {reorderAnnouncement}
   </div>

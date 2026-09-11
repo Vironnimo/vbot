@@ -1445,7 +1445,6 @@ export const englishCatalog = Object.freeze({
     'Choose the common starting point. Individual Agents can override it.',
   'agents.shared.compactionDescription':
     'The inherited policy for keeping long conversations within the Model context.',
-  'agents.shared.configureCompaction': 'Configure Compaction',
   'agents.shared.listHint': 'Common Model, Thinking & Compaction',
   'settings.title': 'Settings',
   'settings.loading': 'Loading settings…',
@@ -1678,7 +1677,7 @@ export const englishCatalog = Object.freeze({
     'Choose when Context is compacted and how the next checkpoint is assembled.',
   'compaction.enabled': 'Automatic compaction',
   'compaction.enabledDescription':
-    'Compact before a Model request or after complete Tool Results when the configured ratio or token limit is reached.',
+    'Compact automatically when a limit is reached. Manual Compaction remains available when this is off.',
   'compaction.trigger.label': 'Trigger',
   'compaction.trigger.contextRatio': 'Context window ratio',
   'compaction.trigger.inputTokens': 'Absolute input tokens',
@@ -1686,14 +1685,17 @@ export const englishCatalog = Object.freeze({
   'compaction.trigger.tokens': 'Input tokens',
   'compaction.trigger.maxTokens': 'Maximum input tokens (optional)',
   'compaction.trigger.noTokenCap': 'No token cap',
-  'compaction.strategy.label': 'Strategy',
-  'compaction.strategy.summaryTail': 'Summary + verbatim tail',
-  'compaction.strategy.continuation': 'Cache-preserving continuation',
+  'compaction.strategy.summaryTailDescription':
+    'Summarize older messages and keep the most recent messages unchanged.',
+  'agents.shared.sections': 'Default settings sections',
+  'compaction.strategy.label': 'Compaction mode',
+  'compaction.strategy.summaryTail': 'With tail',
+  'compaction.strategy.continuation': 'Classic',
   'compaction.strategy.tailTokens': 'Verbatim tail tokens',
   'compaction.strategy.summaryModel': 'Summary model',
   'compaction.strategy.activeModel': 'Active Model',
   'compaction.strategy.continuationDescription':
-    'Reuses the active Model request prefix and turns one text response directly into the next checkpoint.',
+    'Summarize the conversation with the active Model. Continue from the summary.',
   'settings.compaction.auto': 'Auto-compact',
   'settings.compaction.autoDescription':
     'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',

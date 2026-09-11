@@ -75,8 +75,6 @@ export async function openSettingsSection(navLabel, sectionId) {
     await waitForCondition(() =>
       document.querySelector('#settings-defaults-model'),
     );
-    if (sectionId === 'compaction')
-      buttonByText('Configure Compaction').click();
   } else {
     await waitForCondition(() => buttonByText(category));
     buttonByText(category).click();
