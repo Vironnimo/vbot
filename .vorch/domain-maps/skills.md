@@ -123,7 +123,7 @@ metadata:
 
 ## External Dependencies
 
-- `pyyaml` (core dependency) parses SKILL.md frontmatter. Browser automation uses the bundled `playwright-cli` Skill through `bash`, with official CLI instructions and on-demand references. CLI/browser setup remains optional and missing binaries do not hide its setup guidance. Provenance and local adaptation are recorded in `resources/skills/playwright-cli/UPSTREAM.json`; operator details and the archived Browser Use boundary live in `docs/browser-use.md`. Computer Use remains an opt-in bundled Extension (`extensions/computer-use.md`).
+- `pyyaml` (core dependency) parses SKILL.md frontmatter. Browser automation uses the bundled `playwright-cli` Skill through `bash`, with official CLI instructions and on-demand references. CLI/browser setup remains optional and missing binaries do not hide its setup guidance. Provenance and local adaptation are recorded in `resources/skills/playwright-cli/UPSTREAM.json`; setup and use live in that package's `SKILL.md`. When updating the replacement Skill or restoring archived Browser Use, read `extensions/browser-use.md`. Computer Use remains an opt-in bundled Extension (`extensions/computer-use.md`).
 
 ## Constraints & Gotchas
 

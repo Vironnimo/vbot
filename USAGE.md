@@ -65,7 +65,7 @@ On Debian-like systems, including Raspberry Pi OS, run:
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-The Installer can add missing prerequisites through `apt`, configures a systemd user unit, and starts the server. Browser automation is optional and uses the bundled `playwright-cli` Skill through the `bash` Tool. Install Node.js 18 or newer, npm, and `@playwright/cli` on the server host when needed; the Skill includes setup instructions. See [Browser automation](docs/browser-use.md).
+The Installer can add missing prerequisites through `apt`, configures a systemd user unit, and starts the server. Browser automation is optional and uses the bundled `playwright-cli` Skill through the `bash` Tool. Install Node.js 18 or newer, npm, and `@playwright/cli` on the server host when needed; the Skill includes setup instructions. See [Browser automation](resources/skills/playwright-cli/SKILL.md).
 
 After either standard installation, wait for the final summary to confirm that the server is running, then open `http://127.0.0.1:8420/`. The first-run setup is described in [First-run setup](#first-run-setup).
 
