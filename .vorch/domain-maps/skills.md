@@ -125,6 +125,8 @@ metadata:
 
 - `pyyaml` (core dependency) parses SKILL.md frontmatter. Browser automation uses the bundled `playwright-cli` Skill through `bash`, with official CLI instructions and on-demand references. CLI/browser setup remains optional and missing binaries do not hide its setup guidance. Provenance and local adaptation are recorded in `resources/skills/playwright-cli/UPSTREAM.json`; setup and use live in that package's `SKILL.md`. When updating the replacement Skill or restoring archived Browser Use, read `extensions/browser-use.md`. Computer Use remains an opt-in bundled Extension (`extensions/computer-use.md`).
 
+The bundled `vbot-cli` Skill advertises extended Session search and transcript retrieval. Its `references/session-search.md` teaches read-only SQLite inspection when Search excerpts are insufficient, including active-lineage transcripts and exact Tool Results; this introduces no Bash prerequisite or automatic Tool grant.
+
 ## Constraints & Gotchas
 
 - Requirement checks run against the environment snapshot captured at registry load/reload, not live `os.environ` at activation - a newly exported key or installed binary flips availability only after reload.

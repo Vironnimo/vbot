@@ -835,3 +835,57 @@ def messages(connection: sqlite3.Connection, address: SessionAddress) -> list[Ch
         (state["session_key"],),
     ).fetchall()
     return [_store_codec.message_from_row(row) for row in rows]
+
+
+def recall_context(
+    connection: sqlite3.Connection, address: SessionAddress, message_id: str
+) -> list[JsonObject]:
+    """Read the enclosing question and final answer without loading a transcript.
+
+    Only active conversation text is projected. The caller already has the hit;
+    do not repeat it or hydrate Tool graphs. A deleted/edited-away anchor returns
+    no context rather than borrowing a different conversation block.
+    """
+    anchor = connection.execute(
+        "SELECT m.session_key, m.seq, m.role FROM messages m JOIN sessions s "
+        "ON s.session_key = m.session_key WHERE s.project_id = ? AND s.agent_id = ? "
+        "AND s.session_id = ? AND s.status = 'live' AND m.active = 1 "
+        "AND m.message_id = ? ORDER BY m.seq DESC LIMIT 1",
+        (*_store_values._scope(address), message_id),
+    ).fetchone()
+    if anchor is None or anchor["role"] not in {"user", "assistant"}:
+        return []
+    key, seq = int(anchor["session_key"]), int(anchor["seq"])
+    bounds = connection.execute(
+        "SELECT (SELECT MAX(seq) FROM messages WHERE session_key = ? AND active = 1 "
+        "AND role = 'user' AND seq <= ?) AS first, "
+        "(SELECT MIN(seq) FROM messages WHERE session_key = ? AND active = 1 "
+        "AND role = 'user' AND seq > ?) AS following",
+        (key, seq, key, seq),
+    ).fetchone()
+    first = bounds["first"]
+    if first is None:
+        return []
+    following = bounds["following"]
+    # Two narrow row lookups; substr bounds the text before it leaves SQLite.
+    rows = connection.execute(
+        "SELECT seq, message_id, role, timestamp, "
+        "substr(COALESCE(content, content_search, ''), 1, 801) AS text "
+        "FROM messages WHERE session_key = ? AND active = 1 AND seq != ? AND "
+        "(seq = ? OR seq = (SELECT MAX(seq) FROM messages WHERE session_key = ? "
+        "AND active = 1 AND role = 'assistant' AND seq > ? AND (? IS NULL OR seq < ?) "
+        "AND length(COALESCE(content, content_search, '')) > 0)) ORDER BY seq",
+        (key, seq, first, key, first, following, following),
+    ).fetchall()
+    return [
+        {
+            "message_index": int(row["seq"]),
+            "message_id": str(row["message_id"]),
+            "role": str(row["role"]),
+            "timestamp": str(row["timestamp"]),
+            "text": str(row["text"])[:800],
+            "truncated": len(str(row["text"])) > 800,
+        }
+        for row in rows
+        if row["text"]
+    ]

@@ -13,7 +13,7 @@ import pytest
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
 from core.providers.accounts import ConnectionRef
-from core.recall import CanonicalSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
+from core.recall import RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
 from core.runtime._configuration import _resolve_resources_path
 from core.runtime.runtime import Runtime
@@ -84,10 +84,6 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_sqlite_fts(
         encoding="utf-8",
     )
     registry = RecallBackendRegistry()
-    registry.register(
-        "canonical_scan",
-        lambda context: CanonicalSessionRecallBackend(context.sessions),
-    )
     registry.register("sqlite_fts", SqliteFtsRecallBackend)
 
     def create_broken_backend(_context: Any) -> Any:

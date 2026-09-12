@@ -24,9 +24,7 @@ from core.tools._session_recall_results import (
     SESSION_SEARCH_EXCERPT_MAX_CHARS,
 )
 from core.tools.session_search import (
-    SESSION_READ_TOOL_NAME,
     SESSION_SEARCH_RESULT_MAX_BYTES,
-    session_read_handler,
     session_search_handler,
 )
 from tests.core.tools.session_search_helpers import (
@@ -238,37 +236,6 @@ async def test_session_scoped_search_keeps_multiple_hits_and_does_not_overfetch(
     assert [item["message_id"] for item in data["items"]] == list(
         reversed([message.id for message in messages])
     )
-
-
-async def test_project_scope_is_preserved_for_search_and_read(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    global_session = sessions.create("coder", session_id="global")
-    project_session = sessions.create("coder", session_id="project", project_id="p1")
-    global_session.append(ChatMessage.user("needle global", timestamp=timestamp(1)))
-    project_message = ChatMessage.user("needle project", timestamp=timestamp(2))
-    project_session.append(project_message)
-    backend = CanonicalSessionRecallBackend(sessions)
-    search_context = make_context(tmp_path, project_id="p1")
-    read_context = make_context(
-        tmp_path,
-        project_id="p1",
-        tool_name=SESSION_READ_TOOL_NAME,
-    )
-
-    data = success(await session_search_handler(search_context, {"query": "needle"}, backend))
-    exact = success(
-        await session_read_handler(
-            read_context,
-            {
-                "session_id": "project",
-                "message_id": project_message.id,
-            },
-            sessions,
-        )
-    )
-
-    assert [item["session_id"] for item in data["items"]] == ["project"]
-    assert exact["items"][0]["message"] == project_message.to_dict()
 
 
 async def test_fts_search_keeps_backend_relevance(tmp_path: Path) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import re
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -30,15 +29,11 @@ SESSION_RECALL_CONVERSATION_ROLES = (
     "error",
     "compaction_checkpoint",
 )
-# Roles a search matches when the caller does not pass ``roles``. Tool results
-# are opt-in: they embed poorly (ANSI dumps, JSON run envelopes, directory
-# listings) and drowned out conversation in results, so a search reaches them
-# only when the caller explicitly asks via ``roles: ["tool"]``. Errors stay in
-# the default — they are low-volume and occasionally the thing being looked for.
+# Ordinary recall searches conversation content and labeled summaries.
+# Tool Results and operational errors require explicit lower-level diagnostic reads.
 SESSION_RECALL_DEFAULT_ROLES = (
     "user",
     "assistant",
-    "error",
     "compaction_checkpoint",
 )
 SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
@@ -68,7 +63,7 @@ SESSION_RECALL_LITERAL_TOOL_SUMMARY = (
 )
 SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
     "Literal terms to find. Every whitespace-separated term must occur as a case-insensitive "
-    "substring; synonyms and paraphrases do not match. Omit to list recent Sessions. Matches "
+    "substring; synonyms and paraphrases do not match. Matches "
     "are newest first."
 )
 
@@ -236,14 +231,7 @@ def message_matches_search_request(message: Any, request: RecallSearchRequest) -
 
 
 def message_search_text(message: Any) -> str:
-    parts = [
-        content_to_text(message.content),
-        message.reasoning or "",
-        message.name or "",
-        message.error_kind or "",
-        tool_calls_text(message.tool_calls),
-    ]
-    return "\n".join(part for part in parts if part)
+    return content_to_text(message.content)
 
 
 def content_to_text(content: Any) -> str:
@@ -264,19 +252,6 @@ def content_block_to_text(block: Any) -> str:
         # conversation content, and would bloat the recall index.
         return block.path
     return ""
-
-
-def tool_calls_text(tool_calls: Any) -> str:
-    if not tool_calls:
-        return ""
-    parts: list[str] = []
-    for tool_call in tool_calls:
-        try:
-            arguments = json.dumps(tool_call.arguments, ensure_ascii=False, sort_keys=True)
-        except TypeError:
-            arguments = str(tool_call.arguments)
-        parts.append(f"{tool_call.name} {arguments}")
-    return "\n".join(parts)
 
 
 def text_matches_search_request(text: str, request: RecallSearchRequest) -> bool:

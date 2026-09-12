@@ -329,8 +329,8 @@ async def test_sqlite_search_text_matches_canonical_scanner_sources(tmp_path: Pa
     tool_call_data = await recall.search_page(request(query="indexed argument"))
 
     assert block_data.hits[0].session_id == "sources-session"
-    assert reasoning_data.hits[0].role == "assistant"
-    assert tool_call_data.hits[0].role == "assistant"
+    assert reasoning_data.hits == ()
+    assert tool_call_data.hits == ()
 
 
 async def test_sqlite_fts_finds_substring_within_token(tmp_path: Path) -> None:

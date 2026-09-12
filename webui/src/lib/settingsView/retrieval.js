@@ -1,7 +1,5 @@
 import { textOrFallback, textOrEmpty } from './values.js';
 
-const RECALL_BACKEND_CANONICAL_SCAN = 'canonical_scan';
-
 const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
 
 const WEB_SEARCH_PROVIDER_BRAVE = 'brave';
@@ -21,8 +19,9 @@ const WEB_SEARCH_PROVIDER_PERPLEXITY = 'perplexity';
 const WEB_SEARCH_PROVIDER_SEARXNG = 'searxng';
 
 const RECALL_BACKEND_DEFAULTS = Object.freeze([
-  RECALL_BACKEND_CANONICAL_SCAN,
   RECALL_BACKEND_SQLITE_FTS,
+  'vector',
+  'hybrid',
 ]);
 
 const WEB_SEARCH_PROVIDER_DEFAULTS = Object.freeze([
@@ -51,7 +50,7 @@ function normalizeRecallSettings(rawSettings) {
     typeof recall.backend === 'string' &&
     availableBackends.includes(recall.backend)
       ? recall.backend
-      : RECALL_BACKEND_CANONICAL_SCAN;
+      : RECALL_BACKEND_SQLITE_FTS;
 
   return {
     backend,

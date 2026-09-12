@@ -52,7 +52,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "process",
     "project",
     "read",
-    "session_read",
     "session_search",
     "skill",
     "skill_manage",

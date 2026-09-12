@@ -64,7 +64,8 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 # v5 → canonical Session generations/revisions replace filesystem freshness,
 #      and this disposable index owns Passage retrieval only while message
 #      search moves into the canonical Session store.
-_SCHEMA_VERSION = 5
+# v6 → conversation-only Passage policy with separate Compaction summaries.
+_SCHEMA_VERSION = 6
 # FTS5 trigram needs at least three characters; shorter queries fall back to the canonical scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
@@ -189,11 +190,12 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             ),
         )
 
-    def search_capabilities(self) -> RecallSearchCapabilities:
+    @staticmethod
+    def search_capabilities() -> RecallSearchCapabilities:
         query_description = (
             "Literal terms to find. Every whitespace-separated term must occur. One- or "
-            "two-character terms match whole tokens; longer terms also match inside words. "
-            "Omit to list recent Sessions. Matches are ranked by text relevance."
+            "two-character terms require whole-token matching for the query; otherwise terms "
+            "also match inside words. Matches are ranked by text relevance."
         )
         return RecallSearchCapabilities(
             result_type="message",

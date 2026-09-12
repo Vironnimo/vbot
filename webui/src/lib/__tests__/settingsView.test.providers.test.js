@@ -456,19 +456,19 @@ describe('settingsView helpers', () => {
       },
     });
     expect(getRecallSettings({})).toEqual({
-      backend: 'canonical_scan',
-      available_backends: ['canonical_scan', 'sqlite_fts'],
+      backend: 'sqlite_fts',
+      available_backends: ['sqlite_fts', 'vector', 'hybrid'],
     });
     expect(
       getRecallSettings({
         recall: {
           backend: 'sqlite_fts',
-          available_backends: ['canonical_scan', 'sqlite_fts'],
+          available_backends: ['sqlite_fts'],
         },
       }),
     ).toEqual({
       backend: 'sqlite_fts',
-      available_backends: ['canonical_scan', 'sqlite_fts'],
+      available_backends: ['sqlite_fts'],
     });
     expect(buildRecallSettingsPayload({ backend: 'sqlite_fts' })).toEqual({
       recall: {
@@ -477,8 +477,9 @@ describe('settingsView helpers', () => {
     });
     expect(buildRecallBackendOptions(getRecallSettings({}), translate)).toEqual(
       [
-        { value: 'canonical_scan', label: 'Canonical scan' },
         { value: 'sqlite_fts', label: 'SQLite FTS' },
+        { value: 'vector', label: 'Vector' },
+        { value: 'hybrid', label: 'Hybrid' },
       ],
     );
     expect(getWebSearchSettings({})).toEqual({

@@ -8,9 +8,6 @@ from typing import Any
 from core.tools.history import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_NAME, MEMORY_TOOL_PARAMETERS
 from core.tools.session_search import (
-    SESSION_READ_TOOL_DESCRIPTION,
-    SESSION_READ_TOOL_NAME,
-    SESSION_READ_TOOL_PARAMETERS,
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
@@ -240,60 +237,17 @@ def _status_scenario(case_name: str) -> ProbeScenario:
     )
 
 
-def _session_read_scenario(case_name: str) -> ProbeScenario:
-    session_id = "session-123"
-    agent_id = "tester"
-    message_id = "message-123"
-    continuation = "r1:1234:" + ("a" * 64)
-    session_read_arguments: dict[str, dict[str, Any]] = {
-        "whole": {"session_id": session_id},
-        "message": {"session_id": session_id, "message_id": message_id},
-        "agent": {"session_id": session_id, "agent_id": agent_id},
-        "continuation": {
-            "session_id": session_id,
-            "message_id": message_id,
-            "continuation": continuation,
-        },
-        "all_messages": {"session_id": session_id, "all_messages": True},
-        "all": {
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "all_messages": True,
-            "continuation": continuation,
-        },
-    }
-    expected_arguments = session_read_arguments[case_name]
-    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
-    instruction = (
-        f"Call {SESSION_READ_TOOL_NAME} exactly once with exactly this JSON object as its "
-        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
-        "shown."
-    )
-    return ProbeScenario(
-        "session_read",
-        [
-            {
-                "name": SESSION_READ_TOOL_NAME,
-                "description": SESSION_READ_TOOL_DESCRIPTION,
-                "parameters": SESSION_READ_TOOL_PARAMETERS,
-            }
-        ],
-        _probe_messages(instruction),
-        SESSION_READ_TOOL_NAME,
-        require_closed_input=False,
-        expected_arguments=expected_arguments,
-    )
-
-
 def _session_search_scenario(case_name: str) -> ProbeScenario:
     query = "Tool schema defaults"
     session_id = "session-123"
     session_search_arguments: dict[str, dict[str, Any]] = {
-        "list": {},
         "query": {"query": query},
-        "period": {"period": "2026-07-01/2026-07-31"},
-        "agent": {"agent_id": "tester"},
+        "period": {"query": query, "period": "2026-07-01/2026-07-31"},
+        "agent": {"query": query, "agent_id": "tester"},
         "session": {"query": query, "session_id": session_id},
+        "subagents": {"query": query, "include_subagents": True},
+        "exclude_subagents": {"query": query, "include_subagents": False},
+        "open_period": {"query": query, "period": "2026-07-01/"},
         "all": {
             "query": query,
             "period": "2026-07-01/2026-07-31",
