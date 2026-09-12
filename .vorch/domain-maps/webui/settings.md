@@ -20,9 +20,12 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 
 `WakewordVoiceSettings.svelte` retains Desktop runtime polling, configuration saving and Model management. Internal `voice/TranscriptionAudioSettings.svelte` owns the independent audio draft/autosave participant; `WakewordCalibration.svelte` owns calibration controls and actions against the same bound runtime state and calibration baseline. `voiceLabels.js` and the namespaced `voice.css` hold presentation details. The Voice card under Tools & Media also owns the Live voice opt-in for all accessors. `WakewordVoiceSettings` saves `live_voice.enabled` through `settings.patch`, reloads canonical Settings, and publishes the successful commit through `SettingsView.onSettingsCommit` to App. A failed save retains the previous setting. See `model_tasks/live.md` for the sidebar control and active-connection lifecycle.
 
+`SettingsMcpPanel.svelte` keeps MCP configuration and inspector composition; its uniquely named presentation rules live in adjacent `mcp.css`.
+
 ## Providers and models
 
 - Specialized Model options render directly below the selected target without a per-target disclosure. Local speech setup and the visibly labeled TTS preview follow those fields. `SettingsSpecializedModelsPanel.test.js` covers initial Qwen/Chatterbox visibility, field order, edits and target changes; `LocalSpeechSupport.test.js` covers the preview label and generation lifecycle.
+- `SettingsProvidersPanel.svelte` delegates local Model loading and editable Context-window values to private `settings/providers/localModels.svelte.js`; credentials, Provider refresh and connection workflows remain in the panel.
 - Provider rows distinguish added Connections, configured credentials, usable Accounts, reachability, and enabled state. Those values come from backend contracts; the UI must not infer connectivity from the presence of a masked credential or a Model result.
 - Connect and disconnect payloads preserve Provider id, connection id, and account id. OAuth, device-flow, API-key, environment, local, and keyless connections have different affordances and must not be collapsed into a single credential form.
 - Adding a Provider means exposing a backend-advertised Connection candidate. Keyless local Connections use the same Add Provider flow: adding persists enablement and triggers discovery but never loads a Model. The frontend does not maintain its own Provider registry.
