@@ -16,6 +16,9 @@ from core.models.models import (
     Model,
     ReasoningCapabilities,
 )
+from core.providers._messages_wire import (
+    _to_anthropic_user_content_block,
+)
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic import (
     ANTHROPIC_METADATA_KEY,
@@ -24,7 +27,6 @@ from core.providers.anthropic import (
 )
 from core.providers.anthropic_compatible import (
     AnthropicCompatibleAdapter,
-    _to_anthropic_user_content_block,
 )
 from core.providers.errors import (
     NetworkError,

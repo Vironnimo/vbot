@@ -59,7 +59,8 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Account id grammar and environment-key derivation: `core/providers/accounts.py`
 - Credential, enablement, and usability resolution: `core/providers/credentials.py`
 - OAuth persistence/refresh and device flow: `core/providers/token_store.py`, `token_getter.py`, `auth_flow.py`
-- Adapter contract, canonical terminal outcomes, Tool-call candidate normalization and target-wire identifier profiles, and shared HTTP/error layer: `core/providers/adapter.py`, `_http_shared.py`, `errors.py`
+- Adapter contract, canonical terminal outcomes and request budgeting: `core/providers/adapter.py`; internal `_tool_calls.py` owns candidate normalization, Result projection and target-wire identifier profiles, re-exported through the existing Adapter API. Shared HTTP/error handling stays in `_http_shared.py` and `errors.py`.
+- Compatible Chat Completions transport and overridable policy: `openai_compatible.py`; internal `_chat_completions_wire.py`, `_chat_completions_stream.py`, `_chat_completions_catalog.py` and `_chat_completions_constants.py` hold complete serialization, decoder and catalog functions. Compatible Messages transport and policy: `anthropic_compatible.py`; `_messages_stream.py` holds the complete stateful decoder, `_messages_wire.py` owns message/cache serialization and response projection, and `_messages_constants.py` holds the wire constants. Concrete Adapters still extend the same base classes.
 - Shared reasoning decision policy: `core/providers/reasoning.py`
 - Shared non-strict Tool-schema rendering: `core/providers/tool_schema.py`
 - Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates

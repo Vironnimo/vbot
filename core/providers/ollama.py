@@ -49,6 +49,12 @@ from core.models.models import (
     Model,
     ReasoningCapabilities,
 )
+from core.providers._chat_completions_stream import (
+    _stream_choices,
+)
+from core.providers._chat_completions_wire import (
+    _first_choice_message,
+)
 from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
@@ -67,8 +73,6 @@ from core.providers.adapter import (
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _first_choice_message,
-    _stream_choices,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (

@@ -20,6 +20,12 @@ from core.models.models import (
     ReasoningCapabilities,
     derive_model_task_types,
 )
+from core.providers._chat_completions_catalog import (
+    _parse_optional_int,
+    _read_mapping,
+    _read_string,
+    _read_string_list,
+)
 from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
@@ -41,10 +47,6 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _parse_optional_int,
-    _read_mapping,
-    _read_string,
-    _read_string_list,
 )
 from core.providers.providers import ProviderConfig
 from core.providers.reasoning import (
