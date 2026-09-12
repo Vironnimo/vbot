@@ -162,3 +162,25 @@ def test_cron_probe_verifies_persisted_effects_for_every_case() -> None:
     for case in cron_tolerance_cases():
         row = asyncio.run(cron_case(Adapter(), args, case))
         assert row["passed"], row
+
+
+def test_channel_probe_checks_actual_receiver_and_saved_notes() -> None:
+    from scripts.provider_probe.workflow_channel_tolerance import (
+        channel_case,
+        channel_tolerance_cases,
+    )
+
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            arguments = json.loads(messages[-1]["content"].removeprefix("Arguments: "))
+            return {
+                "tool_calls": [{"id": "fixture", "name": "channel_send", "arguments": arguments}]
+            }
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args([])
+    for case in channel_tolerance_cases():
+        row = asyncio.run(channel_case(Adapter(), args, case))
+        assert row["passed"], row

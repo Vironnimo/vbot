@@ -19,6 +19,7 @@ from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.tools.arguments import optional_string, required_string
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -161,6 +162,31 @@ _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+_CHANNEL_SEND_RUNTIME_CONTRACT = compile_tool_contract(
+    name="channel_send",
+    input_schema={
+        **CHANNEL_SEND_TOOL_PARAMETERS,
+        "properties": {
+            **CHANNEL_SEND_TOOL_PARAMETERS["properties"],
+            "action": {"type": "string", "enum": ["send"]},
+        },
+    },
+    require_closed_input=False,
+)
+
+
+def _normalize_channel_send_arguments(arguments: Any) -> Any:
+    arguments = _CHANNEL_SEND_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    if not isinstance(arguments, dict):
+        return arguments
+    action = arguments.pop("action", "send")
+    if action != "send":
+        raise ToolContractError(
+            "channel_send sends messages or files; action must be send or omitted."
+        )
+    return arguments
+
+
 def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject:
     canonical_properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     if not isinstance(canonical_properties, dict):
@@ -273,6 +299,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
         open_input_schema=True,
+        argument_normalizer=_normalize_channel_send_arguments,
         result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
         display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),

@@ -633,3 +633,53 @@ class TestToolPromptBlockRegistry:
 
     def test_empty_registry_yields_no_definitions(self) -> None:
         assert ToolPromptBlockRegistry().block_definitions() == []
+
+
+@pytest.mark.asyncio
+async def test_domain_argument_repair_precedes_schema_and_preserves_input(tmp_path: Path) -> None:
+    calls = []
+
+    def repair(arguments):
+        calls.append("repair")
+        return arguments.pop("fetch")
+
+    def handler(context, arguments):
+        calls.append(arguments)
+        return tool_success({})
+
+    registry = ToolRegistry()
+    registry.register(
+        "fixture",
+        "Fixture",
+        {
+            "type": "object",
+            "properties": {"count": {"type": "integer", "minimum": 1}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        handler,
+        argument_normalizer=repair,
+    )
+    context = ToolContext(
+        agent_id="probe",
+        session_id="probe",
+        run_id="probe",
+        tool_call_id="probe",
+        tool_name="fixture",
+        tool_call_index=0,
+        workspace=tmp_path,
+        vbot_root=tmp_path,
+        data_root=tmp_path,
+    )
+    original = {"fetch": {"count": "3.0"}}
+    assert (await registry.dispatch(context, original, ["fixture"]))["ok"]
+    assert calls == ["repair", {"count": 3}]
+    assert original == {"fetch": {"count": "3.0"}}
+    with pytest.raises(ValueError):
+        await registry.dispatch(context, {"fetch": {"count": 0}}, ["fixture"])
+    assert calls[-1] == "repair"
+    from core.tools.tools import ToolNotAllowedError
+
+    with pytest.raises(ToolNotAllowedError):
+        await registry.dispatch(context, original, [])
+    assert calls == ["repair", {"count": 3}, "repair"]

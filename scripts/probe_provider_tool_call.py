@@ -326,7 +326,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--tolerance-report", type=Path)
     parser.add_argument("--tolerance-case", default="all")
     parser.add_argument(
-        "--tolerance-tool", choices=("skill_manage", "edit", "cron"), default="skill_manage"
+        "--tolerance-tool",
+        choices=("skill_manage", "edit", "cron", "channel_send"),
+        default="skill_manage",
     )
     return parser
 
