@@ -65,4 +65,4 @@ Local endpoint reachability is Runtime probe state, not credential state. `Runti
 - OAuth: `core/providers/token_store.py`, `token_getter.py`, `auth_flow.py`
 - Runtime wiring and reachability: `core/runtime/runtime.py`
 - RPCs: `server/rpc/connection_methods.py`
-- Focused coverage: `tests/core/providers/test_accounts.py`, the `test_credentials_*.py` suites, `test_token_store.py`, `test_token_getter.py`, `test_auth_flow.py`, and Connection RPC/Runtime tests
+- Focused coverage: `tests/core/providers/test_accounts.py`, the `test_credentials_*.py` suites, `test_token_store.py`, the `test_token_getter*.py` and `test_auth_flow*.py` behavior suites, and Connection RPC/Runtime tests

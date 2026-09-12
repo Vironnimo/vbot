@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from core.sessions.errors import SessionRecoveryConflictError, SessionStoreUnavailableError
-from core.sessions.snapshots import acknowledge_recovery_incident, read_snapshot_summary
+from core.sessions.recovery import acknowledge_recovery_incident
+from core.sessions.snapshots import read_snapshot_summary
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SESSION_STORE
 from server.rpc.dispatcher import RpcMethodHandler

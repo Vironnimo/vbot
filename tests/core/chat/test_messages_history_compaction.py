@@ -8,8 +8,8 @@ from .messages_test_support import (
     ChatMessage,
     ChatMessageValidationError,
     ToolCall,
-    _effective_compaction_messages,
     checkpoint_ordinal,
+    effective_compaction_messages,
     finalize_checkpoint_history_guidance,
     history_available,
 )
@@ -166,7 +166,7 @@ class TestHistoryCompactionPrimitives:
             compacted_token_count=1,
         )
 
-        effective = _effective_compaction_messages([carrier, result, deferred_note, checkpoint])
+        effective = effective_compaction_messages([carrier, result, deferred_note, checkpoint])
 
         assert [message.id for message in effective[-2:]] == [carrier.id, result.id]
         assert len({message.id for message in effective}) == len(effective)
@@ -189,7 +189,7 @@ class TestHistoryCompactionPrimitives:
             compacted_token_count=1,
         )
 
-        effective = _effective_compaction_messages([carrier, result, consumed, checkpoint])
+        effective = effective_compaction_messages([carrier, result, consumed, checkpoint])
 
         assert carrier.id not in {message.id for message in effective}
         assert result.id not in {message.id for message in effective}

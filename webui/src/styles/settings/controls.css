@@ -1,0 +1,122 @@
+.s-row-control {
+  display: flex;
+  min-width: fit-content;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.s-row-control--input {
+  width: min(220px, 100%);
+  min-width: 180px;
+}
+
+.s-row-control--model {
+  width: min(420px, 100%);
+  min-width: 260px;
+}
+
+.settings-view__dropdown {
+  width: 100%;
+}
+
+.settings-view__fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.settings-view__fallback-row .settings-view__dropdown {
+  flex: 1;
+}
+
+.settings-view__fallback-remove,
+.settings-view__fallback-add {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-med);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.settings-view__fallback-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.settings-view__fallback-remove:hover {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
+
+.settings-view__fallback-add {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.settings-view__fallback-add:hover {
+  color: var(--text-hi);
+  border-color: var(--text-med);
+}
+
+.settings-view__thinking-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.s-row-control--input-actions {
+  gap: 10px;
+  width: min(360px, 100%);
+  min-width: 220px;
+}
+
+.s-row-control--input-actions .s-input {
+  flex: 1;
+}
+
+.s-row-control--number {
+  width: 132px;
+  min-width: 132px;
+}
+
+.s-row-control--appearance {
+  gap: 10px;
+  width: min(360px, 100%);
+  min-width: 220px;
+}
+
+.s-row-control--recall {
+  width: min(320px, 100%);
+  min-width: 220px;
+}
+
+.s-row-control--web-search {
+  width: min(320px, 100%);
+  min-width: 220px;
+}
+
+.s-row-control--web-search-url {
+  width: min(420px, 100%);
+  min-width: 260px;
+}
+
+.s-row-control--task-model {
+  gap: 8px;
+  width: min(520px, 100%);
+  min-width: 280px;
+}
+
+.s-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.s-row-actions--provider {
+  justify-content: flex-end;
+}

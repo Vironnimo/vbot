@@ -1,30 +1,32 @@
 <script>
-  import { onDestroy, tick, untrack } from 'svelte';
-  import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import { t } from '../../../../webui/src/lib/i18n.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
-  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
-  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
-  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
-  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
-  import ToggleChipList from '../../../../webui/src/components/ui/ToggleChipList.svelte';
-  import ToolAccessEditor from '../../../../webui/src/components/tools/ToolAccessEditor.svelte';
   import {
-    effortOptionsForReasoning,
-    reasoningForModelValue,
-  } from '../../../../webui/src/lib/agentForm.js';
-  import {
-    buildModelSelectOptions,
     filterModelSelectOptions,
     modelFilterFooterLabel,
+    buildModelSelectOptions,
   } from '../../../../webui/src/lib/modelSelection.js';
+  import {
+    reasoningForModelValue,
+    effortOptionsForReasoning,
+  } from '../../../../webui/src/lib/agentForm.js';
+  import SearchableDropdown from '../../../../webui/src/components/SearchableDropdown.svelte';
+  import InfoHint from '../../../../webui/src/components/ui/InfoHint.svelte';
+  import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
+  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import Toggle from '../../../../webui/src/components/ui/Toggle.svelte';
+  import ToolAccessEditor from '../../../../webui/src/components/tools/ToolAccessEditor.svelte';
+  import ToggleChipList from '../../../../webui/src/components/ui/ToggleChipList.svelte';
+  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
+  import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
   import { changeToolAccessMode } from '../../../../webui/src/lib/toolAccess.js';
-  import { t } from '../../../../webui/src/lib/i18n.js';
+  import { createProfilePromptPreview } from './profilePromptPreview.svelte.js';
+  import './profileEditor.css';
 
   let {
     profile = null,
@@ -33,6 +35,17 @@
     onSave,
     onCancel,
   } = $props();
+  const preview = createProfilePromptPreview({
+    get snapshot() {
+      return snapshot;
+    },
+    get bridgeClient() {
+      return bridgeClient;
+    },
+    get profilePayload() {
+      return profilePayload;
+    },
+  });
   const defaults = {
     schema_version: 1,
     name: '',
@@ -117,29 +130,12 @@
   let tab = $state('overview');
   let showAllModels = $state(false);
   let scrollport;
-  let preview = $state(null);
-  let previewSnapshot = $state('');
-  let previewBusy = $state(false);
-  let previewError = $state('');
-  let previewFormation = $state(0);
-  let previewRequest = 0;
-  const previewCurrent = $derived(
-    preview && previewSnapshot === `${previewFormation}:${snapshot()}`,
-  );
+
   const promptBlocks = $derived(
     (catalog.prompt_blocks ?? []).filter(
       (block) => block.id !== 'core:agent_body',
     ),
   );
-  const blockTitle = (id) =>
-    t(
-      `systemPrompt.blockTitle.${id}`,
-      {
-        'tool:project': 'Project Tool guidance',
-        'tool:subagent': 'Subagent Tool guidance',
-        'tool:bash': 'Bash environment',
-      }[id] || id,
-    );
   const reminderTitles = $derived({
     delivery: t(
       'swarm.profile.reminderDelivery',
@@ -166,25 +162,7 @@
     if (!payload.slug?.trim()) delete payload.slug;
     return payload;
   }
-  async function inspectPrompt() {
-    const request = ++previewRequest;
-    const submitted = `${previewFormation}:${snapshot()}`;
-    previewBusy = true;
-    previewError = '';
-    try {
-      const result = await bridgeClient.operation('profiles.preview', {
-        profile: profilePayload(),
-        formation_index: Number(previewFormation),
-      });
-      if (request !== previewRequest) return;
-      preview = result.preview;
-      previewSnapshot = submitted;
-    } catch (cause) {
-      if (request === previewRequest) previewError = cause.message;
-    } finally {
-      if (request === previewRequest) previewBusy = false;
-    }
-  }
+
   const models = $derived(catalog.models ?? []);
   const projects = $derived(catalog.projects ?? []);
   const tools = $derived(
@@ -382,7 +360,7 @@
 </script>
 
 <section
-  class="editor"
+  class="editor swarm-profile-editor"
   aria-label={t('swarm.profile.editorLabel', 'Swarm editor')}
 >
   <header class="editor-head">
@@ -698,15 +676,15 @@
             )}
           </p>
           {#each promptBlocks as block (block.id)}
-            {@const detail = previewCurrent
-              ? preview.blocks.find((item) => item.id === block.id)
+            {@const detail = preview.previewCurrent
+              ? preview.preview.blocks.find((item) => item.id === block.id)
               : null}
             <div class="prompt-block">
               <div class="prompt-block-head">
-                <span>{blockTitle(block.id)}</span>
+                <span>{preview.blockTitle(block.id)}</span>
                 <Toggle
                   checked={draft.prompt_blocks.includes(block.id)}
-                  ariaLabel={blockTitle(block.id)}
+                  ariaLabel={preview.blockTitle(block.id)}
                   onChange={(enabled) => setPromptBlock(block.id, enabled)}
                 />
               </div>
@@ -735,14 +713,14 @@
           {#each draft.prompt_blocks.filter((id) => !promptBlocks.some((block) => block.id === id)) as id (id)}
             <div class="prompt-block-head">
               <span
-                >{blockTitle(id)} — {t(
+                >{preview.blockTitle(id)} — {t(
                   'swarm.profile.blockUnavailable',
                   'Currently unavailable',
                 )}</span
               >
               <Toggle
                 checked={true}
-                ariaLabel={blockTitle(id)}
+                ariaLabel={preview.blockTitle(id)}
                 onChange={(enabled) => setPromptBlock(id, enabled)}
               />
             </div>
@@ -753,34 +731,34 @@
           <div class="prompt-block-head">
             <Dropdown
               id="swarm-preview-model"
-              value={previewFormation}
+              value={preview.previewFormation}
               options={draft.participants.map((row, index) => ({
                 value: index,
                 label: `${index + 1}: ${row.model || t('swarm.profile.selectModel', 'Select a model')}`,
               }))}
               ariaLabel={t('swarm.profile.previewModel', 'Preview Model')}
-              onValueChange={(value) => (previewFormation = value)}
+              onValueChange={(value) => (preview.previewFormation = value)}
             />
             <Button
               variant="secondary"
-              disabled={previewBusy}
-              onClick={inspectPrompt}
+              disabled={preview.previewBusy}
+              onClick={preview.inspectPrompt}
               >{t('swarm.profile.generatePreview', 'Generate preview')}</Button
             >
           </div>
-          {#if previewError}<Banner variant="error" role="alert"
-              >{previewError}</Banner
+          {#if preview.previewError}<Banner variant="error" role="alert"
+              >{preview.previewError}</Banner
             >{/if}
-          {#if preview && !previewCurrent}<Banner
+          {#if preview.preview && !preview.previewCurrent}<Banner
               >{t(
                 'swarm.profile.previewStale',
                 'Configuration changed. Generate a new preview to see the current prompt.',
               )}</Banner
             >{/if}
-          {#if previewCurrent}
+          {#if preview.previewCurrent}
             <pre
               class="prompt-preview"
-              data-testid="swarm-prompt-preview">{preview.text}</pre>
+              data-testid="swarm-prompt-preview">{preview.preview.text}</pre>
             <details>
               <summary
                 >{t(
@@ -788,7 +766,7 @@
                   'Tool definitions sent separately',
                 )}</summary
               >
-              {#each preview.tools as tool (tool.name)}
+              {#each preview.preview.tools as tool (tool.name)}
                 <details>
                   <summary>{tool.name}</summary>
                   <pre>{JSON.stringify(tool, null, 2)}</pre>
@@ -998,7 +976,7 @@
     closeDisabled={transitionSaving}
     onClose={() => (pendingTransition = null)}
   >
-    {#snippet body()}<p class="transition-copy">
+    {#snippet body()}<p class="transition-copy swarm-profile-transition-copy">
         {t(
           'autosave.transitionFailureBody',
           'Retry saving your changes, or discard them and continue.',
@@ -1017,211 +995,3 @@
     {/snippet}
   </Modal>
 {/if}
-
-<style>
-  .editor {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-  }
-  .editor-head {
-    padding: 24px 28px 20px;
-  }
-  .editor :global(.tab-list) {
-    margin: 0 28px;
-    flex-shrink: 0;
-  }
-  .editor :global(.banner) {
-    margin: 14px 28px 0;
-    flex-shrink: 0;
-  }
-  .transition-copy {
-    margin: 0;
-    padding: 0 20px 20px;
-  }
-  .editor-head,
-  .section-head,
-  .switch-row,
-  .editor-footer,
-  .editor-footer > div {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .editor-head,
-  .editor-footer {
-    flex-shrink: 0;
-  }
-  h2,
-  h3,
-  p {
-    margin: 0;
-  }
-  h2 {
-    font-size: var(--fs-display);
-  }
-  h3 {
-    font-size: var(--fs-heading-sm);
-    font-weight: 600;
-  }
-  .editor-head p,
-  .hint,
-  .editor-footer p {
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-  }
-  .editor-head p {
-    margin-top: 4px;
-  }
-  .editor-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    scrollbar-gutter: stable;
-    padding: 24px 28px;
-  }
-  fieldset {
-    border: 0;
-    margin: 0;
-    padding: 0;
-    max-width: var(--content-max-narrow);
-    margin-inline: auto;
-    min-width: 0;
-  }
-  .topic {
-    display: grid;
-    gap: 28px;
-  }
-  .topic[hidden] {
-    display: none;
-  }
-  .form-section {
-    display: grid;
-    gap: 14px;
-  }
-  .formation {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
-    align-items: start;
-    gap: 16px;
-    padding: 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-  }
-  .formation-settings {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 80px auto;
-    align-items: end;
-    gap: 12px;
-  }
-  .formation-settings :global(.btn-icon) {
-    justify-self: end;
-  }
-  .editor :global(.form-field__label) {
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-    letter-spacing: normal;
-    text-transform: none;
-    line-height: 1.4;
-  }
-  .directory-fields {
-    display: grid;
-    grid-template-columns: 160px minmax(0, 1fr);
-    gap: 14px;
-  }
-  .three {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-  }
-  .advanced {
-    border-top: 1px solid var(--border);
-    padding-top: 14px;
-  }
-  .prompt-block {
-    border-bottom: 1px solid var(--border);
-    padding: 12px 0;
-  }
-  .prompt-block-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 14px;
-  }
-  .prompt-block details {
-    margin-top: 8px;
-  }
-  .topic pre {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    max-height: 480px;
-    overflow: auto;
-    color: var(--text-hi);
-    font: inherit;
-  }
-  .prompt-preview {
-    background: var(--surface);
-    padding: 14px;
-    border: 1px solid var(--border-2);
-    border-radius: 6px;
-  }
-  .advanced summary {
-    cursor: pointer;
-    color: var(--text-med);
-  }
-  .advanced summary:hover {
-    color: var(--text-hi);
-  }
-  .advanced > :not(summary) {
-    margin-top: 14px;
-  }
-  .editor-footer {
-    justify-content: flex-end;
-    padding: 12px 0 0;
-  }
-  .editor-footer > div {
-    flex-shrink: 0;
-  }
-  @media (max-width: 1200px) {
-    .formation {
-      grid-template-columns: 1fr;
-    }
-  }
-  @media (max-width: 640px) {
-    .editor-head {
-      padding: 16px 16px 14px;
-    }
-    .editor :global(.tab-list) {
-      margin-inline: 16px;
-    }
-    .editor-scroll {
-      padding: 20px 16px;
-    }
-    .editor-footer {
-      padding: 12px 16px;
-    }
-    .directory-fields,
-    .three {
-      grid-template-columns: 1fr;
-    }
-    .formation-settings {
-      grid-template-columns: minmax(0, 1fr) 86px auto;
-      gap: 8px;
-    }
-    .formation {
-      grid-template-columns: 1fr;
-      padding: 12px;
-    }
-    .editor-footer p {
-      display: none;
-    }
-    .editor-footer {
-      justify-content: flex-end;
-    }
-  }
-</style>

@@ -17,7 +17,6 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings import (
     SettingsValidationError,
     load_runtime_settings_json,
@@ -25,11 +24,8 @@ from core.settings import (
 )
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
-    coerce_defaults_section,
     coerce_defaults_update,
     coerce_skills_update,
-    normalize_agent_default_value,
-    normalize_agent_defaults,
     normalize_appearance_settings,
     normalize_compaction_settings,
     normalize_custom_provider_id,
@@ -37,7 +33,6 @@ from core.settings.normalizers import (
     normalize_debug_settings,
     normalize_defaults_settings,
     normalize_extensions_settings,
-    normalize_json_object,
     normalize_local_models_settings,
     normalize_model_task_settings,
     normalize_providers_settings,
@@ -48,9 +43,9 @@ from core.settings.normalizers import (
     normalize_speech_settings,
     normalize_subagent_integer,
     normalize_web_search_settings,
-    validate_supported_agent_default_fields,
 )
-from core.settings.settings import effective_timezone_name, validate_timezone_name
+from core.settings.paths import SUBAGENT_SETTING_DEFAULTS
+from core.storage import _settings_updates as settings_updates
 from core.storage.errors import StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
@@ -70,11 +65,6 @@ _LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SUBAGENT_SETTING_DEFAULTS = {
-    "max_subagent_depth": 4,
-    "max_subagents_per_turn": 8,
-    "subagent_timeout_minutes": 60,
-}
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
@@ -346,87 +336,87 @@ class StorageManager:
 
         def apply_update(settings: dict[str, Any]) -> dict[str, Any]:
             if "appearance" in settings_update:
-                updated_sections["appearance"] = self._apply_appearance_settings(
+                updated_sections["appearance"] = settings_updates.apply_appearance_settings(
                     settings,
                     settings_update["appearance"],
                 )
             if "speech" in settings_update:
-                updated_sections["speech"] = self._apply_speech_settings(
+                updated_sections["speech"] = settings_updates.apply_speech_settings(
                     settings,
                     settings_update["speech"],
                 )
             if "skills" in settings_update:
                 skills_update = coerce_skills_update(settings_update["skills"])
                 updated_sections["skills"] = {
-                    "directories": self._apply_skill_directory_settings(
+                    "directories": settings_updates.apply_skill_directory_settings(
                         settings,
                         skills_update["directories"],
                     )
                 }
             if "subagents" in settings_update:
-                updated_sections["subagents"] = self._apply_subagent_settings(
+                updated_sections["subagents"] = settings_updates.apply_subagent_settings(
                     settings,
                     settings_update["subagents"],
                 )
             if "compaction" in settings_update:
-                updated_sections["compaction"] = self._apply_compaction_settings(
+                updated_sections["compaction"] = settings_updates.apply_compaction_settings(
                     settings,
                     settings_update["compaction"],
                 )
             if "defaults" in settings_update:
                 defaults_update = coerce_defaults_update(settings_update["defaults"])
-                updated_sections["defaults"] = self._apply_defaults(
+                updated_sections["defaults"] = settings_updates.apply_defaults(
                     settings,
                     "agent",
                     defaults_update["agent"],
                 )
             if "recall" in settings_update:
-                updated_sections["recall"] = self._apply_recall_settings(
+                updated_sections["recall"] = settings_updates.apply_recall_settings(
                     settings,
                     settings_update["recall"],
                 )
             if "web_search" in settings_update:
-                updated_sections["web_search"] = self._apply_web_search_settings(
+                updated_sections["web_search"] = settings_updates.apply_web_search_settings(
                     settings,
                     settings_update["web_search"],
                 )
             if "model_tasks" in settings_update:
-                updated_sections["model_tasks"] = self._apply_model_task_settings(
+                updated_sections["model_tasks"] = settings_updates.apply_model_task_settings(
                     settings,
                     settings_update["model_tasks"],
                 )
             if "providers" in settings_update:
-                updated_sections["providers"] = self._apply_providers_settings(
+                updated_sections["providers"] = settings_updates.apply_providers_settings(
                     settings,
                     settings_update["providers"],
                 )
             if "debug" in settings_update:
-                updated_sections["debug"] = self._apply_debug_settings(
+                updated_sections["debug"] = settings_updates.apply_debug_settings(
                     settings,
                     settings_update["debug"],
                 )
             if "server" in settings_update:
-                updated_sections["server"] = self._apply_server_settings(
+                updated_sections["server"] = settings_updates.apply_server_settings(
                     settings,
                     settings_update["server"],
                 )
             if "extensions" in settings_update:
-                updated_sections["extensions"] = self._apply_extensions_settings(
+                updated_sections["extensions"] = settings_updates.apply_extensions_settings(
                     settings,
                     settings_update["extensions"],
                 )
             if "reflection" in settings_update:
-                updated_sections["reflection"] = self._apply_reflection_settings(
+                updated_sections["reflection"] = settings_updates.apply_reflection_settings(
                     settings,
                     settings_update["reflection"],
                 )
             if "local_models" in settings_update:
-                updated_sections["local_models"] = self._apply_local_models_settings(
+                updated_sections["local_models"] = settings_updates.apply_local_models_settings(
                     settings,
                     settings_update["local_models"],
                 )
             if "session_titles" in settings_update:
-                updated_sections["session_titles"] = self._apply_session_title_settings(
+                updated_sections["session_titles"] = settings_updates.apply_session_title_settings(
                     settings,
                     settings_update["session_titles"],
                 )
@@ -445,61 +435,17 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_appearance_settings(settings.get("appearance"))
 
-    def _apply_appearance_settings(
-        self,
-        settings: dict[str, Any],
-        appearance: Mapping[str, Any],
-    ) -> dict[str, str]:
-        """Merge Appearance settings into an in-memory settings mapping."""
-
-        if not isinstance(appearance, Mapping):
-            raise StorageError("Appearance settings must be a mapping")
-
-        unsupported_fields = sorted(
-            set(appearance) - {"language", "chat_width", "chat_working_mode"}
-        )
-        if unsupported_fields:
-            raise StorageError(f"Unsupported appearance settings: {', '.join(unsupported_fields)}")
-
-        if "language" not in appearance:
-            raise StorageError("Appearance settings must include language")
-
-        settings["appearance"] = normalize_appearance_settings(appearance)
-        return dict(settings["appearance"])
-
     def load_speech_settings(self) -> dict[str, Any]:
         """Return live Provider-facing transcription audio settings."""
 
         settings = self.load_settings()
         return normalize_speech_settings(settings.get("speech"))
 
-    def _apply_speech_settings(
-        self,
-        settings: dict[str, Any],
-        speech: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Replace the complete server-owned speech settings section."""
-
-        normalized = normalize_speech_settings(speech)
-        settings["speech"] = normalized
-        return normalized
-
     def load_skill_directory_settings(self) -> list[str]:
         """Return normalized extra skill directory settings."""
 
         settings = self.load_settings()
         return normalize_skill_directories(settings.get("skill_directories"))
-
-    def _apply_skill_directory_settings(
-        self,
-        settings: dict[str, Any],
-        directories: Any,
-    ) -> list[str]:
-        """Merge extra skill directories into an in-memory settings mapping."""
-
-        normalized_directories = normalize_skill_directories(directories)
-        settings["skill_directories"] = normalized_directories
-        return normalized_directories
 
     def load_subagent_settings(self) -> dict[str, int]:
         """Return normalized persisted Sub-Agent settings."""
@@ -509,32 +455,6 @@ class StorageManager:
             key: normalize_subagent_integer(key, settings.get(key), default)
             for key, default in SUBAGENT_SETTING_DEFAULTS.items()
         }
-
-    def _apply_subagent_settings(
-        self,
-        settings: dict[str, Any],
-        subagents: Mapping[str, Any],
-    ) -> dict[str, int]:
-        """Merge Sub-Agent settings into an in-memory settings mapping."""
-
-        if not isinstance(subagents, Mapping):
-            raise StorageError("Sub-agent settings must be a mapping")
-
-        expected_fields = set(SUBAGENT_SETTING_DEFAULTS)
-        unsupported_fields = sorted(set(subagents) - expected_fields)
-        if unsupported_fields:
-            raise StorageError(f"Unsupported sub-agent settings: {', '.join(unsupported_fields)}")
-
-        missing_fields = sorted(expected_fields - set(subagents))
-        if missing_fields:
-            raise StorageError(f"Missing sub-agent settings: {', '.join(missing_fields)}")
-
-        normalized_subagents = {
-            key: normalize_subagent_integer(key, subagents[key], default)
-            for key, default in SUBAGENT_SETTING_DEFAULTS.items()
-        }
-        settings.update(normalized_subagents)
-        return normalized_subagents
 
     def load_compaction_settings(self) -> dict[str, Any]:
         """Return normalized persisted compaction settings."""
@@ -553,16 +473,6 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_session_title_settings(settings.get("session_titles"))
 
-    def _apply_session_title_settings(
-        self,
-        settings: dict[str, Any],
-        session_titles: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Replace the complete automatic Session-title settings section."""
-        normalized = normalize_session_title_settings(session_titles)
-        settings["session_titles"] = normalized
-        return normalized
-
     def load_recall_settings(self) -> dict[str, str]:
         """Return normalized persisted recall backend settings."""
 
@@ -579,44 +489,6 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_local_models_settings(settings.get("local_models"))
-
-    def _apply_local_models_settings(
-        self,
-        settings: dict[str, Any],
-        local_models: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge local-models settings into an in-memory settings mapping.
-
-        Sparse per-key merge: a ``null`` window removes the key (the model
-        falls back to the default cap), an integer sets it, and unmentioned
-        keys are preserved.
-        """
-
-        if not isinstance(local_models, Mapping):
-            raise StorageError("Local-models settings must be a mapping")
-
-        unsupported_fields = sorted(set(local_models) - {"context_windows"})
-        if unsupported_fields:
-            raise StorageError(
-                f"Unsupported local_models settings: {', '.join(unsupported_fields)}"
-            )
-
-        update_windows = local_models.get("context_windows")
-        if not isinstance(update_windows, Mapping):
-            raise StorageError("local_models.context_windows must be a mapping")
-
-        merged = dict(
-            normalize_local_models_settings(settings.get("local_models"))["context_windows"]
-        )
-        for key, value in update_windows.items():
-            if value is None:
-                merged.pop(key, None)
-            else:
-                merged[key] = value
-
-        normalized = normalize_local_models_settings({"context_windows": merged})
-        settings["local_models"] = normalized
-        return dict(normalized)
 
     def load_providers_settings(self) -> dict[str, Any]:
         """Return normalized persisted providers settings.
@@ -697,33 +569,6 @@ class StorageManager:
         normalized = normalize_providers_settings(settings.get("providers"))
         return dict(normalized["openrouter"]["routing"])
 
-    def _apply_providers_settings(
-        self,
-        settings: dict[str, Any],
-        providers: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Replace OpenRouter routing while preserving Connections and Custom Providers."""
-
-        if not isinstance(providers, Mapping):
-            raise StorageError("Provider settings must be a mapping")
-        unsupported_fields = sorted(set(providers) - {"openrouter"})
-        if unsupported_fields:
-            raise StorageError(
-                f"Unsupported public providers settings: {', '.join(unsupported_fields)}"
-            )
-        if "openrouter" not in providers:
-            raise StorageError("Provider settings must include openrouter")
-
-        current = normalize_providers_settings(settings.get("providers"))
-        candidate = {
-            "connections": current["connections"],
-            "custom": current["custom"],
-            "openrouter": providers["openrouter"],
-        }
-        normalized = normalize_providers_settings(candidate)
-        settings["providers"] = normalized
-        return dict(normalized)
-
     def set_provider_connection_enabled(self, connection_key: str, enabled: bool) -> None:
         """Persist one connection's enabled override in a settings transaction.
 
@@ -765,31 +610,6 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_reflection_settings(settings.get("reflection"))
 
-    def _apply_reflection_settings(
-        self,
-        settings: dict[str, Any],
-        reflection: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge reflection settings into an in-memory settings mapping."""
-
-        if not isinstance(reflection, Mapping):
-            raise StorageError("Reflection settings must be a mapping")
-
-        unsupported_fields = sorted(
-            set(reflection) - {"enabled", "memory_turn_interval", "skill_model_step_interval"}
-        )
-        if unsupported_fields:
-            raise StorageError(f"Unsupported reflection settings: {', '.join(unsupported_fields)}")
-
-        normalized_reflection = normalize_reflection_settings(
-            {
-                **normalize_reflection_settings(settings.get("reflection")),
-                **dict(reflection),
-            }
-        )
-        settings["reflection"] = normalized_reflection
-        return dict(normalized_reflection)
-
     def load_web_search_settings(self) -> dict[str, Any]:
         """Return normalized persisted web search provider settings."""
 
@@ -813,132 +633,6 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_extensions_settings(settings.get("extensions"))
 
-    def _apply_extensions_settings(
-        self,
-        settings: dict[str, Any],
-        extensions: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge the ``extensions`` section into an in-memory settings mapping."""
-
-        if not isinstance(extensions, Mapping):
-            raise StorageError("Extensions settings must be a mapping")
-
-        normalized_extensions = normalize_extensions_settings(extensions)
-        settings["extensions"] = normalized_extensions
-        return dict(normalized_extensions)
-
-    def _apply_recall_settings(
-        self,
-        settings: dict[str, Any],
-        recall: Mapping[str, Any],
-    ) -> dict[str, str]:
-        """Merge recall settings into an in-memory settings mapping."""
-
-        if not isinstance(recall, Mapping):
-            raise StorageError("Recall settings must be a mapping")
-
-        unsupported_fields = sorted(set(recall) - {"backend"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported recall settings: {', '.join(unsupported_fields)}")
-
-        normalized_recall = normalize_recall_settings(recall)
-        settings["recall"] = normalized_recall
-        return dict(normalized_recall)
-
-    def _apply_debug_settings(
-        self,
-        settings: dict[str, Any],
-        debug: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge debug settings into an in-memory settings mapping."""
-
-        if not isinstance(debug, Mapping):
-            raise StorageError("Debug settings must be a mapping")
-
-        unsupported_fields = sorted(set(debug) - {"enabled", "trace_limit"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported debug settings: {', '.join(unsupported_fields)}")
-
-        normalized_debug = normalize_debug_settings(
-            {
-                **normalize_debug_settings(settings.get("debug")),
-                **dict(debug),
-            }
-        )
-        settings["debug"] = normalized_debug
-        return dict(normalized_debug)
-
-    def _apply_server_settings(
-        self,
-        settings: dict[str, Any],
-        server: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge server settings into an in-memory settings mapping.
-
-        The public ``server`` section persists to flat raw keys; unspecified
-        fields keep their stored values (sparse merge).
-        """
-
-        if not isinstance(server, Mapping):
-            raise StorageError("Server settings must be a mapping")
-
-        unsupported_fields = sorted(set(server) - {"keep_awake", "timezone"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported server settings: {', '.join(unsupported_fields)}")
-
-        if "keep_awake" in server:
-            keep_awake = server["keep_awake"]
-            if not isinstance(keep_awake, bool):
-                raise StorageError("Server keep_awake setting must be a boolean")
-            settings["keep_awake"] = keep_awake
-
-        if "timezone" in server:
-            try:
-                settings["timezone"] = validate_timezone_name(
-                    server["timezone"], label="Server timezone setting"
-                )
-            except SettingsValidationError as error:
-                raise StorageError(str(error)) from error
-
-        return {
-            "keep_awake": settings.get("keep_awake") is True,
-            "timezone": effective_timezone_name(settings),
-        }
-
-    def _apply_web_search_settings(
-        self,
-        settings: dict[str, Any],
-        web_search: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge web search settings into an in-memory settings mapping."""
-
-        if not isinstance(web_search, Mapping):
-            raise StorageError("Web search settings must be a mapping")
-
-        unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
-
-        current_settings = normalize_web_search_settings(settings.get("web_search"))
-        raw_searxng_update = web_search.get("searxng", {})
-        if raw_searxng_update is None:
-            raw_searxng_update = {}
-        if not isinstance(raw_searxng_update, Mapping):
-            raise StorageError("Expected settings.web_search.searxng to be an object")
-
-        normalized_web_search = normalize_web_search_settings(
-            {
-                **current_settings,
-                **dict(web_search),
-                "searxng": {
-                    **current_settings["searxng"],
-                    **dict(raw_searxng_update),
-                },
-            }
-        )
-        settings["web_search"] = normalized_web_search
-        return dict(normalized_web_search)
-
     def update_model_task_settings(
         self,
         model_tasks: Mapping[str, Any],
@@ -949,112 +643,8 @@ class StorageManager:
             raise StorageError("Model task settings must be a mapping")
 
         return self.update_settings(
-            lambda settings: self._apply_model_task_settings(settings, model_tasks)
+            lambda settings: settings_updates.apply_model_task_settings(settings, model_tasks)
         )
-
-    def _apply_model_task_settings(
-        self,
-        settings: dict[str, Any],
-        model_tasks: Mapping[str, Any],
-    ) -> dict[str, dict[str, Any]]:
-        """Merge task-model bindings into an in-memory settings mapping."""
-
-        merged_model_tasks = normalize_model_task_settings(settings.get("model_tasks"))
-
-        for task_type, raw_binding in model_tasks.items():
-            if task_type not in SUPPORTED_TASK_TYPES:
-                raise StorageError(f"Unsupported model task type: {task_type}")
-            if not isinstance(raw_binding, Mapping):
-                raise StorageError(f"Model task binding {task_type} must be a mapping")
-
-            unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
-            if unsupported_fields:
-                raise StorageError(
-                    f"Unsupported model task settings for {task_type}: "
-                    f"{', '.join(unsupported_fields)}"
-                )
-
-            current_binding = dict(merged_model_tasks.get(task_type, {}))
-            target = current_binding.get("target", "")
-            if "target" in raw_binding:
-                raw_target = raw_binding["target"]
-                if not isinstance(raw_target, str):
-                    raise StorageError(f"Model task target for {task_type} must be a string")
-                target = raw_target.strip()
-
-            if not target:
-                merged_model_tasks.pop(task_type, None)
-                continue
-
-            options = current_binding.get("options", {})
-            if "options" in raw_binding:
-                options = normalize_json_object(
-                    raw_binding["options"],
-                    f"settings.model_tasks.{task_type}.options",
-                )
-
-            merged_model_tasks[task_type] = {
-                "target": target,
-                "options": options,
-            }
-
-        if merged_model_tasks:
-            settings["model_tasks"] = merged_model_tasks
-        else:
-            settings.pop("model_tasks", None)
-
-        return normalize_model_task_settings(settings.get("model_tasks"))
-
-    def _apply_defaults(
-        self,
-        settings: dict[str, Any],
-        section: str,
-        values: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge defaults into an in-memory settings mapping."""
-
-        merged_defaults = coerce_defaults_section(settings.get("defaults"))
-
-        if section == "agent":
-            current_agent_defaults = normalize_agent_defaults(merged_defaults.get("agent"))
-            validate_supported_agent_default_fields(values)
-            for field, value in values.items():
-                normalized_value = normalize_agent_default_value(field, value)
-                if normalized_value is None:
-                    current_agent_defaults.pop(field, None)
-                    continue
-                current_agent_defaults[field] = normalized_value
-
-            if current_agent_defaults:
-                merged_defaults["agent"] = current_agent_defaults
-            else:
-                merged_defaults.pop("agent", None)
-
-        if merged_defaults:
-            settings["defaults"] = merged_defaults
-        else:
-            settings.pop("defaults", None)
-
-        return normalize_defaults_settings(merged_defaults)
-
-    def _apply_compaction_settings(
-        self,
-        settings: dict[str, Any],
-        compaction: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Merge compaction settings into an in-memory settings mapping."""
-
-        if not isinstance(compaction, Mapping):
-            raise StorageError("Compaction settings must be a mapping")
-
-        normalized_compaction = normalize_compaction_settings(
-            {
-                **normalize_compaction_settings(settings.get("compaction")),
-                **dict(compaction),
-            }
-        )
-        settings["compaction"] = normalized_compaction
-        return dict(normalized_compaction)
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json`` as UTF-8 JSON."""

@@ -55,11 +55,12 @@ and Model-specific Tool routing. It returns combined text, rendered block detail
 and Tool definitions without creating a Session or Run. `catalog()` includes
 public System Prompt block metadata. The bundled Swarm uses these capabilities
 for explicit prompt composition; see `extensions/swarm.md` and
-`tests/core/runtime/test_runtime_extensions.py`.
+`tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Ownership and source routing
 
-- Public declarations, records, loader, capability application, hooks, and lifecycle: `core/extensions/extensions.py`
+- Public API, registration identity, hooks, and lifecycle: `core/extensions/extensions.py`. Internal `_declarations.py` owns declaration/record values and diagnostics; `_api.py` collects declarations; `_loading.py` owns filesystem discovery/import and registration deadlines; `_callbacks.py` owns bounded callback execution.
+- `_capabilities.py` applies declared Tools, Commands, Recall backends, and Prompt blocks to their existing owners, including collision diagnosis and identity-safe Tool removal. Its installer receives the registry records, without access to the ExtensionRegistry or Runtime.
 - Neutral channel-interaction types and reserved prefixes: `core/extensions/interactions.py`
 - Settings field parsing and config validation: `core/extensions/settings_schema.py`
 - Bootstrap construction and cross-domain callback wiring: `core/runtime/runtime.py`; serialized rebuild, disable, registry swap, and lifecycle ordering: `core/extensions/runtime.py`

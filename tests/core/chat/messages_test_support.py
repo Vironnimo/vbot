@@ -16,7 +16,17 @@ from core.chat import (
     ReplySurface,
     ToolCall,
 )
-from core.chat.chat import (
+from core.chat._message_history import (
+    checkpoint_ordinal,
+    effective_compaction_messages,
+    finalize_checkpoint_history_guidance,
+    history_available,
+    reply_surface_from_note,
+    should_append_reply_surface_note,
+)
+from core.chat.content_blocks import FileBlock, TextBlock
+from core.chat.messages import (
+    COMPACTION_SUMMARY_END_MARKER,
     ERROR_KIND_AUTH,
     ERROR_KIND_CONFIG,
     ERROR_KIND_PROVIDER_ERROR,
@@ -25,18 +35,8 @@ from core.chat.chat import (
     ERROR_KIND_RATE_LIMIT,
     ERROR_KIND_TIMEOUT,
     ERROR_KIND_TOOL_ITERATIONS,
-    error_kind_llm_visible,
-)
-from core.chat.content_blocks import FileBlock, TextBlock
-from core.chat.messages import (
-    COMPACTION_SUMMARY_END_MARKER,
     HISTORY_COMPACTION_GUIDANCE,
-    _effective_compaction_messages,
-    checkpoint_ordinal,
-    finalize_checkpoint_history_guidance,
-    history_available,
-    reply_surface_from_note,
-    should_append_reply_surface_note,
+    error_kind_llm_visible,
 )
 from core.chat.wire_shaping import (
     INTERRUPTED_TOOL_RESULT_CODE,
@@ -82,7 +82,7 @@ __all__ = [
     "INTERRUPTED_TOOL_RESULT_CODE",
     "INTERRUPTED_TOOL_RESULT_MESSAGE",
     "_assistant_continuation_dict",
-    "_effective_compaction_messages",
+    "effective_compaction_messages",
     "_embed_notes_into_request",
     "_message_to_request_dict",
     "_repair_dangling_tool_calls",

@@ -10,9 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
@@ -45,6 +42,10 @@ from core.providers.reasoning import (
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
+
 
 _LOGGER = get_logger("providers.opencode_go")
 

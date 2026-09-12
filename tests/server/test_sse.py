@@ -16,7 +16,8 @@ from core.chat.output_files import AssistantFileReference
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
-from server.app import _sse_run_events, create_app
+from server._streams import _sse_run_events
+from server.app import create_app
 from server.file_delivery import FileDelivery
 from tests.server.test_rpc import StubAdapter, StubRuntime
 

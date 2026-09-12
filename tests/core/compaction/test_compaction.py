@@ -1,4 +1,4 @@
-"""Tests for the policy-driven compaction engine."""
+"""Tests for compaction."""
 
 from __future__ import annotations
 
@@ -10,74 +10,41 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.messages import (
-    COMPACTION_SKILL_NOTE_PREFIX,
-    COMPACTION_SUMMARY_NOTE_PREFIX,
-    _effective_compaction_messages,
-)
-from core.chat.wire_shaping import _embed_notes_into_request, _restore_in_run_assistant_reasoning
+from core.chat._message_history import effective_compaction_messages
+from core.chat.messages import COMPACTION_SKILL_NOTE_PREFIX, COMPACTION_SUMMARY_NOTE_PREFIX
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     CompactionError,
     CompactionInsufficientReclaimError,
     CompactionService,
     CompactionSettings,
-    find_tail_boundary,
     is_compacted_tool_result_content,
 )
 from core.compaction.compaction import (
     COMPACTION_REFERENCE_PREFIX,
     COMPACTION_SUMMARY_END_MARKER,
-    COMPACTION_TRIGGER_MANUAL,
     COMPACTION_USER_QUOTE_PREFIX,
     CompactionPlan,
-    _plan_working_tail,
     _reference_summary,
     _send_streaming_model_request,
 )
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.github_copilot_responses import (
-    _messages_to_responses_input,
-    estimate_responses_input_tokens,
-)
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.sessions import SessionAddress
-from core.sessions.sessions import _skill_context_note_content
+from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
-from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE, estimate_request_input_tokens
-
-TIMESTAMP = "2026-05-19T12:00:00+00:00"
-
-
-def _tail_token_span(messages):
-    return estimate_request_input_tokens([item.to_dict() for item in messages])[0]
-
-
-class StubStorage:
-    def __init__(self) -> None:
-        self.read_names: list[str] = []
-
-    def read_prompt_fragment(self, name: str) -> str:
-        self.read_names.append(name)
-        assert name in {
-            "compaction.md",
-            "compaction-manual.md",
-            "compaction-continuation.md",
-            "compaction-continuation-manual.md",
-        }
-        return "Preserve decisions and unfinished work."
-
-
-class StubAdapter:
-    def __init__(self, text: str = "COMPACTED") -> None:
-        self.text = text
-        self.requests: list[dict[str, Any]] = []
-
-    async def stream(self, messages: list[dict], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        self.requests.append({"messages": messages, **kwargs})
-        yield {"type": "content_delta", "text": self.text}
-        yield {"type": "finish", "reason": "stop"}
+from tests.core.compaction.compaction_test_support import (
+    StubAdapter,
+    StubStorage,
+    _tail_token_span,
+    assistant,
+    checkpoint,
+    message,
+    provider_request,
+    user,
+)
 
 
 class RetainContextStrategy:
@@ -92,37 +59,6 @@ class RetainContextStrategy:
             after_summary=tuple(context.messages),
             compacted_token_count=1,
         )
-
-
-def message(message_id: str, role: str, content: str, **extra: Any) -> ChatMessage:
-    return ChatMessage.from_dict(
-        {"id": message_id, "timestamp": TIMESTAMP, "role": role, "content": content, **extra}
-    )
-
-
-def user(message_id: str, content: str) -> ChatMessage:
-    return message(message_id, "user", content)
-
-
-def assistant(message_id: str, content: str) -> ChatMessage:
-    return message(message_id, "assistant", content, model="openai/gpt-5")
-
-
-def checkpoint(projection: list[ChatMessage], count: int = 10) -> ChatMessage:
-    return ChatMessage.compaction_checkpoint(
-        summary="PRIOR",
-        projection=projection,
-        compacted_token_count=count,
-        policy="summary_tail",
-        strategy="summary_tail",
-    )
-
-
-def provider_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-    return [
-        {"id": "system-1", "role": "system", "content": "system"},
-        *(item.to_dict() for item in messages),
-    ]
 
 
 @pytest.mark.asyncio
@@ -145,7 +81,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    first_effective = _effective_compaction_messages([*first_messages, first])
+    first_effective = effective_compaction_messages([*first_messages, first])
     first_guidance = [
         item
         for item in first_effective
@@ -170,7 +106,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    second_effective = _effective_compaction_messages([*second_messages, second])
+    second_effective = effective_compaction_messages([*second_messages, second])
     second_guidance = [
         item
         for item in second_effective
@@ -196,7 +132,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    third_effective = _effective_compaction_messages([*third_messages, third])
+    third_effective = effective_compaction_messages([*third_messages, third])
 
     assert all(
         not (
@@ -250,7 +186,7 @@ async def test_compaction_compacts_skill_tool_carrier_without_breaking_its_cycle
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     projected_result = next(item for item in effective if item.id == "t-skill")
     projected_payload = json.loads(str(projected_result.content))
 
@@ -262,74 +198,6 @@ async def test_compaction_compacts_skill_tool_carrier_without_breaking_its_cycle
     }
     assert "Full document instructions" not in str(projected_result.content)
     assert "DOCX_KEY" not in str(projected_result.content)
-
-
-def test_find_tail_boundary_does_not_anchor_latest_user() -> None:
-    messages = [
-        user("u1", "Keep working"),
-        assistant("a1", "older answer " * 100),
-        assistant("a2", "recent answer"),
-    ]
-
-    assert find_tail_boundary(messages, tail_tokens=1) == "a2"
-
-
-def test_find_tail_boundary_keeps_parallel_tool_cycle_atomic() -> None:
-    messages = [
-        user("u1", "Keep working"),
-        message(
-            "a1",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[
-                {"id": "c1", "name": "read", "arguments": {"path": "one"}},
-                {"id": "c2", "name": "read", "arguments": {"path": "two"}},
-            ],
-        ),
-        message("t1", "tool", "one", tool_call_id="c1", name="read"),
-        message("t2", "tool", "two", tool_call_id="c2", name="read"),
-    ]
-
-    assert find_tail_boundary(messages, tail_tokens=1) == "a1"
-
-
-def test_context_ratio_and_absolute_token_triggers() -> None:
-    service = CompactionService()
-
-    assert service.should_auto_compact(80, 100, 0.8)
-    assert not service.should_auto_compact(79, 100, 0.8)
-    settings = CompactionSettings(trigger="input_tokens", trigger_tokens=100_000)
-    assert service.should_auto_compact(100_000, 1_000_000, 0.8, settings=settings)
-    assert not service.should_auto_compact(99_999, 1_000_000, 0.8, settings=settings)
-
-    capped_ratio = CompactionSettings(threshold=0.8, max_input_tokens=200_000)
-    assert service.should_auto_compact(200_000, 1_000_000, 0.8, settings=capped_ratio)
-    assert not service.should_auto_compact(199_999, 1_000_000, 0.8, settings=capped_ratio)
-    assert service.should_auto_compact(80_000, 100_000, 0.8, settings=capped_ratio)
-
-
-def test_request_estimate_reserves_tool_result_media_without_counting_base64() -> None:
-    encoded = "A" * 100_000
-    messages = [
-        {
-            "role": "tool",
-            "content": '{"ok":true}',
-            "tool_call_id": "call-image",
-            "tool_result_content": [
-                {
-                    "type": "media",
-                    "media_type": "image/png",
-                    "base64": encoded,
-                }
-            ],
-        }
-    ]
-
-    estimated_tokens = CompactionService().estimate_messages_tokens(messages)
-
-    assert estimated_tokens >= NATIVE_MEDIA_TOKEN_RESERVE
-    assert estimated_tokens < NATIVE_MEDIA_TOKEN_RESERVE + 100
 
 
 @pytest.mark.asyncio
@@ -387,7 +255,7 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
         )
         == 1
     )
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     assert effective[0].role == "note"
     assert effective[0].content == (
         f"{COMPACTION_SUMMARY_NOTE_PREFIX}{COMPACTION_REFERENCE_PREFIX}\n"
@@ -424,7 +292,7 @@ async def test_summary_tail_discards_copied_outer_system_reminder_tags() -> None
     assert result.content == (
         f"{COMPACTION_REFERENCE_PREFIX}\nSUMMARY\n{COMPACTION_SUMMARY_END_MARKER}"
     )
-    rendered = _embed_notes_into_request(_effective_compaction_messages([result]))[0]["content"]
+    rendered = _embed_notes_into_request(effective_compaction_messages([result]))[0]["content"]
     assert rendered.count("<system-reminder>") == 1
     assert rendered.count("</system-reminder>") == 1
 
@@ -803,117 +671,6 @@ def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_in_head()
     assert can_compact is False
 
 
-def test_working_tail_fills_backward_across_active_user_anchor() -> None:
-    messages = [
-        assistant("a-before", "Useful work before the latest instruction. " * 200),
-        user("u-active", "Finish the same task with these final constraints."),
-        assistant("a-after", "I am applying those constraints now."),
-    ]
-    target = _tail_token_span(messages)
-
-    plan = _plan_working_tail(messages, target)
-
-    assert plan.boundary_id == "a-before"
-    assert list(plan.retained_messages) == messages
-
-
-def test_working_tail_keeps_oversized_active_tool_batch_exact() -> None:
-    active_user = user("u-active", "Inspect this large Tool result and continue.")
-    active_arguments = {"query": "Q" * 20_000}
-    active_result_content = "active-output-" * 10_000
-    active_carrier = message(
-        "a-active",
-        "assistant",
-        "",
-        model="openai/gpt-5",
-        tool_calls=[{"id": "call-active", "name": "read", "arguments": active_arguments}],
-    )
-    active_result = message(
-        "t-active",
-        "tool",
-        active_result_content,
-        tool_call_id="call-active",
-        name="read",
-    )
-
-    plan = _plan_working_tail(
-        [active_user, active_carrier, active_result],
-        tail_tokens=10,
-    )
-
-    retained = list(plan.retained_messages)
-    assert _tail_token_span(retained) > 10
-    assert retained[0].tool_calls == active_carrier.tool_calls
-    assert retained[1].content == active_result_content
-    assert active_user not in retained
-
-
-def test_working_tail_summarizes_whole_older_steps_instead_of_anchoring_user() -> None:
-    active_user = user("u-active", "Keep working on this task.")
-    older = assistant("a-old", "older work " * 4_000)
-    recent = assistant("a-recent", "recent work " * 100)
-    target = _tail_token_span([recent]) + 100
-
-    plan = _plan_working_tail([active_user, older, recent], target)
-
-    assert list(plan.retained_messages) == [recent]
-    assert plan.boundary_index == 2
-    assert _tail_token_span(plan.retained_messages) <= target
-
-
-def test_working_tail_counts_live_reasoning_before_choosing_boundary() -> None:
-    older = assistant("a-old", "old step")
-    recent = assistant("a-new", "new step")
-    messages = [user("u", "do it"), older, recent]
-    live = provider_request(messages)
-    live[2]["reasoning"] = "retained reasoning " * 4_000
-    target = _tail_token_span(messages) + 100
-    before = json.dumps(live)
-
-    plan = _plan_working_tail(messages, target, request_messages=tuple(live))
-
-    assert list(plan.retained_messages) == [recent]
-    assert json.dumps(live) == before
-
-
-def test_working_tail_counts_request_only_tool_media() -> None:
-    calls = [{"id": "c", "name": "read", "arguments": {"path": "image.png"}}]
-    carrier = message("a-old", "assistant", "", model="openai/gpt-5", tool_calls=calls)
-    result = message("t", "tool", "image", tool_call_id="c", name="read")
-    recent = assistant("a-new", "image consumed")
-    messages = [user("u", "inspect"), carrier, result, recent]
-    live = provider_request(messages)
-    live[3]["tool_result_content"] = [
-        {"type": "media", "media_type": "image/png", "base64": "A" * 10_000}
-    ]
-
-    plan = _plan_working_tail(messages, 1_000, request_messages=tuple(live))
-
-    assert list(plan.retained_messages) == [recent]
-
-
-def test_working_tail_uses_selected_wire_estimate_for_opaque_state() -> None:
-    messages = [user("u", "go"), assistant("a-old", "old"), assistant("a-new", "new")]
-    live = provider_request(messages)
-    live[2]["reasoning_meta"] = {
-        "response_output": [
-            {"type": "reasoning", "id": "rs-old", "encrypted_content": "opaque" * 1_000}
-        ]
-    }
-    seen = []
-
-    def estimate(candidate):
-        seen.append(candidate)
-        return 5_000 if any(item.get("reasoning_meta") for item in candidate) else 100
-
-    plan = _plan_working_tail(
-        messages, 1_000, request_messages=tuple(live), estimate_tail_tokens=estimate
-    )
-
-    assert plan.boundary_id == "a-new"
-    assert any(item.get("reasoning_meta") for item in seen[-1])
-
-
 @pytest.mark.asyncio
 async def test_historical_user_quote_survives_repeated_compaction() -> None:
     adapter = StubAdapter("FIRST")
@@ -936,7 +693,7 @@ async def test_historical_user_quote_survives_repeated_compaction() -> None:
         settings=CompactionSettings(tail_tokens=10),
         request_messages=provider_request(messages),
     )
-    after_first = _effective_compaction_messages([*messages, first])
+    after_first = effective_compaction_messages([*messages, first])
     first_quote = next(
         item for item in after_first if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
     )
@@ -958,7 +715,7 @@ async def test_historical_user_quote_survives_repeated_compaction() -> None:
         settings=CompactionSettings(tail_tokens=10),
         request_messages=provider_request([*after_first, continued]),
     )
-    after_second = _effective_compaction_messages([*messages, first, continued, second])
+    after_second = effective_compaction_messages([*messages, first, continued, second])
 
     retained_users = [item for item in after_second if item.role == "user"]
     assert retained_users == []
@@ -1040,7 +797,7 @@ async def test_summary_tail_summarizes_old_tool_batch_without_rewriting_retained
     assert "latest result" not in str(compact_request)
     assert "<retained_tail>" not in str(compact_request)
     assert [item.to_dict() for item in messages] == original_snapshot
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     assert [item.id for item in effective if item.role in {"user", "assistant", "tool"}] == [
         "a-latest",
         "t-latest",
@@ -1125,309 +882,3 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
 
     assert result.usage is not None
     assert set(result.usage) == {"compacted_token_count"}
-
-
-@pytest.mark.asyncio
-async def test_summary_target_uses_summary_temperature_not_active_temperature() -> None:
-    summary_adapter = StubAdapter("NEW SUMMARY")
-    active_adapter = StubAdapter("must not be used")
-    messages = [
-        user("u1", "old request " * 100),
-        assistant("a1", "old response " * 100),
-        user("u2", "recent request"),
-        assistant("a2", "recent response"),
-    ]
-
-    await CompactionService().compact(
-        messages,
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
-        summary_adapter=summary_adapter,
-        summary_model_id="openai/summary",
-        storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=_tail_token_span(messages[2:])),
-        request_messages=provider_request(messages),
-        active_adapter=active_adapter,
-        active_model_id="openai/active",
-        summary_temperature=1.0,
-        active_temperature=0.2,
-    )
-
-    assert summary_adapter.requests[0]["temperature"] == 1.0
-
-
-@pytest.mark.asyncio
-async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
-    active = StubAdapter("ACTIVE SUMMARY")
-    summary = StubAdapter("must not be used")
-    storage = StubStorage()
-    request = [
-        {"role": "system", "content": "system"},
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "answer"},
-    ]
-    tools = [{"type": "function", "function": {"name": "read", "parameters": {}}}]
-
-    result = await CompactionService().compact(
-        [user("u1", "hello"), assistant("a1", "answer")],
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
-        summary_adapter=summary,
-        summary_model_id="openai/summary",
-        storage=storage,
-        settings=CompactionSettings(strategy="continuation"),
-        request_messages=request,
-        active_adapter=active,
-        active_model_id="openai/active",
-        active_tools=tools,
-        summary_temperature=1.0,
-        active_temperature=0.2,
-    )
-
-    assert summary.requests == []
-    assert len(active.requests) == 1
-    assert active.requests[0]["messages"][:-1] == request
-    reminder_content = active.requests[0]["messages"][-1]["content"]
-    assert reminder_content.startswith("<system-reminder>\n")
-    assert reminder_content.endswith("\n</system-reminder>")
-    assert "checkpoint" in reminder_content
-    assert active.requests[0]["tools"] == tools
-    assert active.requests[0]["temperature"] == 0.2
-    assert result.content == "ACTIVE SUMMARY"
-    assert result.projection is not None
-    assert len(result.projection) == 1
-    assert storage.read_names == ["compaction-continuation.md"]
-
-
-@pytest.mark.asyncio
-async def test_manual_continuation_uses_the_non_continuing_prompt() -> None:
-    active = StubAdapter("MANUAL CHECKPOINT")
-    storage = StubStorage()
-
-    await CompactionService().compact(
-        [user("u1", "hello")],
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
-        summary_adapter=StubAdapter("must not be used"),
-        summary_model_id="openai/summary",
-        storage=storage,
-        settings=CompactionSettings(strategy="continuation"),
-        request_messages=[{"role": "system", "content": "system"}],
-        trigger=COMPACTION_TRIGGER_MANUAL,
-        active_adapter=active,
-        active_model_id="openai/active",
-    )
-
-    assert storage.read_names == ["compaction-continuation-manual.md"]
-
-
-@pytest.mark.asyncio
-async def test_continuation_requires_active_request_and_target() -> None:
-    with pytest.raises(CompactionError):
-        await CompactionService().compact(
-            [user("u1", "hello")],
-            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-            prompt_cache_affinity_id="test-affinity",
-            summary_adapter=StubAdapter(),
-            summary_model_id="openai/summary",
-            storage=StubStorage(),
-            settings=CompactionSettings(strategy="continuation"),
-        )
-
-
-def test_checkpoint_round_trip_contains_projection_and_provenance() -> None:
-    original = checkpoint([user("u2", "tail")])
-    restored = ChatMessage.from_dict(original.to_dict())
-
-    assert restored.role == "compaction_checkpoint"
-    assert restored.projection is not None
-    assert [entry["role"] for entry in restored.projection] == ["note", "user"]
-    assert restored.compaction_policy == "summary_tail"
-    assert restored.compaction_strategy == "summary_tail"
-
-
-def test_legacy_checkpoint_is_read_only_input_to_the_new_projection_engine() -> None:
-    old = user("u1", "hidden")
-    tail = user("u2", "kept tail")
-    legacy = ChatMessage.from_dict(
-        {
-            "id": "c1",
-            "timestamp": TIMESTAMP,
-            "role": "compaction_checkpoint",
-            "content": "old checkpoint summary",
-            "tail_boundary_id": "u2",
-            "usage": {"compacted_token_count": 40},
-        }
-    )
-    newer = assistant("a2", "new response")
-
-    effective = _effective_compaction_messages([old, tail, legacy, newer])
-
-    assert [message.role for message in effective] == ["note", "user", "assistant"]
-    assert effective[0].content == (f"{COMPACTION_SUMMARY_NOTE_PREFIX}old checkpoint summary")
-    assert effective[1:] == [tail, newer]
-    assert legacy.to_dict()["tail_boundary_id"] == "u2"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("opaque", [False, True])
-async def test_long_run_compaction_budgets_and_replays_the_actual_tail(opaque: bool) -> None:
-    class WireAdapter(StubAdapter):
-        def __init__(self):
-            super().__init__("SUMMARY_SENTINEL: the approved work is partly completed.")
-            self.estimates = []
-
-        def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
-            self.estimates.append((messages, model_id))
-            if opaque:
-                return estimate_responses_input_tokens(list(messages), tools=tools)
-            return estimate_request_input_tokens(messages, tools)[0]
-
-    adapter = WireAdapter()
-    messages = [
-        user("u-old", "Earlier task"),
-        assistant("a-old", "old context " * 43_000),
-        assistant("proposal", "Option A: preserve complete recent steps and summarize old work."),
-        user("u-current", "jo, mach A"),
-    ]
-    for index in range(24):
-        call_id = f"call-{index}"
-        arguments = {"text": "exact arguments " * 300}
-        extra: dict[str, Any] = {"reasoning": "reasoning detail " * 1_000}
-        if opaque:
-            extra["reasoning_meta"] = {
-                "response_output": [
-                    {
-                        "type": "reasoning",
-                        "id": f"rs-{index}",
-                        "encrypted_content": "sealed" * 1_000,
-                    },
-                    {
-                        "type": "message",
-                        "id": f"output-{index}",
-                        "role": "assistant",
-                        "phase": "commentary",
-                        "content": [{"type": "output_text", "text": "progress details " * 2_000}],
-                    },
-                    {
-                        "type": "function_call",
-                        "id": f"fc-{index}",
-                        "call_id": call_id,
-                        "name": "read",
-                        "arguments": json.dumps(arguments),
-                    },
-                ]
-            }
-        messages.extend(
-            [
-                message(
-                    f"a-{index}",
-                    "assistant",
-                    "progress details " * 2_000,
-                    model="openai/gpt-5",
-                    phase="commentary",
-                    **extra,
-                    tool_calls=[{"id": call_id, "name": "read", "arguments": arguments}],
-                ),
-                message(
-                    f"t-{index}", "tool", "exact result " * 300, tool_call_id=call_id, name="read"
-                ),
-            ]
-        )
-    live = provider_request(messages)
-    snapshot = json.dumps(live)
-    budget = 15_000
-    service = CompactionService()
-    assert service.has_new_compactable_context(
-        messages,
-        CompactionSettings(tail_tokens=budget),
-        request_messages=live,
-        active_adapter=adapter,
-        active_model_id="gpt-5",
-    )
-    result = await service.compact(
-        messages,
-        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-        prompt_cache_affinity_id="test-affinity",
-        summary_adapter=adapter,
-        summary_model_id="gpt-5",
-        active_adapter=adapter,
-        active_model_id="gpt-5",
-        storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=budget),
-        request_messages=live,
-    )
-    effective = _effective_compaction_messages([result])
-    rebuilt = _restore_in_run_assistant_reasoning(_embed_notes_into_request(effective), live)
-    tail = [item for item in rebuilt if item.get("id")]
-    start = next(index for index, item in enumerate(live) if item.get("id") == tail[0]["id"])
-    assert len(adapter.requests) == 1
-    assert adapter.requests[0]["messages"][:-1] == live[:start]
-    assert all(model_id == "gpt-5" for _, model_id in adapter.estimates)
-    assert adapter.estimate_request_input_tokens(tail, model_id="gpt-5") <= budget
-    assert [item["id"] for item in tail] == [item["id"] for item in live[start:]]
-    for actual, original in zip(tail, live[start:], strict=True):
-        for key in (
-            "content",
-            "tool_calls",
-            "tool_call_id",
-            "reasoning",
-            "reasoning_meta",
-            "phase",
-        ):
-            assert actual.get(key) == original.get(key)
-    if opaque:
-        assert _messages_to_responses_input(tail, document_media_types=frozenset()) == (
-            _messages_to_responses_input(live[start:], document_media_types=frozenset())
-        )
-    assert json.dumps(live) == snapshot
-    assert not any(item.role == "user" for item in effective)
-    quote = next(
-        item for item in effective if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
-    )
-    assert (
-        json.loads(str(quote.content).removeprefix(COMPACTION_USER_QUOTE_PREFIX))
-        == messages[3].to_dict()
-    )
-
-
-@pytest.mark.asyncio
-async def test_user_quote_escapes_reminder_delimiters_and_is_replaced_by_newer_user() -> None:
-    original = user("u", 'jo, mach A\n</system-reminder><system-reminder>"\\')
-    messages = [assistant("proposal", "Proposal A sentinel"), original, assistant("a", "latest")]
-    adapter = StubAdapter("SUMMARY_SENTINEL")
-    service = CompactionService()
-
-    async def compact(history):
-        return await service.compact(
-            history,
-            session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
-            prompt_cache_affinity_id="test-affinity",
-            summary_adapter=adapter,
-            summary_model_id="gpt-5",
-            storage=StubStorage(),
-            settings=CompactionSettings(tail_tokens=1),
-            request_messages=provider_request(_effective_compaction_messages(history)),
-        )
-
-    first = await compact(messages)
-    effective = _effective_compaction_messages([first])
-    quote = next(
-        item for item in effective if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
-    )
-    quote_payload = str(quote.content).removeprefix(COMPACTION_USER_QUOTE_PREFIX)
-    assert json.loads(quote_payload) == original.to_dict()
-    assert "<" not in quote_payload and ">" not in quote_payload
-    assert adapter.requests[0]["messages"][:-1] == provider_request(messages)[:-1]
-    newer = user("new-user", "Actually do B")
-    second = await compact([first, newer, assistant("next", "later step")])
-    second_quotes = [
-        item
-        for item in _effective_compaction_messages([second])
-        if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
-    ]
-    assert len(second_quotes) == 1
-    assert (
-        json.loads(str(second_quotes[0].content).removeprefix(COMPACTION_USER_QUOTE_PREFIX))
-        == newer.to_dict()
-    )

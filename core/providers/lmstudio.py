@@ -8,9 +8,6 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import REASONING_CONTROL_ON_OFF, Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
     classify_http_status,
@@ -23,6 +20,10 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
 from core.utils.retry import retry_async
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
+
 
 NATIVE_MODELS_ENDPOINT = "/api/v1/models"
 NATIVE_MODEL_LOAD_ENDPOINT = "/api/v1/models/load"

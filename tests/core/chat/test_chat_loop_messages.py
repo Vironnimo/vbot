@@ -9,7 +9,9 @@ from core.chat import (
     ChatMessage,
     ToolCall,
 )
-from core.chat.chat import _assign_session_image_references
+from core.chat._request_history import (
+    _assign_session_image_references,
+)
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import (
@@ -74,7 +76,9 @@ class TestSessionImageReferences:
 
 class TestEmbedNotesIntoRequest:
     def test_defers_note_between_assistant_tool_calls_and_tool_result(self) -> None:
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.user("Use the tool"),
@@ -100,7 +104,9 @@ class TestEmbedNotesIntoRequest:
         }
 
     def test_defers_multiple_notes_within_one_tool_sequence(self) -> None:
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.user("Use tools"),
@@ -144,7 +150,9 @@ class TestEmbedNotesIntoRequest:
         }
 
     def test_note_between_two_tool_sequences_is_not_deferred(self) -> None:
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.user("Start"),
@@ -187,7 +195,9 @@ class TestEmbedNotesIntoRequest:
         }
 
     def test_notes_before_tool_sequence_emit_before_assistant_message(self) -> None:
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.note("Pre-sequence note"),
@@ -212,7 +222,9 @@ class TestEmbedNotesIntoRequest:
         }
 
     def test_skips_reasoning_only_assistant_message(self) -> None:
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.user("Previous question"),
@@ -236,7 +248,9 @@ class TestMessageToRequestDict:
 
     def test_strips_reasoning_reasoning_meta_and_usage_from_assistant_message(self):
         """Old assistant reasoning fields must not be resent on fresh follow-up turns."""
-        from core.chat.chat import _message_to_request_dict
+        from core.chat.wire_shaping import (
+            _message_to_request_dict,
+        )
 
         message = ChatMessage.assistant(
             model="openai/gpt-4",
@@ -276,7 +290,9 @@ class TestMessageToRequestDict:
 
     def test_request_dict_strips_reasoning_before_adapter_history_formatting(self):
         """History conversion should remove reasoning before adapter formatting runs."""
-        from core.chat.chat import _message_to_request_dict
+        from core.chat.wire_shaping import (
+            _message_to_request_dict,
+        )
         from core.providers.opencode_go import OpenCodeGoAdapter
 
         assistant_history_message = ChatMessage.assistant(
@@ -296,7 +312,9 @@ class TestMessageToRequestDict:
 
     def test_preserves_usage_on_non_assistant_messages(self):
         """User and tool messages never have usage, but the function should not strip it."""
-        from core.chat.chat import _message_to_request_dict
+        from core.chat.wire_shaping import (
+            _message_to_request_dict,
+        )
 
         message = ChatMessage.user("What is the weather?")
         result = _message_to_request_dict(message)
@@ -305,7 +323,9 @@ class TestMessageToRequestDict:
         assert result["content"] == "What is the weather?"
 
     def test_strips_timing_from_tool_messages(self):
-        from core.chat.chat import _message_to_request_dict
+        from core.chat.wire_shaping import (
+            _message_to_request_dict,
+        )
 
         message = ChatMessage.tool(
             tool_call_id="call-one",
@@ -324,7 +344,9 @@ class TestMessageToRequestDict:
         assert "timing" not in result
 
     def test_run_summary_is_omitted_from_request_history(self):
-        from core.chat.chat import _embed_notes_into_request
+        from core.chat.wire_shaping import (
+            _embed_notes_into_request,
+        )
 
         messages = [
             ChatMessage.user("Previous question"),
@@ -350,16 +372,28 @@ class TestMessageToRequestDict:
 
 class TestErrorKindClassification:
     def test_streaming_chunk_timeout_maps_to_timeout(self) -> None:
-        from core.chat.chat import ERROR_KIND_TIMEOUT, _exception_to_error_kind
+        from core.chat.events import (
+            _exception_to_error_kind,
+        )
+        from core.chat.messages import (
+            ERROR_KIND_TIMEOUT,
+        )
 
         assert _exception_to_error_kind(StreamingChunkTimeoutError("stalled")) == ERROR_KIND_TIMEOUT
 
     def test_network_error_maps_to_network_error_kind(self) -> None:
-        from core.chat.chat import ERROR_KIND_NETWORK, _exception_to_error_kind
+        from core.chat.events import (
+            _exception_to_error_kind,
+        )
+        from core.chat.messages import (
+            ERROR_KIND_NETWORK,
+        )
 
         assert _exception_to_error_kind(NetworkError("offline")) == ERROR_KIND_NETWORK
 
     def test_network_error_does_not_trigger_model_fallback(self) -> None:
-        from core.chat.chat import should_advance_model_fallback_chain
+        from core.chat.streaming import (
+            should_advance_model_fallback_chain,
+        )
 
         assert should_advance_model_fallback_chain(NetworkError("offline")) is False

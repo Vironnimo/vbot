@@ -4,6 +4,8 @@ pywebview-based desktop accessor that embeds the normal WebUI and talks only to 
 
 ## Overview
 
+Wakeword source routing: `worker.py` retains the detection/recording/transcription lifecycle. `_audio_capture.py` owns native-frame conversion and WAV encoding; `_microphones.py` owns device selection and enumeration; `_speech_detection.py` owns neural/fallback speech detection; `_worker_support.py` holds readiness and interruptible retry helpers; `_worker_modes.py` holds explicit mock/unavailable workers. `bridge.py` retains the synchronized WebUI/worker lifecycle, with pure configuration, profile-key and calibration calculations in `_bridge_values.py`. Calibration uses the standard-library median; public Worker and Bridge imports remain available from their original files.
+
 `desktop/` owns the native window shell around the existing WebUI. It does not import core/server business logic and it does not manage vBot server processes. Desktop stays intentionally thin: it loads the same server-served WebUI a browser would load from `/`, inside a pywebview window - and because that server can be remote (e.g. a Raspberry Pi), a Pi-server + Windows-client topology is a primary intended use.
 
 Server selection lives **inside the window**: a shell-owned native connection screen (`desktop/connection.py`) handles first run and launch failures, while the connected WebUI exposes the Desktop-local remembered-server list under Settings -> Desktop app -> Connection. The last-used target auto-connects on launch; there is no silent localhost default and no dead-end error page. No native application menu is attached.
@@ -100,6 +102,8 @@ Worker states (`getWakewordStatus().state`): `off` -> `starting` -> `listening` 
 - RPC retries allowlist side-effect-free reads only (`agent.get`, `session.list`); `session.create` and `chat.stream` get exactly one transport attempt because post-commit retries could duplicate Sessions or Runs. A 200 response with malformed JSON is logged and treated as a failed utterance/RPC result rather than escaping the worker loop; it is not replayed.
 - Isolated microphone read failures reopen the stream; a failed reopen or three consecutive failures move the worker to `microphone_disconnected` recovery (same for no compatible device at startup - a warning, not hard `error`). Empty/no-speech/failed transcriptions surface long enough for feedback, then return to listening - one bad utterance never stops detection.
 - A stop between capture and send discards the utterance (`_running` re-checked after recording and transcription; retry loops honor it); stop-induced empty results publish `off`, never `error`.
+
+Wakeword regression suites under `tests/desktop/` separate Bridge status/configuration, calibration, model management and server connections (`test_bridge*.py`) from Worker lifecycle, recording, VAD, audio conversion, dispatch, recovery, network, mock mode and microphone selection (`test_worker*.py`). Shared fake devices and scoped fixtures live in `bridge_helpers.py` and `worker_helpers.py`.
 
 ## External Dependencies
 

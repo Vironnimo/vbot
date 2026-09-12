@@ -9,8 +9,7 @@ A Session's searchable text is split into overlapping source-derived Passages.
 Each Passage is its own metadata row and its own row in the ``vec0`` virtual
 table, keyed by the compatibility-named chunk index in the
 ``(agent_id, session_id, chunk_index)`` tuple. Callers choose the exact on-disk
-file under ``<data_dir>/recall/`` so typed Passage and legacy chunk policies
-stay separate; the ``sqlite-vec``
+file under ``<data_dir>/recall/``. The ``sqlite-vec``
 extension is loaded via the same enable/disable dance as the rest of
 the project's SQLite work, and the index is schema-versioned through
 ``PRAGMA user_version`` so a mismatched index is dropped and rebuilt
@@ -32,7 +31,7 @@ import sqlite_vec  # type: ignore[import-untyped]
 from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
-_INDEX_FILE_NAME = "session_vectors.sqlite"
+_INDEX_FILE_NAME = "session_passage_vectors.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 # Bump when the on-disk index becomes invalid under a new build/index policy;
 # mismatched indexes are dropped and rebuilt (the index is disposable, no migration).
@@ -55,25 +54,9 @@ _SCHEMA_VERSION = 9
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
-# Character-budget heuristic for capping a session's text before embedding.
-# Embedding models bill ~1 token per N characters; English averages ~4, but
-# German (compound words, umlauts) and code tokenize denser — observed ~3.9 and
-# as low as ~3 — so we assume 3 to stay safely under the model's token cap for
-# mixed-language sessions. A pure character heuristic cannot match the model's
-# tokenizer exactly; see FLAGGED.md for the residual overflow risk.
-_CHARS_PER_TOKEN = 3
-# Fraction of the token window we actually fill, leaving headroom for the
-# heuristic's error and any provider-side request wrapping.
-_INPUT_TOKEN_SAFETY = 0.9
-# Conservative default token window when the bound model is not in the local
-# registry. 8192 is the cap for bge-m3, the OpenAI embedding models, and most
-# OpenRouter embedding models, so we assume that floor.
-_DEFAULT_CONTEXT_WINDOW = 8192
-
 # Cosine distance range — distances are 0 (identical direction) to 2 (opposite).
 # ``overshoot`` is the additional candidate count we ask sqlite-vec for so
-# structural filters applied after KNN still leave us with ``limit`` hits.
-# The recall backend over-fetches further for chunk→session dedup.
+# Recall can validate canonical candidates before returning its bounded page.
 _KNN_OVERSHOOT = 4
 _UNBOUNDED_START_TIMESTAMP_MICROS = -(2**63)
 _UNBOUNDED_END_TIMESTAMP_MICROS = 2**63 - 1
@@ -131,11 +114,9 @@ class ChunkVectorRecord:
 class VectorStore:
     """sqlite-vec backed store keyed by chunk rowid."""
 
-    def __init__(self, data_dir: Path, *, index_file_name: str = _INDEX_FILE_NAME) -> None:
-        if Path(index_file_name).name != index_file_name:
-            raise ValueError("Vector index file name must not contain path components")
+    def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
-        self.index_path = data_dir / _INDEX_DIR_NAME / index_file_name
+        self.index_path = data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
 
     @property
     def path(self) -> Path:
@@ -738,30 +719,6 @@ class VectorStore:
             ).fetchone()
             is not None
         )
-
-    # ------------------------------------------------------------------
-    # Truncation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def truncate_to_input_limit(text: str, *, context_window: int | None) -> str:
-        """Cap *text* to a character budget safely under the model's token window.
-
-        The budget is ``context_window * _INPUT_TOKEN_SAFETY * _CHARS_PER_TOKEN``
-        characters. ``_CHARS_PER_TOKEN`` is a conservative chars-per-token
-        estimate (German and code tokenize denser than English), and
-        ``_INPUT_TOKEN_SAFETY`` reserves headroom so the heuristic's error does
-        not push the request over the model's hard token cap. When the bound
-        model's window is unknown, ``_DEFAULT_CONTEXT_WINDOW`` is assumed.
-        """
-
-        window = (
-            context_window if context_window and context_window > 0 else _DEFAULT_CONTEXT_WINDOW
-        )
-        limit = max(1, int(window * _INPUT_TOKEN_SAFETY) * _CHARS_PER_TOKEN)
-        if len(text) <= limit:
-            return text
-        return text[:limit]
 
 
 def format_started_at(timestamp: str | datetime | None) -> str:

@@ -10,7 +10,7 @@ Incrementally indexed aggregation over persisted Sessions producing the WebUI St
 
 ## Report sections
 
-Frozen dataclass tree `{generated_at, window, overview, usage, runs, compactions, errors, tools, skills}`; aggregation in `statistics.py`, SQLite reconciliation + minimal message projection in `index.py`, skill usage in `skills.py`. The index stores scoped cursors plus compact records holding only aggregation-consumed fields - raw text, Reasoning, arguments/result payloads, Skill content never enter it.
+Frozen dataclass tree `{generated_at, window, overview, usage, runs, compactions, errors, tools, skills}`; report records in `report.py`, accumulation in `_aggregation.py`, measured-value normalization in `_measurements.py`, cache accounting in `_cache.py`, and source contracts/activity selection in `_sources.py`. `statistics.py` owns service orchestration, `index.py` owns SQLite reconciliation and minimal message projection, and `skills.py` owns Skill usage. Public imports remain under `core.statistics`. The index stores scoped cursors plus compact records holding only aggregation-consumed fields - raw text, Reasoning, arguments/result payloads, Skill content never enter it.
 
 - **overview** - structural totals, role counts split into visible Chat messages (`user` always; `assistant` only with non-blank text - Thinking/Tool-only steps don't count) versus all ten canonical stored roles zero-filled, including internal `history_edit` controls, run-status counts, durations, per-agent activity, daily trend with outcome splits.
 - **usage** - totals plus per-provider/per-model records with input/output each split measured vs estimated (`total_tokens` only for ranking); cache section with worst hit-rate sessions (minimum reporting floor) and suspected breaks.
@@ -26,9 +26,9 @@ Both report RPCs reconcile through the dedicated two-worker Statistics pool with
 
 - `statistics.report {since?, until?}` validates ISO windows strictly; the service caches on RPC state and offloads reconciliation so filesystem/SQLite work never blocks the loop.
 - `statistics.run_activity {since, until}` returns Runs overlapping the requested interval (newest first, cap 200) for temporal correlation with usage changes - explicitly not causality attribution.
-- WebUI renders seven sub-views from one mount-time call plus refresh or a shared 7/30/90-day/all-time selection through the existing report window. A failed selection retains the previous report and its scope; Limits keeps its independent live/history windows. Formatting/rollup logic stays in pure unit-tested `statisticsView.js`; bounded charts fill missing UTC periods, share one scale for measured/estimated tokens, and keep structural inventory outside the activity totals (`StatisticsView.test.js`, `statisticsView.test.js`). Presentation labels preserve visible vs records, absent vs zero evidence, and derived heuristics.
+- WebUI renders seven sub-views from one mount-time call plus refresh or a shared 7/30/90-day/all-time selection through the existing report window. A failed selection retains the previous report and its scope; Limits keeps its independent live/history windows. The `StatisticsView` owner retains report/range/tab state while internal `components/statistics/*Panel.svelte` components render each local section; chart granularity survives tab changes. Shared report snippets, timeline labels and namespaced styling stay under that owner. Formatting/rollup logic stays in pure unit-tested `statisticsView.js`; bounded charts fill missing UTC periods, share one scale for measured/estimated tokens, and keep structural inventory outside the activity totals (`StatisticsView.test.js`, `statisticsView.test.js`). Presentation labels preserve visible vs records, absent vs zero evidence, and derived heuristics.
 - CLI `vbot statistics compactions` formats the same section without rescanning.
-- **Limits crosses two owners:** `components/statistics/ProviderLimits.svelte` owns live state, single-flight polling, visibility and cleanup independently of local report loading/errors. Statistics navigation remains available before a report succeeds; while visible, the component polls Providers-domain `provider.usage` immediately then every 10 s; `LimitHistory` separately refreshes Provider-owned history every 60 s. Selecting an interval requests the Statistics-owned Run projection. Statistics performs no network access and writes only its disposable index.
+- **Limits crosses two owners:** `components/statistics/ProviderLimits.svelte` owns live state, single-flight polling, visibility and cleanup independently of local report loading/errors. Statistics navigation remains available before a report succeeds; while visible, the component polls Providers-domain `provider.usage` immediately then every 10 s; `LimitHistory` separately refreshes Provider-owned history every 60 s; its uniquely named presentation rules live in adjacent `limitHistory.css`. Selecting an interval requests the Statistics-owned Run projection. Statistics performs no network access and writes only its disposable index.
 
 ## Extension group projection
 
@@ -39,7 +39,7 @@ unrelated earlier history in a reused Session is excluded. Explicit owner scope
 reconciliation does not prune normal Statistics scopes. The bounded worker facade
 returns the existing usage, Tools, Compaction and Run projections without costs,
 account data or separate counters. Generation checks and fork-prefix exclusion
-remain in force (`statistics.py`, `index.py`; `test_statistics.py`,
+remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
 `tests/core/sessions/test_run_ownership.py`).
 
 ## Conventions

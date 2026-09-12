@@ -2,33 +2,74 @@
 
 Handles the model-selected OpenAI Platform endpoint (``api-key`` connection)
 and the ChatGPT Codex ``/codex/responses`` endpoint (``subscription``
-connection with ``mode: codex_responses``).
-"""
+connection with ``mode: codex_responses``)."""
 
 from __future__ import annotations
 
 import asyncio
-import copy
-import inspect
-import json
-import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._codex_websocket import (
+    CodexWebSocket,
+    _CodexWebSocketTransportError,
+)
 from core.providers._http_shared import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
     connect_streaming_with_retry,
     format_http_error_detail,
     post_json_with_retry,
     wrap_network_error,
+)
+from core.providers._openai_constants import (
+    _CODEX_CACHE_SCOPE_MAX_LENGTH,
+    _CODEX_STABLE_VERSION_PATTERN,
+    _CODEX_TRANSPORT_AUTO,
+    _CODEX_TRANSPORT_SSE,
+    _NORMALIZED_CODEX_STREAM_RESPONSE_KEY,
+    CODEX_CACHE_SCOPE_HEADERS,
+    CODEX_CLIENT_VERSION_FALLBACK,
+    CODEX_EXTRA_HEADERS,
+    CODEX_PACKAGE_METADATA_URL,
+    CODEX_RESPONSES_ENDPOINT,
+    CODEX_RESPONSES_MODE,
+    CODEX_WEBSOCKET_BETA,
+    CONVERSATION_ID_KWARG,
+    DISCOVERY_JSON_PARAMETER_NAMES,
+    DISCOVERY_REASONING_PARAMETER_NAMES,
+    DISCOVERY_TOOL_PARAMETER_NAMES,
+    OPENAI_API_KEY_WIRE_KEY,
+    OPENAI_METADATA_KEY,
+    OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
+    OPENAI_REASONING_CONTEXTS,
+    OPENAI_RESPONSES_PROTOCOL,
+    OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS,
+    OPENAI_SUBSCRIPTION_REASONING_EFFORTS,
+    OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS,
+    OPENAI_SUBSCRIPTION_WIRE_KEY,
+    OPENAI_WIRE_POLICIES_KEY,
+    OPTIONAL_REQUEST_PARAMETER_NAMES,
+    PROMPT_CACHE_AFFINITY_ID_KWARG,
+    REASONING_PARAMETER_NAMES,
+    RESPONSES_POLICY_ENDPOINT,
+    STRUCTURED_OUTPUT_PARAMETER_NAMES,
+    TOOL_PARAMETER_NAMES,
+    CodexTransport,
+    CodexWebSocketConnector,
+    CodexWebSocketRoute,
+)
+from core.providers._openai_policy import (
+    OpenAISubscriptionResponsesPolicy,
+    _normalize_catalog_raw,
+    _optional_mapping,
+    _optional_string,
+    _string_set,
+    _subscription_capability_supported,
+    _subscription_supported_parameters,
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
 from core.providers.errors import (
@@ -43,7 +84,6 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
-    normalize_responses_stream_event,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
@@ -51,92 +91,48 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     ReasoningIntent,
-    closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
 )
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 
-CODEX_RESPONSES_MODE = "codex_responses"
-CODEX_EXTRA_HEADERS: dict[str, str] = {
-    "OpenAI-Beta": "responses=experimental",
-    "originator": "vbot",
-}
-CODEX_WEBSOCKET_BETA = "responses_websockets=2026-02-06"
-CODEX_RESPONSES_ENDPOINT = "/codex/responses"
-RESPONSES_POLICY_ENDPOINT = "/responses"
-OPENAI_METADATA_KEY = "openai"
-OPENAI_WIRE_POLICIES_KEY = "wire_policies"
-OPENAI_API_KEY_WIRE_KEY = "api-key"
-OPENAI_SUBSCRIPTION_WIRE_KEY = "subscription"
-OPENAI_RESPONSES_PROTOCOL = "responses"
-OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS = frozenset(
-    {"max_tokens", "max_output_tokens", "top_p"}
-)
-OPENAI_REASONING_CONTEXTS = frozenset({"auto", "current_turn", "all_turns"})
-OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
-OPENAI_SUBSCRIPTION_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
-# Codex rejects sampling and output-limit fields the same way. A Chat-loop
-# ``top_p=None`` (no model recommendation) used to survive as ``"top_p": null``
-# and fail live GPT-5.6 Luna with ``Unsupported parameter: top_p``.
-OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS: frozenset[str] = frozenset()
-OPTIONAL_REQUEST_PARAMETER_NAMES = frozenset(
-    {"max_tokens", "max_output_tokens", "temperature", "top_p", "top_k", "stop_sequences"}
-)
-REASONING_PARAMETER_NAMES = frozenset(
-    {"thinking_effort", "reasoning_effort", "reasoning", "include_reasoning"}
-)
-STRUCTURED_OUTPUT_PARAMETER_NAMES = frozenset(
-    {"response_format", "structured_outputs", "json_mode"}
-)
-TOOL_PARAMETER_NAMES = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
-DISCOVERY_TOOL_PARAMETER_NAMES = frozenset({"tools", "tool_calls", "function_calling"})
-DISCOVERY_JSON_PARAMETER_NAMES = frozenset({"response_format", "structured_outputs", "json_mode"})
-DISCOVERY_REASONING_PARAMETER_NAMES = frozenset(
-    {"reasoning", "reasoning_effort", "include_reasoning", "thinking_effort"}
-)
-CODEX_CLIENT_VERSION_FALLBACK = "0.144.0"
-CODEX_PACKAGE_METADATA_URL = "https://registry.npmjs.org/@openai%2Fcodex/latest"
-_CODEX_STABLE_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
-# Codex backend prompt-cache routing: the ChatGPT ``/codex/responses`` backend
-# routes the prompt cache by these request HEADERS scoped to the conversation —
-# NOT by the body-level ``prompt_cache_key`` (verified live 2026-07-09: the body
-# field has no measurable effect, while a stable conversation scope on these
-# headers lifts cache hits from ~1/6 to ~5/6). Mirrors the Codex CLI and the
-# hermes-agent transport.
-CODEX_CACHE_SCOPE_HEADERS = ("session_id", "x-client-request-id")
-CONVERSATION_ID_KWARG = "conversation_id"
-PROMPT_CACHE_AFFINITY_ID_KWARG = "prompt_cache_affinity_id"
-_NORMALIZED_CODEX_STREAM_RESPONSE_KEY = "_normalized_codex_stream_response"
-_CODEX_TRANSPORT_AUTO: Literal["auto"] = "auto"
-_CODEX_TRANSPORT_SSE: Literal["sse"] = "sse"
-_CODEX_CACHE_SCOPE_MAX_LENGTH = 64
-_CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS = 10.0
-_CODEX_WEBSOCKET_STATUS_CODE = 101
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
 
-CodexTransport = Literal["auto", "sse"]
-CodexWebSocketConnector = Callable[..., Awaitable[Any]]
-CodexWebSocketRoute = tuple[str, str, str]
-
-
-@dataclass
-class _CodexWebSocketContinuation:
-    route: CodexWebSocketRoute
-    last_request_payload: dict[str, Any]
-    last_response_id: str
-    last_response_items: list[dict[str, Any]]
-
-
-class _CodexPreviousResponseMissingError(Exception):
-    """Connection-scoped continuation vanished and must be replayed in full."""
-
-
-class _CodexWebSocketTransportError(NetworkError):
-    """Codex WebSocket failed before or after receiving a provider event."""
-
-    def __init__(self, message: str, *, events_received: bool) -> None:
-        super().__init__(message)
-        self.events_received = events_received
+__all__ = [
+    "CODEX_CACHE_SCOPE_HEADERS",
+    "CODEX_CLIENT_VERSION_FALLBACK",
+    "CODEX_EXTRA_HEADERS",
+    "CODEX_PACKAGE_METADATA_URL",
+    "CODEX_RESPONSES_ENDPOINT",
+    "CODEX_RESPONSES_MODE",
+    "CODEX_WEBSOCKET_BETA",
+    "CONVERSATION_ID_KWARG",
+    "CodexTransport",
+    "CodexWebSocketConnector",
+    "CodexWebSocketRoute",
+    "DISCOVERY_JSON_PARAMETER_NAMES",
+    "DISCOVERY_REASONING_PARAMETER_NAMES",
+    "DISCOVERY_TOOL_PARAMETER_NAMES",
+    "OPENAI_API_KEY_WIRE_KEY",
+    "OPENAI_METADATA_KEY",
+    "OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS",
+    "OPENAI_REASONING_CONTEXTS",
+    "OPENAI_RESPONSES_PROTOCOL",
+    "OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS",
+    "OPENAI_SUBSCRIPTION_REASONING_EFFORTS",
+    "OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS",
+    "OPENAI_SUBSCRIPTION_WIRE_KEY",
+    "OPENAI_WIRE_POLICIES_KEY",
+    "OPTIONAL_REQUEST_PARAMETER_NAMES",
+    "OpenAIAdapter",
+    "OpenAISubscriptionResponsesPolicy",
+    "PROMPT_CACHE_AFFINITY_ID_KWARG",
+    "REASONING_PARAMETER_NAMES",
+    "RESPONSES_POLICY_ENDPOINT",
+    "STRUCTURED_OUTPUT_PARAMETER_NAMES",
+    "TOOL_PARAMETER_NAMES",
+]
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -176,18 +172,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
         self._codex_transport = codex_transport
-        self._codex_websocket_connect = codex_websocket_connect or cast(
-            CodexWebSocketConnector, websocket_connect
-        )
-        self._codex_websocket: Any | None = None
-        self._codex_websocket_route: CodexWebSocketRoute | None = None
-        self._codex_websocket_continuation: _CodexWebSocketContinuation | None = None
         self._codex_websocket_disabled_routes: set[CodexWebSocketRoute] = set()
-        self._codex_websocket_lock = asyncio.Lock()
+        self._codex_socket = CodexWebSocket(
+            base_url=str(self._client.base_url),
+            connect=codex_websocket_connect or cast(CodexWebSocketConnector, websocket_connect),
+            debug_recorder=self._debug_recorder,
+            response_input=lambda response, model_id: self._build_responses_payload(
+                [response], model_id=model_id, stream=True
+            ).get("input"),
+        )
 
     async def aclose(self) -> None:
         """Close the cached Codex WebSocket and inherited HTTP client."""
-        await self._close_codex_websocket()
+        await self._codex_socket.aclose()
         await super().aclose()
 
     @classmethod
@@ -885,7 +882,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return
 
         try:
-            async for delta in self._stream_codex_websocket(
+            async for delta in self._codex_socket.stream(
                 payload,
                 headers=websocket_headers,
                 route=route,
@@ -904,143 +901,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             ):
                 yield delta
 
-    async def _stream_codex_websocket(
-        self,
-        payload: dict[str, Any],
-        *,
-        headers: dict[str, str],
-        route: CodexWebSocketRoute,
-        state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
-        async with self._codex_websocket_lock:
-            if self._codex_websocket_route not in {None, route}:
-                await self._close_codex_websocket()
-            request_payload = self._build_codex_cached_request(payload, route)
-            retried_missing_continuation = False
-            while True:
-                try:
-                    async for delta in self._stream_codex_websocket_attempt(
-                        request_payload,
-                        headers=headers,
-                        route=route,
-                        state=state,
-                    ):
-                        yield delta
-                except _CodexPreviousResponseMissingError:
-                    if (
-                        "previous_response_id" not in request_payload
-                        or retried_missing_continuation
-                    ):
-                        self._codex_websocket_continuation = None
-                        await self._close_codex_websocket()
-                        raise ProviderError(
-                            "Codex WebSocket continuation was not found",
-                            retryable=False,
-                        ) from None
-                    retried_missing_continuation = True
-                    self._codex_websocket_continuation = None
-                    await self._close_codex_websocket()
-                    request_payload = copy.deepcopy(payload)
-                    continue
-                except BaseException:
-                    self._codex_websocket_continuation = None
-                    await self._close_codex_websocket()
-                    raise
-
-                self._remember_codex_websocket_continuation(payload, route, state)
-                return
-
-    async def _stream_codex_websocket_attempt(
-        self,
-        request_payload: dict[str, Any],
-        *,
-        headers: dict[str, str],
-        route: CodexWebSocketRoute,
-        state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
-        wire_payload = {"type": "response.create", **request_payload}
-        wire_text = json.dumps(wire_payload, ensure_ascii=False, separators=(",", ":"))
-        capture = (
-            self._debug_recorder.begin_capture(
-                method="WEBSOCKET",
-                url=self._codex_websocket_url(),
-                headers=headers,
-                body=wire_text.encode("utf-8"),
-            )
-            if self._debug_recorder is not None
-            else None
-        )
-        events_received = False
-        model_delta_received = False
-        finish_received = False
-        try:
-            websocket = await self._ensure_codex_websocket(route, headers)
-            if capture is not None:
-                status_code, response_headers = _codex_websocket_response_head(websocket)
-                capture.record_response_head(status_code, response_headers)
-            send_result = websocket.send(wire_text)
-            if inspect.isawaitable(send_result):
-                await send_result
-            while True:
-                raw_frame = await websocket.recv()
-                if isinstance(raw_frame, bytes):
-                    frame_bytes = raw_frame
-                    frame_text = raw_frame.decode("utf-8", errors="replace")
-                elif isinstance(raw_frame, str):
-                    frame_text = raw_frame
-                    frame_bytes = raw_frame.encode("utf-8")
-                else:
-                    raise TypeError("Codex WebSocket returned a non-text frame")
-                events_received = True
-                if capture is not None:
-                    capture.feed_body(frame_bytes + b"\n")
-                event = json.loads(frame_text)
-                if not isinstance(event, Mapping):
-                    raise ValueError("Codex WebSocket event must be an object")
-                event_data = dict(event)
-                if (
-                    "previous_response_id" in request_payload
-                    and not model_delta_received
-                    and _codex_responses_error_code(event_data) == "previous_response_not_found"
-                ):
-                    raise _CodexPreviousResponseMissingError
-                event_type = event_data.get("type")
-                event_name = event_type if isinstance(event_type, str) else ""
-                deltas = normalize_responses_stream_event(event_name, event_data, state)
-                for delta in deltas:
-                    if delta.get("type") in {
-                        "content_delta",
-                        "reasoning_delta",
-                        "tool_call_delta",
-                    }:
-                        model_delta_received = True
-                    if delta.get("type") == "finish":
-                        finish_received = True
-                    yield delta
-                if finish_received:
-                    return
-        except _CodexPreviousResponseMissingError:
-            raise
-        except ProviderError:
-            raise
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            transport_error = (
-                exc
-                if isinstance(exc, _CodexWebSocketTransportError)
-                else _CodexWebSocketTransportError(
-                    f"Codex WebSocket failed: {exc}",
-                    events_received=events_received,
-                )
-            )
-            if capture is not None:
-                capture.record_error(transport_error)
-            raise transport_error from exc
-        finally:
-            if capture is not None:
-                capture.finalize()
-
     async def _build_codex_websocket_headers(self, cache_scope_id: str) -> dict[str, str]:
         wire_cache_scope = _clamp_codex_cache_scope(cache_scope_id)
         headers = await self._build_codex_headers(wire_cache_scope)
@@ -1054,303 +914,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         headers["x-client-request-id"] = wire_cache_scope
         return headers
 
-    async def _ensure_codex_websocket(
-        self,
-        route: CodexWebSocketRoute,
-        headers: dict[str, str],
-    ) -> Any:
-        if self._codex_websocket is not None and self._codex_websocket_route == route:
-            return self._codex_websocket
-        await self._close_codex_websocket()
-        connection = self._codex_websocket_connect(
-            self._codex_websocket_url(),
-            additional_headers=headers,
-            open_timeout=_CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
-            max_size=None,
-        )
-        websocket = await connection if inspect.isawaitable(connection) else connection
-        self._codex_websocket = websocket
-        self._codex_websocket_route = route
-        return websocket
-
-    async def _close_codex_websocket(self) -> None:
-        websocket = self._codex_websocket
-        self._codex_websocket = None
-        self._codex_websocket_route = None
-        self._codex_websocket_continuation = None
-        if websocket is None:
-            return
-        try:
-            close_result = websocket.close()
-            if inspect.isawaitable(close_result):
-                await close_result
-        except Exception:
-            pass
-
-    def _codex_websocket_url(self) -> str:
-        base_url = str(self._client.base_url).rstrip("/")
-        if base_url.startswith("https://"):
-            websocket_base = f"wss://{base_url.removeprefix('https://')}"
-        elif base_url.startswith("http://"):
-            websocket_base = f"ws://{base_url.removeprefix('http://')}"
-        else:
-            raise ProviderError(
-                f"Codex WebSocket requires an HTTP(S) base URL, got {base_url!r}",
-                retryable=False,
-            )
-        return f"{websocket_base}{CODEX_RESPONSES_ENDPOINT}"
-
-    def _build_codex_cached_request(
-        self,
-        payload: dict[str, Any],
-        route: CodexWebSocketRoute,
-    ) -> dict[str, Any]:
-        continuation = self._codex_websocket_continuation
-        if continuation is None or continuation.route != route:
-            self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
-        if not _codex_payloads_match_except_input(
-            payload,
-            continuation.last_request_payload,
-        ):
-            self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
-        current_input = payload.get("input")
-        previous_input = continuation.last_request_payload.get("input")
-        if not isinstance(current_input, list) or not isinstance(previous_input, list):
-            self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
-        baseline = [*previous_input, *continuation.last_response_items]
-        if len(current_input) < len(baseline) or current_input[: len(baseline)] != baseline:
-            self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
-        request_payload = copy.deepcopy(payload)
-        request_payload["previous_response_id"] = continuation.last_response_id
-        request_payload["input"] = copy.deepcopy(current_input[len(baseline) :])
-        return request_payload
-
-    def _remember_codex_websocket_continuation(
-        self,
-        payload: dict[str, Any],
-        route: CodexWebSocketRoute,
-        state: ResponsesStreamState,
-    ) -> None:
-        completed_response = state.completed_response
-        if not isinstance(completed_response, Mapping):
-            self._codex_websocket_continuation = None
-            return
-        response_id = completed_response.get("id")
-        normalized_response = state.normalized_response()
-        response_items = self._build_responses_payload(
-            [normalized_response],
-            model_id=route[1],
-            stream=True,
-        ).get("input")
-        if (
-            not isinstance(response_id, str)
-            or not response_id
-            or not isinstance(response_items, list)
-        ):
-            self._codex_websocket_continuation = None
-            return
-        self._codex_websocket_continuation = _CodexWebSocketContinuation(
-            route=route,
-            last_request_payload=copy.deepcopy(payload),
-            last_response_id=response_id,
-            last_response_items=[
-                copy.deepcopy(item) for item in response_items if isinstance(item, dict)
-            ],
-        )
-
-
-def _codex_websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]:
-    response = getattr(websocket, "response", None)
-    raw_status = getattr(response, "status_code", _CODEX_WEBSOCKET_STATUS_CODE)
-    status_code = (
-        raw_status
-        if isinstance(raw_status, int) and not isinstance(raw_status, bool)
-        else _CODEX_WEBSOCKET_STATUS_CODE
-    )
-    raw_headers = getattr(response, "headers", None)
-    try:
-        headers = dict(raw_headers) if raw_headers is not None else {}
-    except (TypeError, ValueError):
-        headers = {}
-    return status_code, {str(name): str(value) for name, value in headers.items()}
-
 
 def _clamp_codex_cache_scope(cache_scope_id: str) -> str:
     return cache_scope_id[:_CODEX_CACHE_SCOPE_MAX_LENGTH]
-
-
-def _codex_responses_error_code(event: Mapping[str, Any]) -> str | None:
-    response = event.get("response")
-    payload = response if isinstance(response, Mapping) else event
-    error = payload.get("error")
-    if isinstance(error, Mapping):
-        code = error.get("code")
-        if isinstance(code, str) and code:
-            return code
-    code = payload.get("code")
-    return code if isinstance(code, str) and code else None
-
-
-def _codex_payloads_match_except_input(
-    current: Mapping[str, Any],
-    previous: Mapping[str, Any],
-) -> bool:
-    ignored = {"input", "previous_response_id"}
-    current_rest = {key: value for key, value in current.items() if key not in ignored}
-    previous_rest = {key: value for key, value in previous.items() if key not in ignored}
-    return current_rest == previous_rest
-
-
-@dataclass(frozen=True)
-class OpenAISubscriptionResponsesPolicy:
-    """Responses request policy for OpenAI Subscription models."""
-
-    allowed_reasoning_efforts: frozenset[str]
-    supports_tools: bool
-    supports_parallel_tool_calls: bool
-    supports_structured_outputs: bool
-    supports_streaming: bool = True
-    endpoint_path: str = RESPONSES_POLICY_ENDPOINT
-    supported_request_parameters: frozenset[str] = OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
-    supports_explicit_none_effort: bool = False
-    minimum_reasoning_effort: str | None = None
-
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return bool(self.allowed_reasoning_efforts)
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered_kwargs = dict(kwargs)
-        if not self.supports_tools:
-            for parameter_name in TOOL_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-        elif not self.supports_parallel_tool_calls:
-            filtered_kwargs.pop("parallel_tool_calls", None)
-
-        if not self.supports_structured_outputs:
-            for parameter_name in STRUCTURED_OUTPUT_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-
-        if not self.allows_any_reasoning_controls:
-            for parameter_name in REASONING_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-        else:
-            self._normalize_reasoning_effort(filtered_kwargs, "thinking_effort")
-            self._normalize_reasoning_effort(filtered_kwargs, "reasoning_effort")
-
-        for parameter_name in OPTIONAL_REQUEST_PARAMETER_NAMES:
-            if (
-                parameter_name in filtered_kwargs
-                and parameter_name not in self.supported_request_parameters
-            ):
-                filtered_kwargs.pop(parameter_name, None)
-        return filtered_kwargs
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized_effort = normalize_thinking_effort(effort)
-        if not normalized_effort:
-            return None
-        if normalized_effort == "none":
-            if self.minimum_reasoning_effort in self.allowed_reasoning_efforts:
-                return self.minimum_reasoning_effort
-            return "none" if self.allows_any_reasoning_controls else None
-        return closest_supported_effort(normalized_effort, self.allowed_reasoning_efforts)
-
-    def supports_request_parameter(self, parameter_name: str) -> bool:
-        return parameter_name in self.supported_request_parameters
-
-    def _normalize_reasoning_effort(
-        self,
-        filtered_kwargs: dict[str, Any],
-        parameter_name: str,
-    ) -> None:
-        if parameter_name not in filtered_kwargs:
-            return
-        safe_effort = self.closest_reasoning_effort(filtered_kwargs.get(parameter_name))
-        if safe_effort is None:
-            filtered_kwargs.pop(parameter_name, None)
-            return
-        filtered_kwargs[parameter_name] = safe_effort
-
-
-def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:
-    normalized = dict(raw)
-    if not _optional_string(normalized.get("id")):
-        slug = _optional_string(normalized.get("slug")) or _optional_string(normalized.get("model"))
-        if slug:
-            normalized["id"] = slug
-    if not _optional_string(normalized.get("name")):
-        display_name = _optional_string(normalized.get("display_name")) or _optional_string(
-            normalized.get("title")
-        )
-        if display_name:
-            normalized["name"] = display_name
-    return normalized
-
-
-def _optional_string(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _optional_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _string_set(value: Any) -> frozenset[str]:
-    if not isinstance(value, list):
-        return frozenset()
-    return frozenset(item for item in value if isinstance(item, str) and item)
-
-
-def _subscription_capability_supported(
-    raw_parameters: frozenset[str],
-    default_value: bool,
-    metadata_sources: tuple[Mapping[str, Any], ...],
-    explicit_keys: tuple[str, ...],
-    matching_parameters: frozenset[str],
-) -> bool:
-    explicit_value = _first_optional_bool(metadata_sources, explicit_keys)
-    if explicit_value is not None:
-        return explicit_value
-    if raw_parameters:
-        return bool(raw_parameters & matching_parameters)
-    return default_value
-
-
-def _subscription_supported_parameters(
-    raw_parameters: frozenset[str],
-    tools_supported: bool,
-    json_supported: bool,
-    reasoning_supported: bool,
-) -> list[str]:
-    supported_parameters: list[str] = []
-    sparse_catalog = not raw_parameters
-    if tools_supported:
-        supported_parameters.append("tools")
-    if json_supported:
-        supported_parameters.append("response_format")
-    if reasoning_supported:
-        supported_parameters.append("reasoning")
-    if tools_supported and (sparse_catalog or "parallel_tool_calls" in raw_parameters):
-        supported_parameters.append("parallel_tool_calls")
-    return supported_parameters
-
-
-def _first_optional_bool(
-    metadata_sources: tuple[Mapping[str, Any], ...],
-    keys: tuple[str, ...],
-) -> bool | None:
-    for source in metadata_sources:
-        for key in keys:
-            value = source.get(key)
-            if isinstance(value, bool):
-                return value
-            if key == "reasoning" and isinstance(value, Mapping):
-                supported = value.get("supported")
-                if isinstance(supported, bool):
-                    return supported
-    return None

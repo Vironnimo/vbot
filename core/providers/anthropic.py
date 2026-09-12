@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import (
     REASONING_CONTROL_BUDGET,
     REASONING_CONTROL_LEVELS,
@@ -25,6 +22,10 @@ from core.providers.anthropic_compatible import (
 )
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
+
 
 MODELS_DISCOVERY_PAGE_SIZE = "1000"
 ANTHROPIC_METADATA_KEY = "anthropic"

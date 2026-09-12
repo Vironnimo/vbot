@@ -8,7 +8,9 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError, ChatSessionError, MessageSender
-from core.chat.chat import _validate_assistant_message
+from core.chat._message_validation import (
+    _validate_assistant_message,
+)
 from core.projects import AgentResolutionError, ProjectStore
 from core.runs import RunCancelledError
 from core.sessions import active_session_messages

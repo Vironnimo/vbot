@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.channels._telegram_inbound as telegram_inbound
+import core.channels._telegram_transport as telegram_transport
 import core.channels.engine as engine_module
-import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
     ConversationFacts,
@@ -203,7 +204,7 @@ async def test_forward_comment_and_photo_trigger_one_combined_run(
     assert blocks[0] == TextBlock(type="text", text="Please edit this image")
     assert isinstance(blocks[1], MediaBlock)
     assert blocks[1].filename == "telegram-photo-uniq-1.jpg"
-    assert adapter._pending_forward_comments == {}
+    assert adapter._inbound._pending_forward_comments == {}
     await adapter.stop()
 
 
@@ -212,7 +213,7 @@ async def test_possible_forward_comment_flushes_as_plain_text_after_settle_windo
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(telegram_module, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(telegram_inbound, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
     trigger_mock = AsyncMock(
         return_value=make_completed_run(
             session_id="ch-tg-assistant-12345",
@@ -230,7 +231,7 @@ async def test_possible_forward_comment_flushes_as_plain_text_after_settle_windo
         make_update(chat_id=12345, user_id=50, text="hello", message_id=700),
         SimpleNamespace(),
     )
-    await asyncio.gather(*adapter._forward_comment_tasks.values())
+    await asyncio.gather(*adapter._inbound._forward_comment_tasks.values())
     await drain_chat_queue(adapter, 12345)
 
     trigger_mock.assert_awaited_once()
@@ -618,7 +619,7 @@ async def test_inbound_voice_retries_transient_telegram_download_failure(
 ) -> None:
     from telegram.error import NetworkError
 
-    monkeypatch.setattr(telegram_module, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
+    monkeypatch.setattr(telegram_transport, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
     attachment_store = AttachmentStore(tmp_path)
     trigger_mock = AsyncMock(
         return_value=make_completed_run(
@@ -655,7 +656,7 @@ async def test_inbound_voice_reports_exhausted_platform_download_retries(
 ) -> None:
     from telegram.error import NetworkError
 
-    monkeypatch.setattr(telegram_module, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
+    monkeypatch.setattr(telegram_transport, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
     attachment_store = AttachmentStore(tmp_path)
     trigger_mock = AsyncMock()
     adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
@@ -733,7 +734,7 @@ async def test_album_messages_are_buffered_into_single_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(telegram_module, "_ALBUM_FLUSH_SECONDS", 0)
+    monkeypatch.setattr(telegram_inbound, "_ALBUM_FLUSH_SECONDS", 0)
     attachment_store = AttachmentStore(tmp_path)
     session_id = "ch-tg-assistant-12345"
     trigger_mock = AsyncMock(
@@ -777,7 +778,7 @@ async def test_album_messages_are_buffered_into_single_trigger_run(
         SimpleNamespace(),
     )
 
-    await adapter._album_tasks["album-1"]
+    await adapter._inbound._album_tasks["album-1"]
     await drain_chat_queue(adapter, 12345)
 
     trigger_mock.assert_awaited_once()
@@ -796,7 +797,7 @@ async def test_group_album_carries_sender_into_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(telegram_module, "_ALBUM_FLUSH_SECONDS", 0)
+    monkeypatch.setattr(telegram_inbound, "_ALBUM_FLUSH_SECONDS", 0)
     attachment_store = AttachmentStore(tmp_path)
     session_id = "ch-tg-assistant--10001"
     trigger_mock = AsyncMock(
@@ -843,7 +844,7 @@ async def test_group_album_carries_sender_into_trigger_run(
         SimpleNamespace(),
     )
 
-    await adapter._album_tasks["album-1"]
+    await adapter._inbound._album_tasks["album-1"]
     await drain_chat_queue(adapter, -10001)
 
     trigger_mock.assert_awaited_once()
@@ -874,7 +875,7 @@ async def test_album_flush_failure_log_carries_traceback(
     await asyncio.wait([failed_task])
 
     with caplog.at_level(logging.WARNING, logger="vbot.channels.telegram"):
-        adapter._on_album_task_done("album-1", failed_task)
+        adapter._inbound._on_album_task_done("album-1", failed_task)
 
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert any(

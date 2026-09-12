@@ -23,7 +23,7 @@ from core.chat.model_resolution import (
 from core.debug import DebugContext
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
-from core.sessions.sessions import (
+from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_TITLE_KEY,
     SessionAddress,

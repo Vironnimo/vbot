@@ -42,6 +42,8 @@ An existing built-in or earlier Extension Tool name wins. The losing declaration
 
 `api.register_recall_backend(name, factory)` declares a `RecallBackendContext -> RecallBackend` factory. Runtime applies it to a registry with built-ins already present before resolving the persisted backend. Invalid or duplicate names are diagnosed and skipped; the Recall domain owns result-unit, control, ranking, pagination, and snapshot semantics.
 
+Constructed backends must provide `search_capabilities()` and `search_page(request)`; missing methods or invalid capability values are rejected at selection while factory registration remains lazy.
+
 If a live-disabled Extension supplied the active backend, Runtime rebuilds Recall and falls back through the normal unknown-backend path while leaving the persisted selection intact, so re-enabling can restore it.
 
 ## System Prompt blocks
@@ -70,7 +72,7 @@ Live disable removes the Extension's hook and interaction entries, unregisters i
 
 ## Source and tests
 
-- Contracts and application: `core/extensions/extensions.py`, `core/extensions/interactions.py`
+- Public contracts: `core/extensions/extensions.py`, `core/extensions/interactions.py`; internal declaration collection: `_api.py`; capability application: `_capabilities.py`; callback execution: `_callbacks.py` (internal files under `core/extensions/`).
 - Chat integration: `core/chat/chat.py`, `core/chat/commands.py`, `core/chat/tool_dispatch.py`
 - Runtime application/teardown: `core/runtime/runtime.py`
 - Focused coverage: `tests/core/extensions/test_capabilities.py`, `test_dispatch.py`, `test_interactions.py`, `test_deactivate.py`, and relevant Chat/Runtime tests

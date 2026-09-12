@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import core.channels._conversation_content as content_module
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -88,7 +89,7 @@ async def test_media_failure_isolates_siblings_and_triggers_successful_blocks(
 
     await engine._process_queued_media(queued)
 
-    assert transport.sent_texts == [engine_module._MEDIA_FAILED_REPLY, "ok"]
+    assert transport.sent_texts == [content_module._MEDIA_FAILED_REPLY, "ok"]
     trigger_mock.assert_awaited_once()
     await_args = trigger_mock.await_args
     assert await_args is not None
@@ -114,7 +115,7 @@ async def test_media_duplicate_failure_replies_are_deduped(tmp_path: Path) -> No
 
     await engine._process_queued_media(queued)
 
-    assert transport.sent_texts == [engine_module._MEDIA_FAILED_REPLY]
+    assert transport.sent_texts == [content_module._MEDIA_FAILED_REPLY]
     trigger_mock.assert_not_awaited()
     await engine.stop()
 
@@ -151,13 +152,13 @@ async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) 
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (AttachmentTypeNotAllowedError("nope"), engine_module._UNSUPPORTED_FILE_REPLY),
-        (AttachmentTooLargeError("too big"), engine_module._FILE_TOO_LARGE_REPLY),
-        (RuntimeError("other"), engine_module._MEDIA_FAILED_REPLY),
+        (AttachmentTypeNotAllowedError("nope"), content_module._UNSUPPORTED_FILE_REPLY),
+        (AttachmentTooLargeError("too big"), content_module._FILE_TOO_LARGE_REPLY),
+        (RuntimeError("other"), content_module._MEDIA_FAILED_REPLY),
     ],
 )
 def test_media_failure_reply_mapping(error: Exception, expected: str) -> None:
-    assert engine_module._media_failure_reply(error) == expected
+    assert content_module._media_failure_reply(error) == expected
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,8 @@ desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
 
 Bare map references resolve under `.vorch/domain-maps/`. Each `core/<module>/` folder's main file is its public API (soft limit: 1000 lines/file). Exceptions: `core/debug` uses an `__init__.py` facade (`debug.md`); independent utilities in `core/utils` use leaf imports.
 
+Large source files are an independent maintenance problem: they increase the context and tokens needed to inspect and edit code, even when the domain responsibility is cohesive. Split oversized files into focused internal units while retaining the owning module and its public contract. Cohesion alone does not justify leaving a multi-thousand-line file intact; avoid arbitrary chunks, method-binding tables, or compressed formatting that merely obscure the same required context.
+
 **Transport:** Commands use `POST /api/rpc`, never WebSockets. `/ws` carries persistent app-wide server-push events; SSE streams each Run; logs and terminals use dedicated sockets. Binary transfers use dedicated HTTP endpoints. No auth (single-user-local). See `server.md`.
 
 **Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; no separate non-agentic streaming path.

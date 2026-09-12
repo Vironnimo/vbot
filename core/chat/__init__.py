@@ -6,52 +6,88 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from core.chat.chat import (
-        INPUT_ORIGIN_SPEECH_TRANSCRIPTION as INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+    from core.chat._message_history import (
+        checkpoint_ordinal,
+        compaction_projection_without_active_skills,
+        compaction_projection_without_provider_state,
+        effective_compaction_messages,
+        has_unconsumed_skill_activation,
+        latest_compaction_checkpoint,
+        reply_surface_from_note,
     )
-    from core.chat.chat import MAX_TOOL_ITERATIONS as MAX_TOOL_ITERATIONS
-    from core.chat.chat import ChatLoop as ChatLoop
-    from core.chat.chat import ChatLoopDependencies as ChatLoopDependencies
-    from core.chat.chat import ChatMessage as ChatMessage
-    from core.chat.chat import InputOrigin as InputOrigin
-    from core.chat.chat import MessageSender as MessageSender
-    from core.chat.chat import ReplySurface as ReplySurface
-    from core.chat.chat import ToolCall as ToolCall
-    from core.chat.chat import ToolCallRejection as ToolCallRejection
-    from core.chat.chat import parse_bare_model as parse_bare_model
-    from core.chat.commands import AgentArgument as AgentArgument
-    from core.chat.commands import CommandDispatcher as CommandDispatcher
-    from core.chat.commands import CommandExecutionContext as CommandExecutionContext
-    from core.chat.commands import CommandFeedback as CommandFeedback
-    from core.chat.commands import CommandNavigation as CommandNavigation
-    from core.chat.commands import CommandOutcome as CommandOutcome
-    from core.chat.commands import CommandResourceChange as CommandResourceChange
-    from core.chat.commands import CommandRun as CommandRun
-    from core.chat.commands import CommandSpec as CommandSpec
-    from core.chat.commands import CommandUnavailability as CommandUnavailability
-    from core.chat.commands import ExtensionCommandContext as ExtensionCommandContext
-    from core.chat.commands import HandoffArgument as HandoffArgument
-    from core.chat.commands import PreparedCommand as PreparedCommand
-    from core.chat.commands import parse_agent_argument as parse_agent_argument
-    from core.chat.commands import parse_handoff_argument as parse_handoff_argument
-    from core.chat.continuation import ContinuationState as ContinuationState
-    from core.chat.errors import ChatError as ChatError
-    from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
-    from core.chat.errors import ChatSessionError as ChatSessionError
-    from core.chat.errors import CompactionUnavailableError as CompactionUnavailableError
-    from core.chat.errors import ToolIterationLimitError as ToolIterationLimitError
-    from core.chat.messages import queue_content_is_editable as queue_content_is_editable
-    from core.chat.usage import aggregate_session_usage as aggregate_session_usage
-    from core.chat.usage import latest_session_context_usage as latest_session_context_usage
-    from core.sessions import ChatSession as ChatSession
-    from core.sessions import ChatSessionManager as ChatSessionManager
+    from core.chat._run_state import (
+        ChatLoopDependencies,
+        RequestState,
+    )
+    from core.chat._step_outcomes import (
+        MAX_TOOL_ITERATIONS,
+    )
+    from core.chat.chat import (
+        ChatLoop,
+    )
+    from core.chat.commands import (
+        AgentArgument,
+        CommandDispatcher,
+        CommandExecutionContext,
+        CommandFeedback,
+        CommandNavigation,
+        CommandOutcome,
+        CommandResourceChange,
+        CommandRun,
+        CommandSpec,
+        CommandUnavailability,
+        ExtensionCommandContext,
+        HandoffArgument,
+        PreparedCommand,
+        parse_agent_argument,
+        parse_handoff_argument,
+    )
+    from core.chat.continuation import (
+        ContinuationState,
+    )
+    from core.chat.errors import (
+        ChatError,
+        ChatMessageValidationError,
+        ChatSessionError,
+        CompactionUnavailableError,
+        ToolIterationLimitError,
+    )
+    from core.chat.messages import (
+        INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+        ChatMessage,
+        InputOrigin,
+        MessageSender,
+        ReplySurface,
+        ToolCall,
+        ToolCallRejection,
+        queue_content_is_editable,
+    )
+    from core.chat.model_resolution import (
+        parse_bare_model,
+    )
+    from core.chat.usage import (
+        aggregate_session_usage,
+        latest_session_context_usage,
+    )
+    from core.sessions import (
+        ChatSession,
+        ChatSessionManager,
+    )
 
 _EXPORT_MODULES = {
+    "RequestState": "core.chat._run_state",
+    "compaction_projection_without_active_skills": "core.chat._message_history",
+    "compaction_projection_without_provider_state": "core.chat._message_history",
+    "effective_compaction_messages": "core.chat._message_history",
+    "latest_compaction_checkpoint": "core.chat._message_history",
+    "checkpoint_ordinal": "core.chat._message_history",
+    "has_unconsumed_skill_activation": "core.chat._message_history",
+    "reply_surface_from_note": "core.chat._message_history",
     "AgentArgument": "core.chat.commands",
     "ChatError": "core.chat.errors",
     "ChatLoop": "core.chat.chat",
-    "ChatLoopDependencies": "core.chat.chat",
-    "ChatMessage": "core.chat.chat",
+    "ChatLoopDependencies": "core.chat._run_state",
+    "ChatMessage": "core.chat.messages",
     "ChatMessageValidationError": "core.chat.errors",
     "ChatSession": "core.sessions",
     "ChatSessionError": "core.chat.errors",
@@ -69,24 +105,70 @@ _EXPORT_MODULES = {
     "ExtensionCommandContext": "core.chat.commands",
     "ContinuationState": "core.chat.continuation",
     "HandoffArgument": "core.chat.commands",
-    "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",
-    "InputOrigin": "core.chat.chat",
-    "MAX_TOOL_ITERATIONS": "core.chat.chat",
-    "MessageSender": "core.chat.chat",
-    "ReplySurface": "core.chat.chat",
+    "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.messages",
+    "InputOrigin": "core.chat.messages",
+    "MAX_TOOL_ITERATIONS": "core.chat._step_outcomes",
+    "MessageSender": "core.chat.messages",
+    "ReplySurface": "core.chat.messages",
     "PreparedCommand": "core.chat.commands",
     "parse_agent_argument": "core.chat.commands",
-    "parse_bare_model": "core.chat.chat",
+    "parse_bare_model": "core.chat.model_resolution",
     "parse_handoff_argument": "core.chat.commands",
     "queue_content_is_editable": "core.chat.messages",
-    "ToolCall": "core.chat.chat",
-    "ToolCallRejection": "core.chat.chat",
+    "ToolCall": "core.chat.messages",
+    "ToolCallRejection": "core.chat.messages",
     "ToolIterationLimitError": "core.chat.errors",
     "aggregate_session_usage": "core.chat.usage",
     "latest_session_context_usage": "core.chat.usage",
 }
 
-__all__ = list(_EXPORT_MODULES)
+__all__ = [
+    "RequestState",
+    "compaction_projection_without_active_skills",
+    "compaction_projection_without_provider_state",
+    "effective_compaction_messages",
+    "latest_compaction_checkpoint",
+    "checkpoint_ordinal",
+    "has_unconsumed_skill_activation",
+    "reply_surface_from_note",
+    "AgentArgument",
+    "ChatError",
+    "ChatLoop",
+    "ChatLoopDependencies",
+    "ChatMessage",
+    "ChatMessageValidationError",
+    "ChatSession",
+    "ChatSessionError",
+    "ChatSessionManager",
+    "CompactionUnavailableError",
+    "CommandDispatcher",
+    "CommandExecutionContext",
+    "CommandFeedback",
+    "CommandNavigation",
+    "CommandOutcome",
+    "CommandResourceChange",
+    "CommandRun",
+    "CommandSpec",
+    "CommandUnavailability",
+    "ExtensionCommandContext",
+    "ContinuationState",
+    "HandoffArgument",
+    "INPUT_ORIGIN_SPEECH_TRANSCRIPTION",
+    "InputOrigin",
+    "MAX_TOOL_ITERATIONS",
+    "MessageSender",
+    "ReplySurface",
+    "PreparedCommand",
+    "parse_agent_argument",
+    "parse_bare_model",
+    "parse_handoff_argument",
+    "queue_content_is_editable",
+    "ToolCall",
+    "ToolCallRejection",
+    "ToolIterationLimitError",
+    "aggregate_session_usage",
+    "latest_session_context_usage",
+]
 
 
 def __getattr__(name: str) -> Any:

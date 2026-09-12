@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import core.subagents.tracker as subagent_tracker
+
 from .subagent_test_support import (
     Any,
     RecordingTriggerService,
     SubAgentBatchTracker,
     asyncio,
     pytest,
-    subagent_module,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -141,7 +142,7 @@ async def test_batch_tracker_logs_trigger_failures(monkeypatch: pytest.MonkeyPat
     parent_key = ("parent", "parent-session", "parent-run")
     tracker.register(parent_key, "worker", "session-one", "run-one")
     monkeypatch.setattr(
-        subagent_module._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
+        subagent_tracker._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
     )
 
     # Act

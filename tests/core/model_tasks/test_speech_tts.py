@@ -361,7 +361,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
         audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
         audio.writeframes(b"\0\0" * 100)
     kill_tree = Mock(return_value=True)
-    monkeypatch.setattr("core.tools.process_manager.windows_taskkill_tree", kill_tree)
+    monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
     if sys.platform != "win32":
         monkeypatch.setattr("os.killpg", kill_tree)
     process = Mock()

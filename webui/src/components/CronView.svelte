@@ -1,62 +1,55 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import {
+    displayValue,
+    listNextRun,
+    scheduleKindLabel,
+    scheduleSummary,
+    scheduleTechnicalValue,
+    sessionSummary,
+    lastResultSupport,
+    remainingRunsLabel,
+    statusLabel,
+    statusChipVariant,
+    outcomeLabel,
+    isTerminalJob,
+  } from './cron/presentation.js';
 
-  import Dropdown from './Dropdown.svelte';
-  import Banner from './ui/Banner.svelte';
+  import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import Banner from './ui/Banner.svelte';
   import EmptyState from './ui/EmptyState.svelte';
-  import FormField from './ui/FormField.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   import StatusChip from './ui/StatusChip.svelte';
-  import TextArea from './ui/TextArea.svelte';
-  import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
-    createCronJob,
-    deleteCronJob,
-    disableCronJob,
-    enableCronJob,
+    CRON_STATUS_ACTIVE,
+    CRON_SCHEDULE_TYPE_INTERVAL,
+    CRON_SCHEDULE_TYPE_ONCE,
+    CRON_SCHEDULE_TYPE_CRON,
+    applyAgentListResponse,
+    applyCronListResponse,
+    buildCronAgentDropdownOptions,
+    buildCronAgentOptions,
+    createCronViewState,
+    visibleCronJobs,
+  } from '$lib/cronView.js';
+  import FormField from './ui/FormField.svelte';
+  import TextField from './ui/TextField.svelte';
+  import Dropdown from './Dropdown.svelte';
+  import TextArea from './ui/TextArea.svelte';
+  import InfoHint from './ui/InfoHint.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import { onMount } from 'svelte';
+  import {
     listAgents,
     listCronJobs,
     listProjects,
     showProject,
-    updateCronJob,
   } from '$lib/api.js';
-  import {
-    applyAgentListResponse,
-    applyCronListResponse,
-    buildCreateCronPayload,
-    buildCronAgentDropdownOptions,
-    buildCronAgentOptions,
-    buildCronPresetOptions,
-    buildUpdateCronPayload,
-    createCronFormValues,
-    createCronViewState,
-    CRON_PRESET_CUSTOM,
-    CRON_SCHEDULE_TYPE_CRON,
-    CRON_SCHEDULE_TYPE_INTERVAL,
-    CRON_SCHEDULE_TYPE_ONCE,
-    CRON_STATUS_ACTIVE,
-    CRON_STATUS_COMPLETED,
-    CRON_STATUS_MISSED,
-    cronFormFingerprint,
-    cronPresetExpression,
-    cronPresetForExpression,
-    describeCronExpression,
-    projectIdsFromList,
-    projectTeamEntry,
-    visibleCronJobs,
-  } from '$lib/cronView.js';
-  import {
-    createDebouncedAutosave,
-    useAutosaveContext,
-  } from '$lib/autosave.js';
-  import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
-  import InfoHint from './ui/InfoHint.svelte';
+  import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
+  import { createCronEditor } from './cron/editor.svelte.js';
 
   const noop = () => {};
-  const initialFormValues = createCronFormValues();
 
   let {
     onToast = noop,
@@ -66,27 +59,31 @@
     projectsRefreshToken = 0,
     targetJobId = '',
   } = $props();
+  const editor = createCronEditor({
+    get jobs() {
+      return jobs;
+    },
+    get viewState() {
+      return viewState;
+    },
+    get loadProjectTeams() {
+      return loadProjectTeams;
+    },
+    get destroyed() {
+      return destroyed;
+    },
+    get loadJobs() {
+      return loadJobs;
+    },
+    get showToast() {
+      return showToast;
+    },
+    get errorMessageText() {
+      return errorMessageText;
+    },
+  });
 
   let viewState = $state(createCronViewState());
-
-  // The detail pane edits either an existing job (a selected id) or a fresh
-  // create draft (`isCreating`). Its form + validation state is panel-local; the
-  // list is the master. Selecting a row, or starting a job, reseeds these.
-  let selectedJobId = $state('');
-  let isCreating = $state(false);
-  let formValues = $state(initialFormValues);
-  let formBaseline = $state(cronFormFingerprint(initialFormValues));
-  let selectedPreset = $state(CRON_PRESET_CUSTOM);
-  let formErrorMessage = $state('');
-  let submittingForm = $state(false);
-  // The id of the job whose enable/disable/delete mutation is in flight, so its
-  // controls disable without freezing the whole pane.
-  let mutatingJobId = $state('');
-  // The cron job awaiting delete confirmation (null = dialog closed).
-  let deleteConfirmJob = $state(null);
-  let pendingDiscardAction = null;
-  let showDiscardConfirm = $state(false);
-  let pendingJobsResult = null;
 
   // Project teams power the project-agent options in the cron dropdown. They are
   // loaded lazily the first time the detail pane renders a form and cached for
@@ -94,7 +91,10 @@
   // never runs on every render — only once, on demand.
   let projectTeams = $state([]);
   let projectTeamsLoaded = false;
-  let projectTeamsRequestId = 0;
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listProjects,
+    showProject,
+  });
 
   let destroyed = false;
   let jobsRequestId = 0;
@@ -108,58 +108,7 @@
   let jobs = $derived(
     visibleCronJobs(viewState.jobs, viewState.systemTimezone),
   );
-  let selectedJob = $derived(
-    jobs.find((job) => job.id === selectedJobId) ?? null,
-  );
-  // The detail form is shown when creating, or when a real job is selected.
-  let showDetailForm = $derived(isCreating || Boolean(selectedJob));
-  let isDirty = $derived(
-    showDetailForm && cronFormFingerprint(formValues) !== formBaseline,
-  );
-  const autosaveContext = useAutosaveContext();
-  const autosave = createDebouncedAutosave({
-    getSnapshot: () => ({ jobId: selectedJobId, values: formValues }),
-    hasChanges: () => !isCreating && isDirty,
-    save: (reason) => persistForm(null, reason),
-  });
-  const unregisterAutosave = autosaveContext.register(autosave.participant);
-  $effect(() => {
-    if (isCreating || !isDirty || submittingForm) return;
-    autosave.scheduleRun();
-    return autosave.cancelPendingTimer;
-  });
-  onDestroy(() => {
-    unregisterAutosave();
-    autosave.cancelPendingTimer();
-  });
-  function submitForm(event) {
-    event.preventDefault();
-    if (isCreating) return persistForm();
-    return autosave.participant.runSave('manual', { force: true });
-  }
 
-  let isCronSchedule = $derived(
-    formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON,
-  );
-  let isIntervalSchedule = $derived(
-    formValues.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL,
-  );
-  let isOnceSchedule = $derived(
-    formValues.schedule_type === CRON_SCHEDULE_TYPE_ONCE,
-  );
-  let cronExpressionPreview = $derived(
-    describeCronExpression(formValues.cron_expression),
-  );
-  let detailTitle = $derived(
-    isCreating
-      ? t('cron.detail.createTitle', 'Create Scheduled Run')
-      : selectedJob?.name || t('cron.detail.editTitle', 'Edit Scheduled Run'),
-  );
-  let presetOptions = $derived(
-    buildCronPresetOptions((key) =>
-      t(`cron.presets.${key}`, key === CRON_PRESET_CUSTOM ? 'Custom' : key),
-    ),
-  );
   // Identity agents (bare ids, unchanged) plus project agents addressed as
   // `agent@projekt`. A project option's value IS the address, so saving sends it
   // straight through as the `agent_id` param. Group headers are inserted only
@@ -187,6 +136,7 @@
 
     return () => {
       destroyed = true;
+      targetCatalog.dispose();
     };
   });
 
@@ -195,7 +145,7 @@
   // link) wins once; it is consumed so the user can freely change selection.
   let appliedTargetJobId = $state('');
   $effect(() => {
-    if (isCreating || jobs.length === 0) {
+    if (editor.isCreating || jobs.length === 0) {
       return;
     }
     if (
@@ -204,11 +154,14 @@
       jobs.some((job) => job.id === targetJobId)
     ) {
       appliedTargetJobId = targetJobId;
-      selectJobNow(jobs.find((job) => job.id === targetJobId));
+      editor.selectJobNow(jobs.find((job) => job.id === targetJobId));
       return;
     }
-    if (!jobs.some((job) => job.id === selectedJobId) && !isDirty) {
-      selectJobNow(jobs[0]);
+    if (
+      !jobs.some((job) => job.id === editor.selectedJobId) &&
+      !editor.isDirty
+    ) {
+      editor.selectJobNow(jobs[0]);
     }
   });
 
@@ -285,11 +238,11 @@
         return;
       }
 
-      if (options.external === true && isDirty) {
-        pendingJobsResult = result;
+      if (options.external === true && editor.isDirty) {
+        editor.pendingJobsResult = result;
         return;
       }
-      pendingJobsResult = null;
+      editor.pendingJobsResult = null;
       applyCronListResponse(viewState, result);
     } catch (error) {
       if (destroyed || requestId !== jobsRequestId) {
@@ -310,313 +263,11 @@
   // non-fatal: the dropdown still shows identity agents, and the team scan can
   // be retried on the next render.
   async function loadProjectTeams() {
-    if (projectTeamsLoaded) {
-      return;
-    }
-
-    const requestId = projectTeamsRequestId + 1;
-    projectTeamsRequestId = requestId;
-
-    try {
-      const listResult = await listProjects();
-      if (destroyed || requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      const projectIds = projectIdsFromList(listResult);
-      const showResults = await Promise.all(
-        projectIds.map((projectId) =>
-          showProject(projectId)
-            .then((showResult) => projectTeamEntry(projectId, showResult))
-            .catch(() => null),
-        ),
-      );
-      if (destroyed || requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      projectTeams = showResults.filter((entry) => entry !== null);
-      projectTeamsLoaded = true;
-    } catch {
-      // Identity agents remain available; leave projectTeams empty and allow a
-      // retry on the next render (projectTeamsLoaded stays false).
-      if (!destroyed && requestId === projectTeamsRequestId) {
-        projectTeams = [];
-      }
-    }
-  }
-
-  function selectJob(job) {
-    if (!job?.id) {
-      return;
-    }
-    if (!isCreating && job.id === selectedJobId) {
-      return;
-    }
-    requestFormTransition(() => selectJobNow(job));
-  }
-
-  function selectJobNow(job) {
-    isCreating = false;
-    selectedJobId = job.id;
-    formValues = createCronFormValues(job, viewState.systemTimezone);
-    if (!formValues.agent_id) {
-      formValues.agent_id = viewState.agents[0]?.id ?? '';
-    }
-    selectedPreset = cronPresetForExpression(formValues.cron_expression);
-    formBaseline = cronFormFingerprint(formValues);
-    formErrorMessage = '';
-    loadProjectTeams();
-  }
-
-  function startCreate() {
-    requestFormTransition(startCreateNow);
-  }
-
-  function startCreateNow() {
-    isCreating = true;
-    formValues = createCronFormValues(null, viewState.systemTimezone);
-    formValues.agent_id = viewState.agents[0]?.id ?? '';
-    selectedPreset = CRON_PRESET_CUSTOM;
-    formBaseline = cronFormFingerprint(formValues);
-    formErrorMessage = '';
-    loadProjectTeams();
-  }
-
-  // Cancel a create draft and return to the previously selected job (if any).
-  function cancelCreate() {
-    if (submittingForm) {
-      return;
-    }
-    requestFormTransition(() => {
-      isCreating = false;
-      if (selectedJob) {
-        selectJobNow(selectedJob);
-      } else if (jobs.length > 0) {
-        selectJobNow(jobs[0]);
-      }
-    });
-  }
-
-  function requestFormTransition(action) {
-    if (!isCreating) return autosaveContext.requestTransition(action);
-    if (!isDirty) {
-      action();
-      return;
-    }
-    pendingDiscardAction = action;
-    showDiscardConfirm = true;
-  }
-
-  function cancelDiscard() {
-    pendingDiscardAction = null;
-    showDiscardConfirm = false;
-  }
-
-  function confirmDiscard() {
-    const action = pendingDiscardAction;
-    pendingDiscardAction = null;
-    showDiscardConfirm = false;
-    if (pendingJobsResult) {
-      applyCronListResponse(viewState, pendingJobsResult);
-      pendingJobsResult = null;
-    }
-    action?.();
-  }
-
-  function setScheduleType(scheduleType) {
-    formValues.schedule_type = scheduleType;
-    formErrorMessage = '';
-  }
-
-  function updateFormField(fieldName, value) {
-    formValues[fieldName] = value;
-    formErrorMessage = '';
-  }
-
-  // Selecting a preset fills its expression; the field stays editable and the
-  // live preview keeps working. Custom (or an unknown key) fills nothing.
-  function applyPreset(presetKey) {
-    selectedPreset = presetKey;
-    if (presetKey === CRON_PRESET_CUSTOM) {
-      return;
-    }
-    const expression = cronPresetExpression(presetKey);
-    if (expression) {
-      formValues.cron_expression = expression;
-    }
-    formErrorMessage = '';
-  }
-
-  // Hand-editing the expression re-derives the preset selection, flipping it to
-  // Custom when the text no longer matches the chosen preset.
-  function updateCronExpression(value) {
-    formValues.cron_expression = value;
-    selectedPreset = cronPresetForExpression(value);
-    formErrorMessage = '';
-  }
-
-  function validateFormValues() {
-    const hasCoreValues =
-      formValues.agent_id.trim().length > 0 &&
-      formValues.prompt.trim().length > 0;
-    let hasScheduleValue = formValues.run_at.trim().length > 0;
-    if (isCronSchedule) {
-      hasScheduleValue = formValues.cron_expression.trim().length > 0;
-    } else if (isIntervalSchedule) {
-      const intervalMinutes = Number(formValues.interval_minutes);
-      hasScheduleValue =
-        Number.isInteger(intervalMinutes) && intervalMinutes > 0;
-    }
-    const repeat = formValues.repeat.trim();
-    const repeatValue = Number(repeat);
-    const hasValidRepeat =
-      (repeat.length === 0 && (isCreating || !isOnceSchedule)) ||
-      (Number.isInteger(repeatValue) &&
-        repeatValue > 0 &&
-        (!isOnceSchedule || repeatValue === 1));
-
-    if (!hasCoreValues || !hasScheduleValue || !hasValidRepeat) {
-      formErrorMessage = t(
-        'cron.errors.missingRequired',
-        'Agent, prompt, and valid schedule details are required. Repeat must be a positive integer; one-time schedules allow only 1.',
-      );
-      return false;
-    }
-
-    return true;
-  }
-
-  async function persistForm(event = null, reason = 'manual') {
-    event?.preventDefault();
-
-    if (submittingForm || !validateFormValues()) {
-      return false;
-    }
-
-    if (!isCreating && !isDirty) {
-      if (reason === 'manual')
-        showToast(t('common.alreadySaved', 'Already saved'));
-      return true;
-    }
-    const submitted = cronFormFingerprint(formValues);
-    const creating = isCreating;
-    submittingForm = true;
-    formErrorMessage = '';
-
-    try {
-      let targetJobId = selectedJobId;
-      if (creating) {
-        const created = await createCronJob(buildCreateCronPayload(formValues));
-        targetJobId = typeof created?.id === 'string' ? created.id : '';
-        if (targetJobId) {
-          formValues.id = targetJobId;
-        }
-        showToast(t('cron.messages.created', 'Cron job created.'));
-      } else {
-        await updateCronJob(buildUpdateCronPayload(formValues));
-        if (reason === 'manual')
-          showToast(t('cron.messages.updated', 'Cron job updated.'));
-      }
-
-      if (destroyed) {
-        return;
-      }
-
-      isCreating = false;
-      if (targetJobId) {
-        selectedJobId = targetJobId;
-      }
-      await loadJobs({ silent: true });
-      const savedJob = jobs.find((job) => job.id === targetJobId);
-      if (creating && savedJob) {
-        selectJobNow(savedJob);
-      } else {
-        formBaseline = savedJob
-          ? cronFormFingerprint(
-              createCronFormValues(savedJob, viewState.systemTimezone),
-            )
-          : submitted;
-      }
-      return true;
-    } catch (error) {
-      formErrorMessage = `${t('cron.errors.save', 'Cron job could not be saved.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
-      return false;
-    } finally {
-      if (!destroyed) {
-        submittingForm = false;
-      }
-    }
-  }
-
-  async function toggleJob(job) {
-    if (
-      !job?.id ||
-      job.status === CRON_STATUS_COMPLETED ||
-      job.status === CRON_STATUS_MISSED
-    ) {
-      return;
-    }
-
-    mutatingJobId = job.id;
-
-    try {
-      if (job.status === CRON_STATUS_ACTIVE) {
-        await disableCronJob(job.id);
-        showToast(t('cron.messages.disabled', 'Cron job disabled.'));
-      } else {
-        await enableCronJob(job.id);
-        showToast(t('cron.messages.enabled', 'Cron job enabled.'));
-      }
-
-      await loadJobs({ silent: true });
-    } catch (error) {
-      showToast(
-        t('cron.errors.toggle', 'Cron job status could not be updated.'),
-        'error',
-        error,
-      );
-    } finally {
-      mutatingJobId = '';
-    }
-  }
-
-  function deleteJob(job) {
-    if (!job?.id) {
-      return;
-    }
-    deleteConfirmJob = job;
-  }
-
-  function cancelDeleteJob() {
-    deleteConfirmJob = null;
-  }
-
-  async function confirmDeleteJob() {
-    const job = deleteConfirmJob;
-    deleteConfirmJob = null;
-    if (!job?.id) {
-      return;
-    }
-
-    mutatingJobId = job.id;
-
-    try {
-      await deleteCronJob(job.id);
-      showToast(t('cron.messages.deleted', 'Cron job deleted.'));
-      if (selectedJobId === job.id) {
-        selectedJobId = '';
-      }
-      await loadJobs({ silent: true });
-    } catch (error) {
-      showToast(
-        t('cron.errors.delete', 'Cron job could not be deleted.'),
-        'error',
-        error,
-      );
-    } finally {
-      mutatingJobId = '';
-    }
+    if (projectTeamsLoaded) return;
+    const catalog = await targetCatalog.load();
+    if (!catalog) return;
+    projectTeams = catalog.projectTeams;
+    projectTeamsLoaded = !catalog.projectError;
   }
 
   // `target` is the readable cron target: a bare agent name for an identity job,
@@ -626,147 +277,6 @@
   function agentLabel(target) {
     return (
       agentLabelByValue.get(target) || target || t('common.unknown', 'Unknown')
-    );
-  }
-
-  function displayValue(value) {
-    return value || t('cron.notAvailable', '—');
-  }
-
-  function listNextRun(job) {
-    if (!job?.next_fire_at_display) {
-      return t('cron.list.noNextRun', 'No next Run');
-    }
-
-    return t('cron.list.nextRun', 'Next · {time}', {
-      time: job.next_fire_at_display,
-    });
-  }
-
-  function scheduleKindLabel(job) {
-    if (job?.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
-      return t('cron.detail.kind.once', 'One-time schedule');
-    }
-
-    return t('cron.detail.kind.recurring', 'Recurring schedule');
-  }
-
-  function scheduleSummary(job) {
-    if (!job) {
-      return t('cron.notAvailable', '—');
-    }
-
-    if (job.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
-      return t('cron.form.scheduleType.once', 'Once');
-    }
-    if (job.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
-      return displayValue(job.schedule_description);
-    }
-
-    return (
-      describeCronExpression(job.cron_expression) ||
-      displayValue(job.schedule_description)
-    );
-  }
-
-  function scheduleTechnicalValue(job) {
-    if (job?.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
-      return displayValue(job.run_at ? job.schedule_description : '');
-    }
-    if (job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
-      return displayValue(job.schedule_description);
-    }
-
-    return displayValue(job?.cron_expression);
-  }
-
-  function sessionSummary(job) {
-    return job?.session_id
-      ? job.session_id
-      : t('cron.detail.newSessionEachRun', 'New Session each Run');
-  }
-
-  function lastResultSupport(job) {
-    if (!job?.last_completed_at_display) {
-      return t('cron.detail.waitingForFirstRun', 'Waiting for first execution');
-    }
-
-    return job.last_completed_at_display;
-  }
-
-  function remainingRunsLabel(job) {
-    return job?.remaining_runs === null
-      ? t('cron.detail.unlimited', 'Unlimited')
-      : String(job?.remaining_runs ?? 0);
-  }
-
-  function statusLabel(status) {
-    if (status === CRON_STATUS_ACTIVE) {
-      return t('cron.status.active', 'Active');
-    }
-
-    if (status === 'paused') {
-      return t('cron.status.paused', 'Paused');
-    }
-
-    if (status === 'failed') {
-      return t('cron.status.failed', 'Failed');
-    }
-
-    if (status === CRON_STATUS_MISSED) {
-      return t('cron.status.missed', 'Missed');
-    }
-
-    return t('cron.status.completed', 'Completed');
-  }
-
-  function statusChipVariant(job) {
-    if (
-      job.status === CRON_STATUS_ACTIVE &&
-      job.last_outcome !== 'failed' &&
-      job.last_outcome !== 'cancelled'
-    ) {
-      return 'success';
-    }
-
-    if (job.status === 'paused' || job.status === CRON_STATUS_MISSED) {
-      return 'warn';
-    }
-
-    if (
-      job.status === 'failed' ||
-      job.last_outcome === 'failed' ||
-      job.last_outcome === 'cancelled'
-    ) {
-      return 'error';
-    }
-
-    return 'neutral';
-  }
-
-  function outcomeLabel(outcome) {
-    if (outcome === 'success') {
-      return t('cron.outcome.success', 'Succeeded');
-    }
-    if (outcome === 'failed') {
-      return t('cron.outcome.failed', 'Failed');
-    }
-    if (outcome === 'cancelled') {
-      return t('cron.outcome.cancelled', 'Cancelled');
-    }
-    if (outcome === 'missed') {
-      return t('cron.outcome.missed', 'Missed');
-    }
-    if (outcome === 'unknown') {
-      return t('cron.outcome.unknown', 'Outcome unknown after restart');
-    }
-    return t('cron.notAvailable', '—');
-  }
-
-  function isTerminalJob(job) {
-    return (
-      job?.status === CRON_STATUS_COMPLETED ||
-      job?.status === CRON_STATUS_MISSED
     );
   }
 
@@ -805,7 +315,11 @@
           {t('cron.title', 'Scheduled Runs')}
         </span>
         <div class="pane-header-actions">
-          <Button variant="primary" disabled={!hasAgents} onClick={startCreate}>
+          <Button
+            variant="primary"
+            disabled={!hasAgents}
+            onClick={editor.startCreate}
+          >
             <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
               <path d="M7 1v12M1 7h12" />
             </svg>
@@ -861,9 +375,10 @@
                 <button
                   type="button"
                   class="cron-item secondary-list__item"
-                  class:active={!isCreating && job.id === selectedJobId}
+                  class:active={!editor.isCreating &&
+                    job.id === editor.selectedJobId}
                   data-testid={`cron-item-${job.id}`}
-                  onclick={() => selectJob(job)}
+                  onclick={() => editor.selectJob(job)}
                 >
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
@@ -886,7 +401,7 @@
       </div>
     </aside>
 
-    {#if !showDetailForm}
+    {#if !editor.showDetailForm}
       <div class="cron-detail-pane">
         <EmptyState
           fill
@@ -900,51 +415,53 @@
         />
       </div>
     {:else}
-      {#key isCreating ? 'cron-create' : selectedJobId}
+      {#key editor.isCreating ? 'cron-create' : editor.selectedJobId}
         <div class="cron-detail-pane">
-          <form class="cron-detail-scroll" onsubmit={submitForm}>
+          <form class="cron-detail-scroll" onsubmit={editor.submitForm}>
             <div class="detail-top">
               <div>
                 <div class="detail-eyebrow">
-                  {isCreating
+                  {editor.isCreating
                     ? t('cron.detail.kind.new', 'New schedule')
-                    : scheduleKindLabel(selectedJob)}
+                    : scheduleKindLabel(editor.selectedJob)}
                 </div>
-                <div class="detail-heading">{detailTitle}</div>
+                <div class="detail-heading">{editor.detailTitle}</div>
                 <div class="detail-sub">
-                  {isCreating
+                  {editor.isCreating
                     ? t(
                         'cron.detail.createSubtitle',
                         'Define the task, timing, and Session for a new scheduled Run.',
                       )
                     : t('cron.detail.subtitle', '{schedule} with {agent}.', {
-                        schedule: scheduleKindLabel(selectedJob),
-                        agent: agentLabel(selectedJob?.agent_id),
+                        schedule: scheduleKindLabel(editor.selectedJob),
+                        agent: agentLabel(editor.selectedJob?.agent_id),
                       })}
                 </div>
               </div>
 
               <div class="detail-btns">
-                {#if !isCreating && selectedJob}
-                  <StatusChip variant={statusChipVariant(selectedJob)}>
-                    {statusLabel(selectedJob.status)}
+                {#if !editor.isCreating && editor.selectedJob}
+                  <StatusChip variant={statusChipVariant(editor.selectedJob)}>
+                    {statusLabel(editor.selectedJob.status)}
                   </StatusChip>
-                  {#if !isTerminalJob(selectedJob)}
+                  {#if !isTerminalJob(editor.selectedJob)}
                     <label class="cron-enabled-control">
                       <span>{t('cron.actions.enabled', 'Enabled')}</span>
                       <Toggle
-                        checked={selectedJob.status === CRON_STATUS_ACTIVE}
-                        ariaLabel={selectedJob.status === CRON_STATUS_ACTIVE
+                        checked={editor.selectedJob.status ===
+                          CRON_STATUS_ACTIVE}
+                        ariaLabel={editor.selectedJob.status ===
+                        CRON_STATUS_ACTIVE
                           ? t('cron.actions.disableJob', 'Disable job {id}', {
-                              id: selectedJob.id,
+                              id: editor.selectedJob.id,
                             })
                           : t('cron.actions.enableJob', 'Enable job {id}', {
-                              id: selectedJob.id,
+                              id: editor.selectedJob.id,
                             })}
-                        disabled={submittingForm ||
-                          mutatingJobId === selectedJob.id}
-                        data-testid={`cron-toggle-${selectedJob.id}`}
-                        onChange={() => toggleJob(selectedJob)}
+                        disabled={editor.submittingForm ||
+                          editor.mutatingJobId === editor.selectedJob.id}
+                        data-testid={`cron-toggle-${editor.selectedJob.id}`}
+                        onChange={() => editor.toggleJob(editor.selectedJob)}
                       />
                     </label>
                   {/if}
@@ -952,7 +469,7 @@
               </div>
             </div>
 
-            {#if !isCreating && selectedJob}
+            {#if !editor.isCreating && editor.selectedJob}
               <div
                 class="cron-summary"
                 aria-label={t('cron.detail.summary', 'Schedule summary')}
@@ -962,7 +479,7 @@
                     {t('cron.detail.nextFire', 'Next Run')}
                   </span>
                   <strong class="cron-summary-value">
-                    {displayValue(selectedJob.next_fire_at_display)}
+                    {displayValue(editor.selectedJob.next_fire_at_display)}
                   </strong>
                   <span class="cron-summary-support">
                     {viewState.systemTimezone}
@@ -973,10 +490,10 @@
                     {t('cron.detail.cadence', 'Cadence')}
                   </span>
                   <strong class="cron-summary-value cron-summary-value--wrap">
-                    {scheduleSummary(selectedJob)}
+                    {scheduleSummary(editor.selectedJob)}
                   </strong>
                   <span class="cron-summary-support cron-summary-support--mono">
-                    {scheduleTechnicalValue(selectedJob)}
+                    {scheduleTechnicalValue(editor.selectedJob)}
                   </span>
                 </div>
                 <div class="cron-summary-item">
@@ -984,10 +501,10 @@
                     {t('cron.detail.lastResult', 'Last result')}
                   </span>
                   <strong class="cron-summary-value">
-                    {outcomeLabel(selectedJob.last_outcome)}
+                    {outcomeLabel(editor.selectedJob.last_outcome)}
                   </strong>
                   <span class="cron-summary-support">
-                    {lastResultSupport(selectedJob)}
+                    {lastResultSupport(editor.selectedJob)}
                   </span>
                 </div>
                 <div class="cron-summary-item">
@@ -995,17 +512,17 @@
                     {t('cron.detail.target', 'Target')}
                   </span>
                   <strong class="cron-summary-value">
-                    {agentLabel(selectedJob.agent_id)}
+                    {agentLabel(editor.selectedJob.agent_id)}
                   </strong>
                   <span class="cron-summary-support cron-summary-support--mono">
-                    {sessionSummary(selectedJob)}
+                    {sessionSummary(editor.selectedJob)}
                   </span>
                 </div>
               </div>
 
-              {#if selectedJob.last_error}
+              {#if editor.selectedJob.last_error}
                 <Banner variant="error" role="status">
-                  {selectedJob.last_error}
+                  {editor.selectedJob.last_error}
                 </Banner>
               {/if}
 
@@ -1017,34 +534,38 @@
                   <div>
                     <dt>{t('cron.detail.lastAttempt', 'Last attempt')}</dt>
                     <dd>
-                      {displayValue(selectedJob.last_attempt_at_display)}
+                      {displayValue(editor.selectedJob.last_attempt_at_display)}
                     </dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.lastFired', 'Last fired')}</dt>
-                    <dd>{displayValue(selectedJob.last_fired_at_display)}</dd>
+                    <dd>
+                      {displayValue(editor.selectedJob.last_fired_at_display)}
+                    </dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.lastCompleted', 'Last completed')}</dt>
                     <dd>
-                      {displayValue(selectedJob.last_completed_at_display)}
+                      {displayValue(
+                        editor.selectedJob.last_completed_at_display,
+                      )}
                     </dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.lastRun', 'Last Run')}</dt>
-                    <dd>{displayValue(selectedJob.last_run_id)}</dd>
+                    <dd>{displayValue(editor.selectedJob.last_run_id)}</dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.failures', 'Failures')}</dt>
-                    <dd>{selectedJob.consecutive_failures}</dd>
+                    <dd>{editor.selectedJob.consecutive_failures}</dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.remainingRuns', 'Remaining Runs')}</dt>
-                    <dd>{remainingRunsLabel(selectedJob)}</dd>
+                    <dd>{remainingRunsLabel(editor.selectedJob)}</dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.scheduleId', 'Schedule ID')}</dt>
-                    <dd>{selectedJob.id}</dd>
+                    <dd>{editor.selectedJob.id}</dd>
                   </div>
                 </dl>
               </details>
@@ -1070,13 +591,13 @@
                   >
                     <TextField
                       id="cron-job-name"
-                      value={formValues.name}
+                      value={editor.formValues.name}
                       placeholder={t(
                         'cron.form.namePlaceholder',
                         'Optional — derived from the prompt',
                       )}
-                      disabled={isCreating && submittingForm}
-                      onInput={(value) => updateFormField('name', value)}
+                      disabled={editor.isCreating && editor.submittingForm}
+                      onInput={(value) => editor.updateFormField('name', value)}
                     />
                   </FormField>
 
@@ -1087,18 +608,18 @@
                   >
                     <Dropdown
                       id="cron-form-agent"
-                      value={formValues.agent_id}
+                      value={editor.formValues.agent_id}
                       options={agentOptions}
                       placeholder={t(
                         'cron.form.agentPlaceholder',
                         'Select an agent',
                       )}
                       ariaLabel={t('cron.form.agent', 'Agent')}
-                      disabled={!hasAgents || submittingForm}
+                      disabled={!hasAgents || editor.submittingForm}
                       triggerClass="cron-dropdown"
                       listClass="cron-dropdown-list"
                       onValueChange={(value) =>
-                        updateFormField('agent_id', value)}
+                        editor.updateFormField('agent_id', value)}
                     />
                   </FormField>
 
@@ -1110,14 +631,15 @@
                     <TextArea
                       id="cron-job-prompt"
                       class="cron-prompt-editor"
-                      value={formValues.prompt}
+                      value={editor.formValues.prompt}
                       rows={8}
                       placeholder={t(
                         'cron.form.promptPlaceholder',
                         'Describe the run to schedule…',
                       )}
-                      disabled={isCreating && submittingForm}
-                      onInput={(value) => updateFormField('prompt', value)}
+                      disabled={editor.isCreating && editor.submittingForm}
+                      onInput={(value) =>
+                        editor.updateFormField('prompt', value)}
                     />
                   </FormField>
                 </div>
@@ -1147,10 +669,11 @@
                             type="radio"
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_CRON}
-                            checked={isCronSchedule}
-                            disabled={isCreating && submittingForm}
+                            checked={editor.isCronSchedule}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
                             onchange={() =>
-                              setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
+                              editor.setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
                           />
                           <span
                             >{t(
@@ -1164,10 +687,13 @@
                             type="radio"
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_INTERVAL}
-                            checked={isIntervalSchedule}
-                            disabled={isCreating && submittingForm}
+                            checked={editor.isIntervalSchedule}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
                             onchange={() =>
-                              setScheduleType(CRON_SCHEDULE_TYPE_INTERVAL)}
+                              editor.setScheduleType(
+                                CRON_SCHEDULE_TYPE_INTERVAL,
+                              )}
                           />
                           <span
                             >{t(
@@ -1181,10 +707,11 @@
                             type="radio"
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_ONCE}
-                            checked={isOnceSchedule}
-                            disabled={isCreating && submittingForm}
+                            checked={editor.isOnceSchedule}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
                             onchange={() =>
-                              setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
+                              editor.setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
                           />
                           <span>{t('cron.form.scheduleType.once', 'Once')}</span
                           >
@@ -1192,20 +719,20 @@
                       </div>
                     </fieldset>
 
-                    {#if isCronSchedule}
+                    {#if editor.isCronSchedule}
                       <FormField
                         controlId="cron-job-preset"
                         label={t('cron.form.preset', 'Schedule preset')}
                       >
                         <Dropdown
                           id="cron-job-preset"
-                          value={selectedPreset}
-                          options={presetOptions}
+                          value={editor.selectedPreset}
+                          options={editor.presetOptions}
                           ariaLabel={t('cron.form.preset', 'Schedule preset')}
-                          disabled={isCreating && submittingForm}
+                          disabled={editor.isCreating && editor.submittingForm}
                           triggerClass="cron-dropdown"
                           listClass="cron-dropdown-list"
-                          onValueChange={applyPreset}
+                          onValueChange={editor.applyPreset}
                         />
                       </FormField>
 
@@ -1221,21 +748,21 @@
                         {/snippet}
                         <TextField
                           id="cron-job-expression"
-                          value={formValues.cron_expression}
+                          value={editor.formValues.cron_expression}
                           placeholder={t(
                             'cron.form.cronExpressionPlaceholder',
                             '0 9 * * 1-5',
                           )}
-                          disabled={isCreating && submittingForm}
-                          onInput={(next) => updateCronExpression(next)}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(next) => editor.updateCronExpression(next)}
                         />
-                        {#if cronExpressionPreview}
+                        {#if editor.cronExpressionPreview}
                           <span class="cron-expression-preview">
-                            {cronExpressionPreview}
+                            {editor.cronExpressionPreview}
                           </span>
                         {/if}
                       </FormField>
-                    {:else if isIntervalSchedule}
+                    {:else if editor.isIntervalSchedule}
                       <FormField
                         controlId="cron-job-interval"
                         label={t(
@@ -1249,14 +776,14 @@
                           type="number"
                           min="1"
                           step="1"
-                          value={formValues.interval_minutes}
+                          value={editor.formValues.interval_minutes}
                           placeholder={t(
                             'cron.form.intervalMinutesPlaceholder',
                             '120',
                           )}
-                          disabled={isCreating && submittingForm}
+                          disabled={editor.isCreating && editor.submittingForm}
                           onInput={(next) =>
-                            updateFormField('interval_minutes', next)}
+                            editor.updateFormField('interval_minutes', next)}
                         />
                       </FormField>
                     {:else}
@@ -1268,9 +795,10 @@
                         <TextField
                           id="cron-job-run-at"
                           type="datetime-local"
-                          value={formValues.run_at}
-                          disabled={isCreating && submittingForm}
-                          onInput={(next) => updateFormField('run_at', next)}
+                          value={editor.formValues.run_at}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(next) =>
+                            editor.updateFormField('run_at', next)}
                         />
                       </FormField>
                     {/if}
@@ -1284,12 +812,13 @@
                         type="number"
                         min="1"
                         step="1"
-                        value={formValues.repeat}
-                        placeholder={isOnceSchedule
+                        value={editor.formValues.repeat}
+                        placeholder={editor.isOnceSchedule
                           ? '1'
                           : t('cron.form.repeatPlaceholder', 'Unlimited')}
-                        disabled={isCreating && submittingForm}
-                        onInput={(next) => updateFormField('repeat', next)}
+                        disabled={editor.isCreating && editor.submittingForm}
+                        onInput={(next) =>
+                          editor.updateFormField('repeat', next)}
                       />
                     </FormField>
                   </div>
@@ -1320,17 +849,18 @@
                       {/snippet}
                       <TextField
                         id="cron-job-session"
-                        value={formValues.session_id}
+                        value={editor.formValues.session_id}
                         placeholder={t(
                           'cron.form.sessionIdPlaceholder',
                           'Optional',
                         )}
-                        disabled={isCreating && submittingForm}
-                        onInput={(next) => updateFormField('session_id', next)}
+                        disabled={editor.isCreating && editor.submittingForm}
+                        onInput={(next) =>
+                          editor.updateFormField('session_id', next)}
                       />
                     </FormField>
 
-                    {#if !isCreating && selectedJob}
+                    {#if !editor.isCreating && editor.selectedJob}
                       <details class="cron-technical-details">
                         <summary>
                           {t(
@@ -1342,18 +872,18 @@
                           <span class="cron-technical-label">
                             {t('cron.detail.scheduleId', 'Schedule ID')}
                           </span>
-                          <code>{selectedJob.id}</code>
+                          <code>{editor.selectedJob.id}</code>
                           <Button
                             variant="danger"
                             ariaLabel={t(
                               'cron.actions.deleteJob',
                               'Delete job {id}',
-                              { id: selectedJob.id },
+                              { id: editor.selectedJob.id },
                             )}
-                            data-testid={`cron-delete-${selectedJob.id}`}
-                            disabled={submittingForm ||
-                              mutatingJobId === selectedJob.id}
-                            onClick={() => deleteJob(selectedJob)}
+                            data-testid={`cron-delete-${editor.selectedJob.id}`}
+                            disabled={editor.submittingForm ||
+                              editor.mutatingJobId === editor.selectedJob.id}
+                            onClick={() => editor.deleteJob(editor.selectedJob)}
                           >
                             {t('common.delete', 'Delete')}
                           </Button>
@@ -1365,30 +895,30 @@
               </div>
             </div>
 
-            {#if formErrorMessage}
+            {#if editor.formErrorMessage}
               <div class="cron-form-error">
                 <Banner variant="error" role="alert">
-                  {formErrorMessage}
+                  {editor.formErrorMessage}
                 </Banner>
               </div>
             {/if}
 
             <div class="cron-detail-footer">
-              {#if isCreating}
+              {#if editor.isCreating}
                 <Button
                   variant="secondary"
-                  disabled={isCreating && submittingForm}
-                  onClick={cancelCreate}
+                  disabled={editor.isCreating && editor.submittingForm}
+                  onClick={editor.cancelCreate}
                 >
                   {t('common.cancel', 'Cancel')}
                 </Button>
               {/if}
               <Button
-                variant={isCreating ? 'primary' : 'tertiary'}
+                variant={editor.isCreating ? 'primary' : 'tertiary'}
                 type="submit"
-                disabled={isCreating && submittingForm}
+                disabled={editor.isCreating && editor.submittingForm}
               >
-                {submittingForm
+                {editor.submittingForm
                   ? t('common.saving', 'Saving…')
                   : t('common.save', 'Save')}
               </Button>
@@ -1399,7 +929,7 @@
     {/if}
   </div>
 
-  {#if deleteConfirmJob}
+  {#if editor.deleteConfirmJob}
     <ConfirmDialog
       title={t('cron.deleteConfirmTitle', 'Delete Scheduled Run')}
       body={t(
@@ -1407,12 +937,12 @@
         'Delete this job permanently? It will no longer run.',
       )}
       confirmLabel={t('common.delete', 'Delete')}
-      onConfirm={confirmDeleteJob}
-      onCancel={cancelDeleteJob}
+      onConfirm={editor.confirmDeleteJob}
+      onCancel={editor.cancelDeleteJob}
     />
   {/if}
 
-  {#if showDiscardConfirm}
+  {#if editor.showDiscardConfirm}
     <ConfirmDialog
       title={t('cron.discardConfirmTitle', 'Discard unsaved changes?')}
       body={t(
@@ -1420,8 +950,8 @@
         'Your edits have not been saved. Discard them and continue?',
       )}
       confirmLabel={t('common.discard', 'Discard')}
-      onConfirm={confirmDiscard}
-      onCancel={cancelDiscard}
+      onConfirm={editor.confirmDiscard}
+      onCancel={editor.cancelDiscard}
     />
   {/if}
 </section>

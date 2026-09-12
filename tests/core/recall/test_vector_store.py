@@ -94,7 +94,7 @@ def test_vector_store_creates_index_file_under_recall_dir(tmp_path: Path) -> Non
         vector=[0.1, 0.2, 0.3, 0.4],
     )
 
-    assert store.path == tmp_path / "recall" / "session_vectors.sqlite"
+    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
     assert store.path.is_file()
 
 
@@ -410,32 +410,6 @@ def test_vector_store_drop_indexed_sessions_is_noop_when_chunk_table_missing(
 ) -> None:
     store = VectorStore(tmp_path)
     assert store.drop_indexed_sessions("coder", "", ["a", "b"]) == 0  # must not raise
-
-
-def test_vector_store_truncate_to_input_limit_uses_context_window(tmp_path: Path) -> None:
-    text = "lorem ipsum " * 200
-    truncated = VectorStore.truncate_to_input_limit(text, context_window=40)
-    # int(40 * 0.9) * 3 chars/token → 108 chars
-    assert len(truncated) == 108
-
-
-def test_vector_store_truncate_to_input_limit_falls_back_to_default(tmp_path: Path) -> None:
-    long = "x" * 50_000
-    truncated = VectorStore.truncate_to_input_limit(long, context_window=None)
-    # Unknown window assumes the 8192-token floor: int(8192 * 0.9) * 3 = 22116
-    assert len(truncated) == 22_116
-
-
-def test_vector_store_truncate_keeps_dense_text_under_token_window(tmp_path: Path) -> None:
-    """The character budget must stay under the model's token cap even for
-    dense text near 3 chars/token — the bge-m3 8192 overflow on German
-    sessions that motivated the conservative heuristic.
-    """
-
-    window = 8192
-    truncated = VectorStore.truncate_to_input_limit("x" * 1_000_000, context_window=window)
-    # Even at a worst-case dense 3 chars/token, the result stays under the cap.
-    assert len(truncated) / 3 < window
 
 
 # ---------------------------------------------------------------------------
