@@ -9,6 +9,7 @@ A Tool definition exists to make the Model choose the right Tool and emit the ri
 ## Model Contract and Runtime Contract
 
 - The model-facing Tool definition describes only what the Model needs to choose and call the Tool.
+- Runtime behavior follows `../tools.md` -> Contracts -> Agent error tolerance: when the Agent's intent is recognizable, process the intended request despite mistakes in its expression. The advertised schema teaches the preferred call shape; it is not a reason to reject an understandable request.
 - The handler owns actual defaults, normalization, conditional validation, authorization, security checks, side effects, and error handling.
 - A permissive model-facing schema is acceptable when its descriptions reliably guide the Model and the handler safely validates execution.
 - Do not expand the model-facing schema merely to encode every invalid runtime state.
@@ -107,8 +108,8 @@ Example:
 
 - The canonical model-facing input has one open JSON-object root with `type`, `properties`, and `required`.
 - The schema owns field names, simple JSON types, small fixed enums, universal requirements, and only constraints that materially help the Model construct a valid call. The handler owns unknown fields, conditional requirements, inapplicable fields, actual defaults, cross-field meaning, authorization, existence, state transitions, and other semantic checks.
-- Reject fields that are unknown or inapplicable to the selected action in the handler before side effects. A typo or stale field must fail with `invalid_arguments`, not be ignored.
-- Do not coerce strings into numbers or booleans, accept aliases, or silently normalize retired public shapes. Runtime validation and handler validation must agree on the canonical types.
+- Interpret recognizable mistakes before rejecting unknown or inapplicable fields. A typo or stale field is not automatically a failed call: repair it when its intended meaning is clear. If meaning remains ambiguous or an instruction cannot be honored, return an actionable error; do not silently discard a meaningful part of the request.
+- Apply the Agent error tolerance contract through shared normalization for general repairs and the Tool's own boundary for domain-specific repairs. For example, a boolean field accepts both `true` and `"true"`. This example does not limit tolerance to type conversion. Keep the model-facing schema canonical and do not disable normalization merely to enforce exact JSON types.
 - Handlers must safely reject or normalize malformed arguments regardless of what the model-facing schema permits, and must apply defaults explicitly: an omitted argument must behave correctly even if the Provider ignores every schema annotation.
 - Authorization, path safety, input sanitization, resource limits, and destructive-action checks belong to runtime code and must never depend on Model compliance.
 - Runtime errors should identify the invalid argument and the valid correction without exposing implementation details.
@@ -151,7 +152,7 @@ The model-facing texts decide whether a Tool gets chosen and called correctly; t
 
 ## Retired Shapes
 
-The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema`, and `discriminated_union_schema` compatibility helpers were removed after the final nested Tool migrated - the latter two built the forbidden oneOf closed-branch action shapes. Do not reintroduce them or accept `request.operation`; preserve any required rendering of historical persisted calls in the WebUI without widening current dispatch.
+The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema`, and `discriminated_union_schema` compatibility helpers were removed after the final nested Tool migrated - the latter two built the forbidden oneOf closed-branch action shapes. Keep new definitions in the canonical flat form rather than reintroducing these helpers. Runtime handling of a recognizable older shape still follows the Agent error tolerance contract; its age alone is not a reason to reject it. Preserve any required rendering of historical persisted calls in the WebUI.
 
 ## Change and Verification Discipline
 
@@ -160,7 +161,7 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 - Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
 - After the change, recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs, and update the owning Tool map plus any documentation that teaches the call shape.
 - Before moving to the next Tool, run its focused local tests and complete the Luna call matrix, and pass its current production definition directly to Luna through `scripts/probe_provider_tool_call.py`. A live installation round-trip is not required for model-facing schema verification.
-- The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, and representative invalid calls that the handler must reject safely.
+- The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, recoverable Agent mistakes, and requests whose ambiguity or invalid intended operation requires rejection. Judge recoverable calls by the interpreted intent and actual effect, not byte-for-byte JSON equality.
 - A Tool change is verified only when every matrix call produces a satisfactory Tool Call and runtime result. Documentation or schema inspection alone is not verification.
 - Commit each fully verified Tool as its own cohesive releaseable change before editing the next Tool.
 - Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
