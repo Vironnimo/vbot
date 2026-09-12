@@ -4,9 +4,9 @@
 
 <h1 align="center">vBot</h1>
 
-<p align="center"><strong>Your Agents. Your machine. Your Models.</strong></p>
+<p align="center"><strong>Your workspace for AI Agents.</strong></p>
 
-<p align="center">Run persistent AI Agents on your own hardware, connect the Providers you choose, and reach them from the WebUI, Desktop, CLI, Telegram, or Discord.</p>
+<p align="center">Work on Projects, automate recurring tasks, and pick up where you left off with Agents that keep useful context across conversations.</p>
 
 <p align="center">
   <a href="https://github.com/Vironnimo/vbot/releases"><img src="https://img.shields.io/github/v/release/Vironnimo/vbot?style=flat-square" alt="Latest release"></a>
@@ -22,7 +22,9 @@
   <a href="resources/skills/vbot-cli/references/extensions.md">Extension development</a>
 </p>
 
-vBot is a local-first, self-hosted home for personal and project Agents. An Agent can keep durable Memory and Sessions, work with files and processes through Tools, use reusable Skills, delegate to Sub-Agents, and run on a schedule. Projects can also discover an existing OpenCode or Claude Code team directly from a repository without copying it into vBot.
+vBot brings conversations, Memory, Tools, and automation together in one place. Your Agents can work alongside you or carry out tasks independently—from working with files to handling scheduled tasks. Reach them through your browser, Desktop, CLI, Telegram, or Discord.
+
+vBot is self-hosted. Connect it to hosted AI services or local Models—you choose what powers your Agents.
 
 ## Get started
 
