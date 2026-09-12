@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.automation import _cron_claims as cron_claims
 from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistrationIdentity
@@ -235,7 +236,7 @@ def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> 
         schedule_type="once",
         run_at="2099-01-01T00:00:00+00:00",
     )
-    claim_path = seed_cron._once_fire_claim_path(once.id)
+    claim_path = cron_claims.path_for(seed_cron._once_fire_claims_dir, once.id)
     claim_path.parent.mkdir(parents=True, exist_ok=True)
     claim_path.write_text("{", encoding="utf-8")
     write_bootstrap_marker(data_dir)

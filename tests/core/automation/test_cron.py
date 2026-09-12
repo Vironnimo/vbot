@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import core.automation.cron as cron_module
+from core.automation import _cron_claims as cron_claims
+from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
     CronJobNotFoundError,
     CronJobStatus,
@@ -659,7 +661,7 @@ async def test_run_once_job_fires_and_marks_completed(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
 
     # Act
     with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
@@ -685,7 +687,7 @@ async def test_run_once_job_fires_and_marks_completed(
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
-    assert not service._once_fire_claim_path(job.id).exists()
+    assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
 @pytest.mark.asyncio
@@ -836,12 +838,12 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
-    assert sleep_delays == [cron_module._ONCE_RETRY_DELAY_SECONDS]
+    assert sleep_delays == [cron_timing._ONCE_RETRY_DELAY_SECONDS]
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
-    assert not service._once_fire_claim_path(job.id).exists()
+    assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
 @pytest.mark.asyncio
@@ -873,14 +875,14 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
     assert trigger_service.trigger_run.await_count == cron_module._ONCE_MAX_FIRE_ATTEMPTS
     backoff_delays = [delay for delay in sleep_delays if delay > 0]
     expected_backoff = [
-        cron_module._once_retry_delay(attempt)
+        cron_timing._once_retry_delay(attempt)
         for attempt in range(1, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
     ]
     assert backoff_delays == expected_backoff
     updated = service.get_job(job.id)
     assert updated.status == "failed"
     assert updated.last_fired_at is None
-    assert not service._once_fire_claim_path(job.id).exists()
+    assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
 def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
@@ -915,7 +917,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
     monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
     save_attempts = 0
 
@@ -946,7 +948,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
-    assert not service._once_fire_claim_path(job.id).exists()
+    assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
 def test_start_completes_claimed_once_job_without_refiring(
@@ -961,7 +963,7 @@ def test_start_completes_claimed_once_job_without_refiring(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    service._write_once_fire_claim(job, datetime.now(UTC).isoformat())
+    cron_claims.write(service._once_fire_claims_dir, job, datetime.now(UTC).isoformat())
 
     restarted_service, restarted_trigger_service = make_service(tmp_path)
 
@@ -980,7 +982,7 @@ def test_start_completes_claimed_once_job_without_refiring(
     assert updated.last_fired_at is not None
     persisted_jobs = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
     assert persisted_jobs[0]["status"] == "completed"
-    assert not restarted_service._once_fire_claim_path(job.id).exists()
+    assert not cron_claims.path_for(restarted_service._once_fire_claims_dir, job.id).exists()
 
 
 def test_start_degrades_cron_when_once_fire_claim_is_invalid(
@@ -1001,7 +1003,7 @@ def test_start_degrades_cron_when_once_fire_claim_is_invalid(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    claim_path = service._once_fire_claim_path(once.id)
+    claim_path = cron_claims.path_for(service._once_fire_claims_dir, once.id)
     claim_path.parent.mkdir(parents=True, exist_ok=True)
     claim_path.write_text("{", encoding="utf-8")
     restarted_service, _restarted_trigger_service = make_service(tmp_path)
@@ -1031,7 +1033,7 @@ def test_start_degrades_cron_when_once_fire_claim_is_not_utf8(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    claim_path = service._once_fire_claim_path(once.id)
+    claim_path = cron_claims.path_for(service._once_fire_claims_dir, once.id)
     claim_path.parent.mkdir(parents=True, exist_ok=True)
     claim_path.write_bytes(b"\xff")
     restarted_service, _restarted_trigger_service = make_service(tmp_path)
@@ -1072,7 +1074,7 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
         def get_next(self, _return_type: Any) -> datetime:
             return self._next_fire
 
-    monkeypatch.setattr(cron_module, "croniter", ImmediateCronIter)
+    monkeypatch.setattr("core.automation._cron_schedule.croniter", ImmediateCronIter)
 
     async def trigger_and_pause(
         _agent_id: str,
@@ -1146,7 +1148,7 @@ async def test_run_cron_job_continues_after_trigger_failure(
             raise RuntimeError("boom")
         service._jobs[job.id].status = "paused"
 
-    monkeypatch.setattr(cron_module, "croniter", ImmediateCronIter)
+    monkeypatch.setattr("core.automation._cron_schedule.croniter", ImmediateCronIter)
     monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 
@@ -1288,7 +1290,7 @@ async def test_run_once_job_fires_with_project_id(
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
         project_id="vbot",
     )
-    monkeypatch.setattr(cron_module, "_sleep_until_utc", AsyncMock())
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
 
     # Act
     await service._run_once_job(job)
@@ -1318,7 +1320,7 @@ async def test_sleep_until_utc_returns_immediately_for_past_target(
     monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
 
     # Act
-    await cron_module._sleep_until_utc(datetime.now(UTC) - timedelta(seconds=1))
+    await cron_timing._sleep_until_utc(datetime.now(UTC) - timedelta(seconds=1))
 
     # Assert
     assert naps == []
@@ -1458,7 +1460,7 @@ async def test_sleep_until_utc_realigns_after_wall_clock_jump(
     start = datetime.now(UTC)
     target = start + timedelta(minutes=10)
     clock = iter([start, target + timedelta(seconds=1)])
-    monkeypatch.setattr(cron_module, "_utc_now", lambda: next(clock))
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: next(clock))
     naps: list[float] = []
 
     async def record_sleep(delay_seconds: float) -> None:
@@ -1467,10 +1469,10 @@ async def test_sleep_until_utc_realigns_after_wall_clock_jump(
     monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
 
     # Act
-    await cron_module._sleep_until_utc(target)
+    await cron_timing._sleep_until_utc(target)
 
     # Assert
-    assert naps == [cron_module._WALL_CLOCK_RECHECK_SECONDS]
+    assert naps == [cron_timing._WALL_CLOCK_RECHECK_SECONDS]
 
 
 def test_short_ids_skip_collisions_after_reload(tmp_path, monkeypatch):
