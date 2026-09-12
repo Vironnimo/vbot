@@ -53,7 +53,7 @@ Loaded Extensions fire startup in load order after runtime capability applicatio
 
 ## Source and tests
 
-- Discovery, records, import, manifest, schema declaration, lifecycle: `core/extensions/extensions.py`, `core/extensions/settings_schema.py`
+- Discovery/import/registration deadlines: `core/extensions/_loading.py`; records: `_declarations.py`; schema declarations: `_api.py` and `settings_schema.py`; lifecycle and public API: `extensions.py` (internal files under `core/extensions/`).
 - Runtime mutation: `core/runtime/runtime.py`
 - RPC catalog/secrets and Settings delta: `server/rpc/extensions_methods.py`, `server/rpc/settings_methods.py`
 - Focused coverage: `tests/core/extensions/test_loader.py`, `test_registration.py`, `test_settings_schema.py`, `test_reload_primitives.py`, `test_deactivate.py`, and Extension RPC/Runtime tests
