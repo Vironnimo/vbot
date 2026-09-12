@@ -194,7 +194,9 @@ def _skill_name_suggestions(instance: ServerInstance, failed: CommandResult) -> 
         lines.append(f"did you mean: {close[0]}")
     if names:
         lines.append(f"known skills: {', '.join(names)}")
-    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=False, message="\n".join(lines), instance=instance, failure=failed.failure
+    )
 
 
 def _first_quoted(message: str) -> str:
@@ -221,7 +223,9 @@ def _agent_id_suggestions(instance: ServerInstance, failed: CommandResult) -> Co
         lines.append(f"did you mean: {close[0]}")
     if names:
         lines.append(f"available agents: {', '.join(names)}")
-    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=False, message="\n".join(lines), instance=instance, failure=failed.failure
+    )
 
 
 def skill_share(
@@ -266,6 +270,7 @@ def _share_failure_result(
                 ok=False,
                 message=f"{failed.message}\ninventory lookup failed: {inventory_payload.message}",
                 instance=instance,
+                failure=failed.failure,
             )
         skills = inventory_payload.data.get("skills")
         if not isinstance(skills, list):
@@ -273,6 +278,7 @@ def _share_failure_result(
                 ok=False,
                 message=f"{failed.message}\ninventory lookup returned no valid Skill list",
                 instance=instance,
+                failure=failed.failure,
             )
         owned = sorted(
             set(
@@ -290,7 +296,9 @@ def _share_failure_result(
             lines.append(f"{agent_id}'s private skills: {', '.join(owned)}")
         else:
             lines.append(f"{agent_id} owns no private skills")
-        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+        return CommandResult(
+            ok=False, message="\n".join(lines), instance=instance, failure=failed.failure
+        )
     return failed
 
 
