@@ -19,8 +19,7 @@
   } from '$lib/api.js';
   import {
     buildAgentTargetOptions,
-    projectIdsFromList,
-    projectTeamEntry,
+    createAgentTargetCatalogLoader,
   } from '$lib/agentTargetOptions.js';
 
   let {
@@ -47,28 +46,29 @@
     actions.filter((action) => action.event_id === eventId),
   );
 
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listAgents,
+    listProjects,
+    showProject,
+  });
   onMount(() => {
-    let alive = true;
     async function loadTargets() {
-      try {
-        const [agentsResult, projectsResult] = await Promise.all([
-          listAgents(),
-          listProjects(),
-        ]);
-        const teams = await Promise.all(
-          projectIdsFromList(projectsResult).map(async (id) =>
-            projectTeamEntry(id, await showProject(id)),
-          ),
-        );
-        if (alive)
-          options = buildAgentTargetOptions(agentsResult.agents ?? [], teams);
-      } catch (e) {
-        if (alive) error = e.message ?? String(e);
-      }
+      const catalog = await targetCatalog.load();
+      if (!catalog) return;
+      options = buildAgentTargetOptions(catalog.agents, catalog.projectTeams);
+      const failure = catalog.agentError ?? catalog.projectError;
+      error = failure
+        ? (failure.message ?? String(failure))
+        : catalog.failedProjects.length
+          ? t(
+              'calendar.actions.targetsPartial',
+              'Some Project Agent targets could not be loaded.',
+            )
+          : '';
     }
     loadTargets();
     return () => {
-      alive = false;
+      targetCatalog.dispose();
       sessionRequest += 1;
     };
   });

@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_FILE = join(SRC_DIR, 'lib', 'api.js');
-const METHOD_LITERAL_EXCLUSIONS = new Set(['lib/i18n.js']);
+const METHOD_LITERAL_EXCLUSIONS = new Set([
+  'lib/i18n.js',
+  'lib/i18n/insights.js',
+]);
 
 function collectProductionSources(directory) {
   const files = [];

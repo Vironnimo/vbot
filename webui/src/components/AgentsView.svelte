@@ -14,10 +14,7 @@
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
   import { useAutosaveContext } from '$lib/autosave.js';
-  import {
-    projectIdsFromList,
-    projectTeamEntry,
-  } from '$lib/agentTargetOptions.js';
+  import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
   import {
@@ -156,7 +153,10 @@
   let lastAgentsRefreshToken = null;
   let agentListRequestId = 0;
   let loadingAgentListRequestId = 0;
-  let projectCatalogRequestId = 0;
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listProjects,
+    showProject,
+  });
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -190,6 +190,7 @@
   });
 
   onDestroy(() => {
+    targetCatalog.dispose();
     destroyed = true;
 
     modelCatalogLoader.invalidate();
@@ -223,51 +224,27 @@
   });
 
   async function loadProjectCatalog() {
-    const requestId = ++projectCatalogRequestId;
-    try {
-      const result = await listProjects();
-      if (requestId !== projectCatalogRequestId) {
-        return;
-      }
-      const projects = Array.isArray(result?.projects) ? result.projects : [];
-      availableProjects = projects.map((project) => ({
-        value: project.project_id,
-        label: project.display_name || project.project_id,
-      }));
-      projectCatalogError = '';
-      const projectIds = projectIdsFromList(result);
-      const teamResults = await Promise.allSettled(
-        projectIds.map(async (projectId) => {
-          const shown = await showProject(projectId);
-          return projectTeamEntry(projectId, shown);
-        }),
-      );
-      if (requestId !== projectCatalogRequestId) {
-        return;
-      }
-      projectTargetProjects = teamResults
-        .filter((entry) => entry.status === 'fulfilled')
-        .map((entry) => entry.value);
-      agentTargetCatalogError = teamResults.some(
-        (entry) => entry.status === 'rejected',
-      )
+    const catalog = await targetCatalog.load();
+    if (!catalog) return;
+    availableProjects = catalog.projects.map((project) => ({
+      value: project.project_id,
+      label: project.display_name || project.project_id,
+    }));
+    projectTargetProjects = catalog.projectTeams;
+    projectCatalogError = catalog.projectError
+      ? viewErrorMessage(
+          catalog.projectError,
+          t('agents.form.projectLoadError', 'Projects could not be loaded.'),
+        )
+      : '';
+    agentTargetCatalogError =
+      projectCatalogError ||
+      (catalog.failedProjects.length
         ? t(
             'agents.access.projectTargetsLoadError',
             'Some Project Agent targets could not be loaded.',
           )
-        : '';
-    } catch (error) {
-      if (requestId !== projectCatalogRequestId) {
-        return;
-      }
-      availableProjects = [];
-      projectTargetProjects = [];
-      projectCatalogError = viewErrorMessage(
-        error,
-        t('agents.form.projectLoadError', 'Projects could not be loaded.'),
-      );
-      agentTargetCatalogError = projectCatalogError;
-    }
+        : '');
   }
 
   // Reload the model catalog when the generic invalidation channel signals a
