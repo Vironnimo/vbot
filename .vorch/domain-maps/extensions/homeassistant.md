@@ -30,6 +30,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 ### `ha_list_services`
 
 - `GET /api/services`. Model-facing schema: open flat object with optional non-empty string `domain`; omission includes every domain, and the handler rejects unknown fields and invalid values.
+- Runtime repair normalizes domain capitalization and surrounding whitespace before validation.
 - Returns `{ count, domains: [{ domain, services: { name: { description, fields } } }] }`.
 
 ### `ha_call_service`
