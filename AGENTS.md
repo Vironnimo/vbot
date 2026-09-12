@@ -9,32 +9,45 @@ Read these two core files completely before doing anything (even saying 'hi'), e
 
 They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
 
-## Exploring rough ideas with the user
+## Communication with the user
 
-When the user brings an open-ended idea or asks what a feature should do, treat it as an early conversation whose direction is still being discovered.
+### Develop ideas together
 
-- Start with a short, provisional high-level picture in a few sentences or at most three brief points. Leave room for the user to shape it; do not open with a comprehensive concept, feature catalog, architecture, or implementation plan.
-- Then interview the user one important decision at a time. Give two or three numbered or lettered concrete options with each question, mark your recommendation, and briefly explain why. Allow the user to suggest a different direction and wait for their answer before moving to the next decision.
-- Start with the desired user experience, purpose, and scope. Introduce technical choices and edge cases only when the agreed direction makes them relevant.
-- Keep each reply short and focused on the current decision. Build on previous answers instead of repeating the whole discussion or presenting a questionnaire upfront.
-- Develop a detailed proposal or implementation plan only once the key decisions are settled and the user wants that next step. Exploration alone does not authorize implementation.
-- Apply this workflow to exploratory discussion, not to clear implementation requests or explicit requests for a comprehensive analysis.
+When the user brings an idea or a rough plan, help develop it into a coherent approach. First understand the intended outcome and why it matters. Treat proposed implementation choices as starting hypotheses unless the user explicitly establishes them as constraints. Surface alternatives and explain when they would better serve the user's intent.
 
-## Implementation discipline
+Start with a short, provisional picture of the whole undertaking. Identify its major areas, how they depend on each other, and the consequential questions that remain open. Take responsibility for surfacing important areas the user may not know to ask about.
 
-**Requirements before code.** Before starting any implementation, state a concise list of concrete, later-verifiable requirements that the completed work must satisfy — each specific enough that you can check it after the fact with a test, a command, or an observable behavior. Keep it short; this is a checklist, not a design document.
+Explore breadth before depth. Do not exhaust one subtopic while other areas still contain unresolved foundational questions. Choose the next question by its impact on the overall outcome, not simply because it follows from the previous answer. Introduce technical decisions when they materially shape feasibility, behavior, or later choices; defer incidental details.
 
-**Verify against the list.** After implementation, go back through every requirement and report which ones pass and which fail, with the evidence (test result, command output, observed behavior). A requirement that can't be verified wasn't concrete enough — say so and tighten it. If you discover requirements you missed, add them and verify those too.
+Discuss one important decision at a time. Offer concrete options, explain their tradeoffs, and give a reasoned recommendation when useful. Keep replies focused and allow the user to challenge the framing or suggest another direction.
 
-## Chat terminology
+Periodically summarize what is settled, which foundational questions remain, and what can safely wait. Agreement with your recommendations does not establish that the important ground has been covered. Before proposing implementation, review the overall approach for missing capabilities, unresolved dependencies, and assumptions that could materially change it. Make remaining uncertainty visible.
 
-Use vBot's established terms exactly as the glossary and domain maps define them. Say Tools, Run, Session, Queue, Skill, Provider — not translated alternatives.
+Apply this approach to exploratory discussion. Respect explicit implementation requests and established decisions; exploration alone does not authorize implementation.
 
-## Agent-facing text review
+### State the expected outcome before implementation
 
-Before creating runtime Agent-facing text in this repository, show the user its complete proposed wording verbatim with all new text in bold. Before changing existing runtime Agent-facing text, show exactly two complete versions: the current wording with every passage to be changed or removed in bold, then the proposed wording with every changed or added passage in bold. Do not substitute a summary or description of the text. Runtime Agent-facing text means text that vBot supplies to an Agent or Model as part of its runtime context or interaction, including System Prompt blocks, Tool descriptions, Skill instructions, System Reminders. It does not include repository governance or development documentation such as this file, domain maps, glossary entries, PROJECT.md, DESIGN.md, or code documentation.
+Before implementation, briefly list what you understand the requested end result to be. Describe concrete, observable outcomes so the user can spot misunderstandings and you can carry the list through the work.
 
-Runtime Agent-facing text must be self-contained for a fresh Agent that has not read project documentation. Mention only concepts the Agent can observe or act on, explain the available behavior and the next valid action, and never name hidden implementation categories merely to explain exclusions.
+Keep the list proportional to the task. Base it on the user's request and established context; do not invent requirements, numerical targets, or additional scope.
+
+Check the completed work against that list. In the final response, briefly state what was achieved, any material deviations or remaining gaps, and the relevant verification results. Keep this in the conversation; create a separate verification report only when requested.
+
+### Present Agent-facing text changes
+
+For runtime Agent-facing text, explain the meaningful changes in the conversation and show the relevant proposed wording verbatim. Include the corresponding current wording when comparison helps the user assess the change.
+
+For larger changes, keep the conversation focused on the passages that materially affect Agent behavior. Make the complete changes available through the source-file diff. Do not create additional files solely to present the review. Show complete wording when the user requests it.
+
+Runtime Agent-facing text includes System Prompt blocks, Tool descriptions, Skill instructions, and System Reminders supplied by vBot to an Agent or Model. Repository governance and development documentation are outside this review rule.
+
+### Use established terminology
+
+Use vBot's established terms as defined in the glossary and domain maps: Tools, Run, Session, Queue, Skill, Provider, and so on. Keep these terms untranslated.
+
+## Agent-facing text quality
+
+Runtime Agent-facing text must be self-contained for a fresh Agent that has not read project documentation. Mention only concepts the Agent can observe or act on, explain available behavior and valid next actions, and avoid hidden implementation categories.
 
 ## Architecture & code
 
