@@ -50,7 +50,8 @@ OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cl
 
 ## Source and tests
 
-- Service, shapes, fetchers, parsers: `core/providers/usage.py`
+- Service lifecycle, cache, Connection selection and fetchers: `core/providers/usage.py`
+- Report shapes and probe contracts: internal `core/providers/_usage_types.py`; Provider response parsing: `_usage_parsers.py`. Existing public imports remain available from `usage.py`.
 - Durable schema, validation, retention, and deletion: `core/providers/usage_history.py`
 - RPC validation/projection: `server/rpc/provider_usage_methods.py`
 - WebUI polling/presentation: `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`
