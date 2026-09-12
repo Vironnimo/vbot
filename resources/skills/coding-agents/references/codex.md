@@ -1,10 +1,10 @@
 # Codex interactive reference
 
-Launch `codex` as a real TUI through `terminal`. Keep the returned `terminal_id`; while that process is alive, all follow-up instructions and approvals belong in that same Terminal Session.
+Launch `codex` as a real TUI through `terminal`. Keep the returned `terminal_id`; use it for questions, approvals, and instructions belonging to the current task.
 
 ## Start
 
-Use `command: "codex"`, set `workdir` to the repository, and provide the task as `text` when Codex is already configured. Put startup overrides into the exact `args` array; do not embed them in the task text.
+Use `command: "codex"`, set `workdir` to the repository, and provide the task as `text`. Put startup overrides into the exact `args` array; do not embed them in the task text.
 
 For “run this with Codex, GPT-5.6 Terra, medium reasoning,” start the interactive TUI with:
 
@@ -23,7 +23,7 @@ For “run this with Codex, GPT-5.6 Terra, medium reasoning,” start the intera
 }
 ```
 
-`--model` selects the model for this session. Codex currently exposes reasoning as the configuration key `model_reasoning_effort`, so pass it with `-c`/`--config`. Supported efforts are model-specific. Inspect `codex debug models` when the requested model or effort is uncertain; a current catalog may expose levels such as `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, but never assume every model supports every level.
+`--model` selects the model for this session. Codex currently exposes reasoning as the configuration key `model_reasoning_effort`, so pass it with `-c`/`--config`. Supported efforts are model-specific. If Codex rejects the requested model or effort, inspect `codex debug models`; a current catalog may expose levels such as `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, but never assume every model supports every level.
 
 Useful interactive start settings:
 
@@ -42,13 +42,13 @@ Useful interactive start settings:
 
 Prefer `terminal`'s `workdir` over also passing Codex `--cd`; using both creates two sources of truth. Leave unspecified settings to the user's global, Project, or profile configuration.
 
-If authentication, workspace trust, or first-run setup is uncertain, start without `text`, inspect `status`, and complete or hand off setup before sending the task.
+If authentication, workspace trust, or first-run setup appears after launch, complete or hand off the displayed setup, then send the task once Codex is ready.
 
-Codex may announce a program or task title through the terminal protocol. Use the title from `list` or `status` to identify the Terminal Session, but rely on the screen—not the title—to decide what input is needed.
+Codex may announce a program or task title through the terminal protocol. When the user requests an existing Terminal Session, its title from `list` or `status` can help identify it, but rely on the screen—not the title—to decide what input is needed.
 
 ## Work with the live TUI
 
-Use `wait` for short activity boundaries and `status` for the current screen and scrollback. Send ordinary follow-ups with `input` text plus Enter. Use named keys for menus and confirmations. Reread the screen and pass `expected_screen_revision` before approvals or other stale-sensitive choices.
+Use `wait` for short activity boundaries. Act from the supplied screen; use `status` when more context is needed. Send ordinary follow-ups with `input` text plus Enter. Use named keys for menus and confirmations. Pass the observed `screen_revision` as `expected_screen_revision` for approvals or other stale-sensitive choices; if rejected, read `status` and reconsider.
 
 Codex can accept new instructions while it is working and may queue them depending on its current UI. Only inject a new instruction when that is actually intended. Escape and Ctrl+C can interrupt active work, so use them only when interruption is deliberate.
 
@@ -56,6 +56,6 @@ Leave approvals enabled unless the user explicitly authorizes a different policy
 
 ## Continue after exit
 
-Do not resume while the original Terminal Session is alive; continue through its input. After the process exits, start a new interactive Terminal Session with `codex resume --last` for the most recent relevant session or `codex resume <session-id>` when an exact Codex session id is known. Inspect the resumed screen before sending the next instruction.
+When the user requests continuation of an existing task, send input to its live Terminal Session. If that process has exited, start a new interactive Terminal Session with `codex resume --last` for the most recent relevant session or `codex resume <session-id>` when an exact Codex session id is known. Inspect the resumed screen before sending the next instruction.
 
 Use `/status` inside Codex when its own session details are needed. The vBot `terminal_id` remains the control handle for the outer Terminal Session and is distinct from any Codex-internal session id.

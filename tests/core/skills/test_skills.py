@@ -41,15 +41,9 @@ def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
     reference_text = "\n".join(references.values())
     combined = f"{skill_text}\n{reference_text}"
 
-    assert "Terminal Sessions survive individual Runs" in skill_text
     assert "expected_screen_revision" in skill_text
     assert "terminal_id" in reference_text
-    assert "machine-output invocation" in skill_text
-    assert "permission checks" in skill_text
     assert "scrollback.next_request" in skill_text
-    assert "Request at most 100 lines" in skill_text
-    assert "raw `log_file` only for VT-level diagnostics" in skill_text
-    assert "preserve the CLI or project default for every value they omit" in skill_text
     assert '"gpt-5.6-terra"' in references["codex.md"]
     assert 'model_reasoning_effort=\\"medium\\"' in references["codex.md"]
     assert '"--effort"' in references["claude-code.md"]

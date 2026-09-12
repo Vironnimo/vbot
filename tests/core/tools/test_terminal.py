@@ -634,6 +634,7 @@ async def test_status_pages_forward_with_absolute_start_line(
         {"action": "status", "terminal_id": terminal_id, "start_line": 0, "lines": 3},
     )
     first_scrollback = cast(dict[str, Any], first["data"])["scrollback"]
+    assert "screen" not in first["data"]
     assert first_scrollback["text"] == "line-0\nline-1\nline-2"
     assert first_scrollback["total_lines"] == 50
     assert first_scrollback["start_line"] == 0
@@ -663,10 +664,25 @@ async def test_status_pages_forward_with_absolute_start_line(
         {"action": "status", "terminal_id": terminal_id, "start_line": 48, "lines": 100},
     )
     tail_scrollback = cast(dict[str, Any], tail["data"])["scrollback"]
+    assert "screen" not in tail["data"]
     assert tail_scrollback["line_count"] == 2
     assert tail_scrollback["end_line"] == 50
     assert tail_scrollback["next_start_line"] is None
     assert tail_scrollback["next_request"] is None
+
+    current = await call(
+        terminal_manager, context, {"action": "status", "terminal_id": terminal_id}
+    )
+    assert current["data"]["screen"] == session.renderer.screen_text()
+    assert current["data"]["scrollback"]["text"]
+    all_lines = []
+    request = {"action": "status", "terminal_id": terminal_id, "start_line": 0, "lines": 7}
+    while request is not None:
+        page = await call(terminal_manager, context, request)
+        assert "screen" not in page["data"]
+        all_lines.extend(page["data"]["scrollback"]["text"].splitlines())
+        request = page["data"]["scrollback"]["next_request"]
+    assert all_lines == [f"line-{index}" for index in range(50)]
 
 
 @pytest.mark.asyncio
@@ -976,3 +992,57 @@ async def test_invalid_or_inapplicable_arguments_return_stable_failure(
     result = await call(manager[0], make_context(tmp_path), arguments)
     assert result["ok"] is False
     assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+async def test_history_page_does_not_acknowledge_an_unseen_resize_or_attention(manager, tmp_path):
+    terminal_manager, factory = manager
+    callbacks = []
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
+    terminal_id = started["data"]["terminal_id"]
+    callbacks.pop()()
+    owner = TerminalOwner("project-a", "agent-a", "session-a")
+    session = terminal_manager.get_session(terminal_id, owner)
+    await terminal_manager.resize_for_operator(terminal_id, columns=100, rows=30)
+    await terminal_manager.send_operator_input(terminal_id, "next")
+    factory.adapters[0].emit("new prompt")
+    await eventually(lambda: session.attention_revision > 0)
+    acknowledged = session.acknowledged_attention_revision
+    page = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "status",
+            "terminal_id": terminal_id,
+            "start_line": 0,
+        },
+    )
+    assert page["ok"]
+    assert "screen" not in page["data"]
+    assert callbacks == []
+    assert session.acknowledged_attention_revision == acknowledged
+    current = await call(
+        terminal_manager, context, {"action": "status", "terminal_id": terminal_id}
+    )
+    assert current["data"]["screen"] == "new prompt"
+    assert "size_change" in current["data"]
+    callbacks.pop()()
+    assert session.acknowledged_attention_revision == session.attention_revision
+    assert "size_change" not in await terminal_manager.snapshot(terminal_id, owner)
+
+
+def test_terminal_definition_budget_and_wire_contract(tmp_path):
+    from core.providers.tool_schema import render_tool_definitions
+    from core.utils.tokens import estimate_json_tokens
+
+    registry = ToolRegistry()
+    register_terminal_tool(
+        registry, TerminalManager(adapter_factory=AdapterFactory()), ProjectStore(tmp_path)
+    )
+    definitions = registry.provider_definitions(allowed_tools=["terminal"])
+    assert estimate_json_tokens(definitions[0])[0] <= 900
+    for profile in ("explicit_non_strict", "omit_strict"):
+        rendered = render_tool_definitions(definitions, profile=profile)[0]
+        assert rendered["parameters"] == definitions[0]["parameters"]
+        assert rendered.get("strict") is (False if profile == "explicit_non_strict" else None)
