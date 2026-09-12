@@ -112,12 +112,13 @@
     void subAgentsAutosave.participant.runSave('manual');
   }
 
-  async function saveSubAgentSettings() {
+  async function saveSubAgentSettings(reason) {
     if (!subAgentDraftHasChanges()) {
       return true;
     }
 
     return runSettingsSave({
+      reason,
       onCommit,
       onToast,
       onError,
@@ -206,7 +207,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualSubAgentSettingsSave}
   >

@@ -323,7 +323,7 @@
     void taskModelsAutosave.participant.runSave('manual');
   }
 
-  async function saveTaskModelBindings() {
+  async function saveTaskModelBindings(reason) {
     if (
       !autoSaveArmed ||
       taskModelBindingsMatch(
@@ -338,6 +338,7 @@
     onError('');
 
     try {
+      const submitted = JSON.stringify(taskModelBindings);
       const result = await updateTaskModelSettings(
         createTaskModelUpdatePayload(
           taskModelBindings,
@@ -349,15 +350,18 @@
         model_tasks: result.model_tasks ?? {},
       };
       onCommit(nextSettings);
-      taskModelBindings = normalizeTaskModelSettings(nextSettings);
-      autoSaveArmed = false;
-      onToast({
-        title: t(
-          'settings.specializedModels.saveSuccess',
-          'Specialized model bindings updated.',
-        ),
-        variant: 'success',
-      });
+      if (JSON.stringify(taskModelBindings) === submitted) {
+        taskModelBindings = normalizeTaskModelSettings(nextSettings);
+        autoSaveArmed = false;
+      }
+      if (reason === 'manual')
+        onToast({
+          title: t(
+            'settings.specializedModels.saveSuccess',
+            'Specialized model bindings updated.',
+          ),
+          variant: 'success',
+        });
       return true;
     } catch (error) {
       onError(
@@ -632,7 +636,7 @@
               'Not configured',
             )}
             ariaLabel={t(row.titleKey, row.titleFallback)}
-            disabled={taskModelLoading || taskModelSaving}
+            disabled={taskModelLoading}
             triggerClass="settings-view__dropdown"
             onValueChange={(value) =>
               handleTaskModelTargetChange(row.taskType, value)}
@@ -669,7 +673,6 @@
                     options={field.options}
                     ariaLabel={field.label}
                     ariaDescribedby={formField.describedBy}
-                    disabled={taskModelSaving}
                     triggerClass="settings-view__dropdown"
                     listClass="settings-view__thinking-list"
                     onValueChange={(value) =>
@@ -681,7 +684,6 @@
                     rows="3"
                     aria-describedby={formField.describedBy}
                     value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
                     onInput={(_value, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
                   />
@@ -700,7 +702,6 @@
                       '[ … ] or { … }',
                     )}
                     value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
                     onInput={(_value, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
                   />
@@ -713,7 +714,6 @@
                     max={field.max ?? undefined}
                     step={field.step ?? 'any'}
                     value={taskModelOptionValue(row.taskType, field)}
-                    disabled={taskModelSaving}
                     onInput={(_next, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
                   />
@@ -721,7 +721,6 @@
                   <Toggle
                     id={formField.controlId}
                     checked={taskModelOptionValue(row.taskType, field) === true}
-                    disabled={taskModelSaving}
                     ariaLabel={field.label}
                     aria-describedby={formField.describedBy}
                     onChange={(next) =>
@@ -732,7 +731,6 @@
                     id={formField.controlId}
                     value={taskModelOptionValue(row.taskType, field)}
                     aria-describedby={formField.describedBy}
-                    disabled={taskModelSaving}
                     onInput={(_next, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
                   />
@@ -777,7 +775,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualTaskModelSave}
   >

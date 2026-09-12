@@ -434,7 +434,7 @@ describe('CronView', () => {
     expect(document.body.querySelector('.modal-footer')).toBeNull();
   });
 
-  it('asks before switching away from unsaved edits', async () => {
+  it('saves existing edits before switching to another job', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })],
     });
@@ -449,10 +449,14 @@ describe('CronView', () => {
     buttonByTestId('cron-item-job-two').click();
     flushSync();
 
-    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
-    confirmDialog('Cancel');
-    flushSync();
-    expect(inputById('cron-job-prompt').value).toBe('Unsaved draft');
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    await waitForCondition(
+      () => inputById('cron-job-prompt').value !== 'Unsaved draft',
+    );
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'job-one', prompt: 'Unsaved draft' }),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('shows a contextual retry state when cron.list fails', async () => {

@@ -137,11 +137,7 @@ describe('AgentsView', () => {
       id: 'alpha',
       model: 'openai/gpt-5.2::subscription',
     });
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        variant: 'success',
-      }),
-    );
+    expect(toastMock).not.toHaveBeenCalled();
 
     const saveButton = getButton('Save changes');
     expect(saveButton.disabled).toBe(false);

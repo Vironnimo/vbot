@@ -424,6 +424,50 @@ describe('SettingsExtensionsPanel', () => {
     vi.useRealTimers();
   });
 
+  it('keeps focus and newer extension edits while a save is in flight', async () => {
+    let finish;
+    const extension = extensionWithSchema([
+      { key: 'level', type: 'text', label: 'Level' },
+    ]);
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list')
+        return Promise.resolve({ extensions: [extension] });
+      if (method === 'settings.update' && !finish)
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      return Promise.resolve({});
+    });
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+    vi.useFakeTimers();
+    const input = document.querySelector('input[type="text"]');
+    input.focus();
+    input.value = 'first';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(input.disabled).toBe(false);
+    input.value = 'latest';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    finish({});
+    await flushAsync();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('latest');
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsync();
+    const writes = rpcMock.mock.calls.filter(
+      ([method]) => method === 'settings.update',
+    );
+    expect(writes).toHaveLength(2);
+    expect(writes[1][1].extensions.config.guard_bash.level).toBe('latest');
+    expect(document.activeElement).toBe(input);
+  });
+
   it('auto-saves after a schema toggle is flipped', async () => {
     // The boolean schema field is the shared Toggle (role="switch"); flipping it
     // must feed the same autosave path as any other non-secret config edit.

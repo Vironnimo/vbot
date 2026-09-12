@@ -1,3 +1,4 @@
+import { scheduleAutosave } from './autosave.js';
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
 import { SURFACE_FORM, shouldApplyReloadNow } from './resourceInvalidation.js';
 import { normalizeToolAccess } from './toolAccess.js';
@@ -207,9 +208,27 @@ export function createProjectsController({
   }
 
   function applyScan(scan, { replaceDrafts = false } = {}) {
+    const oldSeeds = Object.fromEntries(
+      state.activeTeam.map((member) => [
+        member.agent_id,
+        seedTeamOverrideDraft(member),
+      ]),
+    );
     state.activeTeam = projectTeam(scan);
     state.activeReport = normalizeScanReport(scan?.report);
     state.activeScanSkills = normalizeScanSkills(scan);
+    if (!replaceDrafts) {
+      for (const member of state.activeTeam) {
+        const previous = oldSeeds[member.agent_id];
+        const draft = state.overrideDrafts[member.agent_id];
+        if (!previous || !draft) continue;
+        const next = seedTeamOverrideDraft(member);
+        for (const field of Object.keys(next)) {
+          if (JSON.stringify(draft[field]) === JSON.stringify(previous[field]))
+            draft[field] = next[field];
+        }
+      }
+    }
     seedOverrideDrafts({ replace: replaceDrafts });
   }
 
@@ -480,7 +499,7 @@ export function createProjectsController({
 
   function clearAutoSave({ flushPending = true } = {}) {
     if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
+      autoSaveTimer();
       autoSaveTimer = null;
     }
     if (flushPending) {
@@ -490,7 +509,7 @@ export function createProjectsController({
 
   function clearToolAccessOverrideAutoSave({ flushPending = true } = {}) {
     if (toolAccessOverrideAutoSaveTimer !== null) {
-      clearTimeout(toolAccessOverrideAutoSaveTimer);
+      toolAccessOverrideAutoSaveTimer();
       toolAccessOverrideAutoSaveTimer = null;
     }
     if (flushPending) {
@@ -500,7 +519,7 @@ export function createProjectsController({
 
   function scheduleAutoSave(save) {
     clearAutoSave();
-    autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = scheduleAutosave(() => {
       autoSaveTimer = null;
       if (active) {
         void save();
@@ -510,7 +529,7 @@ export function createProjectsController({
 
   function scheduleToolAccessOverrideAutoSave(save) {
     clearToolAccessOverrideAutoSave();
-    toolAccessOverrideAutoSaveTimer = setTimeout(() => {
+    toolAccessOverrideAutoSaveTimer = scheduleAutosave(() => {
       toolAccessOverrideAutoSaveTimer = null;
       if (active) {
         void save();
@@ -808,31 +827,39 @@ export function createProjectsController({
     return typeof draft.thinking_effort === 'string';
   }
 
-  function pendingToolAccessOverrideChanges() {
+  function pendingOverrideChanges() {
     return state.activeTeam.flatMap((member) => {
       const draft = state.overrideDrafts[member.agent_id];
-      if (!draft) {
-        return [];
-      }
-      const value = normalizeToolAccess(draft.tool_access);
-      const saved = normalizeToolAccess(
-        seedTeamOverrideDraft(member).tool_access,
-      );
-      return JSON.stringify(value) === JSON.stringify(saved)
-        ? []
-        : [{ agentId: member.agent_id, value }];
+      if (!draft) return [];
+      const saved = seedTeamOverrideDraft(member);
+      return Object.keys(saved).flatMap((field) => {
+        if (JSON.stringify(draft[field]) === JSON.stringify(saved[field]))
+          return [];
+        return [
+          {
+            agentId: member.agent_id,
+            field,
+            value: overrideValueForField(member.agent_id, field),
+          },
+        ];
+      });
     });
   }
 
-  async function savePendingToolAccessOverrides() {
+  async function savePendingOverrides() {
     clearToolAccessOverrideAutoSave({ flushPending: false });
-    const changes = pendingToolAccessOverrideChanges();
-    for (const change of changes) {
-      if (
-        !(await setMemberOverride(change.agentId, 'tool_access', change.value))
-      ) {
+    for (const change of pendingOverrideChanges()) {
+      if (!canSetOverride(change.agentId, change.field)) {
+        state.editError = translate(
+          'errors.validation',
+          'Check the highlighted fields and try again.',
+        );
         return false;
       }
+      if (
+        !(await setMemberOverride(change.agentId, change.field, change.value))
+      )
+        return false;
     }
     return true;
   }
@@ -846,6 +873,7 @@ export function createProjectsController({
     ) {
       return false;
     }
+    const submittedDrafts = JSON.parse(JSON.stringify(state.overrideDrafts));
     state.overrideBusyKey = overrideKey(agentId, field);
     state.editError = '';
     try {
@@ -860,7 +888,23 @@ export function createProjectsController({
       if (!active) {
         return false;
       }
-      applyScan(result?.scan, { replaceDrafts: true });
+      applyScan(result?.scan);
+      const member = state.activeTeam.find(
+        (entry) => entry.agent_id === agentId,
+      );
+      if (
+        member &&
+        JSON.stringify(state.overrideDrafts[agentId]?.[field]) ===
+          JSON.stringify(submittedDrafts[agentId]?.[field])
+      ) {
+        state.overrideDrafts = {
+          ...state.overrideDrafts,
+          [agentId]: {
+            ...state.overrideDrafts[agentId],
+            [field]: seedTeamOverrideDraft(member)[field],
+          },
+        };
+      }
       onToast({
         title: translate('projects.team.overrideSaved', 'Override saved.'),
         variant: 'success',
@@ -1104,13 +1148,13 @@ export function createProjectsController({
     openRePoint,
     overrideDraft,
     pendingChanges,
-    pendingToolAccessOverrideChanges,
+    pendingOverrideChanges,
     flushPendingProjects,
     refreshScan,
     replaceListField,
     scheduleAutoSave,
     scheduleToolAccessOverrideAutoSave,
-    savePendingToolAccessOverrides,
+    savePendingOverrides,
     saveSelectedProject,
     selectProject,
     selectedProject,

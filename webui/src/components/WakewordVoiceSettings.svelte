@@ -7,7 +7,10 @@
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import Toggle from './ui/Toggle.svelte';
-  import { useAutosaveContext } from '$lib/autosave.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { updateSettings, setLiveVoiceEnabled } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -42,7 +45,6 @@
     snapshotVoiceSettings,
   } from '$lib/wakewordSettings.js';
 
-  const MAX_VOICE_FLUSH_PASSES = 10;
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
   const VOICE_STATUS_RETRY_MS = 3000;
   const UNAVAILABLE_MICROPHONE_VALUE = '__configured_unavailable__';
@@ -94,7 +96,6 @@
   let microphones = $state([]);
   let wakewordModels = $state([]);
   let saveState = $state('idle');
-  let saveChain = Promise.resolve();
   let modelFileInput = $state();
   let modelActionState = $state('idle');
   let enableActionState = $state('idle');
@@ -110,7 +111,6 @@
     untrack(() => normalizeTranscriptionAudio(settings)),
   );
   let transcriptionSaveState = $state('idle');
-  let transcriptionSaveChain = Promise.resolve();
   let desktopMode = $derived(isDesktop() && wakewordAvailable);
 
   let agentOptions = $derived(
@@ -254,19 +254,18 @@
         (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
   );
   const autosaveContext = useAutosaveContext();
-  const voiceAutosaveParticipant = {
-    flush: flushVoiceAutosave,
-    hasPending: () =>
-      saveState === 'saving' ||
-      transcriptionSaveState === 'saving' ||
-      enableActionBusy ||
-      calibrationActionBusy ||
-      voiceConfigHasChanges() ||
-      transcriptionAudioHasChanges(),
-  };
-  const unregisterVoiceAutosave = autosaveContext.register(
-    voiceAutosaveParticipant,
-  );
+  const voiceAutosave = createAutosaveParticipant({
+    getSnapshot: () => snapshotVoiceSettings(voiceState),
+    hasChanges: voiceConfigHasChanges,
+    save: persistCurrentConfig,
+  });
+  const audioAutosave = createAutosaveParticipant({
+    getSnapshot: () => transcriptionAudio,
+    hasChanges: transcriptionAudioHasChanges,
+    save: persistCurrentTranscriptionAudio,
+  });
+  const unregisterVoiceAutosave = autosaveContext.register(voiceAutosave);
+  const unregisterAudioAutosave = autosaveContext.register(audioAutosave);
 
   function liveStateText(state) {
     if (state === 'wakeword_detected') {
@@ -389,6 +388,7 @@
   onDestroy(() => {
     destroyed = true;
     unregisterVoiceAutosave();
+    unregisterAudioAutosave();
     if (voiceLoadRetryTimer !== null) {
       clearTimeout(voiceLoadRetryTimer);
       voiceLoadRetryTimer = null;
@@ -522,8 +522,7 @@
   }
 
   function saveConfig() {
-    saveChain = saveChain.then(persistCurrentConfig);
-    return saveChain;
+    return voiceAutosave.runSave('manual', { force: true });
   }
 
   function voiceConfigHasChanges() {
@@ -542,40 +541,6 @@
       transcriptionAudio.sample_rate_hz !==
         lastSavedTranscriptionAudio.sample_rate_hz
     );
-  }
-
-  async function flushVoiceAutosave() {
-    for (let pass = 0; pass < MAX_VOICE_FLUSH_PASSES; pass += 1) {
-      const observedChain = saveChain;
-      const observedTranscriptionChain = transcriptionSaveChain;
-      const [saved, transcriptionSaved] = await Promise.all([
-        observedChain,
-        observedTranscriptionChain,
-      ]);
-      if (
-        observedChain !== saveChain ||
-        observedTranscriptionChain !== transcriptionSaveChain
-      ) {
-        continue;
-      }
-      if (saved === false || transcriptionSaved === false) {
-        return false;
-      }
-      if (!voiceConfigHasChanges() && !transcriptionAudioHasChanges()) {
-        return true;
-      }
-      const saves = [];
-      if (voiceConfigHasChanges()) {
-        saves.push(saveConfig());
-      }
-      if (transcriptionAudioHasChanges()) {
-        saves.push(saveTranscriptionAudio());
-      }
-      if ((await Promise.all(saves)).some((result) => result === false)) {
-        return false;
-      }
-    }
-    return false;
   }
 
   async function persistCurrentConfig() {
@@ -600,10 +565,7 @@
   }
 
   function saveTranscriptionAudio() {
-    transcriptionSaveChain = transcriptionSaveChain.then(
-      persistCurrentTranscriptionAudio,
-    );
-    return transcriptionSaveChain;
+    return audioAutosave.runSave('manual');
   }
 
   async function persistCurrentTranscriptionAudio() {
@@ -729,7 +691,7 @@
 
     modelActionState = 'importing';
     try {
-      await saveChain;
+      if (!(await voiceAutosave.flush())) return;
       const contentBase64 = await readFileAsBase64(file);
       const imported = await importWakewordModel(file.name, contentBase64);
       wakewordModels = await listWakewordModels();
@@ -770,7 +732,7 @@
 
     modelActionState = 'deleting';
     try {
-      await saveChain;
+      if (!(await voiceAutosave.flush())) return;
       await deleteWakewordModel(model.id);
       wakewordModels = await listWakewordModels();
       await refreshEditableStatus();

@@ -1,4 +1,5 @@
 <script>
+  import { autosaveInput } from '$lib/autosave.js';
   // Shared multi-line form control. Callers own the value and receive edits
   // through the same callback contract as TextField. The default variant is a
   // bordered form field; inset is the borderless editor embedded in a bounded
@@ -38,6 +39,7 @@
 </script>
 
 <textarea
+  use:autosaveInput
   {...rest}
   class={textAreaClass}
   {value}

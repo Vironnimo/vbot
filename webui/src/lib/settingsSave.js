@@ -32,6 +32,7 @@ export async function runSettingsSave({
   successFallback,
   applyResult,
   getDraftSnapshot,
+  reason = 'manual',
 }) {
   setSaving(true);
   onError('');
@@ -50,7 +51,8 @@ export async function runSettingsSave({
     if (draftIsCurrent) {
       applyResult?.(nextSettings);
     }
-    onToast({ title: t(successKey, successFallback), variant: 'success' });
+    if (reason === 'manual')
+      onToast({ title: t(successKey, successFallback), variant: 'success' });
     return true;
   } catch (error) {
     onError(

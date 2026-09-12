@@ -160,7 +160,7 @@
     });
   }
 
-  async function saveAppearance() {
+  async function saveAppearance(reason) {
     if (!appearanceHasChanges()) {
       return true;
     }
@@ -182,10 +182,11 @@
       // display preferences have no runtime reload hook.
       setChatWidth(selectedChatWidth);
       setChatWorkingMode(selectedChatWorkingMode);
-      onToast({
-        title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
-        variant: 'success',
-      });
+      if (reason === 'manual')
+        onToast({
+          title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
+          variant: 'success',
+        });
       return true;
     } catch (error) {
       onError(
@@ -213,7 +214,7 @@
       value={selectedLanguageId}
       options={languageDropdownOptions}
       ariaLabel={t('settings.appearance.language', 'Language')}
-      disabled={saving || availableLanguageOptions.length <= 1}
+      disabled={availableLanguageOptions.length <= 1}
       triggerClass="settings-view__dropdown"
       listClass="settings-view__thinking-list"
       onValueChange={handleLanguageChange}
@@ -239,7 +240,6 @@
       value={selectedChatWidth}
       options={chatWidthDropdownOptions}
       ariaLabel={t('settings.appearance.chatWidth.label', 'Chat width')}
-      disabled={saving}
       triggerClass="settings-view__dropdown"
       listClass="settings-view__thinking-list"
       onValueChange={handleChatWidthChange}
@@ -265,7 +265,6 @@
       value={selectedChatWorkingMode}
       options={chatWorkingModeDropdownOptions}
       ariaLabel={t('settings.appearance.chatWorkingMode.label', 'Work details')}
-      disabled={saving}
       triggerClass="settings-view__dropdown"
       listClass="settings-view__thinking-list"
       onValueChange={handleChatWorkingModeChange}
@@ -275,7 +274,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualSave}
   >

@@ -20,6 +20,7 @@
   } from '$lib/api.js';
   import {
     createAutosaveParticipant,
+    scheduleAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -96,14 +97,14 @@
   function clearAutoSaveTimer(name) {
     const timer = autoSaveTimers.get(name);
     if (timer !== undefined) {
-      clearTimeout(timer);
+      timer();
       autoSaveTimers.delete(name);
     }
   }
 
   function clearAllAutoSaveTimers() {
     for (const timer of autoSaveTimers.values()) {
-      clearTimeout(timer);
+      timer();
     }
     autoSaveTimers.clear();
   }
@@ -158,7 +159,7 @@
     if (!extensionConfigDirty(extension)) {
       return;
     }
-    const timer = setTimeout(() => {
+    const timer = scheduleAutosave(() => {
       autoSaveTimers.delete(extension.name);
       void extensionConfigAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
@@ -273,7 +274,7 @@
     void extensionConfigAutosave.runSave('manual');
   }
 
-  async function saveExtensionConfigs() {
+  async function saveExtensionConfigs(reason) {
     if (panelBusy) {
       return false;
     }
@@ -321,14 +322,18 @@
 
     try {
       await updateSettings(buildExtensionsUpdatePayload(nextExtensions));
-      onToast({
-        title: t(
-          'settings.extensions.settingsSaveSuccess',
-          'Extension settings saved.',
-        ),
-        variant: 'success',
-      });
-      await loadExtensions();
+      // Update the persisted baseline without unmounting the form or replacing
+      // drafts (including another extension edited during this request).
+      extensions = nextExtensions;
+      if (reason === 'manual')
+        onToast({
+          title: t(
+            'settings.extensions.settingsSaveSuccess',
+            'Extension settings saved.',
+          ),
+          variant: 'success',
+        });
+
       return true;
     } catch (error) {
       onError(
@@ -463,7 +468,11 @@
 {:else}
   <div class="s-ext-list">
     {#each extensions as extension (extension.name)}
-      {@const rowBusy = panelBusy}
+      {@const rowBusy =
+        loading ||
+        reloading ||
+        actionName.length > 0 ||
+        savingSecret.length > 0}
       {@const isOverridden = extension.status === 'overridden'}
       {@const capabilities =
         extension.name === 'mcp' && extension.status === 'loaded'
@@ -687,7 +696,7 @@
               {/each}
               <div class="s-ext-config-actions">
                 <Button
-                  variant="primary"
+                  variant="tertiary"
                   disabled={rowBusy}
                   onClick={() => handleManualSchemaConfigSave(extension)}
                 >

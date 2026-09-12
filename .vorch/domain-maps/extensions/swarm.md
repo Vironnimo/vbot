@@ -18,7 +18,7 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
   the catalog to resolve a selected Project default, not on display context
   updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
 - Profile editing uses the shared Model search/selection and effort helpers,
-  the shared Secondary bar, topic tabs, a bounded scrollport, and a fixed save footer.
+  the shared Secondary bar, topic tabs, a bounded scrollport, and a small manual Save action after its fields.
   Creation saves explicitly; saved profiles autosave and flush before navigation
   through the generic page bridge. Invalidations preserve the mounted draft.
   The System Prompt tab owns editable instructions, explicit block selection,
