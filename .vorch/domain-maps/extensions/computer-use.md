@@ -4,6 +4,8 @@ Read this reference for the bundled `computer_use` Extension, its opt-in `comput
 
 ## Ownership and prerequisites
 
+The existing service's internal files separate Tool schema/argument validation (`_arguments.py`) from owned Session view records and pure reference selection (`_session_views.py`). `extension.py` retains live authority checks, Driver lifecycle and effect dispatch; the extracted reference helpers cannot authorize or send input. Tool descriptions and recovery wording are unchanged.
+
 `resources/extensions/computer_use/extension.py` owns validation, live authority checks, observation ownership, dispatch, and registration. `driver.py` owns the persistent Cua MCP connection and emergency hotkey. `windows.py` owns Windows physical display geometry, screenshots, modal-window resolution, and foreground input through Pillow/Win32. `observations.py` owns original images, coordinates, crops, and bounded results. `skills/computer-use/SKILL.md` supplies the workflow through ordinary loaded-Extension Skill discovery and allowlisting; it does not grant Tool access. The manifest remains version 1.0.0 and requires Extension API v5.
 
 `computer` requires explicit opt-in; Project whitelist membership alone does not grant access. Policy is checked after lock admission, connection/session setup, and before subsequent actions. Independent Bash permission remains outside this boundary.
