@@ -306,7 +306,7 @@ describe('SettingsView', () => {
           createSettingsPayload({
             recall: {
               backend: params.recall.backend,
-              available_backends: ['canonical_scan', 'sqlite_fts'],
+              available_backends: ['sqlite_fts', 'vector', 'hybrid'],
             },
           }),
       }),
@@ -331,7 +331,7 @@ describe('SettingsView', () => {
     ).find(
       (option) =>
         option.textContent.trim() ===
-        'Full-text search — fast keyword search with an index',
+        'Hybrid — combines full-text and semantic search',
     );
     expect(sqliteOption).toBeTruthy();
     sqliteOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -341,7 +341,7 @@ describe('SettingsView', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       recall: {
-        backend: 'sqlite_fts',
+        backend: 'hybrid',
       },
     });
 

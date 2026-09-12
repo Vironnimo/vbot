@@ -41,7 +41,6 @@ def test_first_party_recall_backends_include_vector() -> None:
     assert (
         frozenset(
             {
-                RECALL_BACKEND_CANONICAL_SCAN,
                 RECALL_BACKEND_SQLITE_FTS,
                 RECALL_BACKEND_VECTOR,
                 RECALL_BACKEND_HYBRID,
@@ -61,9 +60,8 @@ def test_registry_create_returns_expected_backend_type(
     registry: RecallBackendRegistry,
     context: RecallBackendContext,
 ) -> None:
-    assert isinstance(
-        registry.create(RECALL_BACKEND_CANONICAL_SCAN, context), CanonicalSessionRecallBackend
-    )
+    with pytest.raises(KeyError):
+        registry.create(RECALL_BACKEND_CANONICAL_SCAN, context)
     assert isinstance(registry.create(RECALL_BACKEND_SQLITE_FTS, context), SqliteFtsRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_VECTOR, context), VectorRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_HYBRID, context), HybridRecallBackend)

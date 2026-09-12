@@ -42,7 +42,6 @@ from scripts.provider_probe.scenario_files import (
 from scripts.provider_probe.scenario_history import (
     _history_scenario,
     _memory_scenario,
-    _session_read_scenario,
     _session_search_scenario,
     _status_scenario,
 )
@@ -293,8 +292,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _project_scenario()
     if name == "read":
         return _read_scenario(str(args.read_case))
-    if name == "session_read":
-        return _session_read_scenario(str(args.session_read_case))
     if name == "session_search":
         return _session_search_scenario(str(args.session_search_case))
     if name == "skill":

@@ -223,12 +223,12 @@ export default Object.freeze({
   'settings.recall.backend': 'Recall backend',
   'settings.recall.backendDescription':
     'How the session search looks through stored conversations.',
-  'settings.recall.backends.canonical_scan':
-    'Simple scan — exact keyword match, no index',
   'settings.recall.backends.sqlite_fts':
     'Full-text search — fast keyword search with an index',
   'settings.recall.backends.vector':
     'Semantic — finds matches by meaning, needs an embedding model',
+  'settings.recall.backends.hybrid':
+    'Hybrid — combines full-text and semantic search',
   'settings.recall.vectorHint':
     'Semantic search requires an embedding model — configure it under Specialized Models.',
   'settings.recall.saveSuccess': 'Recall backend updated.',

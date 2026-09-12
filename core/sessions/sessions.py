@@ -392,29 +392,6 @@ class ChatSessionManager:
             summaries.append(summary)
         return summaries
 
-    def list_recall_summaries(
-        self,
-        agent_id: str,
-        project_id: str | None = None,
-        *,
-        include_subagents: bool,
-        excluded_session_id: str | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        limit: int | None = None,
-    ) -> builtins.list[JsonObject]:
-        """Return the exact Recall-visible Session set from normalized list fields."""
-        rows = self._store.list_recall_summary_rows(
-            project_id,
-            agent_id,
-            include_subagents=include_subagents,
-            excluded_session_id=excluded_session_id,
-            since=since,
-            until=until,
-            limit=limit,
-        )
-        return [_session_list_summary_from_state(row) for row in rows]
-
     async def list_with_metadata_async(
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
@@ -917,6 +894,10 @@ class ChatSessionManager:
 
     def fts_health(self) -> FtsHealth:
         return self._store.fts_health()
+
+    def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
+        """Return the bounded question/final-answer context for a past Message."""
+        return self._store.recall_context(address, message_id)
 
     def fts_search(
         self,

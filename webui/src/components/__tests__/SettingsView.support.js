@@ -908,8 +908,8 @@ export function settingsPayload(options = {}) {
       },
     },
     recall: {
-      backend: 'canonical_scan',
-      available_backends: ['canonical_scan', 'sqlite_fts'],
+      backend: 'sqlite_fts',
+      available_backends: ['sqlite_fts'],
     },
     web_search: {
       provider: 'brave',

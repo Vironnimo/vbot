@@ -16,7 +16,6 @@ BASH_ALLOWED_ENV_KEY = "allowed_env"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
 PROJECT_TOOL_NAME = "project"
 SESSION_SEARCH_TOOL_NAME = "session_search"
-SESSION_READ_TOOL_NAME = "session_read"
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent"})
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
@@ -346,7 +345,6 @@ __all__ = [
     "DEFAULT_SUBAGENT_ALLOWED_AGENTS",
     "MEMORY_TOOL_NAME",
     "PROJECT_TOOL_NAME",
-    "SESSION_READ_TOOL_NAME",
     "SESSION_SEARCH_TOOL_NAME",
     "SKILL_MANAGE_TOOL_NAME",
     "SUBAGENT_ALLOWED_AGENTS_KEY",

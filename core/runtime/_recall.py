@@ -21,7 +21,6 @@ from core.runtime.interfaces import LoggerProtocol
 from core.sessions import ChatSessionManager
 from core.storage.storage import StorageManager
 from core.tools import (
-    SESSION_READ_TOOL_NAME,
     register_session_search_tool,
 )
 from core.tools.tools import ToolRegistry
@@ -110,7 +109,6 @@ class RecallIntegration:
         self.backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
-            self._tools.unregister(SESSION_READ_TOOL_NAME)
             register_session_search_tool(
                 self._tools,
                 self.backend,

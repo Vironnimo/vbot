@@ -950,7 +950,7 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
             "session_id",
             "include_subagents",
         }
-        assert runtime.tools.get("session_read").name == "session_read"
+        assert "session_read" not in [tool.name for tool in runtime.tools.list_tools()]
 
         _write_settings(config, {"recall": {"backend": "vector"}})
         runtime.reload_recall_backend()
@@ -966,7 +966,7 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
                 vector_tool.parameters["properties"][field]
                 == canonical_parameters["properties"][field]
             )
-        assert runtime.tools.get("session_read").name == "session_read"
+        assert "session_read" not in [tool.name for tool in runtime.tools.list_tools()]
         assert "semantically related passages" in vector_tool.description
     finally:
         runtime.stop()

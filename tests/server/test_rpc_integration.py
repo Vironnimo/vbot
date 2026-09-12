@@ -166,8 +166,8 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "summary_model": None,
             },
             "recall": {
-                "backend": "canonical_scan",
-                "available_backends": ["canonical_scan", "hybrid", "sqlite_fts", "vector"],
+                "backend": "sqlite_fts",
+                "available_backends": ["hybrid", "sqlite_fts", "vector"],
             },
             "web_search": {
                 "provider": "brave",

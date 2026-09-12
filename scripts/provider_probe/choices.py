@@ -100,7 +100,6 @@ PROBE_SCENARIOS = (
     "process",
     "project",
     "read",
-    "session_read",
     "session_search",
     "skill",
     "skill_manage",
@@ -368,18 +367,10 @@ READ_CASES = (
 )
 
 
-SESSION_READ_CASES = (
-    "whole",
-    "message",
-    "agent",
-    "continuation",
-    "all_messages",
-    "all",
-)
-
-
 SESSION_SEARCH_CASES = (
-    "list",
+    "subagents",
+    "exclude_subagents",
+    "open_period",
     "query",
     "period",
     "agent",

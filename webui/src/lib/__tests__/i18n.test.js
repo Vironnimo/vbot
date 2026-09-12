@@ -434,7 +434,7 @@ describe('i18n t()', () => {
       'settings.recall.subtitle',
       'settings.recall.backend',
       'settings.recall.backendDescription',
-      'settings.recall.backends.canonical_scan',
+      'settings.recall.backends.hybrid',
       'settings.recall.backends.sqlite_fts',
       'settings.recall.backends.vector',
       'settings.recall.vectorHint',

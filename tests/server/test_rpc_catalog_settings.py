@@ -350,7 +350,7 @@ async def test_settings_update_persists_recall_backend_and_reloads_runtime(
     assert state.runtime.recall_reload_count == 1
     assert response["result"]["recall"] == {
         "backend": "sqlite_fts",
-        "available_backends": ["canonical_scan", "hybrid", "sqlite_fts", "vector"],
+        "available_backends": ["hybrid", "sqlite_fts", "vector"],
     }
 
 
@@ -382,21 +382,21 @@ async def test_settings_update_accepts_vector_recall_backend(
 @pytest.mark.asyncio
 async def test_settings_get_lists_extension_recall_backend(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.available_recall_backends = lambda: ["canonical_scan", "my_ext_backend"]
+    state.runtime.available_recall_backends = lambda: ["sqlite_fts", "my_ext_backend"]
 
     response = await dispatch_rpc(state, {"method": "settings.get"})
 
     assert response["ok"] is True, response
     assert response["result"]["recall"]["available_backends"] == [
-        "canonical_scan",
         "my_ext_backend",
+        "sqlite_fts",
     ]
 
 
 @pytest.mark.asyncio
 async def test_settings_update_accepts_extension_recall_backend(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.available_recall_backends = lambda: ["canonical_scan", "my_ext_backend"]
+    state.runtime.available_recall_backends = lambda: ["my_ext_backend"]
 
     response = await dispatch_rpc(
         state,
