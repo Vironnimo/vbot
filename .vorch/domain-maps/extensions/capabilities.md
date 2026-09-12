@@ -42,6 +42,8 @@ An existing built-in or earlier Extension Tool name wins. The losing declaration
 
 `api.register_recall_backend(name, factory)` declares a `RecallBackendContext -> RecallBackend` factory. Runtime applies it to a registry with built-ins already present before resolving the persisted backend. Invalid or duplicate names are diagnosed and skipped; the Recall domain owns result-unit, control, ranking, pagination, and snapshot semantics.
 
+Constructed backends must provide `search_capabilities()` and `search_page(request)`; missing methods or invalid capability values are rejected at selection while factory registration remains lazy.
+
 If a live-disabled Extension supplied the active backend, Runtime rebuilds Recall and falls back through the normal unknown-backend path while leaving the persisted selection intact, so re-enabling can restore it.
 
 ## System Prompt blocks

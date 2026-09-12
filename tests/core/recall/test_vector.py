@@ -20,24 +20,11 @@ from core.model_tasks import (
 )
 from core.recall import (
     RecallBackendContext,
-    RecallRequest,
     RecallSearchError,
     RecallSearchRequest,
     VectorRecallBackend,
 )
-from core.recall.vector import (
-    _CHUNK_FETCH_MULTIPLIER,
-    _CHUNK_OVERLAP_MESSAGES,
-    _CHUNK_TARGET_CHARS,
-    _EMBED_BATCH_SIZE,
-    _MAX_DISTANCE,
-    _PER_MESSAGE_CHAR_CAP,
-    _SEMANTIC_FAILED_NOTICE,
-    _SEMANTIC_UNAVAILABLE_NOTICE,
-    Chunk,
-    build_session_chunks,
-)
-from core.recall.vector_store import VectorStore
+from core.recall.vector import _EMBED_BATCH_SIZE
 from core.sessions import ChatSessionManager, SessionAddress
 
 pytestmark = pytest.mark.asyncio
@@ -53,20 +40,19 @@ def request(
     match_mode: str = "all_terms",
     roles: tuple[str, ...] = ("user", "assistant", "tool", "error", "compaction_checkpoint"),
     limit: int = 5,
-) -> RecallRequest:
-    return RecallRequest(
+) -> RecallSearchRequest:
+    return RecallSearchRequest(
         agent_id="coder",
+        project_id=None,
+        offset=0,
         session_id=None,
-        around_message_id=None,
         query=query,
         since=None,
         until=None,
         roles=roles,
         match_mode=match_mode,  # type: ignore[arg-type]
         limit=limit,
-        context_messages=0,
-        bookend_messages=2,
-        sort="newest",
+        order="newest",
     )
 
 
@@ -323,7 +309,7 @@ async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
     page = await recall.search_page(search_request("fruit", limit=10))
 
     assert [hit.session_id for hit in page.hits] == ["fruit", "vegetable"]
-    assert page.hits[-1].score > _MAX_DISTANCE
+    assert page.hits[-1].score > 0.7
 
     none_dir = tmp_path / "none"
     none_dir.mkdir()
@@ -361,12 +347,12 @@ async def test_typed_filtered_search_keeps_other_scope_sessions_indexed(tmp_path
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
     await recall.search_page(search_request("fruit"))
-    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
     page = await recall.search_page(search_request("fruit", session_id="one"))
 
     assert {hit.session_id for hit in page.hits} == {"one"}
-    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
 
 async def test_typed_search_rebuilds_full_scope_on_native_dimension_change(
@@ -385,10 +371,10 @@ async def test_typed_search_rebuilds_full_scope_on_native_dimension_change(
     page = await recall.search_page(search_request("fruit"))
 
     assert {hit.session_id for hit in page.hits} == {"one", "two"}
-    header = recall._typed_store.read_header()
+    header = recall.store.read_header()
     assert header is not None
     assert header.dimension == 6
-    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+    assert set(recall.store.list_indexed_sessions("coder")) == {"one", "two"}
 
 
 async def test_typed_search_rebuilds_when_execution_fingerprint_changes(tmp_path: Path) -> None:
@@ -406,7 +392,7 @@ async def test_typed_search_rebuilds_when_execution_fingerprint_changes(tmp_path
 
     assert [hit.session_id for hit in page.hits] == ["one"]
     assert len(embeddings.embed_calls) >= calls_before_switch + 2
-    header = recall._typed_store.read_header()
+    header = recall.store.read_header()
     assert header is not None
     assert header.space_fingerprint == "stub-space-b"
 
@@ -418,33 +404,12 @@ async def test_typed_search_discards_corrupt_index_once_and_rebuilds(tmp_path: P
     )
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
     await recall.search_page(search_request("fruit"))
-    recall._typed_store.path.write_bytes(b"not a sqlite database")
+    recall.store.path.write_bytes(b"not a sqlite database")
 
     page = await recall.search_page(search_request("fruit"))
 
     assert [hit.session_id for hit in page.hits] == ["one"]
-    assert recall._typed_store.read_header() is not None
-
-
-async def test_typed_and_legacy_search_use_separate_index_policies(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="one").append(
-        ChatMessage.user("banana fruit", timestamp=timestamp(1))
-    )
-    embeddings = _StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
-
-    await recall.search(request(query="fruit"))
-    legacy_calls = len(embeddings.embed_calls)
-    typed_page = await recall.search_page(search_request("fruit"))
-
-    assert [hit.session_id for hit in typed_page.hits] == ["one"]
-    assert recall.store.path != recall._typed_store.path
-    legacy_header = recall.store.read_header()
-    typed_header = recall._typed_store.read_header()
-    assert legacy_header is not None and typed_header is not None
-    assert legacy_header.index_policy != typed_header.index_policy
-    assert len(embeddings.embed_calls) >= legacy_calls + 2
+    assert recall.store.read_header() is not None
 
 
 async def test_typed_search_embeds_documents_and_query_with_explicit_purposes(
@@ -496,7 +461,7 @@ async def test_typed_search_rebuilds_when_provider_response_model_changes(
     assert continuation.snapshot_id == first_page.snapshot_id
     assert error_info.value.code == "stale_cursor"
     assert [hit.session_id for hit in page.hits] == ["one"]
-    header = recall._typed_store.read_header()
+    header = recall.store.read_header()
     assert header is not None
     assert header.model_id == "stub-embed"
     assert header.response_model_id == "served/embed-b"
@@ -519,7 +484,7 @@ async def test_typed_search_rebuilds_when_response_model_drifts_during_backfill(
     page = await recall.search_page(search_request("fruit"))
 
     assert [hit.session_id for hit in page.hits] == ["one"]
-    header = recall._typed_store.read_header()
+    header = recall.store.read_header()
     assert header is not None
     assert header.response_model_id == "served/embed-b"
 
@@ -612,13 +577,13 @@ async def test_vector_backend_ranks_semantically_nearest_sessions(tmp_path: Path
     )
     embeddings = _StubEmbeddings()
 
-    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search_page(
         request(query="car", limit=2)
     )
 
-    assert [match["session_id"] for match in data["matches"]] == ["cars", "vehicles"]
+    assert [match.session_id for match in data.hits] == ["cars", "vehicles"]
     # ``distance`` is set by the vector backend and absent from the canonical fallback.
-    assert data["matches"][0]["distance"] == pytest.approx(0.0, abs=1e-5)
+    assert data.hits[0].score == pytest.approx(0.0, abs=1e-5)
 
 
 async def test_vector_backend_backfills_missing_sessions_lazily(tmp_path: Path) -> None:
@@ -632,11 +597,11 @@ async def test_vector_backend_backfills_missing_sessions_lazily(tmp_path: Path) 
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    first = await recall.search(request(query="carrot", limit=2))
+    first = await recall.search_page(request(query="carrot", limit=2))
 
     # First search backfills and embeds both sessions; we expect both to be embedded.
     assert len(embeddings.embed_calls) == 2  # one batch of sessions + the query
-    assert "carrots" in [match["session_id"] for match in first["matches"]]
+    assert "carrots" in [match.session_id for match in first.hits]
 
 
 async def test_vector_backend_reuses_indexed_vectors_on_second_search(tmp_path: Path) -> None:
@@ -650,8 +615,8 @@ async def test_vector_backend_reuses_indexed_vectors_on_second_search(tmp_path: 
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    await recall.search(request(query="fruit", limit=2))
-    await recall.search(request(query="carrot", limit=2))
+    await recall.search_page(request(query="fruit", limit=2))
+    await recall.search_page(request(query="carrot", limit=2))
 
     # Two searches: 1 session backfill + 1 query on the first call, 1 query only
     # on the second call (no backfill needed because nothing changed).
@@ -665,15 +630,17 @@ async def test_vector_backend_reindexes_when_canonical_changes(tmp_path: Path) -
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    first = await recall.search(request(query="fruit", limit=2))
-    assert "dynamic" not in [match["session_id"] for match in first["matches"]]
+    first = await recall.search_page(request(query="fruit", limit=2))
+    assert "fruit" not in first.hits[0].text
 
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(2)))
-    second = await recall.search(request(query="fruit", limit=2))
+    second = await recall.search_page(request(query="fruit", limit=2))
 
     # The session should have been reindexed — the new content embeds to the
     # fruit vector and the search should surface it for "fruit".
-    assert "dynamic" in [match["session_id"] for match in second["matches"]]
+    assert "fruit" in second.hits[0].text
+    assert second.snapshot_id != first.snapshot_id
+    assert len(embeddings.embed_calls) == 4
 
 
 async def test_vector_backend_drops_indexed_session_when_canonical_file_removed(
@@ -689,15 +656,15 @@ async def test_vector_backend_drops_indexed_session_when_canonical_file_removed(
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    await recall.search(request(query="carrot", limit=2))
+    await recall.search_page(request(query="carrot", limit=2))
 
     sessions.delete(SessionAddress(project_id=None, agent_id="coder", session_id="carrots"))
-    data = await recall.search(request(query="carrot", limit=2))
+    data = await recall.search_page(request(query="carrot", limit=2))
 
-    assert "carrots" not in [match["session_id"] for match in data["matches"]]
+    assert "carrots" not in [match.session_id for match in data.hits]
 
 
-async def test_vector_backend_falls_back_to_canonical_when_no_embedding_binding(
+async def test_vector_backend_reports_unavailable_when_no_embedding_binding(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -705,18 +672,11 @@ async def test_vector_backend_falls_back_to_canonical_when_no_embedding_binding(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
 
-    data = await backend(tmp_path, sessions, embeddings=None).search(request(query="carrot"))
-
-    assert [match["session_id"] for match in data["matches"]] == ["carrots"]
-    # canonical fallback does not produce a ``distance`` field.
-    assert all("distance" not in match for match in data["matches"])
-    # The degraded result tells the agent semantic search was unavailable, and
-    # the notice is prepended to the model-facing content.
-    assert data["notice"] == _SEMANTIC_UNAVAILABLE_NOTICE
-    assert data["content"].startswith(_SEMANTIC_UNAVAILABLE_NOTICE)
+    with pytest.raises(RecallSearchError, match="Semantic search"):
+        await backend(tmp_path, sessions, embeddings=None).search_page(request(query="carrot"))
 
 
-async def test_vector_backend_falls_back_to_canonical_when_binding_raises(
+async def test_vector_backend_reports_unavailable_when_binding_raises(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -724,41 +684,10 @@ async def test_vector_backend_falls_back_to_canonical_when_binding_raises(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
 
-    data = await backend(tmp_path, sessions, embeddings=_NullEmbeddings()).search(
-        request(query="carrot")
-    )
-
-    assert [match["session_id"] for match in data["matches"]] == ["carrots"]
-    # A binding-resolution failure is the "not configured" case → unavailable notice.
-    assert data["notice"] == _SEMANTIC_UNAVAILABLE_NOTICE
-
-
-async def test_vector_backend_search_without_query_returns_session_summaries(
-    tmp_path: Path,
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="carrots").append(
-        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
-    )
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
-        RecallRequest(
-            agent_id="coder",
-            session_id=None,
-            around_message_id=None,
-            query=None,
-            since=None,
-            until=None,
-            roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
-            match_mode="all_terms",
-            limit=5,
-            context_messages=0,
-            bookend_messages=2,
-            sort="newest",
+    with pytest.raises(RecallSearchError, match="Semantic search"):
+        await backend(tmp_path, sessions, embeddings=_NullEmbeddings()).search_page(
+            request(query="carrot")
         )
-    )
-
-    assert [session["session_id"] for session in data["sessions"]] == ["carrots"]
 
 
 async def test_vector_backend_respects_limit(tmp_path: Path) -> None:
@@ -773,64 +702,11 @@ async def test_vector_backend_respects_limit(tmp_path: Path) -> None:
         ChatMessage.user("Another car story", timestamp=timestamp(3))
     )
 
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="car", limit=2)
     )
-    assert len(data["matches"]) == 2
-    assert data["truncated"] is True
-
-
-async def test_vector_backend_browse_delegates_to_canonical(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="carrots").append(
-        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
-    )
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).browse(
-        RecallRequest(
-            agent_id="coder",
-            session_id=None,
-            around_message_id=None,
-            query=None,
-            since=None,
-            until=None,
-            roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
-            match_mode="all_terms",
-            limit=5,
-            context_messages=0,
-            bookend_messages=2,
-            sort="newest",
-        )
-    )
-
-    assert [session["session_id"] for session in data["sessions"]] == ["carrots"]
-
-
-async def test_vector_backend_scroll_delegates_to_canonical(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="carrots")
-    first = ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
-    session.append(first)
-    session.append(ChatMessage.assistant(model="m", content="Got it.", timestamp=timestamp(2)))
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).scroll(
-        RecallRequest(
-            agent_id="coder",
-            session_id="carrots",
-            around_message_id=first.id,
-            query=None,
-            since=None,
-            until=None,
-            roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
-            match_mode="all_terms",
-            limit=5,
-            context_messages=0,
-            bookend_messages=2,
-            sort="newest",
-        )
-    )
-    assert data["around_message_id"] == first.id
-    assert any(item["message_id"] == first.id for item in data["window"])
+    assert len(data.hits) == 2
+    assert data.has_more is True
 
 
 async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
@@ -844,7 +720,7 @@ async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
     embeddings_a.model_id = "model-a"
 
     recall = backend(tmp_path, sessions, embeddings=embeddings_a)
-    await recall.search(request(query="carrot", limit=2))
+    await recall.search_page(request(query="carrot", limit=2))
     header_a = recall.store.read_header()
     assert header_a is not None
     assert header_a.model_id == "model-a"
@@ -859,14 +735,14 @@ async def test_vector_backend_rebuilds_index_when_embedding_model_changes(
             embeddings=embeddings_b,
         )
     )
-    await new_recall.search(request(query="carrot", limit=2))
+    await new_recall.search_page(request(query="carrot", limit=2))
 
     header = new_recall.store.read_header()
     assert header is not None
     assert header.model_id == "model-b"
 
 
-async def test_vector_backend_falls_back_to_canonical_when_embed_call_fails(
+async def test_vector_backend_reports_unavailable_when_embed_call_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -885,16 +761,10 @@ async def test_vector_backend_falls_back_to_canonical_when_embed_call_fails(
             del texts, purpose
             raise EmbeddingError("provider unavailable")
 
-    data = await backend(tmp_path, sessions, embeddings=_FlakyEmbeddings()).search(
-        request(query="carrot")
-    )
-
-    # Falls back to canonical substring match on "carrot".
-    assert [match["session_id"] for match in data["matches"]] == ["carrots"]
-    # A transient embed failure (binding resolves, embed raises) → failed notice,
-    # distinct from the "not configured" case.
-    assert data["notice"] == _SEMANTIC_FAILED_NOTICE
-    assert data["content"].startswith(_SEMANTIC_FAILED_NOTICE)
+    with pytest.raises(RecallSearchError, match="Semantic search"):
+        await backend(tmp_path, sessions, embeddings=_FlakyEmbeddings()).search_page(
+            request(query="carrot")
+        )
 
 
 async def test_run_embed_recursively_splits_overflowing_batch_without_changing_text(
@@ -943,25 +813,6 @@ async def test_run_embed_never_truncates_a_single_overlong_text(tmp_path: Path) 
     assert embeddings.embed_calls == [[text]]
 
 
-async def test_vector_backend_search_includes_per_match_distance_in_payload(
-    tmp_path: Path,
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="cars").append(
-        ChatMessage.user("My car broke down", timestamp=timestamp(1))
-    )
-    sessions.create("coder", session_id="vehicles").append(
-        ChatMessage.user("I was driving my vehicle", timestamp=timestamp(2))
-    )
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
-        request(query="car")
-    )
-
-    distances = [match["distance"] for match in data["matches"]]
-    assert distances == sorted(distances)
-
-
 @pytest.mark.timeout(10)
 async def test_vector_backend_search_completes_when_called_from_running_event_loop(
     tmp_path: Path,
@@ -976,10 +827,10 @@ async def test_vector_backend_search_completes_when_called_from_running_event_lo
         ChatMessage.user("I was driving my vehicle", timestamp=timestamp(2))
     )
 
-    result = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    result = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="car", limit=2)
     )
-    session_ids = [match["session_id"] for match in result["matches"]]
+    session_ids = [match.session_id for match in result.hits]
     assert session_ids == ["cars", "vehicles"]
 
 
@@ -1010,7 +861,7 @@ async def test_vector_search_cancellation_reaches_embedding_call(tmp_path: Path)
         ChatMessage.user("semantic content", timestamp=timestamp(1))
     )
     task = asyncio.create_task(
-        backend(tmp_path, sessions, embeddings=_SlowEmbeddings()).search(
+        backend(tmp_path, sessions, embeddings=_SlowEmbeddings()).search_page(
             request(query="semantic content")
         )
     )
@@ -1023,200 +874,8 @@ async def test_vector_search_cancellation_reaches_embedding_call(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# Chunking policy — build_session_chunks
+# Chunking policy — build_session_passages
 # ---------------------------------------------------------------------------
-
-
-async def test_build_session_chunks_splits_long_session_into_multiple_chunks() -> None:
-    """A session whose messages overflow ``_CHUNK_TARGET_CHARS`` yields >1 chunk."""
-
-    messages = [
-        ChatMessage.user("word " * 200, timestamp=timestamp(1)),  # ~1000 chars
-        ChatMessage.user("word " * 200, timestamp=timestamp(2)),  # adds to chunk 1
-        ChatMessage.user("word " * 200, timestamp=timestamp(3)),  # forces a new chunk
-    ]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) > 1
-    # Every chunk's text fits in the budget (the chunker seals before
-    # the next message would push the running total over the target).
-    for chunk in chunks:
-        assert len(chunk.text) <= _CHUNK_TARGET_CHARS + (
-            _CHUNK_OVERLAP_MESSAGES * _CHUNK_TARGET_CHARS
-        )
-    # The first chunk opens at the session's first message; the last
-    # chunk's span ends at the session's last message.
-    assert chunks[0].start_message_id == messages[0].id
-    assert chunks[-1].end_message_id == messages[-1].id
-
-
-async def test_build_session_chunks_carries_overlap_messages() -> None:
-    """The last ``_CHUNK_OVERLAP_MESSAGES`` messages of chunk N appear in chunk N+1."""
-
-    messages = [
-        ChatMessage.user("alpha " * 200, timestamp=timestamp(1)),
-        ChatMessage.user("beta " * 200, timestamp=timestamp(2)),
-        ChatMessage.user("gamma " * 200, timestamp=timestamp(3)),
-        ChatMessage.user("delta " * 200, timestamp=timestamp(4)),
-    ]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) >= 2
-    # The second chunk's text must contain the prior chunk's last
-    # message's text content for boundary context.
-    assert "beta" in chunks[1].text or "gamma" in chunks[1].text
-
-
-async def test_build_session_chunks_handles_zero_overlap_without_carrying_full_tail(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``_CHUNK_OVERLAP_MESSAGES = 0`` does not accidentally carry the whole prior tail.
-
-    Regression: ``current_messages[-0:]`` returns the full list because
-    ``-0 == 0``, so an unguarded slice would copy every accumulated
-    message into the next chunk. The guard must skip the slice
-    entirely when the constant is 0.
-    """
-
-    messages = [
-        ChatMessage.user("alpha " * 200, timestamp=timestamp(1)),
-        ChatMessage.user("beta " * 200, timestamp=timestamp(2)),
-        ChatMessage.user("gamma " * 200, timestamp=timestamp(3)),
-        ChatMessage.user("delta " * 200, timestamp=timestamp(4)),
-    ]
-
-    monkeypatch.setattr("core.recall.vector._CHUNK_OVERLAP_MESSAGES", 0)
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) >= 2
-    # Without overlap, each chunk's span must start *after* the prior
-    # chunk's last message — never reusing the tail as a fresh opener.
-    for index in range(len(chunks) - 1):
-        previous = chunks[index]
-        current = chunks[index + 1]
-        previous_end_index = next(
-            i for i, m in enumerate(messages) if m.id == previous.end_message_id
-        )
-        current_start_index = next(
-            i for i, m in enumerate(messages) if m.id == current.start_message_id
-        )
-        assert current_start_index > previous_end_index
-
-
-async def test_build_session_chunks_handles_oversized_single_message() -> None:
-    """A single message longer than the chunk budget becomes its own chunk, hard-capped."""
-
-    # ~1800 chars — above the chunk budget (1500) so the per-message
-    # cap (2000) is not enough to fit it in a normal chunk; the chunker
-    # seals the prior buffer (empty here) and emits a standalone chunk
-    # for this message.
-    long_text = "alpha " * 360
-    messages = [ChatMessage.user(long_text, timestamp=timestamp(1))]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) == 1
-    assert chunks[0].start_message_id == messages[0].id
-    assert chunks[0].end_message_id == messages[0].id
-    # The chunk's text is the input text capped at the per-message
-    # ceiling (2000). ``truncate_to_input_limit`` with the default
-    # 8192-token window leaves any text under 22118 chars unchanged,
-    # so the chunker passes the capped value through.
-    assert chunks[0].text == long_text[:_PER_MESSAGE_CHAR_CAP]
-
-
-async def test_build_session_chunks_picks_first_non_note_anchor() -> None:
-    """A note-prefixed chunk anchors on the first non-note, non-skill-context message."""
-
-    messages = [
-        ChatMessage.note("system noise", timestamp=timestamp(1)),
-        ChatMessage.user("first real message", timestamp=timestamp(2)),
-        ChatMessage.user("second real message", timestamp=timestamp(3)),
-    ]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) == 1
-    assert chunks[0].anchor_message_id == messages[1].id
-
-
-async def test_build_session_chunks_falls_back_to_first_message_when_only_notes() -> None:
-    """A chunk composed entirely of notes still gets a non-empty anchor id."""
-
-    messages = [
-        ChatMessage.note("first note", timestamp=timestamp(1)),
-        ChatMessage.note("second note", timestamp=timestamp(2)),
-    ]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) == 1
-    assert chunks[0].anchor_message_id == messages[0].id
-
-
-async def test_build_session_chunks_skips_chunks_with_no_embeddable_text() -> None:
-    """A window of only run_summary records (no searchable text) is not indexed.
-
-    Regression: run_summary annotations carry no content, so the chunk text
-    joins to an empty string. An empty string embeds to a constant vector that
-    surfaced in every query as identical-distance, empty-snippet noise.
-    """
-
-    messages = [
-        ChatMessage.run_summary(run_id="r1", status="completed", timing={}, iteration_count=1),
-        ChatMessage.run_summary(run_id="r2", status="completed", timing={}, iteration_count=1),
-    ]
-
-    assert build_session_chunks(messages) == []
-
-
-async def test_build_session_chunks_anchors_on_context_message_not_run_summary() -> None:
-    """A chunk mixing a run_summary with a real message anchors on the real one."""
-
-    messages = [
-        ChatMessage.run_summary(run_id="r1", status="completed", timing={}, iteration_count=1),
-        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(2)),
-    ]
-
-    chunks = build_session_chunks(messages)
-
-    assert len(chunks) == 1
-    # The user message is the anchor — never the kernel-internal run_summary.
-    assert chunks[0].anchor_message_id == messages[1].id
-
-
-async def test_build_session_chunks_excludes_session_search_results_from_text() -> None:
-    """A persisted session_search result is not embedded — it is the tool's own output."""
-
-    artifact = ChatMessage.tool(
-        tool_call_id="c1",
-        name="session_search",
-        content="I love bananas and fruit",
-    )
-    user_message = ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
-
-    chunks = build_session_chunks([artifact, user_message])
-
-    assert len(chunks) == 1
-    # The session_search output text must not leak into the chunk's embedding,
-    # and the anchor is the real user message, not the tool artifact.
-    assert "fruit" not in chunks[0].text
-    assert chunks[0].text == "I bought some carrots"
-    assert chunks[0].anchor_message_id == user_message.id
-
-
-async def test_build_session_chunks_skips_chunk_of_only_session_search_results() -> None:
-    """A window of only session_search results collapses to empty text → not indexed."""
-
-    artifact = ChatMessage.tool(
-        tool_call_id="c1",
-        name="session_search",
-        content="Found 20 semantic match(es) for query: Bild",
-    )
-
-    assert build_session_chunks([artifact]) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +912,7 @@ async def test_vector_backend_indexing_splits_long_session_into_multiple_vec_row
         session.append(ChatMessage.user("lorem ipsum " * 200, timestamp=timestamp(day)))
 
     backend_ = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    await backend_.search(request(query="lorem", limit=2))
+    await backend_.search_page(request(query="lorem", limit=2))
 
     # 4 messages × ~2400 chars each — well over ``_CHUNK_TARGET_CHARS``
     # (1500) so the chunker must produce several chunks per session.
@@ -1284,80 +943,18 @@ async def test_vector_backend_mid_session_match_anchors_at_matching_chunk(
         )
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(5)))
 
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="fruit", limit=2)
     )
 
-    assert len(data["matches"]) == 1
-    match = data["matches"][0]
-    assert match["session_id"] == "mixed"
+    assert data.hits
+    match = data.hits[0]
+    assert match.session_id == "mixed"
     # The anchor must be the *last* message (the fruit one), not the
     # car opener at the start of the session.
-    assert match["message_id"] == session.load()[-1].id
+    assert match.end_message_id == session.load()[-1].id
     # The chunk snippet contains the matched region's keyword.
-    assert "fruit" in match["snippet"].lower()
-
-
-async def test_vector_backend_dedup_chunks_per_session_in_results(tmp_path: Path) -> None:
-    """A session with multiple matching chunks surfaces once, not once-per-chunk."""
-
-    sessions = ChatSessionManager(tmp_path)
-    # Use long enough messages to span multiple chunks so the dedup
-    # path is actually exercised — each chunk is its own vec0 row.
-    session = sessions.create("coder", session_id="fruit-heavy")
-    for day in range(1, 5):
-        session.append(
-            ChatMessage.user(
-                "I love bananas and fruit, especially the tropical ones " * 50,
-                timestamp=timestamp(day),
-            )
-        )
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
-        request(query="fruit", limit=5)
-    )
-
-    session_ids = [match["session_id"] for match in data["matches"]]
-    assert session_ids.count("fruit-heavy") == 1
-
-
-async def test_vector_backend_drops_matches_beyond_max_distance(tmp_path: Path) -> None:
-    """Weak matches (cosine distance > ``_MAX_DISTANCE``) are filtered out."""
-
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="cars").append(
-        ChatMessage.user("My car broke down", timestamp=timestamp(1))
-    )
-    # "Tofu" is not in any stub branch → default vector [0.5, 0.5, 0, 0].
-    # The query "car" → [1, 0, 0, 0]. Cosine distance = 1 - 0.707 = 0.293.
-    # Below cutoff — kept. Add an orthogonal match to verify the
-    # cutoff path: a session whose text uses no recognized keyword at
-    # all stays at the default vector and is similar to the query only
-    # at the orthogonal dot, so its distance is well above 0.7.
-    sessions.create("coder", session_id="unrelated").append(
-        ChatMessage.user(
-            "completely off topic conversation about the weather", timestamp=timestamp(2)
-        )
-    )
-    # "Vegetable" branch → [0, 1, 0, 0], orthogonal to "car" — distance = 1.0.
-    sessions.create("coder", session_id="vegetable").append(
-        ChatMessage.user("I bought a vegetable at the market", timestamp=timestamp(3))
-    )
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
-        request(query="car", limit=10)
-    )
-
-    session_ids = [match["session_id"] for match in data["matches"]]
-    assert "cars" in session_ids
-    # The orthogonal vector must be dropped by the distance cutoff.
-    assert "vegetable" not in session_ids
-    # The "default" vector is also dropped — its distance to "car" is
-    # the same as the fruit vector's (0.5, 0.5, 0, 0) which sits at
-    # 0.293 from "car". We expect that one to pass the cutoff; this
-    # test only asserts the orthogonal cases are filtered.
-    for match in data["matches"]:
-        assert match["distance"] <= _MAX_DISTANCE
+    assert "fruit" in match.text.lower()
 
 
 async def test_vector_backend_chunk_count_resets_when_session_is_appended(
@@ -1379,14 +976,14 @@ async def test_vector_backend_chunk_count_resets_when_session_is_appended(
         session.append(ChatMessage.user("lorem ipsum " * 200, timestamp=timestamp(day)))
 
     backend_ = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    await backend_.search(request(query="lorem", limit=2))
+    await backend_.search_page(request(query="lorem", limit=2))
     first_chunk_count = _count_vec_rows(backend_.store.path, "coder", "growing")
     assert first_chunk_count > 0
 
     # Append more content; the reindex must reflect the new total.
     for day in range(4, 8):
         session.append(ChatMessage.user("brand new content " * 200, timestamp=timestamp(day)))
-    await backend_.search(request(query="brand new", limit=2))
+    await backend_.search_page(request(query="brand new", limit=2))
     second_chunk_count = _count_vec_rows(backend_.store.path, "coder", "growing")
     assert second_chunk_count > 0
     # The new total message count is higher, so the reindexed chunk
@@ -1431,7 +1028,7 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
 
     Regression: ``upsert_many_chunks`` only wipes sessions that appear in
     its ``records`` parameter. If a stale session's
-    ``build_session_chunks`` call returns an empty list, the session is
+    ``build_session_passages`` call returns an empty list, the session is
     not in ``records`` and its old rows survive a reindex, leaving
     stale hits in subsequent searches. The fix calls
     ``store.delete_session`` for any session with zero chunks.
@@ -1443,20 +1040,20 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
-    first = await recall.search(request(query="fruit", limit=2))
-    assert "becomes-empty" in [match["session_id"] for match in first["matches"]]
+    first = await recall.search_page(request(query="fruit", limit=2))
+    assert "becomes-empty" in [match.session_id for match in first.hits]
     assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 1
 
-    # Simulate the canonical history changing such that ``build_session_chunks`` now
+    # Simulate the canonical history changing such that ``build_session_passages`` now
     # yields nothing (e.g. the session turned into a stream of empty
     # system-only messages). Append a real message so the session's
     # mtime/size change and the staleness path is exercised.
     session.append(ChatMessage.user("still here, but inert", timestamp=timestamp(2)))
-    monkeypatch.setattr("core.recall.vector.build_session_chunks", lambda _messages: [])
+    monkeypatch.setattr("core.recall.vector.build_session_passages", lambda _messages: [])
 
-    second = await recall.search(request(query="fruit", limit=2))
+    second = await recall.search_page(request(query="fruit", limit=2))
 
-    assert "becomes-empty" not in [match["session_id"] for match in second["matches"]]
+    assert "becomes-empty" not in [match.session_id for match in second.hits]
     assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 0
 
 
@@ -1468,7 +1065,7 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
 
     Regression for ``no such table: chunks``: on a fresh index the eager
     backfill calls ``store.delete_session`` for any candidate session
-    whose ``build_session_chunks`` returns nothing — and that happens
+    whose ``build_session_passages`` returns nothing — and that happens
     *before* any upsert has created the chunk table. The delete must be
     a no-op on a schema-less store rather than raising a bare
     ``sqlite3.OperationalError`` that escapes the canonical fallback.
@@ -1478,17 +1075,16 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     sessions.create("coder", session_id="empty-ish").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
-    monkeypatch.setattr("core.recall.vector.build_session_chunks", lambda _messages: [])
+    monkeypatch.setattr("core.recall.vector.build_session_passages", lambda _messages: [])
 
     # Must not raise. With nothing indexed the KNN has no candidates, so the
     # semantic search returns zero matches gracefully (an empty index is a
     # valid state, not an error — the bug was the bare ``no such table``).
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="carrot")
     )
 
-    assert data["matches"] == []
-    assert data["searched_sessions"] == 1
+    assert data.hits == ()
 
 
 async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Path) -> None:
@@ -1512,38 +1108,13 @@ async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Pa
     )
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
 
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="fruit", limit=5)
     )
 
-    assert [match["session_id"] for match in data["matches"]] == ["mixed"]
-    assert all(match["role"] != "run_summary" for match in data["matches"])
-    assert data["matches"][0]["role"] == "user"
-
-
-async def test_vector_backend_reanchors_to_requested_role_within_chunk(tmp_path: Path) -> None:
-    """When the recorded anchor's role is not requested, hydration re-anchors.
-
-    A chunk spans a user message (the recorded anchor) and an assistant
-    message. A request for assistant-only must surface the assistant message
-    from inside the chunk's span, not drop the match or return the user role.
-    """
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="s1")
-    session.append(ChatMessage.user("fruit question", timestamp=timestamp(1)))
-    assistant_message = ChatMessage.assistant(
-        model="m", content="fruit answer", timestamp=timestamp(2)
-    )
-    session.append(assistant_message)
-
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
-        request(query="fruit", roles=("assistant",), limit=5)
-    )
-
-    assert len(data["matches"]) == 1
-    assert data["matches"][0]["role"] == "assistant"
-    assert data["matches"][0]["message_id"] == assistant_message.id
+    assert [match.session_id for match in data.hits] == ["mixed"]
+    assert all(match.role != "run_summary" for match in data.hits)
+    assert data.hits[0].role == "user"
 
 
 async def test_vector_backend_default_search_snippet_is_conversation_not_tool_headline(
@@ -1572,18 +1143,18 @@ async def test_vector_backend_default_search_snippet_is_conversation_not_tool_he
     session.append(ChatMessage.user("I love fruit too", timestamp=timestamp(2)))
 
     conversation_only = ("user", "assistant", "error", "compaction_checkpoint")
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="fruit", roles=conversation_only, limit=5)
     )
 
-    assert len(data["matches"]) == 1
-    match = data["matches"][0]
+    assert data.hits
+    match = data.hits[0]
     # Re-anchored onto the conversation message, not the tool result.
-    assert match["role"] == "user"
-    assert match["message_id"] == session.load()[-1].id
+    assert match.role == "user"
+    assert match.end_message_id == session.load()[-1].id
     # The snippet is the conversation message, with no tool noise leaking in.
-    assert "fruit" in match["snippet"].lower()
-    assert "ansi" not in match["snippet"].lower()
+    assert "fruit" in match.text.lower()
+    assert "ansi" not in match.text.lower()
 
 
 def _project_request(
@@ -1591,20 +1162,18 @@ def _project_request(
     query: str,
     project_id: str | None,
     limit: int = 5,
-) -> RecallRequest:
-    return RecallRequest(
+) -> RecallSearchRequest:
+    return RecallSearchRequest(
         agent_id="coder",
+        offset=0,
         session_id=None,
-        around_message_id=None,
         query=query,
         since=None,
         until=None,
         roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
         match_mode="all_terms",
         limit=limit,
-        context_messages=0,
-        bookend_messages=2,
-        sort="newest",
+        order="newest",
         project_id=project_id,
     )
 
@@ -1621,11 +1190,11 @@ async def test_vector_backend_project_recall_finds_only_project_sessions(tmp_pat
     )
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
-    project = await recall.search(_project_request(query="fruit", project_id="alpha"))
-    identity = await recall.search(_project_request(query="fruit", project_id=None))
+    project = await recall.search_page(_project_request(query="fruit", project_id="alpha"))
+    identity = await recall.search_page(_project_request(query="fruit", project_id=None))
 
-    assert [m["session_id"] for m in project["matches"]] == ["proj-fruit"]
-    assert [m["session_id"] for m in identity["matches"]] == ["global-fruit"]
+    assert [m.session_id for m in project.hits] == ["proj-fruit"]
+    assert [m.session_id for m in identity.hits] == ["global-fruit"]
 
 
 async def test_vector_backend_same_uuid_global_and_project_do_not_collide(tmp_path: Path) -> None:
@@ -1646,12 +1215,12 @@ async def test_vector_backend_same_uuid_global_and_project_do_not_collide(tmp_pa
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
     # Global scope: "carrot" hits; "fruit" (only in the project session) does not.
-    global_carrot = await recall.search(_project_request(query="carrot", project_id=None))
-    assert [m["session_id"] for m in global_carrot["matches"]] == [shared_id]
+    global_carrot = await recall.search_page(_project_request(query="carrot", project_id=None))
+    assert [m.session_id for m in global_carrot.hits] == [shared_id]
 
     # Project scope: "fruit" hits the project session of the same UUID.
-    project_fruit = await recall.search(_project_request(query="fruit", project_id="alpha"))
-    assert [m["session_id"] for m in project_fruit["matches"]] == [shared_id]
+    project_fruit = await recall.search_page(_project_request(query="fruit", project_id="alpha"))
+    assert [m.session_id for m in project_fruit.hits] == [shared_id]
     # The project chunk did not overwrite the global one — both vec0 rows exist.
     assert _count_vec_rows(recall.store.path, "coder", shared_id) == 2
 
@@ -1672,11 +1241,13 @@ async def test_vector_backend_identity_recall_unchanged_by_project_field(tmp_pat
     )
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
-    explicit_none = await recall.search(_project_request(query="car", project_id=None, limit=2))
-    default = await recall.search(request(query="car", limit=2))
+    explicit_none = await recall.search_page(
+        _project_request(query="car", project_id=None, limit=2)
+    )
+    default = await recall.search_page(request(query="car", limit=2))
 
-    assert [m["session_id"] for m in explicit_none["matches"]] == ["cars", "vehicles"]
-    assert [m["session_id"] for m in default["matches"]] == ["cars", "vehicles"]
+    assert [m.session_id for m in explicit_none.hits] == ["cars", "vehicles"]
+    assert [m.session_id for m in default.hits] == ["cars", "vehicles"]
 
 
 async def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Path) -> None:
@@ -1701,13 +1272,13 @@ async def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Pat
     session.append(ChatMessage.user("I bought some carrots", timestamp=timestamp(2)))
 
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    fruit = await recall.search(request(query="fruit", limit=5))
-    carrot = await recall.search(request(query="carrot", limit=5))
+    fruit = await recall.search_page(request(query="fruit", limit=5))
+    carrot = await recall.search_page(request(query="carrot", limit=5))
 
-    assert "selfref" not in [match["session_id"] for match in fruit["matches"]]
-    carrot_matches = [match for match in carrot["matches"] if match["session_id"] == "selfref"]
+    assert all("fruit" not in hit.text for hit in fruit.hits)
+    carrot_matches = [match for match in carrot.hits if match.session_id == "selfref"]
     assert len(carrot_matches) == 1
-    assert carrot_matches[0]["role"] == "user"
+    assert carrot_matches[0].role == "user"
 
 
 # ---------------------------------------------------------------------------
@@ -1785,42 +1356,3 @@ async def test_run_embed_single_text_does_not_split(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-async def test_chunk_dataclass_is_frozen() -> None:
-    """``Chunk`` is a frozen dataclass — once built, its fields are read-only."""
-
-    chunk = Chunk(
-        anchor_message_id="m1",
-        start_message_id="m1",
-        end_message_id="m2",
-        text="hello world",
-        snippet="hello world",
-    )
-    with pytest.raises((AttributeError, TypeError)):
-        chunk.text = "mutated"  # type: ignore[misc]
-
-
-async def test_chunk_fetch_multiplier_is_used_in_knn_query(tmp_path: Path) -> None:
-    """The KNN query over-fetches by ``_CHUNK_FETCH_MULTIPLIER`` for chunk→session dedup."""
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="s1")
-    for day in range(1, 4):
-        session.append(ChatMessage.user("hello there " * 200, timestamp=timestamp(day)))
-
-    class _SpyStore(VectorStore):
-        def __init__(self, inner: VectorStore) -> None:
-            super().__init__(inner.data_dir)
-            self._inner = inner
-            self.knn_calls: list[int] = []
-
-        def knn_search(self, **kwargs: Any) -> Any:
-            self.knn_calls.append(int(kwargs["limit"]))
-            return self._inner.knn_search(**kwargs)
-
-    backend_ = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
-    backend_.store = _SpyStore(backend_.store)
-    await backend_.search(request(query="hello", limit=2))
-
-    assert backend_.store.knn_calls == [2 * _CHUNK_FETCH_MULTIPLIER + 4]
