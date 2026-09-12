@@ -284,7 +284,6 @@ async def test_openai_image_generate_rejects_empty_data_list() -> None:
     must surface as a ``ProviderError`` (retryable, since the same request
     could succeed against a healthy gateway)."""
 
-
     respx.post("https://api.openai.com/v1/images/generations").mock(
         return_value=httpx.Response(200, json={"created": 1, "data": []})
     )
@@ -320,7 +319,6 @@ async def test_openai_image_generate_url_response_is_a_provider_error() -> None:
     image. The Settings schema defaults ``response_format`` to ``b64_json``;
     a user who explicitly chose ``url`` sees a clear actionable error."""
 
-
     respx.post("https://api.openai.com/v1/images/generations").mock(
         return_value=httpx.Response(
             200,
@@ -338,7 +336,6 @@ async def test_provider_image_client_rejects_unknown_provider() -> None:
     """A provider using an unsupported task adapter surfaces an explicit
     ``ProviderError`` so the caller (ImageService) can map it to an
     ``ImageExecutionError``."""
-
 
     client = _openai_image_client("gpt-image-1")
     # Swap the Provider to an adapter whose image wire is not supported.

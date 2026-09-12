@@ -1,7 +1,5 @@
 """Tests for models records."""
 
-
-
 from dataclasses import FrozenInstanceError
 
 import pytest

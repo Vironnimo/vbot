@@ -1,9 +1,5 @@
 """Shared fixtures and fakes for agents behavior tests."""
 
-
-
-
-
 from pathlib import Path
 
 import pytest

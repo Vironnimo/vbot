@@ -1,6 +1,5 @@
 """Tests for runtime local providers."""
 
-
 from unittest.mock import Mock
 
 import pytest

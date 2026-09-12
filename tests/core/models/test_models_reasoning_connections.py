@@ -1,8 +1,5 @@
 """Tests for models reasoning connections."""
 
-
-
-
 from pathlib import Path
 
 import pytest
