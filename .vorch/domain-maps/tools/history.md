@@ -4,7 +4,7 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 
 ## Overview
 
-`core/tools/history.py` owns the built-in `history` Tool. It is bound to the current `ToolContext` Session, has no Agent/Project/Session addressing arguments, and becomes model-visible only when that Session already contains at least one persisted `compaction_checkpoint`. Its canonical Session read, snapshot construction, search, cursor validation, and page rendering run through the cancellation-safe Tool worker boundary. It reads checkpoint metadata and bounded canonical record batches through `ChatSessionManager`; it does not load the complete active Session, use Recall indexes, or alter provider Context.
+`core/tools/history.py` owns the built-in `history` Tool. It is bound to the current `ToolContext` Session, has no Agent/Project/Session addressing arguments, and becomes model-visible only when that Session already contains at least one persisted `compaction_checkpoint`. Its canonical Session read, snapshot construction, search, cursor validation, and page rendering run through the cancellation-safe Tool worker boundary. `_history_protocol.py` owns request validation and snapshot-bound cursor encoding/validation; the Tool file retains bounded reads, canonical filtering, search, and page rendering. It reads checkpoint metadata and bounded canonical record batches through `ChatSessionManager`; it does not load the complete active Session, use Recall indexes, or alter provider Context.
 
 ## Interface
 
