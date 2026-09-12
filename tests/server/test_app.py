@@ -21,17 +21,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
-from server.app import (
-    JSON_REQUEST_BODY_MAX_BYTES,
-    WEBUI_DOCUMENT_CACHE_HEADERS,
-    ServerEventBus,
-    _active_runs_snapshot,
-    _bus_epoch,
-    _bus_last_sequence,
-    _connection_replay_status,
-    _is_reserved_server_path,
-    _parse_query_string,
-    _queues_snapshot,
+from server._app_lifecycle import (
     _register_bash_process_change_bridge,
     _register_cron_change_bridge,
     _register_run_event_bridge,
@@ -39,10 +29,24 @@ from server.app import (
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
     _start_statistics_warmup,
+)
+from server._streams import (
+    _active_runs_snapshot,
+    _bus_epoch,
+    _bus_last_sequence,
+    _connection_replay_status,
+    _parse_query_string,
+    _queues_snapshot,
     _stream_websocket_events,
+)
+from server.app import (
+    JSON_REQUEST_BODY_MAX_BYTES,
+    WEBUI_DOCUMENT_CACHE_HEADERS,
+    _is_reserved_server_path,
     create_app,
 )
 from server.clients import ClientRegistry
+from server.events import ServerEventBus
 from server.rpc.event_bridge import publish_bash_process_status_changed
 
 

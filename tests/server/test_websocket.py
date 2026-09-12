@@ -20,7 +20,8 @@ from core.subagents import (
     SUBAGENT_STATUS_CHANGED_EVENT,
 )
 from core.tools.terminal_manager import TerminalNotFoundError
-from server.app import _parse_after_sequence, create_app
+from server._streams import _parse_after_sequence
+from server.app import create_app
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from server.rpc.event_bridge import (
     RUN_DELTA_EVENT_TYPES,

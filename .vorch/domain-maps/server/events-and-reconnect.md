@@ -54,10 +54,10 @@ Emission belongs to the server mutation edge, never `core/`. Representative owne
 - Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements -> scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
 - RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` -> scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
 - Channel mutations -> `channels`; `/ws` presence lifecycle -> `clients`; terminal Run bridge and Debug mutations -> `debug_traces`.
-- `CronService.add_changed_callback` is bridged in `server/app.py` -> `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
-- `TerminalManager.add_changed_callback` is bridged in `server/app.py` -> scoped `terminals`, covering active-catalog and state changes from Agent Tool calls, process lifecycle, hooks, and operator mutations without publishing high-volume PTY output to the shared bus.
+- `CronService.add_changed_callback` is bridged in `server/_app_lifecycle.py` -> `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
+- `TerminalManager.add_changed_callback` is bridged in `server/_app_lifecycle.py` -> scoped `terminals`, covering active-catalog and state changes from Agent Tool calls, process lifecycle, hooks, and operator mutations without publishing high-volume PTY output to the shared bus.
 
-The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/rpc/event_bridge.py`, and `server/app.py`. A new consumer normally requires one allowed kind, one mutation-edge emit, and one client reload path rather than a new event family.
+The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/rpc/event_bridge.py`, and `server/_app_lifecycle.py`. A new consumer normally requires one allowed kind, one mutation-edge emit, and one client reload path rather than a new event family.
 
 ## SSE and dedicated WebSockets
 
@@ -70,7 +70,7 @@ The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/
 ## Source and tests
 
 - Bus and allowlists: `server/events.py`; `tests/server/test_events.py`.
-- Shared WebSocket/SSE and handshake: `server/app.py`; `tests/server/test_websocket.py` and `test_sse.py`.
+- Shared WebSocket/SSE routes and handshake: `server/app.py`; delivery/replay/presence helpers: `server/_streams.py`; `tests/server/test_websocket.py` and `test_sse.py`.
 - Terminal operator RPC and dedicated stream: `server/rpc/terminal_methods.py`, `server/app.py`; `tests/server/rpc/test_terminal_methods.py` and `tests/server/test_websocket.py`.
-- Run/resource bridge: `server/rpc/event_bridge.py`; `tests/server/rpc/test_event_bridge.py` and `test_rpc_payload_events.py`.
+- Run/resource bridge: `server/rpc/event_bridge.py`; core callback registration/cleanup: `server/_app_lifecycle.py`; `tests/server/rpc/test_event_bridge.py` and `test_rpc_payload_events.py`.
 - Presence: `server/clients.py`; `tests/server/test_clients.py` and `tests/server/rpc/test_client_methods.py`.
