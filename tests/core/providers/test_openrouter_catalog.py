@@ -1,0 +1,300 @@
+"""Openrouter: catalog behavior."""
+
+from __future__ import annotations
+
+import pytest
+
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.query import ModelQuery
+from core.providers.openrouter import (
+    SUPPLEMENTARY_OUTPUT_MODALITIES,
+    OpenRouterAdapter,
+)
+
+
+def raw_openrouter_model(
+    *,
+    input_modalities: list[str] | None = None,
+    output_modalities: list[str] | None = None,
+    supported_parameters: list[str] | None = None,
+    max_completion_tokens: int | None = 64000,
+    supported_voices: list[str] | None = None,
+) -> dict:
+    raw: dict = {
+        "id": "anthropic/claude-sonnet-4",
+        "name": "Anthropic: Claude Sonnet 4",
+        "architecture": {
+            "input_modalities": input_modalities or ["text", "image"],
+            "output_modalities": output_modalities or ["text"],
+            "modality": "text+image->text",
+        },
+        "supported_parameters": (
+            supported_parameters
+            if supported_parameters is not None
+            else ["tools", "response_format", "reasoning"]
+        ),
+        "context_length": 128000,
+        "top_provider": {"max_completion_tokens": max_completion_tokens},
+    }
+    if supported_voices is not None:
+        raw["supported_voices"] = supported_voices
+    return raw
+
+
+def test_normalize_catalog_entry_maps_all_openrouter_fields() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(raw_openrouter_model(), {"max_tokens": 8192})
+
+    assert model == Model(
+        model_id="anthropic/claude-sonnet-4",
+        name="Anthropic: Claude Sonnet 4",
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+            input_modalities=("text", "image"),
+            output_modalities=("text",),
+            supported_parameters=("reasoning", "response_format", "tools"),
+            task_types=(
+                "chat",
+                "text_output",
+                "image_input",
+                "image_understanding",
+            ),
+        ),
+        context_window=128000,
+        max_output_tokens=64000,
+        metadata={"openrouter": {"modality": "text+image->text"}},
+    )
+
+
+def test_normalize_catalog_entry_preserves_non_text_outputs() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(
+        raw_openrouter_model(
+            input_modalities=["text", "image", "file"],
+            output_modalities=["text", "image"],
+        ),
+        {},
+    )
+
+    assert model.capabilities.input_modalities == ("text", "image", "file")
+    assert model.capabilities.output_modalities == ("text", "image")
+    assert "image_generation" in model.capabilities.task_types
+    assert "file_input" in model.capabilities.task_types
+
+
+def test_normalize_catalog_entry_tags_music_without_tagging_general_audio() -> None:
+    lyria = raw_openrouter_model(
+        input_modalities=["text", "image"],
+        output_modalities=["text", "audio"],
+    )
+    lyria["id"] = "google/lyria-3-pro-preview"
+    lyria["name"] = "Google: Lyria 3 Pro Preview"
+    lyria["architecture"]["modality"] = "text+image->text+audio"
+    gpt_audio = raw_openrouter_model(
+        input_modalities=["text", "audio"],
+        output_modalities=["text", "audio"],
+    )
+    gpt_audio["id"] = "openai/gpt-audio"
+    gpt_audio["name"] = "OpenAI: GPT Audio"
+    gpt_audio["architecture"]["modality"] = "text+audio->text+audio"
+
+    music_model = OpenRouterAdapter.normalize_catalog_entry(lyria, {})
+    general_audio_model = OpenRouterAdapter.normalize_catalog_entry(gpt_audio, {})
+
+    assert "music_generation" in music_model.capabilities.task_types
+    assert "audio_generation" in music_model.capabilities.task_types
+    assert "music_generation" not in general_audio_model.capabilities.task_types
+    assert "audio_generation" in general_audio_model.capabilities.task_types
+
+
+def test_normalize_catalog_entry_preserves_unknown_null_max_tokens() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(
+        raw_openrouter_model(max_completion_tokens=None),
+        {"max_tokens": 8192},
+    )
+
+    assert model.max_output_tokens is None
+
+
+@pytest.mark.parametrize(
+    ("supported_parameters", "tools", "json_mode", "reasoning"),
+    [
+        (["tools"], True, False, False),
+        (["response_format"], False, True, False),
+        (["structured_outputs"], False, True, False),
+        (["reasoning"], False, False, True),
+        (["include_reasoning"], False, False, True),
+        ([], False, False, False),
+    ],
+)
+def test_supported_parameters_derive_capabilities(
+    supported_parameters: list[str],
+    tools: bool,
+    json_mode: bool,
+    reasoning: bool,
+) -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(
+        raw_openrouter_model(supported_parameters=supported_parameters),
+        {},
+    )
+
+    assert model.capabilities.tools is tools
+    assert model.capabilities.json_mode is json_mode
+    assert model.capabilities.reasoning.supported is reasoning
+
+
+@pytest.mark.parametrize(
+    ("input_modalities", "vision"), [(["text", "image"], True), (["text"], False)]
+)
+def test_input_modalities_derive_vision(input_modalities: list[str], vision: bool) -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(
+        raw_openrouter_model(input_modalities=input_modalities),
+        {},
+    )
+
+    assert model.capabilities.vision is vision
+
+
+def test_normalize_catalog_entry_captures_supported_voices() -> None:
+    raw = {
+        "id": "hexgrad/kokoro-82m",
+        "name": "hexgrad: Kokoro 82M",
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["speech"],
+            "modality": "text->speech",
+        },
+        "supported_parameters": ["response_format", "seed"],
+        "supported_voices": ["af_alloy", "af_aoede", "af_sky"],
+        "context_length": 4096,
+        "top_provider": {"max_completion_tokens": None},
+    }
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.supported_voices == ("af_alloy", "af_aoede", "af_sky")
+    assert "text_to_speech" in model.capabilities.task_types
+
+
+def test_normalize_catalog_entry_defaults_supported_voices_when_absent() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(raw_openrouter_model(), {})
+
+    assert model.capabilities.supported_voices == ()
+
+
+def test_normalize_catalog_entry_ignores_malformed_supported_voices() -> None:
+    """A non-list/mixed-type ``supported_voices`` value is treated as absent."""
+
+    raw = raw_openrouter_model()
+    raw["supported_voices"] = "not-a-list"
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.supported_voices == ()
+
+
+# Embedding model discovery (text_embedding)
+def test_supplementary_output_modalities_includes_embeddings() -> None:
+    """The ``embeddings`` modality is part of the supplementary fetch list so
+    OpenRouter's dedicated text-embedding models are discoverable.
+    """
+
+    assert "embeddings" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "transcription" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "speech" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "image" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "audio" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "video" in SUPPLEMENTARY_OUTPUT_MODALITIES
+
+
+def test_supplementary_discovery_params_includes_embeddings_query() -> None:
+    """``supplementary_discovery_params()`` emits the ``embeddings`` query param."""
+
+    params = OpenRouterAdapter.supplementary_discovery_params()
+
+    assert {"output_modalities": "embeddings"} in params
+    # All non-text modalities are present as separate fetches.
+    for modality in (
+        "transcription",
+        "speech",
+        "image",
+        "audio",
+        "video",
+        "embeddings",
+    ):
+        assert {"output_modalities": modality} in params
+
+
+def test_normalize_catalog_entry_tags_embedding_models_with_text_embedding_task() -> None:
+    """An entry with ``output_modalities=embeddings`` is tagged ``text_embedding``
+    and preserves context_length and supported_parameters.
+    """
+
+    raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["embeddings"],
+        supported_parameters=["response_format"],
+    )
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.output_modalities == ("embeddings",)
+    assert model.capabilities.task_types == ("text_embedding",)
+    assert model.context_window == 128000
+    assert model.capabilities.supported_parameters == ("response_format",)
+    # Embedding models output vectors, not text/chat.
+    assert "chat" not in model.capabilities.task_types
+    assert "text_output" not in model.capabilities.task_types
+
+
+def test_normalize_catalog_entry_zero_context_length_becomes_unknown() -> None:
+    """OpenRouter reports ``context_length: 0`` for non-chat models (STT,
+    image/video generation). A 0 is no usable window, so it normalizes to None
+    (honest unknown) rather than a fake fact (Phase 6)."""
+
+    raw = raw_openrouter_model()
+    raw["context_length"] = 0
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.context_window is None
+
+
+def test_registry_query_returns_embedding_models_for_text_embedding_task() -> None:
+    """A registry built from normalized embedding entries returns those entries
+    when queried with ``tasks=("text_embedding",)`` and excludes them from
+    chat-only queries.
+    """
+
+    embedding_raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["embeddings"],
+    )
+    # The helper defaults ``id``/``name``; override to the embedding example ids.
+    embedding_raw["id"] = "google/gemini-embedding-2"
+    embedding_raw["name"] = "Google: Gemini Embedding 2"
+
+    chat_raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["text"],
+    )
+
+    embedding_model = OpenRouterAdapter.normalize_catalog_entry(embedding_raw, {})
+    chat_model = OpenRouterAdapter.normalize_catalog_entry(chat_raw, {})
+
+    registry = ModelRegistry(
+        {
+            ("openrouter", embedding_model.model_id): embedding_model,
+            ("openrouter", chat_model.model_id): chat_model,
+        }
+    )
+
+    embedding_matches = registry.query(ModelQuery(tasks=("text_embedding",)))
+    assert ("openrouter", embedding_model) in embedding_matches
+    # Chat-only model must not match the text_embedding filter.
+    assert ("openrouter", chat_model) not in embedding_matches
+
+    chat_matches = registry.query(ModelQuery(tasks=("chat",)))
+    assert ("openrouter", chat_model) in chat_matches
+    assert ("openrouter", embedding_model) not in chat_matches
