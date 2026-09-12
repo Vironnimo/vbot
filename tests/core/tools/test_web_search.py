@@ -12,7 +12,8 @@ import httpx
 import pytest
 import respx
 
-import core.tools.web_search as web_search_module
+import core.tools._web_search_providers as web_search_providers
+import core.tools._web_search_transport as web_search_transport
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -335,7 +336,7 @@ async def test_web_search_rejects_declared_oversize_before_reading_body(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", 5)
+    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", 5)
     respx.get(_BRAVE_ENDPOINT).mock(
         return_value=httpx.Response(
             200,
@@ -363,7 +364,7 @@ async def test_web_search_rejects_searxng_body_larger_than_declared(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", 5)
+    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", 5)
     respx.get(_SEARXNG_ENDPOINT).mock(
         return_value=httpx.Response(
             200,
@@ -395,7 +396,7 @@ async def test_web_search_accepts_response_at_exact_limit(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     body = b'{"web":{"results":[]}}'
-    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", len(body))
+    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", len(body))
     respx.get(_BRAVE_ENDPOINT).mock(return_value=httpx.Response(200, content=body))
 
     result = await web_search_handler(
@@ -610,7 +611,7 @@ async def test_web_search_handler_brave_network_error(
         del retry_after
         sleep_attempts.append(attempt)
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     def _raise_connect_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
@@ -645,7 +646,7 @@ async def test_web_search_handler_retries_transient_http_status(
         del retry_after
         sleep_attempts.append(attempt)
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     route = respx.get(_BRAVE_ENDPOINT).mock(
         side_effect=[
@@ -677,7 +678,7 @@ async def test_web_search_brave_exhausted_status_signals_retryable(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     route = respx.get(_BRAVE_ENDPOINT).mock(
         return_value=httpx.Response(503, json={"error": {"message": "busy"}})
@@ -706,7 +707,7 @@ async def test_web_search_brave_network_error_signals_retryable(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     def _raise_connect_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
@@ -1233,7 +1234,7 @@ async def test_web_search_handler_honors_retry_after_hint(
         del attempt
         observed_hints.append(retry_after)
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     respx.get(_BRAVE_ENDPOINT).mock(
         side_effect=[
@@ -1478,7 +1479,7 @@ async def test_web_search_handler_tavily_retries_transient_post(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     route = respx.post(_TAVILY_ENDPOINT).mock(
         side_effect=[
@@ -1527,7 +1528,7 @@ async def test_web_search_handler_tavily_rejects_oversized_post_response(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", 5)
+    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", 5)
     respx.post(_TAVILY_ENDPOINT).mock(
         return_value=httpx.Response(
             200,
@@ -2139,7 +2140,7 @@ async def test_web_search_handler_firecrawl_retries_gateway_timeout(
     async def _fake_sleep(attempt: int, retry_after: float | None = None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr("core.tools.web_search.sleep_for_retry", _fake_sleep)
+    monkeypatch.setattr("core.tools._web_search_transport.sleep_for_retry", _fake_sleep)
 
     route = respx.post(_FIRECRAWL_ENDPOINT).mock(
         side_effect=[
@@ -2395,8 +2396,8 @@ async def test_web_search_handler_duckduckgo_page_slices_client_side(
     assert results[0]["url"] == "https://example.org/direct"
     assert "recency" not in data
     assert data["warnings"] == [
-        web_search_module._DUCKDUCKGO_RECENCY_WARNING,
-        web_search_module._DUCKDUCKGO_PAGINATION_WARNING,
+        web_search_providers._DUCKDUCKGO_RECENCY_WARNING,
+        web_search_providers._DUCKDUCKGO_PAGINATION_WARNING,
     ]
 
 
@@ -2560,7 +2561,7 @@ async def test_web_search_handler_perplexity_page_warns_without_paging(
 
     data = assert_success_envelope(result)
     assert len(data["results"]) == 0
-    assert data["warnings"] == [web_search_module._PERPLEXITY_PAGINATION_WARNING]
+    assert data["warnings"] == [web_search_providers._PERPLEXITY_PAGINATION_WARNING]
 
 
 @pytest.mark.asyncio
@@ -2632,7 +2633,7 @@ async def test_web_search_preserves_provider_retry_profiles(
     async def record_sleep(attempt: int, retry_after: float | None = None) -> None:
         sleeps.append((attempt, retry_after))
 
-    monkeypatch.setattr(web_search_module, "sleep_for_retry", record_sleep)
+    monkeypatch.setattr(web_search_transport, "sleep_for_retry", record_sleep)
     route = respx.request(method, endpoint).respond(
         status_code,
         headers={"Retry-After": "7"},
@@ -2661,3 +2662,63 @@ async def test_web_search_preserves_provider_retry_profiles(
         assert "attempts_made" not in error
         assert route.call_count == 1
         assert sleeps == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_duckduckgo_parses_html_attributes_and_keeps_snippet_scope(tmp_path: Path) -> None:
+    respx.get(_DUCKDUCKGO_ENDPOINT).respond(
+        200,
+        text="""
+        <a class='other result__a' title='a > b' href='https://example.com/one'>
+          A &lt;b&gt;literal&lt;/b&gt; &amp; <b>title</b>
+        </a>
+        <div class='result__snippet'>x &lt; y and z &gt; w <em>works</em></div>
+        <a href=https://example.com/two class=result__a>Second</a>
+        <a class='result__a'>Invalid</a>
+        <span class=result__snippet>Must not attach to Second</span>
+    """,
+    )
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "duckduckgo"},
+    )
+    data = assert_success_envelope(result)
+    assert data["results"] == [
+        {
+            "rank": 1,
+            "title": "A <b>literal</b> & title",
+            "url": "https://example.com/one",
+            "description": "x < y and z > w works",
+        },
+        {"rank": 2, "title": "Second", "url": "https://example.com/two", "description": ""},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_brave_preserves_plain_comparisons_in_decorated_snippets(tmp_path: Path) -> None:
+    respx.get(_BRAVE_ENDPOINT).respond(
+        200,
+        json={
+            "web": {
+                "results": [
+                    {
+                        "title": "A <b title='a > b'>title</b>",
+                        "url": "https://example.com",
+                        "description": "x < y and z > w &amp; more",
+                    }
+                ]
+            }
+        },
+    )
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+    row = assert_success_envelope(result)["results"][0]
+    assert row["title"] == "A title"
+    assert row["description"] == "x < y and z > w & more"
