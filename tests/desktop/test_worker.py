@@ -363,7 +363,9 @@ def test_encode_wav_produces_valid_container() -> None:
     import io
     import wave
 
-    from desktop.wakeword.worker import _encode_wav
+    from desktop.wakeword._audio_capture import (
+        _encode_wav,
+    )
 
     raw = _make_silence_chunk(1600)  # 100ms of silence
     wav_bytes = _encode_wav(raw)
@@ -574,9 +576,11 @@ def test_recording_exceeds_15_seconds_when_speech_continues(
     is recorded until the utterance really ends; only the speech upload size
     budget (or silence) ends the capture.
     """
-    from desktop.wakeword.worker import (
+    from desktop.wakeword._worker_constants import (
         _SILENCE_FRAME_COUNT,
         _VAD_FRAME_DURATION_MS,
+    )
+    from desktop.wakeword.worker import (
         WakewordWorker,
     )
 
@@ -615,10 +619,12 @@ def test_recording_stops_at_upload_budget_when_speech_never_ends(
     upload limit, measured in native-rate PCM bytes; the recording may never
     produce a payload the server would reject as oversize.
     """
-    from desktop.wakeword.worker import (
+    from desktop.wakeword._worker_constants import (
         _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
         _UPLOAD_BUDGET_FALLBACK_BYTES,
         _WAV_HEADER_BYTES,
+    )
+    from desktop.wakeword.worker import (
         WakewordWorker,
     )
 
@@ -656,9 +662,11 @@ def test_upload_budget_asks_the_server_for_its_active_limit(
     fake_bridge: FakeBridge,
 ) -> None:
     """The recording budget derives from the server's configured upload limit."""
-    from desktop.wakeword.worker import (
+    from desktop.wakeword._worker_constants import (
         _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
         _WAV_HEADER_BYTES,
+    )
+    from desktop.wakeword.worker import (
         WakewordWorker,
     )
 
@@ -769,8 +777,10 @@ def test_recording_ends_during_continuous_noise_not_at_max_duration(
     wake-word-adjacent speech the recording ends at the silence timeout even
     though noise continues forever.
     """
-    from desktop.wakeword.worker import (
+    from desktop.wakeword._worker_constants import (
         _SILENCE_FRAME_COUNT,
+    )
+    from desktop.wakeword.worker import (
         WakewordWorker,
     )
 
@@ -835,9 +845,11 @@ def test_single_noise_blip_does_not_reset_silence_timer(
     noisy tail would extend the recording indefinitely. The detector's
     hysteresis closes once below the negative threshold and stays closed.
     """
-    from desktop.wakeword.worker import (
+    from desktop.wakeword._worker_constants import (
         _SILENCE_DURATION_SECONDS,
         _VAD_FRAME_DURATION_MS,
+    )
+    from desktop.wakeword.worker import (
         WakewordWorker,
     )
 
@@ -1035,7 +1047,9 @@ def test_real_speech_detector_endpoints_speech_and_ignores_noise(
 
 
 def test_detection_gate_requires_two_speech_frames_per_chunk() -> None:
-    from desktop.wakeword.worker import _chunk_contains_speech
+    from desktop.wakeword._speech_detection import (
+        _chunk_contains_speech,
+    )
 
     class ScriptedVad:
         def __init__(self, speech_frames: set[int]) -> None:
@@ -1054,7 +1068,9 @@ def test_detection_gate_requires_two_speech_frames_per_chunk() -> None:
 
 
 def test_detection_gate_fails_open_when_it_cannot_judge() -> None:
-    from desktop.wakeword.worker import _chunk_contains_speech
+    from desktop.wakeword._speech_detection import (
+        _chunk_contains_speech,
+    )
 
     class RaisingVad:
         @staticmethod
@@ -1074,7 +1090,9 @@ def test_detection_gate_neural_detector_gates_noise_and_admits_speech(
     """With a neural detector, chunks are gated on speech probability."""
     from unittest.mock import MagicMock
 
-    from desktop.wakeword.worker import _chunk_contains_speech
+    from desktop.wakeword._speech_detection import (
+        _chunk_contains_speech,
+    )
 
     detector = MagicMock()
     detector.speech_probability.return_value = 0.0
@@ -1092,7 +1110,9 @@ def test_detection_gate_neural_detector_gates_noise_and_admits_speech(
 def test_detection_gate_neural_scoring_failure_falls_back_to_webrtc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from desktop.wakeword.worker import _chunk_contains_speech
+    from desktop.wakeword._speech_detection import (
+        _chunk_contains_speech,
+    )
 
     class SilentVad:
         @staticmethod
@@ -1113,7 +1133,10 @@ def test_detection_gate_neural_scoring_failure_falls_back_to_webrtc(
 
 def test_detection_gate_matches_silence_and_speech_with_real_fallback_vad() -> None:
     pytest.importorskip("webrtcvad")
-    from desktop.wakeword.worker import _chunk_contains_speech, _create_detection_vad
+    from desktop.wakeword._speech_detection import (
+        _chunk_contains_speech,
+        _create_detection_vad,
+    )
 
     vad = _create_detection_vad()
 
@@ -1183,7 +1206,9 @@ def test_detection_loop_gates_engine_detection_on_speech_presence(
     ],
 )
 def test_voice_cancel_phrase_requires_reserved_ending(transcript: str, cancelled: bool) -> None:
-    from desktop.wakeword.worker import _is_voice_cancel_phrase
+    from desktop.wakeword._worker_support import (
+        _is_voice_cancel_phrase,
+    )
 
     assert _is_voice_cancel_phrase(transcript) is cancelled
 
@@ -1346,7 +1371,9 @@ def test_resample_pcm16_filters_out_of_band_audio() -> None:
     import numpy as np
 
     pytest.importorskip("soxr")
-    from desktop.wakeword.worker import _resample_pcm16
+    from desktop.wakeword._audio_capture import (
+        _resample_pcm16,
+    )
 
     def sine_pcm16(frequency: int, rate: int) -> bytes:
         samples = (np.sin(2 * np.pi * frequency * np.arange(rate) / rate) * 12000).astype(np.int16)
@@ -1365,7 +1392,12 @@ def test_resample_pcm16_filters_out_of_band_audio() -> None:
 
 
 def test_command_audio_keeps_native_capture_rate_before_server_normalization() -> None:
-    from desktop.wakeword.worker import CapturedAudioFrame, _encode_captured_audio
+    from desktop.wakeword._audio_capture import (
+        _encode_captured_audio,
+    )
+    from desktop.wakeword.worker import (
+        CapturedAudioFrame,
+    )
 
     native_audio = b"\x01\x00" * 1440
     wav_bytes = _encode_captured_audio(
@@ -2338,7 +2370,7 @@ def test_mock_worker_walks_full_state_cycle_on_spike(
     fake_bridge: FakeBridge,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword import _worker_modes as worker_module
     from desktop.wakeword.worker import MockWakewordWorker
 
     monkeypatch.setattr(worker_module, "_MOCK_FRAME_SECONDS", 0.0)
@@ -2379,7 +2411,7 @@ def test_mock_worker_simulate_cycle_publishes_all_stages(
     fake_bridge: FakeBridge,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword import _worker_modes as worker_module
     from desktop.wakeword.worker import MockWakewordWorker
 
     monkeypatch.setattr(worker_module, "_MOCK_STAGE_SECONDS", 0.0)
@@ -2402,7 +2434,9 @@ def test_backoff_sleep_returns_immediately_when_not_running() -> None:
     import threading
     import time
 
-    from desktop.wakeword.worker import _backoff_sleep
+    from desktop.wakeword._worker_support import (
+        _backoff_sleep,
+    )
 
     running = threading.Event()  # cleared → the interruptible sleep returns at once
 
@@ -2477,7 +2511,9 @@ def test_refresh_microphone_devices_reinitializes_portaudio_for_hotplug(monkeypa
 
 
 def test_saved_microphone_identity_survives_device_reordering() -> None:
-    from desktop.wakeword.worker import _candidate_device_indices
+    from desktop.wakeword._microphones import (
+        _candidate_device_indices,
+    )
 
     class ReorderedSoundDevice:
         @staticmethod
@@ -2497,7 +2533,9 @@ def test_saved_microphone_identity_survives_device_reordering() -> None:
 
 
 def test_saved_microphone_never_uses_recycled_index() -> None:
-    from desktop.wakeword.worker import _candidate_device_indices
+    from desktop.wakeword._microphones import (
+        _candidate_device_indices,
+    )
 
     class RecycledSoundDevice:
         @staticmethod

@@ -8,6 +8,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from desktop.connection import PreparedConnection, ServerEntry
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.system_actions import DesktopSystemActions
+from desktop.wakeword import _bridge_values as bridge_values
 from desktop.wakeword import bridge as bridge_module
 from desktop.wakeword import engine as engine_module
 from desktop.wakeword.bridge import DesktopBridge
@@ -285,12 +287,12 @@ def test_calibrated_threshold_uses_supported_step_between_noise_and_phrase(
     noise_level: float,
     phrase_peaks: list[float],
 ) -> None:
-    sensitivity = bridge_module._recommended_sensitivity(noise_level, phrase_peaks)
+    sensitivity = bridge_values._recommended_sensitivity(noise_level, phrase_peaks)
     threshold = 1.0 - sensitivity
 
     assert sensitivity / 0.05 == pytest.approx(round(sensitivity / 0.05))
     assert threshold >= noise_level + 0.02 - 1e-9
-    reference_phrase = bridge_module._median(phrase_peaks)
+    reference_phrase = median(phrase_peaks)
     assert threshold <= reference_phrase - 0.02 + 1e-9
 
 
