@@ -15,8 +15,7 @@
   import Toggle from './ui/Toggle.svelte';
   import {
     buildAgentTargetDropdownOptions,
-    projectIdsFromList,
-    projectTeamEntry,
+    createAgentTargetCatalogLoader,
   } from '$lib/agentTargetOptions.js';
   import {
     createPromptBlock,
@@ -144,7 +143,10 @@
   // every render. A scan failure is non-fatal — identity agents still preview.
   let projectTeams = $state([]);
   let projectTeamsLoaded = false;
-  let projectTeamsRequestId = 0;
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listProjects,
+    showProject,
+  });
 
   let isBusy = $derived(blocks.some((block) => block.isSaving || block.isBusy));
   let selectedScope = $derived(
@@ -176,6 +178,7 @@
     loadData();
     loadProjectTeams();
     return () => {
+      targetCatalog.dispose();
       scopeLoadRequestId += 1;
       previewRequestId += 1;
       unregisterPromptAutosave();
@@ -250,40 +253,11 @@
   // `agent@projekt`. Kicked off on mount; a failure is non-fatal (identity
   // agents still preview) and leaves the cache unset so a reload can retry.
   async function loadProjectTeams() {
-    if (projectTeamsLoaded) {
-      return;
-    }
-
-    const requestId = projectTeamsRequestId + 1;
-    projectTeamsRequestId = requestId;
-
-    try {
-      const listResult = await listProjects();
-      if (requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      const projectIds = projectIdsFromList(listResult);
-      const showResults = await Promise.all(
-        projectIds.map((projectId) =>
-          showProject(projectId)
-            .then((showResult) => projectTeamEntry(projectId, showResult))
-            .catch(() => null),
-        ),
-      );
-      if (requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      projectTeams = showResults.filter((entry) => entry !== null);
-      projectTeamsLoaded = true;
-    } catch {
-      // Identity agents remain available; leave projectTeams empty and allow a
-      // retry on the next mount (projectTeamsLoaded stays false).
-      if (requestId === projectTeamsRequestId) {
-        projectTeams = [];
-      }
-    }
+    if (projectTeamsLoaded) return;
+    const catalog = await targetCatalog.load();
+    if (!catalog) return;
+    projectTeams = catalog.projectTeams;
+    projectTeamsLoaded = !catalog.projectError;
   }
 
   function selectPreviewAgent(agentId) {

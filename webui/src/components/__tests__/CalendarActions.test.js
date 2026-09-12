@@ -155,3 +155,32 @@ it('keeps failed edits visible and does not claim they were saved', async () => 
   expect(document.querySelector('.calendar-action-editor')).not.toBeNull();
   expect(onChanged).not.toHaveBeenCalled();
 });
+
+it('keeps Identity and healthy Project targets when another Team fails', async () => {
+  rpcMock.mockImplementation(async (method, params) => {
+    if (method === 'agent.list')
+      return { agents: [{ id: 'main', name: 'Main' }] };
+    if (method === 'project.list')
+      return {
+        projects: [{ project_id: 'broken' }, { project_id: 'healthy' }],
+      };
+    if (method === 'project.show') {
+      if (params.project_id === 'broken')
+        throw new Error('test-project-unavailable');
+      return { scan: { team: [{ agent_id: 'coder' }] } };
+    }
+    return { sessions: [] };
+  });
+  component = mount(CalendarActions, {
+    target: document.body,
+    props: { eventId: 'event1', occurrenceStart: '2027-01-01T12:00' },
+  });
+  await settle();
+  button('Add action').click();
+  await settle();
+  const targets = [
+    ...document.querySelectorAll('#calendar-action-target option'),
+  ].map((option) => option.value);
+  expect(targets).toContain('main');
+  expect(targets).toContain('coder@healthy');
+});

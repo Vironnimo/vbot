@@ -43,14 +43,13 @@
     cronPresetExpression,
     cronPresetForExpression,
     describeCronExpression,
-    projectIdsFromList,
-    projectTeamEntry,
     visibleCronJobs,
   } from '$lib/cronView.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
+  import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import InfoHint from './ui/InfoHint.svelte';
@@ -94,7 +93,10 @@
   // never runs on every render — only once, on demand.
   let projectTeams = $state([]);
   let projectTeamsLoaded = false;
-  let projectTeamsRequestId = 0;
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listProjects,
+    showProject,
+  });
 
   let destroyed = false;
   let jobsRequestId = 0;
@@ -187,6 +189,7 @@
 
     return () => {
       destroyed = true;
+      targetCatalog.dispose();
     };
   });
 
@@ -310,40 +313,11 @@
   // non-fatal: the dropdown still shows identity agents, and the team scan can
   // be retried on the next render.
   async function loadProjectTeams() {
-    if (projectTeamsLoaded) {
-      return;
-    }
-
-    const requestId = projectTeamsRequestId + 1;
-    projectTeamsRequestId = requestId;
-
-    try {
-      const listResult = await listProjects();
-      if (destroyed || requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      const projectIds = projectIdsFromList(listResult);
-      const showResults = await Promise.all(
-        projectIds.map((projectId) =>
-          showProject(projectId)
-            .then((showResult) => projectTeamEntry(projectId, showResult))
-            .catch(() => null),
-        ),
-      );
-      if (destroyed || requestId !== projectTeamsRequestId) {
-        return;
-      }
-
-      projectTeams = showResults.filter((entry) => entry !== null);
-      projectTeamsLoaded = true;
-    } catch {
-      // Identity agents remain available; leave projectTeams empty and allow a
-      // retry on the next render (projectTeamsLoaded stays false).
-      if (!destroyed && requestId === projectTeamsRequestId) {
-        projectTeams = [];
-      }
-    }
+    if (projectTeamsLoaded) return;
+    const catalog = await targetCatalog.load();
+    if (!catalog) return;
+    projectTeams = catalog.projectTeams;
+    projectTeamsLoaded = !catalog.projectError;
   }
 
   function selectJob(job) {
