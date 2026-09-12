@@ -1,50 +1,41 @@
 <script>
-  // Collection navigation, bounded results, and inspection of one exact Skill.
-  // Runtime policy and write scopes remain server-owned.
-  import { onMount, onDestroy, tick } from 'svelte';
-
+  import { t } from '$lib/i18n.js';
+  import Button from '../ui/Button.svelte';
+  import { tooltip } from '$lib/tooltip.js';
+  import Toggle from '../ui/Toggle.svelte';
+  import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
+  import TextField from '../ui/TextField.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import {
+    skillStatusVariant,
+    skillStatusLabel,
+    skillDiagnosticLines,
+    skillSourceLabel,
     agentDisplayName,
-    createSkillDocument,
+    skillInstructionBody,
     filterSkills,
     skillCollections,
-    skillSourceLabel,
-    skillDiagnosticLines,
-    skillStatusLabel,
-    skillStatusVariant,
-    skillInstructionBody,
     SKILL_PAGE_SIZE,
   } from './skillsView.js';
-  import Dropdown from '../Dropdown.svelte';
-  import TabList from '../ui/TabList.svelte';
-  import MarkdownContent from '../chat/MarkdownContent.svelte';
-  import CopyButton from '../ui/CopyButton.svelte';
-  import Banner from '../ui/Banner.svelte';
-  import Button from '../ui/Button.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
-  import TextArea from '../ui/TextArea.svelte';
-  import TextField from '../ui/TextField.svelte';
   import Badge from '../ui/Badge.svelte';
-  import Toggle from '../ui/Toggle.svelte';
-  import {
-    createSkill as createSkillRequest,
-    deleteSkill as deleteSkillRequest,
-    listAgents,
-    inspectSkill,
-    setSkillDisabled,
-    shareSkill,
-    skillInventory,
-    updateSkill,
-  } from '$lib/api.js';
-  import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
+  import TabList from '../ui/TabList.svelte';
+  import CopyButton from '../ui/CopyButton.svelte';
+  import MarkdownContent from '../chat/MarkdownContent.svelte';
+  import Modal from '../ui/Modal.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
+  import TextArea from '../ui/TextArea.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { listAgents, inspectSkill, skillInventory } from '$lib/api.js';
+  import { createSkillActions } from './actions.svelte.js';
+  import './skills.css';
 
-  const GLOBAL_SCOPE = 'global';
+  // Collection navigation, bounded results, and inspection of one exact Skill.
+  // Runtime policy and write scopes remain server-owned.
+
   const noop = () => {};
 
   let {
@@ -53,13 +44,32 @@
     onToast = noop,
     skillsRefreshToken = 0,
   } = $props();
+  const actions = createSkillActions({
+    get agents() {
+      return agents;
+    },
+    get scope() {
+      return scope;
+    },
+    get onToast() {
+      return onToast;
+    },
+    get loadInventory() {
+      return loadInventory;
+    },
+    get inspected() {
+      return inspected;
+    },
+    get agentError() {
+      return agentError;
+    },
+  });
 
   let agents = $state([]);
   let inventory = $state([]);
   let staleShared = $state([]);
   let loading = $state(true);
   let loadError = $state('');
-  let busy = $state(false);
 
   // View-mode state: group by source (origin) or by agent (owner-centric).
   let scope = $state('all');
@@ -85,25 +95,7 @@
   });
   let searchQuery = $state('');
 
-  // Create-modal state: a target scope (global pool or an agent's private home)
-  // plus the name/content draft.
-  let showCreateModal = $state(false);
-  let createScope = $state(GLOBAL_SCOPE);
-  let newName = $state('');
-  let newDescription = $state('');
-  let newContent = $state('');
-
-  // Edit-modal state: which entry (scope + name) is open with which content.
-  let editing = $state(null); // { scope, name }
-  let editContent = $state('');
-
-  // The skill awaiting delete confirmation (null = dialog closed).
-  let deleteTarget = $state(null); // { scope, name }
-
-  // Share-modal state: which entry is being shared and which receivers are
-  // selected.
-  let shareTarget = $state(null); // { owner_id, name }
-  let shareReceivers = $state([]); // selected receiver agent ids
+  // selected receiver agent ids
 
   let showDirectories = $state(false);
   let directoryEditor = $state();
@@ -195,22 +187,6 @@
     listElement?.querySelector(`[data-skill-id="${id}"]`)?.focus();
   }
 
-  let createDisabled = $derived(
-    busy || !newName.trim() || !newDescription.trim() || !newContent.trim(),
-  );
-  let scopeOptions = $derived([
-    {
-      value: GLOBAL_SCOPE,
-      label: t('settings.skills.scopeGlobal', 'Global skills'),
-    },
-    ...agents.map((agent) => ({
-      value: `agent:${agent.id}`,
-      label: t('settings.skills.scopeAgent', '{name} (private)', {
-        name: agent.name || agent.id,
-      }),
-    })),
-  ]);
-
   onMount(() => {
     void loadAgents();
     void loadInventory();
@@ -253,7 +229,7 @@
       if (selectedId) {
         const entry = inventory.find((item) => item.id === selectedId);
         if (!entry) clearSelection();
-        else if (!editing) void openSkill(entry, false);
+        else if (!actions.editing) void openSkill(entry, false);
       }
     } catch (error) {
       if (!disposed && version === inventoryVersion)
@@ -264,219 +240,14 @@
   }
 
   async function openDirectories(focusAdd = false) {
-    createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
+    actions.createScope = scope.startsWith('agent:')
+      ? scope
+      : actions.GLOBAL_SCOPE;
     showDirectories = true;
     changeScope('directories');
     if (focusAdd) {
       await tick();
       directoryEditor?.focusNewDirectory();
-    }
-  }
-
-  function openCreateModal() {
-    if (scope !== 'directories')
-      createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
-    newName = '';
-    newDescription = '';
-    newContent = '';
-    showCreateModal = true;
-  }
-
-  function closeCreateModal() {
-    showCreateModal = false;
-    newName = '';
-    newDescription = '';
-    newContent = '';
-  }
-
-  async function createSkill() {
-    if (createDisabled) {
-      return;
-    }
-    busy = true;
-    try {
-      await createSkillRequest({
-        scope: createScope,
-        name: newName.trim(),
-        content: createSkillDocument(newName, newDescription, newContent),
-      });
-      onToast({
-        title: t('settings.skills.created', 'Skill created.'),
-        variant: 'success',
-      });
-      closeCreateModal();
-      await loadInventory();
-    } catch (error) {
-      onToast({
-        title: `${t('settings.skills.createError', 'Skill could not be created.')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
-  }
-
-  function startEdit(entry) {
-    if (busy || !entry.editable_scope || inspected?.id !== entry.id) return;
-    editing = {
-      scope: entry.editable_scope,
-      name: entry.name,
-      shared: entry.shared,
-    };
-    editContent = inspected.content;
-  }
-
-  function closeEditModal() {
-    editing = null;
-    editContent = '';
-  }
-
-  async function saveEdit() {
-    if (busy || !editing) {
-      return;
-    }
-    busy = true;
-    try {
-      await updateSkill({
-        scope: editing.scope,
-        name: editing.name,
-        content: editContent,
-      });
-      onToast({
-        title: t('settings.skills.saved', 'Skill saved.'),
-        variant: 'success',
-      });
-      closeEditModal();
-      await loadInventory();
-    } catch (error) {
-      onToast({
-        title: `${t('settings.skills.contentSaveError', 'Skill could not be saved.')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function toggleDisabled(entry) {
-    if (busy) {
-      return;
-    }
-    busy = true;
-    try {
-      await setSkillDisabled(entry.name, !entry.disabled);
-      onToast({
-        title: entry.disabled
-          ? t('skills.enabledToast', 'Skill "{name}" enabled.', {
-              name: entry.name,
-            })
-          : t('skills.disabledToast', 'Skill "{name}" disabled everywhere.', {
-              name: entry.name,
-            }),
-        variant: 'success',
-      });
-      await loadInventory();
-    } catch (error) {
-      onToast({
-        title: `${t('skills.toggleError', 'The skill could not be changed.')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
-  }
-
-  function openShareModal(entry) {
-    if (busy || !entry.owner_id) {
-      return;
-    }
-    shareTarget = { owner_id: entry.owner_id, name: entry.name };
-    shareReceivers = Array.isArray(entry.shared_with)
-      ? [...entry.shared_with]
-      : [];
-  }
-
-  function closeShareModal() {
-    shareTarget = null;
-    shareReceivers = [];
-  }
-
-  function toggleReceiver(agentId) {
-    if (shareReceivers.includes(agentId)) {
-      shareReceivers = shareReceivers.filter((id) => id !== agentId);
-    } else {
-      shareReceivers = [...shareReceivers, agentId];
-    }
-  }
-
-  let shareableAgents = $derived(
-    agents.filter((agent) => agent.id !== shareTarget?.owner_id),
-  );
-  let shareSaveDisabled = $derived(busy || Boolean(agentError));
-
-  async function saveShare() {
-    if (busy || !shareTarget || agentError) {
-      return;
-    }
-    busy = true;
-    try {
-      await shareSkill(
-        shareTarget.owner_id,
-        shareTarget.name,
-        shareReceivers.length > 0,
-        shareReceivers,
-      );
-      onToast({
-        title: t('skills.sharedToast', 'Skill shared with {count} agents.', {
-          count: shareReceivers.length,
-        }),
-        variant: 'success',
-      });
-      closeShareModal();
-      await loadInventory();
-    } catch (error) {
-      onToast({
-        title: `${t('skills.shareError', 'Sharing could not be changed.')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
-  }
-
-  function requestDelete(entry) {
-    if (busy || !entry.editable_scope) return;
-    deleteTarget = { scope: entry.editable_scope, name: entry.name };
-  }
-
-  function cancelDelete() {
-    deleteTarget = null;
-  }
-
-  async function confirmDelete() {
-    const target = deleteTarget;
-    deleteTarget = null;
-    if (!target || busy) {
-      return;
-    }
-    busy = true;
-    try {
-      await deleteSkillRequest(target.scope, target.name);
-      onToast({
-        title: t('settings.skills.deleted', 'Skill deleted.'),
-        variant: 'success',
-      });
-      if (editing?.name === target.name && editing?.scope === target.scope) {
-        closeEditModal();
-      }
-      await loadInventory();
-    } catch (error) {
-      onToast({
-        title: `${t('settings.skills.deleteError', 'Skill could not be deleted.')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
     }
   }
 </script>
@@ -491,10 +262,10 @@
       <Button
         variant="tertiary"
         icon
-        disabled={busy || Boolean(agentError)}
+        disabled={actions.busy || Boolean(agentError)}
         ariaLabel={t('skills.shareNamed', '', { name: entry.name })}
         tooltip={t('skills.sharing')}
-        onClick={() => openShareModal(entry)}
+        onClick={() => actions.openShareModal(entry)}
       >
         <svg
           width="16"
@@ -515,10 +286,10 @@
       <Button
         variant="danger"
         icon
-        disabled={busy}
+        disabled={actions.busy}
         ariaLabel={t('skills.deleteNamed', '', { name: entry.name })}
         tooltip={t('common.delete')}
-        onClick={() => requestDelete(entry)}
+        onClick={() => actions.requestDelete(entry)}
       >
         <svg
           width="16"
@@ -534,9 +305,9 @@
     <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
       <Toggle
         checked={!entry.disabled}
-        disabled={busy}
+        disabled={actions.busy}
         ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
-        onChange={() => toggleDisabled(entry)}
+        onChange={() => actions.toggleDisabled(entry)}
       />
     </span>
   </div>
@@ -682,8 +453,10 @@
           onError={(message) => (directoryError = message)}
         />
         <div class="skills-create-secondary">
-          <Button variant="tertiary" disabled={busy} onClick={openCreateModal}
-            >{t('skills.createCustom')}</Button
+          <Button
+            variant="tertiary"
+            disabled={actions.busy}
+            onClick={actions.openCreateModal}>{t('skills.createCustom')}</Button
           >
         </div>
       {/if}
@@ -919,10 +692,10 @@
                 <div class="skills-content-actions">
                   {#if selected.editable_scope}<Button
                       variant="tertiary"
-                      disabled={busy ||
+                      disabled={actions.busy ||
                         inspectLoading ||
                         inspected?.id !== selected.id}
-                      onClick={() => startEdit(selected)}
+                      onClick={() => actions.startEdit(selected)}
                       >{t('skills.editInstructions')}</Button
                     >{:else}<Badge>{t('skills.readOnly')}</Badge>{/if}
                   {#if inspected}<CopyButton
@@ -964,13 +737,13 @@
   </div>
 </section>
 
-{#if showCreateModal}
+{#if actions.showCreateModal}
   <Modal
     title={t('settings.skills.newSkill', 'New skill')}
     class="skills-editor-modal"
     labelledById="skill-create-modal-title"
-    closeDisabled={busy}
-    onClose={closeCreateModal}
+    closeDisabled={actions.busy}
+    onClose={actions.closeCreateModal}
   >
     {#snippet body()}
       <div class="skills-modal-body">
@@ -980,14 +753,14 @@
           </label>
           <Dropdown
             id="create-scope"
-            value={createScope}
-            options={scopeOptions}
+            value={actions.createScope}
+            options={actions.scopeOptions}
             ariaLabel={t('skills.createScopeLabel')}
-            onValueChange={(value) => (createScope = value)}
+            onValueChange={(value) => (actions.createScope = value)}
           />
           <p class="skills-secondary">
             {t(
-              createScope === 'global'
+              actions.createScope === 'global'
                 ? 'skills.createGlobalHelp'
                 : 'skills.createPrivateHelp',
             )}
@@ -999,8 +772,8 @@
           </label>
           <TextField
             id="new-skill-name"
-            value={newName}
-            onInput={(next) => (newName = next)}
+            value={actions.newName}
+            onInput={(next) => (actions.newName = next)}
             placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
           />
         </div>
@@ -1011,8 +784,8 @@
           </label>
           <TextField
             id="new-skill-description"
-            value={newDescription}
-            onInput={(value) => (newDescription = value)}
+            value={actions.newDescription}
+            onInput={(value) => (actions.newDescription = value)}
             placeholder={t('skills.descriptionPlaceholder')}
           />
         </div>
@@ -1023,71 +796,91 @@
           <TextArea
             id="new-skill-content"
             rows="12"
-            value={newContent}
-            onInput={(value) => (newContent = value)}
+            value={actions.newContent}
+            onInput={(value) => (actions.newContent = value)}
             placeholder={t('skills.instructionsPlaceholder')}
           />
         </div>
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" disabled={busy} onClick={closeCreateModal}>
+      <Button
+        variant="secondary"
+        disabled={actions.busy}
+        onClick={actions.closeCreateModal}
+      >
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button variant="primary" disabled={createDisabled} onClick={createSkill}>
+      <Button
+        variant="primary"
+        disabled={actions.createDisabled}
+        onClick={actions.createSkill}
+      >
         {t('settings.skills.create', 'Create skill')}
       </Button>
     {/snippet}
   </Modal>
 {/if}
 
-{#if editing}
+{#if actions.editing}
   <Modal
-    title={t('skills.editTitle', 'Edit {name}', { name: editing.name })}
+    title={t('skills.editTitle', 'Edit {name}', { name: actions.editing.name })}
     class="skills-editor-modal"
     labelledById="skill-edit-modal-title"
-    closeDisabled={busy}
-    onClose={closeEditModal}
+    closeDisabled={actions.busy}
+    onClose={actions.closeEditModal}
   >
     {#snippet body()}
       <div class="skills-modal-body">
-        {#if editing.shared}<Banner variant="info"
+        {#if actions.editing.shared}<Banner variant="info"
             >{t('skills.editSharedHelp')}</Banner
           >{/if}
         <div class="skills-field">
           <label
             class="skills-field-label"
-            for={`skill-content-${editing.name}`}
+            for={`skill-content-${actions.editing.name}`}
           >
             {t('settings.skills.contentLabel', 'SKILL.md content')}
           </label>
           <TextArea
-            id={`skill-content-${editing.name}`}
+            id={`skill-content-${actions.editing.name}`}
             code
             rows="16"
-            value={editContent}
-            onInput={(value) => (editContent = value)}
+            value={actions.editContent}
+            onInput={(value) => (actions.editContent = value)}
           />
         </div>
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" disabled={busy} onClick={closeEditModal}>
+      <Button
+        variant="secondary"
+        disabled={actions.busy}
+        onClick={actions.closeEditModal}
+      >
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button variant="primary" disabled={busy} onClick={saveEdit}>
-        {busy ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+      <Button
+        variant="primary"
+        disabled={actions.busy}
+        onClick={actions.saveEdit}
+      >
+        {actions.busy
+          ? t('common.saving', 'Saving…')
+          : t('common.save', 'Save')}
       </Button>
     {/snippet}
   </Modal>
 {/if}
 
-{#if shareTarget}
+{#if actions.shareTarget}
   <Modal
-    title={t('skills.shareTitle', 'Share {name}', { name: shareTarget.name })}
+    title={t('skills.shareTitle', 'Share {name}', {
+      name: actions.shareTarget.name,
+    })}
     labelledById="skill-share-modal-title"
-    closeDisabled={busy}
-    onClose={closeShareModal}
+    closeDisabled={actions.busy}
+    onClose={actions.closeShareModal}
   >
     {#snippet body()}
       <div class="skills-modal-body">
@@ -1098,7 +891,7 @@
             'Select which agents should have access to this skill. They can activate and co-maintain it.',
           )}
         </p>
-        {#if shareableAgents.length === 0}
+        {#if actions.shareableAgents.length === 0}
           <EmptyState
             density="compact"
             description={t(
@@ -1108,22 +901,22 @@
           />
         {:else}
           <div class="skills-share-list">
-            {#each shareableAgents as agent (agent.id)}
+            {#each actions.shareableAgents as agent (agent.id)}
               <button
                 type="button"
                 class="skills-share-option"
-                class:skills-share-option--selected={shareReceivers.includes(
+                class:skills-share-option--selected={actions.shareReceivers.includes(
                   agent.id,
                 )}
                 role="switch"
-                aria-checked={shareReceivers.includes(agent.id)}
+                aria-checked={actions.shareReceivers.includes(agent.id)}
                 aria-label={t('skills.toggleReceiver', 'Share with {name}', {
                   name: agent.name || agent.id,
                 })}
-                onclick={() => toggleReceiver(agent.id)}
+                onclick={() => actions.toggleReceiver(agent.id)}
               >
                 <span class="skills-receiver-check" aria-hidden="true"
-                  >{shareReceivers.includes(agent.id) ? '✓' : ''}</span
+                  >{actions.shareReceivers.includes(agent.id) ? '✓' : ''}</span
                 >
                 <span class="skills-share-agent-name"
                   >{agent.name || agent.id}</span
@@ -1138,13 +931,17 @@
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" disabled={busy} onClick={closeShareModal}>
+      <Button
+        variant="secondary"
+        disabled={actions.busy}
+        onClick={actions.closeShareModal}
+      >
         {t('common.cancel', 'Cancel')}
       </Button>
       <Button
         variant="primary"
-        disabled={shareSaveDisabled}
-        onClick={saveShare}
+        disabled={actions.shareSaveDisabled}
+        onClick={actions.saveShare}
       >
         {t('skills.saveShare', 'Save')}
       </Button>
@@ -1152,533 +949,16 @@
   </Modal>
 {/if}
 
-{#if deleteTarget}
+{#if actions.deleteTarget}
   <ConfirmDialog
     title={t('settings.skills.deleteConfirmTitle', 'Delete skill')}
     body={t(
       'skills.deletePackageConfirm',
       'Delete skill "{name}" permanently? The skill file is removed from disk.',
-      { name: deleteTarget.name },
+      { name: actions.deleteTarget.name },
     )}
     confirmLabel={t('common.delete', 'Delete')}
-    onConfirm={confirmDelete}
-    onCancel={cancelDelete}
+    onConfirm={actions.confirmDelete}
+    onCancel={actions.cancelDelete}
   />
 {/if}
-
-<style>
-  .skills-view {
-    display: flex;
-    flex-direction: row;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .skills-nav-label {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font: 600 var(--fs-mono-xs)/1.4 var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--text-hi);
-  }
-  .skills-nav-label::after {
-    content: '';
-    flex: 1;
-    border-top: 1px solid var(--border-2);
-  }
-  .skills-nav-label:first-child {
-    margin-top: 8px;
-  }
-  .skills-nav nav {
-    overflow-y: auto;
-    min-height: 0;
-    flex: 1;
-  }
-  .skills-nav-label {
-    margin: 28px 6px 10px;
-  }
-  .skills-collection {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 16px;
-    color: var(--text-med);
-    text-align: left;
-    cursor: pointer;
-    font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
-  }
-  .skills-collection.active {
-    color: var(--text-hi);
-  }
-  .skills-collection-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .skills-count {
-    font: 400 var(--fs-mono-xs)/1.4 var(--font-mono);
-  }
-  .skills-main {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    gap: 14px;
-    padding: 24px 28px 20px;
-    max-width: calc(var(--content-max-wide) + 56px);
-    margin: 0 auto;
-  }
-  .skills-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-    flex-shrink: 0;
-  }
-  .skills-header h2 {
-    margin: 0;
-    color: var(--text-hi);
-    font: 600 var(--fs-heading-lg)/1.3 var(--font-ui);
-    overflow-wrap: anywhere;
-  }
-  .skills-header p {
-    margin: 6px 0 0;
-    max-width: 62ch;
-    color: var(--text-med);
-    font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-  }
-  .skills-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .skills-search {
-    position: relative;
-    min-width: 0;
-    flex: 1;
-  }
-  .skills-search svg {
-    position: absolute;
-    left: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--text-med);
-    pointer-events: none;
-  }
-  .skills-search :global(input) {
-    width: 100%;
-    padding-left: 36px;
-    font-family: var(--font-ui);
-  }
-  .skills-toolbar :global(.dropdown) {
-    min-width: 160px;
-  }
-  .skills-workspace {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    border-top: 1px solid var(--border);
-  }
-  .skills-results {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-  }
-  .skills-results-meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    min-height: 44px;
-    color: var(--text-med);
-    font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
-    padding-right: 12px;
-  }
-  .skills-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-  .skills-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 12px;
-    text-align: left;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    border-left: 2px solid transparent;
-    background: transparent;
-    cursor: pointer;
-  }
-  .skills-row:hover {
-    background: var(--surface);
-  }
-  .skills-row--selected {
-    background: var(--accent-06);
-    border-left-color: var(--accent);
-  }
-  .skills-row-open:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: -2px;
-    background: var(--surface);
-  }
-  .skills-row-open {
-    display: flex;
-    align-items: center;
-    flex: 1 1 140px;
-    min-width: 0;
-    min-height: 44px;
-    padding: 4px 0;
-    border: 0;
-    background: transparent;
-    text-align: left;
-    cursor: pointer;
-  }
-  .skills-row-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .skills-actions,
-  .skills-content-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-  .skills-enable {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 40px;
-  }
-  .skills-enable :global(.toggle::before) {
-    content: '';
-    position: absolute;
-    inset: -9px -3px;
-  }
-  .skills-create-secondary {
-    margin-top: 24px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }
-  .skills-row-copy {
-    display: grid;
-    gap: 4px;
-    flex: 1;
-    min-width: 0;
-  }
-  .skills-row-name {
-    font: 500 var(--fs-mono-body)/1.5 var(--font-mono);
-    color: var(--text-hi);
-    overflow-wrap: anywhere;
-  }
-  .skills-row-source {
-    font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
-    color: var(--text-med);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .skills-source-divider {
-    margin: 0 4px;
-  }
-  .skills-row--disabled {
-    border-left-style: dashed;
-  }
-  .skills-pagination {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 12px 12px 0 0;
-    border-top: 1px solid var(--border);
-    color: var(--text-med);
-    font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
-  }
-  .skills-workspace--selected .skills-results {
-    flex: 0 0 44%;
-  }
-  .skills-row .skills-actions {
-    margin-left: auto;
-  }
-  .skills-detail {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    margin-left: 20px;
-    border-left: 1px solid var(--border);
-    padding-left: 20px;
-    outline: none;
-  }
-  .skills-detail:focus-visible {
-    box-shadow: inset 2px 0 var(--accent-40);
-  }
-  .skills-detail-top {
-    min-height: 44px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-  }
-  .skills-detail-scroll {
-    overflow-y: auto;
-    min-height: 0;
-    flex: 1;
-    overscroll-behavior: contain;
-    padding: 14px 12px 20px 0;
-  }
-  .skills-detail-header {
-    padding: 8px 0 14px;
-    border-bottom: 1px solid var(--border);
-  }
-  .skills-detail-header .skills-actions {
-    margin-top: 12px;
-    flex-wrap: wrap;
-  }
-  .skills-detail-header h3 {
-    margin: 8px 0;
-    font: 500 var(--fs-heading-md)/1.4 var(--font-mono);
-    color: var(--text-hi);
-    overflow-wrap: anywhere;
-  }
-  .skills-detail-source {
-    margin: 0;
-    font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-    color: var(--text-med);
-    overflow-wrap: anywhere;
-  }
-  .skills-access {
-    margin: 0 0 24px;
-    padding-left: 14px;
-    border-left: 2px solid var(--border-2);
-  }
-  .skills-access h4 {
-    margin: 0 0 8px;
-    font: 500 var(--fs-body-md)/1.4 var(--font-ui);
-    color: var(--text-hi);
-  }
-  .skills-access p,
-  .skills-notice p {
-    margin: 6px 0;
-    font: 400 var(--fs-body-sm)/1.6 var(--font-ui);
-    color: var(--text-hi);
-    overflow-wrap: anywhere;
-  }
-  .skills-secondary,
-  .skills-access .skills-secondary {
-    margin: 0;
-    color: var(--text-med);
-    font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-  }
-  .skills-content-head {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-  }
-  .skills-content {
-    padding: 16px 0;
-    overflow-wrap: anywhere;
-    font: 400 var(--fs-body-lg)/1.65 var(--font-ui);
-  }
-  .skills-content :global(.msg-markdown) {
-    color: var(--text-hi);
-  }
-  .skills-content pre {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font: 400 var(--fs-mono-body)/1.6 var(--font-mono);
-    color: var(--text-hi);
-  }
-  .skills-content :global(pre) {
-    max-width: 100%;
-    overflow-x: auto;
-  }
-  .skills-diagnostics summary,
-  .skills-notice summary {
-    cursor: pointer;
-    color: var(--text-med);
-    font: 500 var(--fs-body-sm)/1.5 var(--font-ui);
-    padding: 8px 0;
-  }
-  .skills-diagnostics {
-    margin-bottom: 20px;
-  }
-  .skills-diagnostics ul,
-  .skills-notice ul {
-    padding-left: 20px;
-    color: var(--text-med);
-    font: 400 var(--fs-body-sm)/1.6 var(--font-ui);
-    overflow-wrap: anywhere;
-  }
-  .skills-notice {
-    border-bottom: 1px solid var(--border);
-  }
-  .skills-directories {
-    overflow-y: auto;
-  }
-  .skills-mobile-nav {
-    display: none;
-  }
-  :global(.skills-editor-modal.modal) {
-    width: 760px;
-  }
-  .skills-modal-body {
-    padding: 20px;
-    max-height: calc(100dvh - 160px);
-    overflow-y: auto;
-  }
-  .skills-modal-body,
-  .skills-field {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .skills-field {
-    gap: 8px;
-  }
-  .skills-field-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
-    color: var(--text-hi);
-  }
-  .skills-share-desc {
-    margin: 0;
-    font: 400 var(--fs-body-md)/1.6 var(--font-ui);
-    color: var(--text-hi);
-  }
-  .skills-share-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-height: 320px;
-    overflow-y: auto;
-  }
-  .skills-share-option {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    color: var(--text-hi);
-    cursor: pointer;
-    text-align: left;
-  }
-  .skills-share-option--selected {
-    background: var(--accent-06);
-    border-color: var(--accent-30);
-  }
-  .skills-share-option:focus-visible {
-    outline: 1px solid var(--accent);
-  }
-  .skills-share-agent-name {
-    flex: 1;
-    font: 400 var(--fs-body-md)/1.4 var(--font-ui);
-  }
-  .skills-share-agent-id {
-    font: 400 var(--fs-mono-xs)/1.4 var(--font-mono);
-    color: var(--text-med);
-  }
-  .skills-receiver-check {
-    width: 18px;
-    height: 18px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-sm);
-    color: var(--accent);
-    text-align: center;
-    line-height: 16px;
-  }
-  @media (max-width: 1280px) {
-    .skills-main {
-      padding: 20px;
-    }
-    .skills-header {
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-    .skills-detail {
-      margin-left: 14px;
-      padding-left: 14px;
-    }
-  }
-  @media (max-width: 960px) {
-    .skills-nav {
-      display: none;
-    }
-    .skills-mobile-nav {
-      display: block;
-    }
-    .skills-mobile-hidden {
-      display: none;
-    }
-    .skills-detail {
-      margin: 0;
-      padding: 0;
-      border: 0;
-    }
-    .skills-header {
-      flex-wrap: nowrap;
-    }
-  }
-  @media (max-width: 640px) {
-    .skills-main {
-      padding: 14px;
-      gap: 12px;
-    }
-    .skills-header {
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-    .skills-header p {
-      display: none;
-    }
-    .skills-toolbar {
-      display: grid;
-      grid-template-columns: 40px minmax(0, 1fr);
-    }
-    .skills-toolbar :global(.dropdown) {
-      grid-column: 2;
-      min-width: 0;
-    }
-    .skills-view :global(.btn-icon) {
-      min-width: 40px;
-    }
-    .skills-view :global(.btn-danger),
-    .skills-view :global(.btn-secondary),
-    .skills-view :global(.btn-tertiary),
-    .skills-view :global(.btn-primary) {
-      min-height: 40px;
-    }
-    .skills-detail-scroll {
-      padding-right: 0;
-    }
-    .skills-diagnostics summary {
-      min-height: 40px;
-    }
-  }
-</style>
