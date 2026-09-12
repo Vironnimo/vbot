@@ -51,6 +51,6 @@ Success reloads the existing `ModelRegistry` in place and records reachable. Fai
 
 - Provider fetch/normalization: `core/models/discovery.py`
 - Model layers and assembly: `core/models/`, `models.md`
-- Local sweep/reachability: `core/runtime/runtime.py`, `server/rpc/connection_methods.py`
+- Local sweep/reachability: `core/providers/runtime.py`, `server/rpc/model_methods.py`
 - Provider-specific normalization: the concrete Adapter modules under `core/providers/`
 - Focused coverage: Provider catalog tests under `tests/core/providers/`, discovery/Models tests, and local-refresh Runtime/RPC tests

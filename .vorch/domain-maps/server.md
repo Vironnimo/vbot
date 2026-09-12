@@ -6,6 +6,8 @@ FastAPI transport and public protocol edge around the core vBot kernel.
 
 `server/` owns HTTP routing, the RPC envelope, SSE, WebSocket transport, request/response validation and mapping, process startup, and optional static WebUI serving. It imports runtime/core services but owns no business rules - Agent, Chat, Run, Session, Provider, Project, Tool, Skill, Extension, Prompt, Channel, and storage semantics stay in their domains.
 
+`app.py` keeps HTTP routes, upload/JSON input limits and the FastAPI lifespan. Internal `_app_lifecycle.py` owns app-state initialization, core-event subscriptions and cleanup helpers; `_streams.py` owns stream delivery, reconnect projections and presence; `_origins.py` and `_bind.py` own Origin policy and bind resolution. `_http_dependencies.py` keeps optional framework availability in one place. These remain parts of the same transport edge.
+
 RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dispatch, validation, payload sanitation, expected-error mapping, and event bridging live in focused support modules. The registered method tables are the source of truth for names/parameters/return shapes - do not mirror the method catalog here.
 
 ## Transport contracts
