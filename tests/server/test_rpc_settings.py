@@ -166,8 +166,8 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             },
         },
         "recall": {
-            "backend": "canonical_scan",
-            "available_backends": ["canonical_scan", "hybrid", "sqlite_fts", "vector"],
+            "backend": "sqlite_fts",
+            "available_backends": ["hybrid", "sqlite_fts", "vector"],
         },
         "web_search": {
             "provider": "brave",

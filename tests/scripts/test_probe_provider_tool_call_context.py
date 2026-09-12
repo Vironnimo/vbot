@@ -466,41 +466,6 @@ def test_project_scenario_uses_production_schema_and_exact_arguments() -> None:
     )
 
 
-def test_session_read_cases_use_production_schema_and_exact_arguments() -> None:
-    for case_name in probe_choices.SESSION_READ_CASES:
-        scenario = probe_scenarios._scenario(
-            Namespace(
-                scenario="session_read",
-                session_read_case=case_name,
-                lines=8,
-            ),
-        )
-        contracts = probe_measurements._compile_probe_contracts(
-            scenario.tools,
-            require_closed_input=scenario.require_closed_input,
-        )
-        arguments = scenario.expected_arguments
-
-        assert scenario.tools[0]["parameters"] is tool_session_search.SESSION_READ_TOOL_PARAMETERS
-        assert arguments is not None
-        contracts[tool_session_search.SESSION_READ_TOOL_NAME].validate_arguments(arguments)
-        assert (
-            probe_measurements._expected_argument_measurements(
-                [
-                    {
-                        "name": tool_session_search.SESSION_READ_TOOL_NAME,
-                        "arguments": arguments,
-                    }
-                ],
-                scenario,
-            )["expected_arguments_match"]
-            is True
-        )
-
-    whole = probe_scenario_history._session_read_scenario("whole")
-    assert whole.expected_arguments == {"session_id": "session-123"}
-
-
 def test_session_search_cases_use_production_schema_and_exact_arguments() -> None:
     for case_name in probe_choices.SESSION_SEARCH_CASES:
         scenario = probe_scenarios._scenario(
@@ -532,8 +497,8 @@ def test_session_search_cases_use_production_schema_and_exact_arguments() -> Non
             is True
         )
 
-    listing = probe_scenario_history._session_search_scenario("list")
-    assert listing.expected_arguments == {}
+    listing = probe_scenario_history._session_search_scenario("query")
+    assert listing.expected_arguments == {"query": "Tool schema defaults"}
 
 
 def test_status_cases_use_production_schema_and_exact_arguments() -> None:

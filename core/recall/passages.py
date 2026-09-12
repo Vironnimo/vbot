@@ -14,7 +14,7 @@ from core.recall.canonical import (
 )
 from core.sessions import is_skill_context_note
 
-PASSAGE_POLICY_VERSION = 1
+PASSAGE_POLICY_VERSION = 2
 PASSAGE_TARGET_CHARS = 1500
 PASSAGE_OVERLAP_CHARS = 200
 
@@ -51,6 +51,39 @@ def build_session_passages(
     roles: tuple[str, ...] = SESSION_RECALL_DEFAULT_ROLES,
     target_chars: int = PASSAGE_TARGET_CHARS,
     overlap_chars: int = PASSAGE_OVERLAP_CHARS,
+) -> list[Passage]:
+    """Keep summaries separate so a hit never presents a summary as verbatim text."""
+    passages: list[Passage] = []
+    pending: list[Any] = []
+    for message in messages:
+        if getattr(message, "role", "") == "compaction_checkpoint":
+            passages.extend(
+                _build_passages(
+                    pending, roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
+                )
+            )
+            pending = []
+            passages.extend(
+                _build_passages(
+                    [message], roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
+                )
+            )
+        else:
+            pending.append(message)
+    passages.extend(
+        _build_passages(
+            pending, roles=roles, target_chars=target_chars, overlap_chars=overlap_chars
+        )
+    )
+    return passages
+
+
+def _build_passages(
+    messages: Iterable[Any],
+    *,
+    roles: tuple[str, ...],
+    target_chars: int,
+    overlap_chars: int,
 ) -> list[Passage]:
     """Split eligible Session text into overlapping Passages without source truncation."""
 

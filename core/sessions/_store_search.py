@@ -140,6 +140,8 @@ def search(
         )
         trigram_supported = bool(terms) and all(len(term) >= 3 for term in terms)
 
+    expression = "{content content_search} : (" + expression + ")"
+
     if (
         not use_fts
         or not _store_fts._fts_health_from_connection(connection, verify_coverage=False).available
@@ -206,9 +208,11 @@ def search(
             )
         return _store_values._FtsSearchRows(found, source="fts")
 
-    result = query_fts(FTS_TABLE)
-    if not result and trigram_supported and not (roles is not None and "tool" in roles):
-        result = query_fts(FTS_TRIGRAM_TABLE)
+    result = query_fts(
+        FTS_TRIGRAM_TABLE
+        if trigram_supported and roles is not None and "tool" not in roles
+        else FTS_TABLE
+    )
     if not result and (roles is None or "tool" in roles):
         result = canonical_rows(connection, fallback_reason="tool_inclusive")
     return result

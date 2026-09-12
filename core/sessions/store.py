@@ -783,29 +783,6 @@ class SessionStore:
                 connection, project_id, agent_id, metadata_keys=metadata_keys
             )
 
-    def list_recall_summary_rows(
-        self,
-        project_id: str | None,
-        agent_id: str,
-        *,
-        include_subagents: bool,
-        excluded_session_id: str | None,
-        since: datetime | None,
-        until: datetime | None,
-        limit: int | None,
-    ) -> list[sqlite3.Row]:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.list_recall_summary_rows(
-                connection,
-                project_id,
-                agent_id,
-                include_subagents=include_subagents,
-                excluded_session_id=excluded_session_id,
-                since=since,
-                until=until,
-                limit=limit,
-            )
-
     @staticmethod
     def metadata_from_state(state: Any) -> JsonObject:
         return _store_values._session_metadata_from_state(state)
@@ -881,6 +858,11 @@ class SessionStore:
                 ).available
         except Exception:
             return False
+
+    def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
+        """Return bounded conversation text beside a search anchor."""
+        with self._runtime.read_ctx() as connection:
+            return _store_history.recall_context(connection, address, message_id)
 
     def fts_search(
         self,

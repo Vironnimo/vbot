@@ -108,6 +108,8 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 - Tests mirror the module split under `tests/cli/`; parser shape, behavior, output text, and lifecycle changes update the focused tests.
 - The bundled product skill `resources/skills/vbot-cli/` teaches vBot's own Agents the CLI surface (lean SKILL.md routing to per-area reference files). Its update workflow creates and verifies a one-shot Bootstrap around `vbot update`, then inspects server status/logs from that Run. When command shapes, areas, or flags change, update the matching reference file (and SKILL.md's area table if areas/subcommands changed) in the same change.
 
+Extended Session inspection is documented in the bundled `vbot-cli/references/session-search.md`: CLI listing and `vbot home` locate the exact target, then read-only SQLite recipes retrieve active transcripts or exact Tool Results. There is no new CLI transcript command.
+
 ## Constraints & Gotchas
 
 - The CLI is an accessor, not a second control plane. Do not add management commands that write `settings.json`, Agent configs, Channel configs, prompt fragments, logs, model catalogs, or other runtime files directly; route them through server RPC unless the command is explicitly local lifecycle/home/desktop-launch/doctor/update/uninstall/autostart behavior. `home` only reports locally resolved paths; the `desktop` launch is a local GUI action. Neither uses RPC or constructs a `ServerInstance`.

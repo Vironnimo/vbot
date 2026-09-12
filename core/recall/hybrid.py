@@ -33,8 +33,8 @@ _RRF_INITIAL_DEPTH = 20
 # the notice propagated from the vector arm.
 _HYBRID_SEARCH_GUIDANCE = (
     "Literal terms or a short topic description. Every whitespace-separated term is required "
-    "by literal search; the same query is also searched by meaning. Omit to list recent "
-    "Sessions. Matches combine both rankings by relevance."
+    "by literal search; the same query is also searched by meaning. "
+    "Matches combine both rankings by relevance."
 )
 _HYBRID_TOOL_SUMMARY = (
     "Find persisted Sessions and relevant passages using literal and semantic search."
