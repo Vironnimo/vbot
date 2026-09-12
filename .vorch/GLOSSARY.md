@@ -1,88 +1,67 @@
 # Glossary
 
 ## Agent
-**Definition:** The common runtime participant in a vBot Session, addressed by an Agent id and resolved as either a stored Identity Agent or a repository-discovered Project Agent. Both forms expose the same runtime configuration surface, but only an Identity Agent owns an `agent.json` and Workspace.
-**Not:** A background process or a Session. The Agent supplies runtime identity and configuration; the Session is the persisted conversation container in which it participates.
+A Session participant addressed by Agent id, supplying runtime identity and configuration. Resolves as a stored Identity Agent or repository-discovered Project Agent. Both expose the same runtime configuration surface; only Identity Agents own `agent.json` and a Workspace. Not a background process or Session.
 
 ## Agentic Loop
-**Definition:** The central processing cycle of a chat. The model receives a user message, responds with text and/or tool calls. If tools are called, they execute and results feed back to the model. This repeats until the model returns a final response with no tool calls. The loop runs entirely in the kernel's async context.
-**Not:** An event loop or game loop. Not a separate process.
+The chat processing cycle: the Model receives a user message, produces text and/or Tool calls, and receives Tool results until it returns a final response without Tool calls. Runs entirely in the async kernel; not an event/game loop or separate process.
 
 ## Provider
-**Definition:** An external API service that hosts AI models. A provider is an **Adapter** (code that speaks the wire protocol) plus a **JSON config** (base URL, authentication, provider-specific settings). Its models come from the layered Model DB; wire/credential internals live in `providers.md`, model layers in `models.md`.
-**Not:** A Model. The provider is the infrastructure that routes the request; the model is the endpoint that processes it.
+An external API service hosting AI Models, represented by an Adapter (wire-protocol code) and JSON config (base URL, authentication, Provider settings). Routes requests to Models from the layered Model DB; it is not the Model processing them. Wire/credentials: `providers.md`; Model layers: `models.md`.
 
 ## Model
-**Definition:** A specific AI model at one specific provider - the same underlying model is a distinct entry per provider, with its own ID, capabilities, and context window. The model ID is the exact string sent on the wire; the user selects `<provider>/<model-id>`. Assembly mechanics live in `models.md`.
-**Not:** A Provider. The model is the cognitive endpoint the provider routes to; the wire model-id goes on the wire.
+An AI endpoint at one Provider, with its own ID, capabilities, and context window; the same underlying Model has a distinct entry per Provider. Users select `<provider>/<model-id>`; only the exact model-id goes on the wire. The Model processes requests; the Provider routes them. Assembly: `models.md`.
 
 ## Reasoning
-**Definition:** A model capability for an internal reasoning step before the final answer - a typed block in the model data (`reasoning.supported`). The agent's `thinking_effort` setting steers it; each adapter renders that steering into its own wire vocabulary. Steering mechanics live in `models.md` and `providers.md`.
-**Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output it produces (defined in `providers.md`).
+A Model's capability for internal reasoning before its final answer, represented by a typed block in Model data (`reasoning.supported`). Agent `thinking_effort` steers it through Adapter-specific wire vocabulary (`models.md`, `providers.md`). The capability and configuration are distinct from Chain of Thought (CoT), its opaque output, defined in `providers.md`.
 
 ## Reasoning Replay
-**Definition:** Returning a Model's prior reasoning state in later requests of the same conversation. Two classes with different rules: opaque meta (`reasoning_details`, signatures/encrypted blocks) is contract state and replays byte-identically when the wire requires it; visible reasoning text is display material and only goes back when that wire's Model demonstrably benefits.
-**Not:** Chain of Thought itself (the content, not its round-trip). Also not "replay everything by default" - minimality is the invariant; mechanics and per-provider policy live in `providers/request-policy.md`.
+Returning prior Model reasoning state in later requests of the same conversation. Opaque meta (`reasoning_details`, signatures/encrypted blocks) is contract state: replay byte-identically when the wire requires it. Visible reasoning text is display material: replay only when that wire's Model demonstrably benefits. Minimal replay, not everything by default; distinct from CoT content itself. Mechanics/policies: `providers/request-policy.md`.
 
 ## Session
-**Definition:** A system-owned persisted chat container that belongs to exactly one Agent within its Identity or Project scope and owns canonical Message history in `<data-dir>/sessions.db` (storage and generation rules in `sessions.md`).
-**Not:** The agent itself, the currently executing work, or the agent's Workspace files. The Session is the persisted conversation container; the Run is the active execution inside it.
+A system-owned persisted chat container belonging to exactly one Agent in its Identity or Project scope, with canonical Message history in `<data-dir>/sessions.db` (`sessions.md`: storage/generation rules). Distinct from its Agent, Workspace files, and active execution (Run).
 
 ## Memory
-**Definition:** Curated, durable facts stored in an Identity Agent's Workspace Markdown files and managed through the Memory service and, when permitted, the `memory` Tool. User-scope Memory lives in `USER.md`; Agent-scope Memory lives in `MEMORY.md`; `memory_prompt_mode` independently decides which files, if any, become prompt-visible.
-**Not:** Session history, scratch notes, or a broad search index. Searchable conversation recall belongs to Sessions and recall tools such as `session_search`.
+Curated durable facts in an Identity Agent's Workspace Markdown: `USER.md` for user scope, `MEMORY.md` for Agent scope. Managed by the Memory service and, when permitted, the `memory` Tool; `memory_prompt_mode` independently controls which files, if any, enter the prompt. Not scratch notes, Session history, or a broad search index; conversation recall uses Sessions and Tools such as `session_search`.
 
 ## Run
-**Definition:** One active execution inside a Session: a user turn plus all model output, visible thinking blocks, tool calls, tool results, and follow-up assistant output until the work completes, fails, or is cancelled.
-**Not:** The Agent, the Session, or a single provider HTTP request. A Run can span multiple model/tool steps.
+One active Session execution: a user turn and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, or cancellation. Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
 
 ## Agent Takeover
-**Definition:** Moving the current running Session - full verbatim history, same id - from one Agent to another (personal or team) via `/agent <addr> [task]`, so it afterwards belongs only to the target, which then waits or runs the optional task immediately.
-**Not:** A Handoff or a copy. `/handoff` writes a *summary* into a **fresh** Session; an Agent Takeover relocates the **same** Session with the literal history and no summary, and the source no longer holds it.
+Moving the current running Session, with the same id and full verbatim history, between Agents (personal or Team) via `/agent <addr> [task]`. Only the target retains ownership; it waits or immediately runs the optional task. No copy or summary: Handoff (`/handoff`) instead writes a summary into a fresh Session.
 
 ## Accessor
-**Definition:** An external interface to the same vBot system, such as the WebUI, Desktop app, CLI, or later other channels. Accessors talk to the vBot server; they do not call providers directly.
-**Not:** A Provider or Adapter. An Accessor is a client-facing entry point into vBot.
+A client-facing interface to vBot (WebUI, Desktop, CLI, or future channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
 
 ## Streaming
-**Definition:** Incremental delivery of a Run's output while that Run is still executing. In vBot's external server contract, streaming is exposed by the server; provider-specific streaming details stay hidden behind adapters.
-**Not:** A separate chat system with different semantics from normal send. It is the same Run, delivered incrementally instead of only at the end.
+Server-exposed incremental output from an executing Run, with Provider-specific details hidden behind Adapters. Same Run and semantics as normal send, delivered incrementally rather than only at completion; not a separate chat system.
 
 ## Cancel
-**Definition:** A best-effort request to stop an active Run as quickly as possible. It stops further model/tool progression, tries to abort the current provider work, and ignores late results that arrive after cancellation.
-**Not:** Deleting the Session, rolling back already persisted history, or erasing output that was already shown to the user.
+A best-effort request to stop an active Run promptly: stop Model/Tool progression, attempt to abort current Provider work, ignore late results. Does not delete the Session, roll back persisted history, or erase displayed output.
 
 ## Skill
-**Definition:** A reusable playbook for an agent - a `SKILL.md` file with instructions that teach the agent *how* to handle a specific task or domain, optionally bundled with helper files under the skill's directory. On activation the agent is told the skill's absolute directory so it can read or run those bundled files.
-**Not:** A Tool. A tool does one thing; a skill teaches a workflow or convention. The utilities a skill may bundle are specialized programs, not agent-tools.
+A reusable Agent playbook: `SKILL.md` teaches a task/domain workflow or convention, optionally with helper files in its directory. Activation supplies the absolute Skill directory for reading/running helpers. Distinct from a Tool that performs an operation; bundled utilities are specialized programs, not Agent Tools.
 
 ## System Reminder
-**Definition:** A kernel-internal note that is persisted in a Session and later embedded into a provider request as a synthetic user message wrapped in `<system-reminder>` tags. It lets background producers inform the model about events without creating a normal user-visible chat message. The complete channel set and when to use which lives in `model-communication.md`.
-**Not:** A system prompt, a real user turn, or a server/UI notification.
+A kernel-internal note persisted in a Session, then embedded in Provider requests as a synthetic user message in `<system-reminder>` tags. Background producers inform the Model without a normal user-visible chat message. Not a System Prompt, real user turn, or server/UI notification. Channel selection: `model-communication.md`.
 
 ## Tool
-**Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an Agent can call during a chat when its Tool Access Policy and runtime conditions permit it. File Tools resolve relative paths against the **cwd** by default: the Project repo for a Project Agent or Rooted Identity Agent, otherwise the Identity Agent's Workspace; the `memory` Tool always stays on the Workspace.
+A function with a name, description, and parameters defined in JSON Schema, callable by an Agent during chat when Tool Access Policy and runtime conditions permit. File Tools default to **cwd** for relative paths: Project repo for Project Agents and Rooted Identity Agents, otherwise the Identity Agent's Workspace. The `memory` Tool always uses Workspace.
 
 ## Workspace
-**Definition:** An Identity Agent's freely editable identity and Memory home, containing `SOUL.md`, `USER.md`, and `MEMORY.md`; a custom absolute Workspace path is valid alongside the default location (see `agent.md`). Workspace remains the `memory` tool's home while cwd separately controls relative file and shell work.
-**Not:** A Project selection, Session owner, or synonym for cwd. Workspace and cwd may coincide, but path equality has no Rooting meaning.
+An Identity Agent's freely editable identity/Memory home: `SOUL.md`, `USER.md`, `MEMORY.md`. Supports default or custom absolute paths (`agent.md`). Always the `memory` Tool's home; cwd independently controls relative file/shell work. Not a Project selection, Session owner, or cwd synonym; equal paths do not imply Rooting.
 
 ## Project
-**Definition:** A first-class entity (not just a cwd), keyed by a stable `project_id` slug with a changeable display name, that bundles a cwd (the repo directory tools resolve relative paths against), one declared source format, an auto-load file list (`AGENTS.md` seeded), a project-default-agent, a default-model, a [[Team]] scanned live from the repo, and Sessions. The minimal Project is just a cwd - team and auto-load files are all optional, so an empty folder is a valid Project.
-**Not:** A bare cwd, a Workspace, or an Agent. The cwd is one field of a Project; Workspace is independently selected identity state. vBot reads the repo to discover the Team but stores runtime Project state in the data-dir; details live in `projects.md`.
+A first-class entity with stable `project_id` slug, changeable display name, cwd (repo directory for relative Tool paths), one declared source format, auto-load files (seeded with `AGENTS.md`), project-default-agent, default-model, repo-scanned [Team](#team), and Sessions. A minimal Project needs only cwd; Team and auto-load files are optional, so an empty folder is valid. Not cwd itself, an Agent, or independently selected Workspace identity state. Team comes from the repo; runtime Project state lives in the data directory (`projects.md`).
 
 ## Team
-**Definition:** The set of agents discovered in a Project by the **scan** of the repo, at the known location of the project's single source format only - no mixing. It is the project's roster of callable agents; re-derived from the repo on open / explicit re-scan (the repo is the source of truth, no copy drift). A bare/empty project has an empty team - that is normal, not an error. Per-ecosystem scan mechanics live in `projects/scanning.md`.
-**Not:** The global Agent store. Team membership is project-scoped and lives in the repo, not in the data-dir agent store. An Identity Agent with explicitly loaded Project Context is **not** a team member.
+A Project's callable Agent roster, scanned at the known location of its single source format, without mixing. Re-derived from the authoritative repo on open/explicit re-scan; a bare/empty Project normally has an empty Team. Membership is repo-/Project-scoped, not the global data-directory Agent store. Loading Project Context does not make an Identity Agent a member. Scan mechanics: `projects/scanning.md`.
 
 ## Config Agent
-**Definition:** The workspace-less runtime representation synthesized when a Project Agent is resolved from its scanned Project Team profile, with no identity or Memory Tool. Its model, Run settings, Skills, and Tool Access Policy resolve from repository configuration plus Project defaults and vBot overrides (resolution tiers in `projects/resolution.md`).
-**Not:** An Identity Agent or a separately stored Agent configuration. A Config Agent has no SOUL/USER/MEMORY home and is interchangeable Run configuration rather than a persistent identity.
+Workspace-less Run configuration synthesized from a scanned Project Team profile when resolving a Project Agent. No persistent identity, SOUL/USER/MEMORY home, Memory Tool, or separately stored Agent config. Model, Run settings, Skills, and Tool Access Policy resolve from repo config, Project defaults, and vBot overrides (`projects/resolution.md`). Interchangeable configuration, not an Identity Agent.
 
 ## Identity Agent
-**Definition:** A stored Agent under `<datadir>/agents/<id>/` with its own `agent.json`, Workspace, durable identity, and Memory files across Sessions. The Workspace provides its Memory home, while `memory_prompt_mode` and the Tool Access Policy independently decide prompt visibility and whether the `memory` Tool is callable.
-**Not:** A Config Agent. The Identity Agent is the persistent self with a Memory home; a Config Agent is a workspace-less Project profile synthesized for a Run.
+A stored Agent at `<datadir>/agents/<id>/` with `agent.json`, Workspace, and durable identity/Memory across Sessions. `memory_prompt_mode` controls Memory prompt visibility; Tool Access Policy independently controls `memory` Tool access. Unlike a Config Agent, it owns a persistent Memory home, not a workspace-less Project profile synthesized for a Run.
 
 ## Rooted Agent
-**Definition:** An Identity Agent whose nullable saved `Project` selection names a registered Project. It keeps its own Workspace, Memory, private Skills, Sessions, permissions, and bare addressing while relative file/shell work, Project Files, and Project Skills use the selected Project.
-**Not:** A Project Agent or Config Agent. Rooting does not move Session ownership, apply Project Config-Agent ceilings, expose the Project Team automatically, or derive from Workspace path equality.
+An Identity Agent whose nullable saved `Project` selection names a registered Project. Retains its Workspace, Memory, private Skills, Sessions, permissions, and bare addressing; relative file/shell work, Project Files, and Project Skills use that Project. Not a Project Agent or Config Agent. Rooting does not move Session ownership, apply Project Config-Agent ceilings, or automatically expose the Team; Workspace path equality does not imply Rooting.
