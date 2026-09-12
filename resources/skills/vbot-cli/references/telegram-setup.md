@@ -36,7 +36,7 @@ vbot channel status tg-main
 `status` should report `running=yes`. `failed=yes` with a token-related failure reason means the token is missing, malformed, or rejected by Telegram. Rotate it without a server restart:
 
 ```bash
-vbot channel set-token tg-main --stdin
+vbot channel token set tg-main --stdin
 vbot channel status tg-main
 ```
 
@@ -88,8 +88,8 @@ vbot channel access tg-main --group <telegram-group-id>
 The own identity is an admin in every group and cannot be demoted. Add or remove other admins without replacing the group list:
 
 ```bash
-vbot channel grant-admin tg-main --group <telegram-group-id> --user <user-id>
-vbot channel revoke-admin tg-main --group <telegram-group-id> --user <user-id>
+vbot channel admin grant tg-main --group <telegram-group-id> --user <user-id>
+vbot channel admin revoke tg-main --group <telegram-group-id> --user <user-id>
 ```
 
 Admins retain the Agent's existing Tool access. Members may authorize only `web_search` and `web_fetch`; group Commands and reserved Run buttons require admin.
@@ -97,6 +97,6 @@ Admins retain the Agent's existing Tool access. Members may authorize only `web_
 ## Troubleshooting
 
 - **No reply in a direct chat:** inspect `channel status` for listener failure or a denied chat. If neither explains it, inspect the routed Agent’s effective Model and recent logs. Silence alone does not identify the cause.
-- **Channel `failed=yes`** → read the `failure_reason`; use `channel set-token <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
+- **Channel `failed=yes`** → read the `failure_reason`; use `channel token set <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
 - **Bot ignores its visible name or other plain group messages** → privacy mode is still on (step 5), or the text did not match a configured wake word. Test delivery with an explicitly addressed command or a reply to the bot.
-- **Group commands ignored** → group slash commands require the sender's `admin` role. Confirm own identity and group roles with `channel identity` and `channel access`, then use additive `grant-admin` if needed.
+- **Group commands ignored** → group slash commands require the sender's `admin` role. Confirm own identity and group roles with `channel identity` and `channel access`, then use additive `admin grant` if needed.

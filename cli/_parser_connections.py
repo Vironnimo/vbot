@@ -92,7 +92,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         channel_subparsers,
         "set-token",
         CHANNEL_HELP["set-token"],
-        example="channel set-token tg-main --stdin",
+        example="channel token set tg-main --stdin",
     )
     set_token_parser.add_argument("id", metavar="<channel-id>", help="Channel id to update")
     set_token_parser.add_argument(
@@ -207,14 +207,14 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "custom-list",
         PROVIDER_HELP["custom-list"],
-        example="provider custom-list",
+        example="provider custom list",
     )
     custom_save_parser = _add_command_parser(
         provider_subparsers,
         "custom-save",
         PROVIDER_HELP["custom-save"],
         example=(
-            'provider custom-save local-ai --name "Local AI" '
+            'provider custom save local-ai --name "Local AI" '
             "--base-url http://127.0.0.1:8080/v1 --auth none --model chat-model"
         ),
     )
@@ -261,7 +261,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "custom-delete",
         PROVIDER_HELP["custom-delete"],
-        example="provider custom-delete local-ai",
+        example="provider custom delete local-ai",
     )
     custom_delete_parser.add_argument(
         "provider",
@@ -296,7 +296,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "usage-history",
         PROVIDER_HELP["usage-history"],
-        example="provider usage-history --since 2026-08-01T00:00:00Z",
+        example="provider history list --since 2026-08-01T00:00:00Z",
     )
     usage_history_parser.add_argument("--since", help="ISO 8601 lower bound (inclusive)")
     usage_history_parser.add_argument("--until", help="ISO 8601 upper bound (inclusive)")
@@ -305,7 +305,7 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "usage-history-clear",
         PROVIDER_HELP["usage-history-clear"],
-        example="provider usage-history-clear --yes",
+        example="provider history clear --yes",
     )
     usage_history_clear_parser.add_argument("--yes", action="store_true", help="Confirm deletion")
 
@@ -313,11 +313,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "set-key",
         PROVIDER_HELP["set-key"],
-        example="provider set-key openai --stdin --refresh-models",
+        example="provider key set openai --stdin --refresh-models",
     )
     set_key_parser.description = (
         "Write an API key to the target data-dir .env through the server RPC contract. "
-        "Example: vbot provider set-key openai --stdin --refresh-models"
+        "Example: vbot provider key set openai --stdin --refresh-models"
     )
     set_key_parser.add_argument(
         "provider", metavar="<provider-id>", help="Provider id to configure"
@@ -352,11 +352,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         provider_subparsers,
         "unset-key",
         PROVIDER_HELP["unset-key"],
-        example="provider unset-key openai",
+        example="provider key unset openai",
     )
     unset_key_parser.description = (
         "Remove an API key from the target data-dir .env through the server RPC contract. "
-        "Process-environment credentials are not touched. Example: vbot provider unset-key openai"
+        "Process-environment credentials are not touched. Example: vbot provider key unset openai"
     )
     unset_key_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to clear")
     unset_key_parser.add_argument(
@@ -498,7 +498,7 @@ def _add_task_model_parsers(
         task_model_subparsers,
         "targets",
         TASK_MODEL_HELP["targets"],
-        example="task-model targets speech_to_text",
+        example="task-model target list speech_to_text",
     )
     targets_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
 
@@ -514,7 +514,7 @@ def _add_task_model_parsers(
         task_model_subparsers,
         "options",
         TASK_MODEL_HELP["options"],
-        example="task-model options text_to_speech openai/gpt-4o-mini-tts::api-key",
+        example="task-model option list text_to_speech openai/gpt-4o-mini-tts::api-key",
     )
     options_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
     options_parser.add_argument(
@@ -562,7 +562,7 @@ def _add_task_model_parsers(
         task_model_subparsers,
         "set-option",
         TASK_MODEL_HELP["set-option"],
-        example=("task-model set-option text_to_speech voice en-us-harper:mai-voice-2"),
+        example=("task-model option set text_to_speech voice en-us-harper:mai-voice-2"),
     )
     set_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
     set_option_parser.add_argument("name", metavar="<name>")
@@ -577,7 +577,7 @@ def _add_task_model_parsers(
         task_model_subparsers,
         "unset-option",
         TASK_MODEL_HELP["unset-option"],
-        example="task-model unset-option text_to_speech speed",
+        example="task-model option unset text_to_speech speed",
     )
     unset_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
     unset_option_parser.add_argument("name", metavar="<name>")

@@ -238,6 +238,7 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
             "failure_reason=Unknown agent_id: missing-agent"
         ),
         instance=instance,
+        attention=("Channel listener failed; inspect the failure details",),
     )
     assert calls == [
         {

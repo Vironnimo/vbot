@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -157,16 +158,19 @@ def _format_rows(jobs: Sequence[object]) -> str:
 def _format_row(job: object) -> str:
     if not isinstance(job, dict):
         return "- invalid Bootstrap job entry"
-    return (
-        f"- name={_string_or_default(job.get('name'), _prompt_preview(job.get('prompt')))}"
-        f" id={_string_or_default(job.get('id'), '?')}"
-        f" agent={_string_or_default(job.get('target'), '?')}"
-        f" mode={_string_or_default(job.get('mode'), '?')}"
-        f" status={_string_or_default(job.get('status'), '?')}"
-        f" session={_string_or_default(job.get('session_id'), 'new')}"
-        f" last_outcome={_string_or_default(job.get('last_outcome'), '-')}"
-        f" last_error={_string_or_default(job.get('last_error'), '-')}"
-        f" prompt={_prompt_preview(job.get('prompt'))}"
+    return record_fields(
+        [
+            f"- name={_string_or_default(job.get('name'), _prompt_preview(job.get('prompt')))}",
+            f" id={_string_or_default(job.get('id'), '?')}",
+            f" agent={_string_or_default(job.get('target'), '?')}",
+            f" mode={_string_or_default(job.get('mode'), '?')}",
+            f" status={_string_or_default(job.get('status'), '?')}",
+            f" session={_string_or_default(job.get('session_id'), 'new')}",
+            f" last_outcome={_string_or_default(job.get('last_outcome'), '-')}",
+            f" last_error={_string_or_default(job.get('last_error'), '-')}",
+            f" prompt={_prompt_preview(job.get('prompt'))}",
+        ],
+        separator="",
     )
 
 

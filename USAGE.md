@@ -262,14 +262,14 @@ The WebUI is the recommended place to manage Connections and Accounts because it
 <summary>Equivalent Provider CLI examples</summary>
 
 ```bash
-vbot provider set-key openrouter --stdin --refresh-models
+vbot provider key set openrouter --stdin --refresh-models
 vbot provider connect openai --connection openai:subscription
 vbot provider usage --connection openai:subscription
 vbot provider enable ollama
 vbot model refresh openrouter
 ```
 
-A key passed to `provider set-key` may be retained by shell history. Prefer the WebUI, a protected environment variable, or a shell-specific history-safe workflow when entering a real secret.
+A key passed to `provider key set` may be retained by shell history. Prefer the WebUI, a protected environment variable, or a shell-specific history-safe workflow when entering a real secret.
 
 </details>
 
@@ -319,16 +319,16 @@ The equivalent secret-free `settings.json` shape is:
 }
 ```
 
-Use `"auth": "api_key"` for standard `Authorization: Bearer` authentication and enter the key through Settings or `provider custom-save --api-key-stdin`. Omit or clear `models_endpoint` to use manual Models only. Discovery and manual Models can coexist: a manual record overrides discovered facts for the same wire id, while other discovered Models remain available. Saving through the WebUI/RPC reloads Providers and Models immediately; after direct file editing, validate with `vbot doctor settings` and restart vBot.
+Use `"auth": "api_key"` for standard `Authorization: Bearer` authentication and enter the key through Settings or `provider custom save --api-key-stdin`. Omit or clear `models_endpoint` to use manual Models only. Discovery and manual Models can coexist: a manual record overrides discovered facts for the same wire id, while other discovered Models remain available. Saving through the WebUI/RPC reloads Providers and Models immediately; after direct file editing, validate with `vbot doctor settings` and restart vBot.
 
 ```bash
-vbot provider custom-save local-ai --name "Local AI" --base-url http://127.0.0.1:8080/v1 --auth none --models-endpoint /models --model chat-model
-vbot provider custom-list
+vbot provider custom save local-ai --name "Local AI" --base-url http://127.0.0.1:8080/v1 --auth none --models-endpoint /models --model chat-model
+vbot provider custom list
 vbot model refresh local-ai
-vbot provider custom-delete local-ai
+vbot provider custom delete local-ai
 ```
 
-`custom-save` replaces the complete Custom Provider record; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+`custom save` replaces the complete Custom Provider record; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
 
 ## Data directory and configuration
 
@@ -557,13 +557,13 @@ vbot agent update coder --project my-project
 vbot project list
 vbot project show my-project
 vbot project set my-project --default-agent orchestrator
-vbot project set-override my-project orchestrator temperature 0.3
+vbot project override set my-project orchestrator temperature 0.3
 vbot session create orchestrator@my-project
 ```
 
 Project registration and Team scanning never write to the repository. Normal Agent Tools may write there during a Run when the Project is the working directory.
 
-Project `add`/`set` can replace the Tool Whitelist and bundled/global/Project Skill policy lists. `set-override`/`clear-override` manage one Project Agent's vBot-owned model, temperature, thinking-effort, or Compaction Policy tier without editing the repository. `project rm --copy-rooted-agent-files` preserves `SOUL.md`, `USER.md`, and `MEMORY.md` before rooted Identity Agents with custom Workspaces are reset to their default Workspace; removal output lists every affected Agent and file effect.
+Project `add`/`set` can replace the Tool Whitelist and bundled/global/Project Skill policy lists. `override set`/`override clear` manage one Project Agent's vBot-owned model, temperature, thinking-effort, or Compaction Policy tier without editing the repository. `project remove --copy-rooted-agent-files` preserves `SOUL.md`, `USER.md`, and `MEMORY.md` before rooted Identity Agents with custom Workspaces are reset to their default Workspace; removal output lists every affected Agent and file effect.
 
 ### Rooted Agents and Project Context Loading
 
@@ -580,7 +580,7 @@ vbot session list coder
 vbot session create coder --make-current
 vbot session fork coder SESSION_ID --target-agent reviewer
 vbot session rename coder SESSION_ID --title "Research notes"
-vbot session set-compaction-policy coder SESSION_ID --policy '{"enabled":false,"trigger":{"type":"context_ratio","threshold":0.8},"strategy":{"type":"summary_tail","tail_tokens":15000,"summary_model":null}}'
+vbot session policy set coder SESSION_ID --policy '{"enabled":false,"trigger":{"type":"context_ratio","threshold":0.8},"strategy":{"type":"summary_tail","tail_tokens":15000,"summary_model":null}}'
 vbot session delete coder SESSION_ID --yes
 ```
 
@@ -631,7 +631,7 @@ vbot skill create librarian --scope agent:coder --file SKILL.md
 vbot prompt preview coder
 ```
 
-The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `read`, `create`, `update`, `delete`, `write-file`, and `remove-file`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
+The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `read`, `create`, `update`, `delete`, `file write`, and `file remove`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
 
 The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Foreground work returns directly, while top-level background work completes asynchronously and wakes the parent with the finished results. Nested Sub-Agents run in the foreground, and background Bash is unavailable inside a Sub-Agent so work cannot be stranded after the child Session ends.
 
@@ -692,8 +692,8 @@ Use Settings for target-specific option forms, or inspect and bind them through 
 
 ```bash
 vbot task-model list
-vbot task-model targets text_embedding
-vbot task-model options image_generation openai/gpt-image-1::api-key
+vbot task-model target list text_embedding
+vbot task-model option list image_generation openai/gpt-image-1::api-key
 vbot task-model set text_embedding openai/text-embedding-3-small::api-key
 vbot task-model clear text_embedding
 ```
@@ -831,8 +831,8 @@ vbot channel update tg-main --allow 123456789
 vbot channel identity tg-main
 vbot channel identity tg-main --user 123456789
 vbot channel access tg-main --group -100123456789
-vbot channel grant-admin tg-main --group -100123456789 --user 987654321
-vbot channel revoke-admin tg-main --group -100123456789 --user 987654321
+vbot channel admin grant tg-main --group -100123456789 --user 987654321
+vbot channel admin revoke tg-main --group -100123456789 --user 987654321
 vbot channel enable tg-main
 vbot channel disable tg-main
 vbot channel remove tg-main
@@ -840,7 +840,7 @@ vbot channel remove tg-main
 
 An empty allowlist means deny all inbound chats, not allow everyone. To discover an id safely, message the bot once and inspect `vbot channel status <channel-id>` or Settings; each active adapter keeps the 20 most recent denied chats in memory. Allowing a chat restarts the adapter and clears that observation list. The allowlist gates inbound traffic only; an Agent using `channel_send` with an explicit platform target can send to any chat the bot account can reach.
 
-Group behavior is configurable from the CLI with `--response-mode mention|all`, list-replacing `--mention-pattern`, and `--observe-unaddressed true|false`. `channel identity` shows or sets the Channel account's own identity from previously seen participants; that identity is an admin in every group and cannot be demoted. `channel access` lists durable participants and roles for one group. `grant-admin` and `revoke-admin` are additive, idempotent one-user actions scoped to that group. Channel create/update/enable/disable output returns the saved config; `channel status` separately reports listener health and denied chats.
+Group behavior is configurable from the CLI with `--response-mode mention|all`, list-replacing `--mention-pattern`, and `--observe-unaddressed true|false`. `channel identity` shows or sets the Channel account's own identity from previously seen participants; that identity is an admin in every group and cannot be demoted. `channel access` lists durable participants and roles for one group. `admin grant` and `admin revoke` are additive, idempotent one-user actions scoped to that group. Channel create/update/enable/disable output returns the saved config; `channel status` separately reports listener health and denied chats.
 
 Direct-message Session routing is controlled by `dm_scope`: `per_conversation` is the default, while `main`, `per_peer`, and `per_account_channel_peer` provide broader or narrower sharing. Group chats always use a shared conversation anchor. `/new` advances that anchor to a new active Session without changing the Agent-wide current Session used by WebUI and Desktop.
 
@@ -896,14 +896,14 @@ vBot scans direct children of `<data-dir>/extensions/` plus configured Extension
 vbot extensions list
 vbot extensions reload
 vbot extensions enable homeassistant
-vbot extensions homeassistant
+vbot extensions show homeassistant
 ```
 
-Inspect or change an Extension field with its name-first command. Use `--stdin` for secrets so they do not enter shell history:
+Inspect an Extension with `extensions show <name>` and change a field with `extensions set <name> <field> <value>`. Use `--stdin` for secrets so they do not enter shell history:
 
 ```bash
-vbot extensions homeassistant set url http://homeassistant.local:8123
-Get-Content .\hass-token.txt | vbot extensions homeassistant set token --stdin
+vbot extensions set homeassistant url http://homeassistant.local:8123
+Get-Content .\hass-token.txt | vbot extensions set homeassistant token --stdin
 ```
 
 For the Extension API, hook contracts, capabilities, and examples, use the [vbot-cli Skill](resources/skills/vbot-cli/SKILL.md), its [Extension authoring guide](resources/skills/vbot-cli/references/extensions.md), and its [runnable templates](resources/skills/vbot-cli/assets/extensions). Bundled Swarm, MCP, and Computer Use operation is covered in the Skill's [Extension usage reference](resources/skills/vbot-cli/references/extension-usage.md).
@@ -925,6 +925,11 @@ Home Assistant ships as a bundled Extension. In Settings → Extensions → Home
 
 Commands read as `vbot <area> <command> [target] [options]`, with deeper subcommands where needed. Start with `vbot --help`, then `vbot <area> --help`. Collection names accept singular and plural forms, such as `vbot provider list` and `vbot providers list`.
 
+Use `vbot help`, `vbot project`, or `vbot project override` to discover the next action without executing anything. Related actions have readable paths such as `project override set`, `session policy set`, `channel token set`, `prompt layout reset`, `task-model option set`, and `skill file write`. Existing compound spellings remain compatible. Extensions use `extensions show <name>`, `extensions set <name> <field> <value>`, and `extensions run <name> <operation>`.
+
+Management commands share an explicit completion marker: `OK` for a completed command, `WARN` for pending work or a reported limitation, and `ERROR` for failure. This does not turn saved configuration into proof of runtime readiness. Notices go to stderr; stdout retains complete data and content, including JSON. Long commands report elapsed time and available operation phases before completion. Terminals get color and status symbols where supported, with long record rows arranged as separate fields. `NO_COLOR=1` disables color. `--output plain` preserves the stable data layout and suppresses extra progress/completion notices; `--output human` requests readable record layout in a capture. Update, server lifecycle, and Doctor retain their dedicated reports.
+
+
 ```bash
 vbot server restart
 vbot providers list
@@ -942,16 +947,16 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Desktop | `desktop [--host ... --port ...]` |
 | Installation lifecycle | `update`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status` |
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
-| Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project detect`, `project rm` |
-| Sessions | `session list`, `session create`, `session fork`, `session rename`, `session set-compaction-policy`, `session delete`, `session link-channel` |
+| Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
+| Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
 | Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
-| Channels | `channel add`, `channel list`, `channel update`, `channel set-token`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel grant-admin`, `channel revoke-admin`, `channel remove` |
-| Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
+| Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel remove` |
+| Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
-| System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
-| Providers | `provider list`, `provider status`, `provider usage`, `provider usage-history`, `provider usage-history-clear`, `provider custom-list`, `provider custom-save`, `provider custom-delete`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |
-| Models | `model list`, `model show`, `model refresh`, `task-model list`, `task-model targets`, `task-model options`, `task-model set`, `task-model set-option`, `task-model unset-option`, `task-model clear` |
-| Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set`, `extensions <name> operations`, `extensions <name> <operation>` |
+| System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt layout set`, `prompt layout reset`, `prompt preview` |
+| Providers | `provider list`, `provider status`, `provider usage`, `provider history list`, `provider history clear`, `provider custom list`, `provider custom save`, `provider custom delete`, `provider key set`, `provider key unset`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connection status` |
+| Models | `model list`, `model show`, `model refresh`, `task-model list`, `task-model target list`, `task-model option list`, `task-model set`, `task-model option set`, `task-model option unset`, `task-model clear` |
+| Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions show <name>`, `extensions set <name>`, `extensions operations <name>`, `extensions run <name> <operation>` |
 | Cron | `cron list`, `cron show`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
 | Bootstrap | `bootstrap list`, `bootstrap show`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |
 | Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics compactions`, `statistics errors`, `statistics tools`, `statistics skills` |

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import Any
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -26,6 +27,7 @@ def list_skills(instance: ServerInstance) -> CommandResult:
         ok=True,
         message=_format_skill_output(skills, invalid or []),
         instance=instance,
+        attention=("Some Skills could not be loaded; see diagnostics",) if invalid else (),
     )
 
 
@@ -437,7 +439,7 @@ def _format_skill_row(skill: object) -> str:
     name = _string_or_default(skill.get("name"), "?")
     description = _string_or_default(skill.get("description"), "?")
     suffix = _format_requirement_suffix(skill)
-    return f"- {name}  {description}{suffix}"
+    return record_fields([f"- {name}", f"{description}{suffix}"], separator="  ")
 
 
 def _format_requirement_suffix(skill: Mapping[str, Any]) -> str:

@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from cli._progress import operation_progress
 from cli.server_management import CommandResult, ServerInstance
 
 RPC_PATH = "/api/rpc"
@@ -21,6 +22,13 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     {"model.refresh_db", "session_store.snapshot_create"}
 )
 RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
+
+_PROGRESS_PHASES = {
+    "model.refresh_db": "Refreshing Model catalogs from Providers",
+    "session_store.snapshot_create": "Creating and verifying a Session-store snapshot",
+    "extensions.reload": "Reloading Extensions and checking their load results",
+    "provider.usage": "Checking live Provider usage limits",
+}
 
 
 class RpcPayload:
@@ -47,6 +55,8 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
     """Call one server RPC method and return normalized success/error payload."""
 
     request_body = {"method": method, "params": params}
+    if method in _PROGRESS_PHASES:
+        operation_progress(_PROGRESS_PHASES[method])
     timeout: httpx.Timeout | float = (
         RPC_LONG_RUNNING_TIMEOUT if method in _LONG_RUNNING_METHODS else RPC_TIMEOUT_SECONDS
     )

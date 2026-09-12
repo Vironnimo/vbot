@@ -7,9 +7,11 @@ description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, 
 
 Use `vbot` through Bash to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
 
-Commands read as `vbot <area> <command> [target] [options]`; a command may have further subcommands. For example: `vbot server restart`, `vbot provider list`, and `vbot provider connect openai`. Options refine the action.
+Choose the area and action first: `vbot <area> <action> [target] [options]`. Related actions can be grouped, for example `vbot project override set`, `vbot channel token set`, and `vbot skill file write`. There is no fixed word count. Resource ids are positional; flags supply options and values. Use the commands shown by help instead of inventing action flags such as `--restart`.
 
-Collection plurals such as `providers`, `models`, and `agents` also work; examples use the canonical area names. Discover commands with `vbot --help`, then narrow with `vbot <area> --help`. A syntax error includes a help command and may suggest a correction; no correction is executed automatically.
+Start with `vbot help` or `vbot <area>`, then narrow to `vbot <area> <group> --help`. Bare command groups show help without executing an action. Collection plurals also work; prefer the names and action paths shown in help. Older compound command spellings remain compatible. Syntax errors may suggest a correction but never execute it automatically.
+
+`[OK]` confirms command completion; `[WARN]` calls out pending work or a reported limitation; `[ERROR]` marks failure. Read the returned state before claiming runtime readiness. Progress and completion notices for management commands go to stderr; stdout retains the data, including complete JSON and content reads. `--output plain` suppresses these extra notices and uses the stable data layout. Terminal output is readable by default; `--output human` requests that layout in a capture too. Lifecycle and Doctor commands retain their dedicated reports.
 
 ## Start with the task
 
