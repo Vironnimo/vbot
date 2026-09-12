@@ -1,44 +1,27 @@
 <script>
-  import { onDestroy, tick } from 'svelte';
-
-  import { transcribeSpeech, uploadAttachment } from '$lib/api.js';
-  import { createAudioRecorder } from '$lib/audioRecorder.js';
-  import {
-    clearDraft,
-    flushComposerMemory,
-    getDraft,
-    getHistory,
-    getPendingAttachments,
-    pushHistory,
-    setPendingAttachments,
-    setDraft,
-  } from '$lib/composerMemory.js';
-  import {
-    extractMentionTokens,
-    fuzzyFilterFiles,
-    isMentionTokenChar,
-    matchMentionCandidates,
-  } from '$lib/fileMentions.js';
-  import { t } from '$lib/i18n.js';
-  import {
-    buildModelSelectOptions,
-    filterModelSelectOptions,
-    modelFilterFooterLabel,
-  } from '$lib/modelSelection.js';
-  import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import FileAutocomplete from './FileAutocomplete.svelte';
   import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
-
-  const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
-  // Mirrors FileAutocomplete's render cap so keyboard navigation and the
-  // rendered list can never disagree on the match set.
-  const MAX_FILE_MATCHES = 50;
-  const ATTACHMENT_ACCEPT =
-    'image/*,audio/*,video/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
-  const EPHEMERAL_ATTACHMENT_SCOPE = '__composer__';
+  import { t } from '$lib/i18n.js';
+  import { onDestroy, tick } from 'svelte';
+  import {
+    clearDraft,
+    flushComposerMemory,
+    getDraft,
+    getHistory,
+    pushHistory,
+    setDraft,
+  } from '$lib/composerMemory.js';
+  import {
+    extractMentionTokens,
+    matchMentionCandidates,
+  } from '$lib/fileMentions.js';
+  import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
+  import { createComposerMedia } from './composer/media.svelte.js';
+  import { createComposerPicker } from './composer/picker.svelte.js';
+  import './composer/composer.css';
 
   let {
     disabled = false,
@@ -62,6 +45,49 @@
     onLoadModelCatalog = null,
     computerControl,
   } = $props();
+  const media = createComposerMedia({
+    get draftKey() {
+      return draftKey;
+    },
+    get onTranscriptionError() {
+      return onTranscriptionError;
+    },
+    get disabled() {
+      return disabled;
+    },
+    get insertTranscript() {
+      return insertTranscript;
+    },
+  });
+  const picker = createComposerPicker({
+    get availableSkills() {
+      return availableSkills;
+    },
+    get content() {
+      return content;
+    },
+    set content(value) {
+      content = value;
+    },
+    get inputElement() {
+      return inputElement;
+    },
+    get onListFiles() {
+      return onListFiles;
+    },
+    get onLoadModelCatalog() {
+      return onLoadModelCatalog;
+    },
+    get resizeInput() {
+      return resizeInput;
+    },
+    get noteContentEdited() {
+      return noteContentEdited;
+    },
+    get executeImmediateCommand() {
+      return executeImmediateCommand;
+    },
+  });
   let content = $state('');
   // Input-history navigation. `historyCursor` is -1 while editing the live draft
   // (the "bottom" slot) and 0..n-1 when a sent message is recalled (newest
@@ -73,60 +99,9 @@
   let lastDraftKey = null;
   let handledFocusRequest = 0;
   let inputElement = $state(null);
-  let autocompleteElement = $state(null);
-  let fileAutocompleteElement = $state(null);
-  let modelAutocompleteElement = $state(null);
-  let fileInputElement = $state(null);
-  let triggerContext = $state(null);
-  let activeSkillIndex = $state(0);
-  // @-mention picker data: `null` = never fetched for this session. Fetched
-  // once per picker open (fresh list, no cache-invalidation problem) and reused
-  // at submit to decide which @-tokens are real files.
-  let fileCandidates = $state(null);
-  let fileListTruncated = $state(false);
-  let fileListLoading = $state(false);
-  let _fileFetchToken = 0;
-  // /model argument autocomplete: `null` = never fetched. Fetched once when the
-  // `/model ` trigger opens and reused while the popup stays active.
-  let modelCatalog = $state(null);
-  let modelCatalogLoading = $state(false);
-  let _modelCatalogFetchToken = 0;
-  let showAllModels = $state(false);
-  let pendingAttachmentsByScope = $state({});
-  let nextPendingAttachmentId = 0;
-  let pendingAttachments = $derived(
-    attachmentsForScope(attachmentScopeForDraftKey(draftKey)),
-  );
-  let isDragOver = $state(false);
-  let attachmentToastMessage = $state('');
-  let recordingState = $state('idle');
-  let transcriptionProgress = $state({
-    phase: 'uploading',
-    elapsed_seconds: 0,
-  });
-  let voiceStatus = $derived(
-    recordingState === 'requesting'
-      ? t('chat.voice.progress.microphone')
-      : t(
-          `chat.voice.progress.${transcriptionProgress.phase}`,
-          t('chat.voice.progress.transcribing'),
-        ),
-  );
-  let microphoneLabel = $derived(
-    voiceBusy
-      ? voiceStatus
-      : isRecording
-        ? t('chat.voice.stopRecording', 'Stop recording')
-        : t('chat.voice.startRecording', 'Start voice input'),
-  );
+
   let inputOrigin = $state('');
   let submitInFlight = $state(false);
-  let activeRecorder = null;
-  let recorderRequestGeneration = 0;
-  let destroyed = false;
-  let attachmentToastTimeoutId = null;
-  let _suppressSelectionUpdate = false;
-  let _triggerClosed = false;
 
   // Context-window fill ring: a thin SVG progress arc proportional to
   // tokens / context_window. The same tooltip as the old header badge.
@@ -154,79 +129,8 @@
       undefined,
   );
 
-  let triggerItems = $derived(availableSkills.filter((item) => item?.name));
-  let autocompleteItems = $derived.by(() =>
-    triggerItemsForContext(triggerContext),
-  );
-  let autocompleteQuery = $derived.by(() => {
-    if (!triggerContext) {
-      return '';
-    }
-
-    return content.slice(triggerContext.start + 1, triggerContext.end);
-  });
-  let matchingFiles = $derived.by(() =>
-    triggerContext?.marker === '@'
-      ? fuzzyFilterFiles(
-          fileCandidates ?? [],
-          autocompleteQuery,
-          MAX_FILE_MATCHES,
-        )
-      : [],
-  );
-  let showSkillAutocomplete = $derived(
-    Boolean(triggerContext) &&
-      triggerContext.marker !== '@' &&
-      triggerContext.marker !== 'model' &&
-      matchingSkillCount() > 0,
-  );
-  let showFileAutocomplete = $derived(
-    Boolean(triggerContext) &&
-      triggerContext.marker === '@' &&
-      (fileListLoading || matchingFiles.length > 0),
-  );
-  let allModelOptions = $derived.by(() => {
-    if (!modelCatalog) {
-      return [];
-    }
-    return buildModelSelectOptions({
-      models: modelCatalog.models,
-      connections: modelCatalog.connections,
-      translate: t,
-    }).filter((option) => option.value !== '');
-  });
-  let modelOptions = $derived(
-    filterModelSelectOptions(allModelOptions, { showAll: showAllModels }),
-  );
-  let modelFilterFooter = $derived(
-    modelFilterFooterLabel({
-      showAll: showAllModels,
-      hiddenCount: allModelOptions.length - modelOptions.length,
-      translate: t,
-    }),
-  );
-  let showModelAutocomplete = $derived(
-    Boolean(triggerContext) &&
-      triggerContext.marker === 'model' &&
-      (modelCatalogLoading || matchingModelCount() > 0),
-  );
-  let hasUploadingAttachments = $derived(
-    pendingAttachments.some((attachment) => attachment.uploading),
-  );
-  let voiceBusy = $derived(
-    recordingState === 'requesting' || recordingState === 'transcribing',
-  );
-  let isRecording = $derived(recordingState === 'recording');
-
   onDestroy(() => {
-    destroyed = true;
-    recorderRequestGeneration += 1;
-    if (attachmentToastTimeoutId !== null) {
-      clearTimeout(attachmentToastTimeoutId);
-      attachmentToastTimeoutId = null;
-    }
-    cancelActiveRecording();
-    releasePendingAttachmentPreviews();
+    media.destroy();
     // Leaving the Chat tab tears this component down; make sure the latest
     // debounced draft reaches durable storage before it goes.
     flushComposerMemory();
@@ -242,23 +146,11 @@
       return;
     }
     lastDraftKey = key;
-    hydratePendingAttachments(key);
+    media.hydratePendingAttachments(key);
     historyCursor = -1;
     navWorkingCopies = {};
     inputOrigin = '';
-    triggerContext = null;
-    activeSkillIndex = 0;
-    _triggerClosed = false;
-    // A different session may sit on a different cwd — drop the file list.
-    fileCandidates = null;
-    fileListTruncated = false;
-    fileListLoading = false;
-    _fileFetchToken += 1;
-    // Drop the model catalog so a fresh `/model ` fetches the latest list.
-    modelCatalog = null;
-    modelCatalogLoading = false;
-    _modelCatalogFetchToken += 1;
-    showAllModels = false;
+    picker.resetForDraft();
     content = getDraft(key);
     tick().then(() => {
       if (content) {
@@ -296,300 +188,6 @@
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   });
 
-  const safeRevokeObjectUrl = (objectUrl) => {
-    if (
-      typeof objectUrl === 'string' &&
-      objectUrl.startsWith('blob:') &&
-      typeof URL !== 'undefined' &&
-      typeof URL.revokeObjectURL === 'function'
-    ) {
-      URL.revokeObjectURL(objectUrl);
-    }
-  };
-
-  const attachmentScopeForDraftKey = (key) => key || EPHEMERAL_ATTACHMENT_SCOPE;
-
-  const attachmentsForScope = (scope) => pendingAttachmentsByScope[scope] ?? [];
-
-  const attachmentPreviewUrl = (attachmentId) =>
-    `/api/attachments/${encodeURIComponent(attachmentId)}`;
-
-  const nextAttachmentLocalId = () => {
-    nextPendingAttachmentId += 1;
-    return `pending-attachment-${nextPendingAttachmentId}`;
-  };
-
-  const hydratePendingAttachments = (key) => {
-    const scope = attachmentScopeForDraftKey(key);
-    if (scope in pendingAttachmentsByScope || !key) {
-      return;
-    }
-    const restored = getPendingAttachments(key).map((attachment) => ({
-      ...attachment,
-      local_id: nextAttachmentLocalId(),
-      preview_url: attachmentPreviewUrl(attachment.attachment_id),
-      uploading: false,
-    }));
-    pendingAttachmentsByScope = {
-      ...pendingAttachmentsByScope,
-      [scope]: restored,
-    };
-  };
-
-  const setAttachmentsForDraftKey = (key, nextAttachments) => {
-    const scope = attachmentScopeForDraftKey(key);
-    const next = Array.isArray(nextAttachments) ? nextAttachments : [];
-    pendingAttachmentsByScope = {
-      ...pendingAttachmentsByScope,
-      [scope]: next,
-    };
-    if (key) {
-      setPendingAttachments(key, next);
-    }
-  };
-
-  const updateAttachmentsForDraftKey = (key, update) => {
-    const scope = attachmentScopeForDraftKey(key);
-    const current = attachmentsForScope(scope);
-    setAttachmentsForDraftKey(key, update(current));
-  };
-
-  const releasePendingAttachmentPreviews = () => {
-    for (const attachments of Object.values(pendingAttachmentsByScope)) {
-      for (const attachment of attachments) {
-        safeRevokeObjectUrl(attachment.preview_url);
-      }
-    }
-  };
-
-  const showComposerErrorToast = (message) => {
-    attachmentToastMessage = message;
-    if (attachmentToastTimeoutId !== null) {
-      clearTimeout(attachmentToastTimeoutId);
-    }
-    attachmentToastTimeoutId = setTimeout(() => {
-      attachmentToastMessage = '';
-      attachmentToastTimeoutId = null;
-    }, 3500);
-  };
-
-  const showAttachmentUploadErrorToast = () => {
-    showComposerErrorToast(
-      t('chat.attachment.uploadFailed', 'Attachment upload failed.'),
-    );
-  };
-
-  const showTranscriptionError = (message) => {
-    const normalizedMessage =
-      typeof message === 'string' && message.length > 0
-        ? message
-        : t('chat.voice.transcriptionFailed', 'Speech transcription failed.');
-    showComposerErrorToast(normalizedMessage);
-    onTranscriptionError?.(normalizedMessage);
-  };
-
-  const removePendingAttachmentByLocalId = (key, localId) => {
-    const scope = attachmentScopeForDraftKey(key);
-    const existingAttachment = attachmentsForScope(scope).find(
-      (attachment) => attachment.local_id === localId,
-    );
-    if (!existingAttachment) {
-      return;
-    }
-    safeRevokeObjectUrl(existingAttachment.preview_url);
-    updateAttachmentsForDraftKey(key, (attachments) =>
-      attachments.filter((attachment) => attachment.local_id !== localId),
-    );
-  };
-
-  const buildPastedImageFileName = () => {
-    const now = new Date();
-    const pad = (value) => String(value).padStart(2, '0');
-    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-    return `screenshot-${date}-${time}.png`;
-  };
-
-  const hasImageMediaType = (mediaType) =>
-    typeof mediaType === 'string' &&
-    mediaType.toLowerCase().startsWith('image/');
-
-  const hasMediaMediaType = (mediaType) =>
-    typeof mediaType === 'string' &&
-    /^(image|audio|video)\//.test(mediaType.toLowerCase());
-
-  const _removeAttachment = (index) => {
-    const attachment = pendingAttachments[index];
-    if (!attachment) {
-      return;
-    }
-    removePendingAttachmentByLocalId(draftKey, attachment.local_id);
-  };
-
-  const _handleFiles = async (files) => {
-    if (disabled) {
-      return;
-    }
-
-    const selectedFiles = Array.from(files ?? []).filter(Boolean);
-    if (selectedFiles.length === 0) {
-      return;
-    }
-
-    const attachmentDraftKey = draftKey;
-    const newAttachments = selectedFiles.map((file) => {
-      const previewUrl =
-        typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
-          ? URL.createObjectURL(file)
-          : '';
-      return {
-        local_id: nextAttachmentLocalId(),
-        attachment_id: '',
-        filename:
-          typeof file.name === 'string' && file.name.trim().length > 0
-            ? file.name
-            : 'upload.bin',
-        media_type:
-          typeof file.type === 'string' && file.type.trim().length > 0
-            ? file.type
-            : 'application/octet-stream',
-        preview_url: previewUrl,
-        uploading: true,
-      };
-    });
-    updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) => [
-      ...attachments,
-      ...newAttachments,
-    ]);
-
-    const uploadTasks = selectedFiles.map(async (file, index) => {
-      const localId = newAttachments[index].local_id;
-      try {
-        const result = await uploadAttachment(file);
-        updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
-          attachments.map((attachment) => {
-            if (attachment.local_id !== localId) {
-              return attachment;
-            }
-            return {
-              ...attachment,
-              attachment_id: result.attachment_id,
-              filename: result.filename,
-              media_type: result.media_type,
-              uploading: false,
-            };
-          }),
-        );
-      } catch {
-        removePendingAttachmentByLocalId(attachmentDraftKey, localId);
-        showAttachmentUploadErrorToast();
-      }
-    });
-
-    await Promise.all(uploadTasks);
-  };
-
-  const handleFilePickerClick = () => {
-    if (disabled) {
-      return;
-    }
-    fileInputElement?.click();
-  };
-
-  const handleMicrophoneClick = async () => {
-    if (disabled || voiceBusy) {
-      return;
-    }
-
-    if (isRecording) {
-      await stopRecordingAndTranscribe();
-      return;
-    }
-
-    recordingState = 'requesting';
-    const requestGeneration = ++recorderRequestGeneration;
-    try {
-      const recorder = await createAudioRecorder();
-      if (destroyed || requestGeneration !== recorderRequestGeneration) {
-        // getUserMedia cannot be aborted once the browser permission prompt is
-        // visible. Release tracks immediately when its late result arrives.
-        recorder.cancel?.();
-        return;
-      }
-      activeRecorder = recorder;
-      activeRecorder.start();
-      recordingState = 'recording';
-    } catch (error) {
-      if (destroyed || requestGeneration !== recorderRequestGeneration) {
-        return;
-      }
-      try {
-        activeRecorder?.cancel?.();
-      } catch {
-        // The recorder implementation remains responsible for track cleanup.
-      }
-      activeRecorder = null;
-      recordingState = 'idle';
-      showTranscriptionError(
-        `${t('chat.voice.startFailed', 'Microphone recording could not start.')} ${error.message ?? ''}`.trim(),
-      );
-    }
-  };
-
-  const stopRecordingAndTranscribe = async () => {
-    const recorder = activeRecorder;
-    if (!recorder) {
-      recordingState = 'idle';
-      return;
-    }
-
-    activeRecorder = null;
-    recordingState = 'transcribing';
-    transcriptionProgress = { phase: 'uploading', elapsed_seconds: 0 };
-    const requestGeneration = ++recorderRequestGeneration;
-    try {
-      const audioBlob = await recorder.stop();
-      const result = await transcribeSpeech(audioBlob, {
-        filename:
-          typeof recorder.filename === 'function'
-            ? recorder.filename()
-            : 'recording.webm',
-        onProgress: (progress) => {
-          if (!destroyed && requestGeneration === recorderRequestGeneration)
-            transcriptionProgress = progress;
-        },
-      });
-      if (destroyed || requestGeneration !== recorderRequestGeneration) return;
-      await insertTranscript(result.text);
-    } catch (error) {
-      try {
-        recorder.cancel?.();
-      } catch {
-        // Preserve the transcription error; cleanup was already requested.
-      }
-      showTranscriptionError(
-        `${t('chat.voice.transcriptionFailed', 'Speech transcription failed.')} ${error.message ?? ''}`.trim(),
-      );
-    } finally {
-      recordingState = 'idle';
-    }
-  };
-
-  const cancelActiveRecording = () => {
-    recorderRequestGeneration += 1;
-    if (!activeRecorder) {
-      return;
-    }
-    try {
-      activeRecorder.cancel?.();
-    } catch {
-      // Track cleanup remains best-effort during component teardown.
-    } finally {
-      activeRecorder = null;
-      recordingState = 'idle';
-    }
-  };
-
   const insertTranscript = async (transcript) => {
     const text = typeof transcript === 'string' ? transcript.trim() : '';
     if (!text) {
@@ -598,72 +196,11 @@
     content = content.trim() ? `${content.trimEnd()}\n${text}` : text;
     inputOrigin = 'speech_transcription';
     noteContentEdited();
-    triggerContext = null;
-    activeSkillIndex = 0;
+    picker.triggerContext = null;
+    picker.activeSkillIndex = 0;
     await tick();
     inputElement?.focus();
     resizeInput();
-  };
-
-  const handleFilePickerChange = async (event) => {
-    const input = event.currentTarget;
-    const files = input?.files;
-    await _handleFiles(files);
-    if (input) {
-      input.value = '';
-    }
-  };
-
-  const handlePaste = async (event) => {
-    const clipboardItems = Array.from(event.clipboardData?.items ?? []);
-    const pastedImageFiles = clipboardItems
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter(Boolean)
-      .map((file) => {
-        if (typeof file.name === 'string' && file.name.trim().length > 0) {
-          return file;
-        }
-        return new File([file], buildPastedImageFileName(), {
-          type: file.type || 'image/png',
-          lastModified: Date.now(),
-        });
-      });
-
-    if (pastedImageFiles.length === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    await _handleFiles(pastedImageFiles);
-  };
-
-  const handleDragOver = (event) => {
-    event.preventDefault();
-    if (!disabled) {
-      isDragOver = true;
-    }
-  };
-
-  const handleDragLeave = (event) => {
-    const host = event.currentTarget;
-    const relatedTarget = event.relatedTarget;
-    if (host?.contains?.(relatedTarget)) {
-      return;
-    }
-    isDragOver = false;
-  };
-
-  const handleDrop = async (event) => {
-    event.preventDefault();
-    isDragOver = false;
-
-    if (disabled) {
-      return;
-    }
-
-    const files = event.dataTransfer?.files;
-    await _handleFiles(files);
   };
 
   // Which @-tokens in the outgoing text are actual files. Decided against the
@@ -676,8 +213,8 @@
         const result = await snapshot.listFiles();
         files = Array.isArray(result?.files) ? result.files : [];
         if (draftKey === snapshot.draftKey) {
-          fileCandidates = files;
-          fileListTruncated = Boolean(result?.truncated);
+          picker.fileCandidates = files;
+          picker.fileListTruncated = Boolean(result?.truncated);
         }
       } catch {
         files = [];
@@ -693,10 +230,11 @@
     draftKey,
     historyKey,
     mentionTokens: extractMentionTokens(content),
-    fileCandidates: fileCandidates === null ? null : Array.from(fileCandidates),
+    fileCandidates:
+      picker.fileCandidates === null ? null : Array.from(picker.fileCandidates),
     listFiles: onListFiles,
     sendMessage: onSendMessage,
-    attachments: pendingAttachments.map((attachment) => ({
+    attachments: media.pendingAttachments.map((attachment) => ({
       source: attachment,
       attachment_id: attachment.attachment_id,
       filename: attachment.filename,
@@ -707,8 +245,8 @@
   const submitBlocked = (snapshot) =>
     disabled ||
     submitInFlight ||
-    hasUploadingAttachments ||
-    voiceBusy ||
+    media.hasUploadingAttachments ||
+    media.voiceBusy ||
     (!snapshot.trimmedContent && snapshot.attachments.length === 0);
 
   const submit = async (snapshot = createSubmitSnapshot()) => {
@@ -717,7 +255,7 @@
     }
 
     submitInFlight = true;
-    cancelActiveRecording();
+    media.cancelActiveRecording();
     try {
       const fileMentions =
         snapshot.mentionTokens.length === 0
@@ -746,7 +284,7 @@
       const contentBlocks = snapshot.attachments
         .filter((attachment) => attachment.attachment_id)
         .flatMap((attachment) => {
-          if (hasMediaMediaType(attachment.media_type)) {
+          if (media.hasMediaMediaType(attachment.media_type)) {
             return [
               {
                 type: 'media',
@@ -804,13 +342,13 @@
     const submittedAttachmentSources = new Set(
       snapshot.attachments.map((attachment) => attachment.source),
     );
-    const submittedAttachmentsStillPresent = attachmentsForScope(
-      attachmentScopeForDraftKey(snapshot.draftKey),
-    ).filter((attachment) => submittedAttachmentSources.has(attachment));
+    const submittedAttachmentsStillPresent = media
+      .attachmentsForScope(media.attachmentScopeForDraftKey(snapshot.draftKey))
+      .filter((attachment) => submittedAttachmentSources.has(attachment));
     for (const attachment of submittedAttachmentsStillPresent) {
-      safeRevokeObjectUrl(attachment.preview_url);
+      media.safeRevokeObjectUrl(attachment.preview_url);
     }
-    updateAttachmentsForDraftKey(snapshot.draftKey, (attachments) =>
+    media.updateAttachmentsForDraftKey(snapshot.draftKey, (attachments) =>
       attachments.filter(
         (attachment) => !submittedAttachmentSources.has(attachment),
       ),
@@ -825,9 +363,9 @@
     if (draftKey === snapshot.draftKey && content === snapshot.content) {
       content = '';
       inputOrigin = '';
-      triggerContext = null;
-      activeSkillIndex = 0;
-      isDragOver = false;
+      picker.triggerContext = null;
+      picker.activeSkillIndex = 0;
+      media.isDragOver = false;
       historyCursor = -1;
       navWorkingCopies = {};
       resetInputHeight();
@@ -918,10 +456,10 @@
           ? getDraft(draftKey)
           : (history[historyCursor] ?? '');
     content = slotText;
-    triggerContext = null;
-    activeSkillIndex = 0;
+    picker.triggerContext = null;
+    picker.activeSkillIndex = 0;
     // Don't auto-open the skill popup from recalled text that begins with `/`.
-    _triggerClosed = true;
+    picker._triggerClosed = true;
     if (historyCursor === -1) {
       setDraft(draftKey, content);
     }
@@ -966,45 +504,32 @@
 
   // The skill/command, file, and model popups share one keyboard contract;
   // these pick the popup that is currently open.
-  const activeAutocompleteElement = () =>
-    showFileAutocomplete
-      ? fileAutocompleteElement
-      : showModelAutocomplete
-        ? modelAutocompleteElement
-        : autocompleteElement;
-  const activeMatchCount = () => {
-    if (triggerContext?.marker === '@') {
-      return matchingFiles.length;
-    }
-    if (triggerContext?.marker === 'model') {
-      return matchingModelCount();
-    }
-    return matchingSkillCount();
-  };
 
   const handleKeydown = (event) => {
     const autocompleteOpen =
-      showSkillAutocomplete || showFileAutocomplete || showModelAutocomplete;
+      picker.showSkillAutocomplete ||
+      picker.showFileAutocomplete ||
+      picker.showModelAutocomplete;
     if (autocompleteOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        _suppressSelectionUpdate = true;
-        activeSkillIndex = Math.min(
-          activeSkillIndex + 1,
-          activeMatchCount() - 1,
+        picker._suppressSelectionUpdate = true;
+        picker.activeSkillIndex = Math.min(
+          picker.activeSkillIndex + 1,
+          picker.activeMatchCount() - 1,
         );
         return;
       }
 
       if (event.key === 'ArrowUp') {
         event.preventDefault();
-        _suppressSelectionUpdate = true;
-        activeSkillIndex = Math.max(activeSkillIndex - 1, 0);
+        picker._suppressSelectionUpdate = true;
+        picker.activeSkillIndex = Math.max(picker.activeSkillIndex - 1, 0);
         return;
       }
 
       if (event.key === 'Tab') {
-        if (activeAutocompleteElement()?.selectActive()) {
+        if (picker.activeAutocompleteElement()?.selectActive()) {
           event.preventDefault();
         }
         return;
@@ -1012,9 +537,9 @@
 
       if (event.key === 'Escape') {
         event.preventDefault();
-        _triggerClosed = true;
-        triggerContext = null;
-        activeSkillIndex = 0;
+        picker._triggerClosed = true;
+        picker.triggerContext = null;
+        picker.activeSkillIndex = 0;
         return;
       }
     }
@@ -1046,7 +571,10 @@
       return;
     }
 
-    if (autocompleteOpen && activeAutocompleteElement()?.selectActive()) {
+    if (
+      autocompleteOpen &&
+      picker.activeAutocompleteElement()?.selectActive()
+    ) {
       event.preventDefault();
       return;
     }
@@ -1056,271 +584,30 @@
   };
 
   const handleInput = () => {
-    _triggerClosed = false;
+    picker._triggerClosed = false;
     if (!content.trim()) {
       inputOrigin = '';
     }
     noteContentEdited();
     resizeInput();
-    updateTriggerContext();
+    picker.updateTriggerContext();
   };
 
   const handleSelection = () => {
-    if (_suppressSelectionUpdate) {
-      _suppressSelectionUpdate = false;
+    if (picker._suppressSelectionUpdate) {
+      picker._suppressSelectionUpdate = false;
       return;
     }
 
-    updateTriggerContext();
-  };
-
-  const matchingSkillCount = () => {
-    if (!triggerContext) {
-      return 0;
-    }
-
-    const normalizedQuery = autocompleteQuery.trim().toLowerCase();
-    const matchingItems = normalizedQuery
-      ? autocompleteItems.filter((item) =>
-          `${item.name} ${item.description ?? ''}`
-            .toLowerCase()
-            .includes(normalizedQuery),
-        )
-      : autocompleteItems;
-
-    // Mirror SkillAutocomplete's match set exactly (same predicate, no cap) so
-    // arrow-key navigation can reach every rendered entry — the popup shows all
-    // matches (scrollable), and the keyboard must not stop short of the list.
-    return matchingItems.length;
+    picker.updateTriggerContext();
   };
 
   // Mirror ModelAutocomplete's match set exactly (same predicate) so keyboard
   // navigation and the rendered list never disagree.
-  const matchingModelCount = () => {
-    if (!triggerContext || triggerContext.marker !== 'model') {
-      return 0;
-    }
-
-    const normalizedQuery = autocompleteQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return modelOptions.length;
-    }
-
-    return modelOptions.filter((option) =>
-      `${option.label} ${option.secondaryLabel ?? ''}`
-        .toLowerCase()
-        .includes(normalizedQuery),
-    ).length;
-  };
-
-  function triggerItemsForContext(context) {
-    if (!context) {
-      return [];
-    }
-
-    if (context.marker === '$') {
-      return triggerItems.filter((item) => item.type !== 'command');
-    }
-
-    return triggerItems;
-  }
-
-  const updateTriggerContext = () => {
-    if (_triggerClosed) {
-      return;
-    }
-
-    if (!inputElement) {
-      triggerContext = null;
-      activeSkillIndex = 0;
-      return;
-    }
-
-    const cursorPosition = inputElement.selectionStart ?? content.length;
-    const previousContext = triggerContext;
-    const skillTrigger = detectSkillTrigger(content, cursorPosition);
-    const modelTrigger = skillTrigger
-      ? null
-      : detectModelArgumentTrigger(content, cursorPosition);
-    triggerContext = skillTrigger ?? modelTrigger;
-    activeSkillIndex = 0;
-
-    // Reset show-all when leaving the model trigger.
-    if (
-      previousContext?.marker === 'model' &&
-      triggerContext?.marker !== 'model'
-    ) {
-      showAllModels = false;
-    }
-
-    // A newly opened @-picker (or the caret jumping to a different @-token)
-    // fetches a fresh file list; typing within the same token filters locally.
-    if (
-      triggerContext?.marker === '@' &&
-      (previousContext?.marker !== '@' ||
-        previousContext.start !== triggerContext.start)
-    ) {
-      refreshFileCandidates();
-    }
-
-    // A newly opened /model argument popup fetches the model catalog once;
-    // typing within the same argument filters locally.
-    if (
-      triggerContext?.marker === 'model' &&
-      previousContext?.marker !== 'model'
-    ) {
-      refreshModelCatalog();
-    }
-  };
-
-  const refreshFileCandidates = async () => {
-    if (typeof onListFiles !== 'function') {
-      fileCandidates = [];
-      fileListTruncated = false;
-      return;
-    }
-    // The token invalidates stale responses: a session switch or a newer fetch
-    // bumps it, and the slower response is dropped instead of applied.
-    const fetchToken = ++_fileFetchToken;
-    fileListLoading = true;
-    try {
-      const result = await onListFiles();
-      if (fetchToken !== _fileFetchToken) {
-        return;
-      }
-      fileCandidates = Array.isArray(result?.files) ? result.files : [];
-      fileListTruncated = Boolean(result?.truncated);
-    } catch {
-      if (fetchToken !== _fileFetchToken) {
-        return;
-      }
-      // Keep whatever list we had; a picker without data simply shows nothing.
-      fileCandidates = fileCandidates ?? [];
-      fileListTruncated = false;
-    } finally {
-      if (fetchToken === _fileFetchToken) {
-        fileListLoading = false;
-      }
-    }
-  };
-
-  const refreshModelCatalog = async () => {
-    if (typeof onLoadModelCatalog !== 'function') {
-      modelCatalog = { models: [], connections: [] };
-      return;
-    }
-    // The token invalidates stale responses: a session switch or a newer fetch
-    // bumps it, and the slower response is dropped instead of applied.
-    const fetchToken = ++_modelCatalogFetchToken;
-    modelCatalogLoading = true;
-    try {
-      const result = await onLoadModelCatalog();
-      if (fetchToken !== _modelCatalogFetchToken) {
-        return;
-      }
-      modelCatalog = {
-        models: Array.isArray(result?.models) ? result.models : [],
-        connections: Array.isArray(result?.connections)
-          ? result.connections
-          : [],
-      };
-    } catch {
-      if (fetchToken !== _modelCatalogFetchToken) {
-        return;
-      }
-      modelCatalog = modelCatalog ?? { models: [], connections: [] };
-    } finally {
-      if (fetchToken === _modelCatalogFetchToken) {
-        modelCatalogLoading = false;
-      }
-    }
-  };
 
   // A /model argument trigger: content starts with "/model" followed by a
   // space, and the cursor sits at or after that space. The query is everything
   // after the space (extracted via the shared autocompleteQuery derived).
-  const detectModelArgumentTrigger = (value, cursorPosition) => {
-    const boundedCursor = Math.max(0, Math.min(cursorPosition, value.length));
-
-    if (!value.startsWith('/model')) {
-      return null;
-    }
-
-    if (value.length <= 6 || value[6] !== ' ') {
-      return null;
-    }
-
-    if (boundedCursor < 7) {
-      return null;
-    }
-
-    return { marker: 'model', start: 6, end: boundedCursor };
-  };
-  const detectFileTrigger = (value, boundedCursor) => {
-    let start = boundedCursor - 1;
-
-    while (start >= 0 && isMentionTokenChar(value[start])) {
-      start -= 1;
-    }
-
-    if (start < 0 || value[start] !== '@') {
-      return null;
-    }
-
-    if (start > 0) {
-      const previous = value[start - 1];
-      if (isMentionTokenChar(previous) || previous === '@') {
-        return null;
-      }
-    }
-
-    return { marker: '@', start, end: boundedCursor };
-  };
-
-  const detectSkillTrigger = (value, cursorPosition) => {
-    const boundedCursor = Math.max(0, Math.min(cursorPosition, value.length));
-
-    const fileTrigger = detectFileTrigger(value, boundedCursor);
-    if (fileTrigger) {
-      return fileTrigger;
-    }
-
-    let start = boundedCursor - 1;
-
-    while (start >= 0 && SKILL_TRIGGER_PATTERN.test(value[start])) {
-      start -= 1;
-    }
-
-    if (start < 0) {
-      return null;
-    }
-
-    const trigger = value[start];
-
-    if (trigger !== '/' && trigger !== '$') {
-      return null;
-    }
-
-    if (trigger === '/' && start !== 0) {
-      return null;
-    }
-
-    if (
-      trigger === '$' &&
-      start > 0 &&
-      SKILL_TRIGGER_PATTERN.test(value[start - 1])
-    ) {
-      return null;
-    }
-
-    for (let index = start + 1; index < boundedCursor; index += 1) {
-      if (!SKILL_TRIGGER_PATTERN.test(value[index])) {
-        return null;
-      }
-    }
-
-    return { marker: trigger, start, end: boundedCursor };
-  };
 
   // A no-argument built-in command runs the instant it is chosen from the `/`
   // popup — no second Enter is needed. Replace the partial token with the
@@ -1347,72 +634,14 @@
     content = command;
     setDraft(draftKey, command);
     inputOrigin = '';
-    triggerContext = null;
-    activeSkillIndex = 0;
-    _triggerClosed = true;
-    isDragOver = false;
+    picker.triggerContext = null;
+    picker.activeSkillIndex = 0;
+    picker._triggerClosed = true;
+    media.isDragOver = false;
     historyCursor = -1;
     navWorkingCopies = {};
     resetInputHeight();
     void submit(candidateSnapshot);
-  };
-
-  const selectFile = async (file) => {
-    if (!triggerContext || typeof file !== 'string' || !file) {
-      return;
-    }
-
-    const prefix = content.slice(0, triggerContext.start);
-    const suffix = content.slice(triggerContext.end);
-    // The trailing space ends the mention token, so typing continues normally.
-    const insertedToken = `@${file} `;
-    const nextCursorPosition = prefix.length + insertedToken.length;
-    content = `${prefix}${insertedToken}${suffix}`;
-    noteContentEdited();
-    triggerContext = null;
-    activeSkillIndex = 0;
-    _triggerClosed = true;
-
-    await tick();
-    inputElement?.focus();
-    inputElement?.setSelectionRange(nextCursorPosition, nextCursorPosition);
-    resizeInput();
-  };
-
-  const selectSkill = async (skill) => {
-    if (!triggerContext || !skill?.name) {
-      return;
-    }
-
-    if (
-      triggerContext.marker === '/' &&
-      skill.type === 'command' &&
-      skill.argument === 'none'
-    ) {
-      executeImmediateCommand(skill);
-      return;
-    }
-
-    const prefix = content.slice(0, triggerContext.start);
-    const suffix = content.slice(triggerContext.end);
-    const marker = triggerContext.marker;
-    const stripPattern = marker === '/' ? /^\/+/ : /^\$+/;
-    const normalizedSkillName = String(skill.name).replace(stripPattern, '');
-    if (!normalizedSkillName) {
-      return;
-    }
-    const insertedToken = `${marker}${normalizedSkillName}`;
-    const nextCursorPosition = prefix.length + insertedToken.length;
-    content = `${prefix}${insertedToken}${suffix}`;
-    noteContentEdited();
-    triggerContext = null;
-    activeSkillIndex = 0;
-    _triggerClosed = true;
-
-    await tick();
-    inputElement?.focus();
-    inputElement?.setSelectionRange(nextCursorPosition, nextCursorPosition);
-    resizeInput();
   };
 
   // A model chosen from the /model argument popup is submitted immediately —
@@ -1420,7 +649,7 @@
   // connection/account suffix) becomes the /model argument through the regular
   // guarded submit path so failures leave a retryable draft.
   const selectModel = (option) => {
-    if (!triggerContext || !option?.value) {
+    if (!picker.triggerContext || !option?.value) {
       return;
     }
 
@@ -1440,10 +669,10 @@
     content = command;
     setDraft(draftKey, command);
     inputOrigin = '';
-    triggerContext = null;
-    activeSkillIndex = 0;
-    _triggerClosed = true;
-    isDragOver = false;
+    picker.triggerContext = null;
+    picker.activeSkillIndex = 0;
+    picker._triggerClosed = true;
+    media.isDragOver = false;
     historyCursor = -1;
     navWorkingCopies = {};
     resetInputHeight();
@@ -1453,74 +682,74 @@
 
 <form
   class="input-area"
-  class:drag-over={isDragOver}
+  class:drag-over={media.isDragOver}
   aria-label={t('chat.composerLabel', 'Message')}
-  ondragover={handleDragOver}
-  ondragleave={handleDragLeave}
-  ondrop={handleDrop}
+  ondragover={media.handleDragOver}
+  ondragleave={media.handleDragLeave}
+  ondrop={media.handleDrop}
   onsubmit={(event) => {
     event.preventDefault();
     submit();
   }}
 >
   <input
-    bind:this={fileInputElement}
+    bind:this={media.fileInputElement}
     class="attachment-file-input"
     type="file"
-    accept={ATTACHMENT_ACCEPT}
+    accept={media.ATTACHMENT_ACCEPT}
     multiple
     {disabled}
-    onchange={handleFilePickerChange}
+    onchange={media.handleFilePickerChange}
   />
-  {#if attachmentToastMessage}
+  {#if media.attachmentToastMessage}
     <div class="composer-toast" role="status" aria-live="polite">
       <p class="composer-toast-title">{t('errors.appError', 'Error')}</p>
-      <p class="composer-toast-message">{attachmentToastMessage}</p>
+      <p class="composer-toast-message">{media.attachmentToastMessage}</p>
     </div>
   {/if}
-  {#if showSkillAutocomplete}
+  {#if picker.showSkillAutocomplete}
     <SkillAutocomplete
-      bind:this={autocompleteElement}
-      skills={autocompleteItems}
-      query={autocompleteQuery}
-      marker={triggerContext.marker}
-      activeIndex={activeSkillIndex}
-      onSelect={selectSkill}
+      bind:this={picker.autocompleteElement}
+      skills={picker.autocompleteItems}
+      query={picker.autocompleteQuery}
+      marker={picker.triggerContext.marker}
+      activeIndex={picker.activeSkillIndex}
+      onSelect={picker.selectSkill}
       onHover={(index) => {
-        activeSkillIndex = index;
+        picker.activeSkillIndex = index;
       }}
     />
   {/if}
-  {#if showFileAutocomplete}
+  {#if picker.showFileAutocomplete}
     <FileAutocomplete
-      bind:this={fileAutocompleteElement}
-      files={fileCandidates ?? []}
-      query={autocompleteQuery}
-      truncated={fileListTruncated}
-      loading={fileListLoading}
-      activeIndex={activeSkillIndex}
-      onSelect={selectFile}
+      bind:this={picker.fileAutocompleteElement}
+      files={picker.fileCandidates ?? []}
+      query={picker.autocompleteQuery}
+      truncated={picker.fileListTruncated}
+      loading={picker.fileListLoading}
+      activeIndex={picker.activeSkillIndex}
+      onSelect={picker.selectFile}
       onHover={(index) => {
-        activeSkillIndex = index;
+        picker.activeSkillIndex = index;
       }}
     />
   {/if}
-  {#if showModelAutocomplete}
+  {#if picker.showModelAutocomplete}
     <ModelAutocomplete
-      bind:this={modelAutocompleteElement}
-      options={modelOptions}
-      query={autocompleteQuery}
-      loading={modelCatalogLoading}
-      footerLabel={modelFilterFooter}
-      onFooterAction={() => (showAllModels = !showAllModels)}
-      activeIndex={activeSkillIndex}
+      bind:this={picker.modelAutocompleteElement}
+      options={picker.modelOptions}
+      query={picker.autocompleteQuery}
+      loading={picker.modelCatalogLoading}
+      footerLabel={picker.modelFilterFooter}
+      onFooterAction={() => (picker.showAllModels = !picker.showAllModels)}
+      activeIndex={picker.activeSkillIndex}
       onSelect={selectModel}
       onHover={(index) => {
-        activeSkillIndex = index;
+        picker.activeSkillIndex = index;
       }}
     />
   {/if}
-  {#if voiceBusy}
+  {#if media.voiceBusy}
     <div
       class="composer-voice-status"
       role="status"
@@ -1528,9 +757,11 @@
       aria-atomic="true"
     >
       <span class="voice-spinner" aria-hidden="true"></span>
-      <span>{voiceStatus}</span>
-      {#if transcriptionProgress.elapsed_seconds > 0}
-        <span aria-hidden="true">{transcriptionProgress.elapsed_seconds}s</span>
+      <span>{media.voiceStatus}</span>
+      {#if media.transcriptionProgress.elapsed_seconds > 0}
+        <span aria-hidden="true"
+          >{media.transcriptionProgress.elapsed_seconds}s</span
+        >
       {/if}
     </div>
   {/if}
@@ -1548,7 +779,7 @@
       aria-label={t('chat.composerLabel', 'Message')}
       oninput={handleInput}
       onkeydown={handleKeydown}
-      onpaste={handlePaste}
+      onpaste={media.handlePaste}
       onclick={handleSelection}
       onkeyup={handleSelection}
       placeholder={t(
@@ -1605,15 +836,15 @@
       </span>
     {/if}
     <div class="input-btns">
-      <span class="tooltip-anchor" use:tooltip={microphoneLabel}>
+      <span class="tooltip-anchor" use:tooltip={media.microphoneLabel}>
         <Button
           variant="tertiary"
           icon
-          class={isRecording ? 'btn-icon--active' : ''}
-          disabled={disabled || voiceBusy}
-          loading={voiceBusy}
-          ariaLabel={microphoneLabel}
-          onClick={handleMicrophoneClick}
+          class={media.isRecording ? 'btn-icon--active' : ''}
+          disabled={disabled || media.voiceBusy}
+          loading={media.voiceBusy}
+          ariaLabel={media.microphoneLabel}
+          onClick={media.handleMicrophoneClick}
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
@@ -1627,7 +858,7 @@
         {disabled}
         ariaLabel={t('chat.attachment.addFile', 'Add file')}
         tooltip={t('chat.attachment.addFile', 'Add file')}
-        onClick={handleFilePickerClick}
+        onClick={media.handleFilePickerClick}
       >
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path
@@ -1673,9 +904,9 @@
         icon
         disabled={disabled ||
           submitInFlight ||
-          hasUploadingAttachments ||
-          voiceBusy ||
-          (!content.trim() && pendingAttachments.length === 0)}
+          media.hasUploadingAttachments ||
+          media.voiceBusy ||
+          (!content.trim() && media.pendingAttachments.length === 0)}
         ariaLabel={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
@@ -1689,17 +920,19 @@
       </Button>
     </div>
   </div>
-  {#if pendingAttachments.length > 0}
+  {#if media.pendingAttachments.length > 0}
     <div
       class="attachment-tray"
       aria-label={t('chat.attachment.preview', 'Preview attachment')}
     >
-      {#each pendingAttachments as attachment, index (attachment.local_id)}
+      {#each media.pendingAttachments as attachment, index (attachment.local_id)}
         <div
           class="attachment-item"
-          class:attachment-item-image={hasImageMediaType(attachment.media_type)}
+          class:attachment-item-image={media.hasImageMediaType(
+            attachment.media_type,
+          )}
         >
-          {#if hasImageMediaType(attachment.media_type)}
+          {#if media.hasImageMediaType(attachment.media_type)}
             <button
               type="button"
               class="attachment-thumb-trigger"
@@ -1740,7 +973,7 @@
               <span class="attachment-status">
                 {t('chat.attachment.uploading', 'Uploading…')}
               </span>
-            {:else if !hasImageMediaType(attachment.media_type)}
+            {:else if !media.hasImageMediaType(attachment.media_type)}
               <span class="attachment-status">
                 {t('chat.attachment.fileLabel', 'Attached file')}
               </span>
@@ -1751,7 +984,7 @@
             class="attachment-remove"
             aria-label={t('chat.attachment.remove', 'Remove attachment')}
             use:tooltip={t('chat.attachment.remove', 'Remove attachment')}
-            onclick={() => _removeAttachment(index)}
+            onclick={() => media._removeAttachment(index)}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M4 4l8 8M12 4l-8 8" />
@@ -1762,227 +995,3 @@
     </div>
   {/if}
 </form>
-
-<style>
-  .context-ring-trigger {
-    display: flex;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .context-hover-card {
-    position: fixed;
-    z-index: var(--z-floating);
-    max-width: min(520px, calc(100vw - 24px));
-    max-height: 60vh;
-    overflow: auto;
-    padding: 12px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-    color: var(--text-hi);
-    box-shadow: var(--dropdown-elevation);
-    font: 12px var(--font-ui);
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  .context-hover-card:global([data-floating-open='true']) {
-    visibility: visible;
-    pointer-events: auto;
-  }
-
-  .context-hover-details {
-    white-space: pre-wrap;
-    margin-bottom: 12px;
-  }
-
-  .input-area {
-    position: relative;
-    width: 100%;
-    min-width: 0;
-  }
-
-  /* Center the composer on the same axis as the capped message column. The
-     unbordered `.input-area` stays full-width on the chat background; only the
-     input box and attachment tray are capped to `--chat-measure` and centered.
-     With the area's symmetric 20px padding this lines the input's left edge up
-     with the message column exactly. `full` disables the cap. */
-  .input-wrap,
-  .attachment-tray {
-    width: 100%;
-    max-width: var(--chat-measure);
-    margin-inline: auto;
-  }
-
-  .msg-input {
-    height: 22px;
-  }
-
-  /* Context-window fill ring: sits at the bottom-right of the input box,
-     between the textarea and the action buttons, aligned to the button row.
-     The track is faint; the fill arc shows how much of the context window is
-     consumed. Same tooltip as the old header badge. */
-  .context-ring {
-    display: flex;
-    flex-shrink: 0;
-    align-self: flex-end;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    margin-bottom: 1px;
-    color: var(--text-lo);
-    cursor: default;
-  }
-
-  .context-ring__track {
-    opacity: 0.3;
-  }
-
-  .context-ring__fill {
-    color: var(--text-med);
-    transition: stroke-dashoffset 300ms ease;
-  }
-
-  /* Extra breathing room around the stop button: cancelling by accident is the
-     only costly misclick in this row, so it gets double the row gap on both
-     sides (mic/attach and Send are harmless neighbors). */
-  :global(.composer-stop) {
-    margin-inline: 4px;
-  }
-
-  .input-area.drag-over .input-wrap {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
-  }
-
-  .attachment-file-input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    border: 0;
-  }
-
-  .composer-voice-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    color: var(--text-med);
-    font-size: 12px;
-  }
-
-  .voice-spinner {
-    width: 12px;
-    height: 12px;
-    border: 2px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-    animation: voice-spin 1s linear infinite;
-  }
-
-  @keyframes voice-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .voice-spinner {
-      animation: none;
-    }
-  }
-
-  .composer-toast {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 10px);
-    z-index: 20;
-    min-width: 220px;
-    max-width: min(340px, 92vw);
-    padding: 10px 12px;
-    border: 1px solid rgba(252, 129, 129, 0.35);
-    border-left: 2px solid var(--red);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  .composer-toast-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-
-  .composer-toast-message {
-    margin: 2px 0 0;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .attachment-tray {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 10px 2px 0;
-  }
-
-  /* The attachment card chrome (.attachment-item, .attachment-thumb,
-     .attachment-hover-preview, .attachment-meta, .attachment-name, …) is shared
-     with the chat timeline and lives in styles/chat-timeline.css. Only the
-     composer-specific controls below (tray, remove button) stay scoped here. */
-
-  .attachment-remove {
-    display: flex;
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid transparent;
-    border-radius: var(--r-sm);
-    color: var(--text-lo);
-    background: transparent;
-    transition:
-      border-color 120ms ease,
-      color 120ms ease,
-      background 120ms ease;
-  }
-
-  .attachment-remove:hover,
-  .attachment-remove:focus-visible {
-    border-color: rgba(252, 129, 129, 0.4);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.08);
-    outline: none;
-  }
-
-  .attachment-remove svg {
-    width: 12px;
-    height: 12px;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-width: 1.4;
-  }
-
-  @media (max-width: 640px) {
-    .input-area {
-      padding: 12px 14px;
-    }
-  }
-</style>
