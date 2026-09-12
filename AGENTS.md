@@ -7,7 +7,7 @@ Read these two core files completely before doing anything (even saying 'hi'), e
 - `.vorch/PROJECT.md` — project context
 - `.vorch/GLOSSARY.md` — project-specific terms
 
-They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
+They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
 
 ## Communication with the user
 
@@ -76,8 +76,7 @@ If a task requires a new dependency, **check first** that no existing dependency
 There's no orchestrator here to keep these current — that's on you. When a change you make affects one, update it as part of the work (small, factual, not deferred):
 
 - `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
-- `.vorch/domain-maps/<domain>.md` — a domain's interface, boundary, invariant, or contract changes, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
-- `.vorch/DESIGN.md` — design-system changes (colors, typography, spacing, components)
+- `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
 - `.vorch/GLOSSARY.md` — new or changed project-specific terms
 - `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
 

@@ -113,7 +113,7 @@
   --red: #fc8181;
   --font-ui: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
-  /* Type scale — sizes only, one token per DESIGN.md typography role.
+  /* Current type scale — sizes only, shared by the component styles.
      New/touched code uses these instead of px literals. */
   --fs-display: 22px;
   --fs-heading-lg: 20px;
@@ -146,7 +146,7 @@
   --secondary-sidebar-width: 216px;
 
   /* Content-width / reading-measure layer. Single source of truth for how wide
-     content is allowed to grow on large monitors (see DESIGN.md → Layout).
+     the current measured content columns grow on large monitors.
      `--chat-measure` is the live chat reading column; it defaults to the
      comfortable tier and is overridden per `[data-chat-width]` on `.chat-view`.
      The `--content-max-*` tokens cap non-chat views (settings/forms vs.
@@ -3307,7 +3307,7 @@ kbd {
   margin-top: 8px;
 }
 
-/* Mobile (≤640, see DESIGN.md → Breakpoints): the sidebar collapses to a top
+/* Mobile (≤640, matching the breakpoint convention above): the sidebar collapses to a top
    band and the navigation becomes a single compact horizontal scroll row so it
    doesn't eat vertical space. Touch targets grow to a ≥40px hit area. */
 @media (max-width: 640px) {
