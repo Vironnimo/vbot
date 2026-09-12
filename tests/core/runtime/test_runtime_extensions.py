@@ -27,6 +27,7 @@ from core.extensions import ExtensionRegistrationIdentity, InteractionButton, In
 from core.extensions.extensions import ExtensionRegistry
 from core.runs import ChatRunManager
 from core.runtime import runtime as runtime_module
+from core.runtime._configuration import _resolve_resources_path
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
@@ -134,7 +135,7 @@ def test_runtime_passes_bundled_extensions_root(
     runtime = Runtime(config)
     runtime.start()
     try:
-        expected = runtime._resolve_resources_path() / "extensions"
+        expected = _resolve_resources_path(runtime.config) / "extensions"
         assert captured["bundled_dir"] == expected
     finally:
         runtime.stop()
@@ -1075,7 +1076,9 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
             raise AssertionError("Preview must not create a Session")
 
         monkeypatch.setattr(runtime.chat_sessions, "create_bound_temporary_session", no_session)
-        preview = asyncio.run(runtime._inspect_extension_prompt(identity, config, None))
+        preview = asyncio.run(
+            runtime._host_operations()._inspect_extension_prompt(identity, config, None)
+        )
         assert preview["text"] == "preview-body-sentinel"
         assert {tool["name"] for tool in preview["tools"]} == {
             "swarm_board",
@@ -1096,7 +1099,7 @@ def test_extension_catalog_projects_tools_settings_and_models_are_safe(
 ) -> None:
     runtime, identity = _catalog_runtime(tmp_path, monkeypatch)
     try:
-        catalog = asyncio.run(runtime._extension_catalog(identity))
+        catalog = asyncio.run(runtime._host_operations()._extension_catalog(identity))
     finally:
         runtime.stop()
 
@@ -1163,7 +1166,7 @@ def test_extension_catalog_rejects_a_registration_retired_during_projection(
     runtime, identity = _catalog_runtime(tmp_path, monkeypatch, expire_during_list=True)
     try:
         with pytest.raises(ValueError, match="no longer current"):
-            asyncio.run(runtime._extension_catalog(identity))
+            asyncio.run(runtime._host_operations()._extension_catalog(identity))
     finally:
         runtime.stop()
 
@@ -1179,7 +1182,8 @@ def test_temporary_preflight_rejects_invalid_model_or_cwd_before_group_opens(
     cwd_name: str,
 ) -> None:
     runtime = Runtime(Config(data_dir=tmp_path / "runtime"))
-    monkeypatch.setattr(runtime, "_started", True)
+    runtime.start()
+    host = runtime._host_operations()
     identity = ExtensionRegistrationIdentity("fixture", "epoch-1")
     monkeypatch.setattr(
         runtime,
@@ -1191,15 +1195,15 @@ def test_temporary_preflight_rejects_invalid_model_or_cwd_before_group_opens(
             ),
         ),
     )
-    monkeypatch.setattr(runtime, "_tools", SimpleNamespace(list_tools=lambda **_kwargs: []))
+    monkeypatch.setattr(host, "tools", SimpleNamespace(list_tools=lambda **_kwargs: []))
 
     def require_model_configured(candidate: str) -> None:
         if candidate == "missing/model":
             raise ValueError("model sentinel")
 
     monkeypatch.setattr(
-        runtime,
-        "_agent_resolver",
+        host,
+        "agent_resolver",
         SimpleNamespace(require_model_configured=require_model_configured),
     )
 
@@ -1231,7 +1235,7 @@ def test_temporary_preflight_rejects_invalid_model_or_cwd_before_group_opens(
             lambda candidate: candidate == identity,
             identity,
             run_manager=ChatRunManager(),
-            validate_binding=runtime._validate_extension_session_binding,
+            validate_binding=host._validate_extension_session_binding,
         )
 
         with pytest.raises((RuntimeError, ValueError)):
@@ -1240,6 +1244,8 @@ def test_temporary_preflight_rejects_invalid_model_or_cwd_before_group_opens(
         assert groups._groups["group"].open is False
     finally:
         sessions.close()
+        monkeypatch.undo()
+        runtime.stop()
 
 
 def test_temporary_preflight_rechecks_owner_after_blocking_validation(
@@ -1295,4 +1301,4 @@ def test_temporary_preflight_rechecks_owner_after_blocking_validation(
     monkeypatch.setattr(runtime_module._RUNTIME_WORKERS, "run", expire_after_validation)
 
     with pytest.raises(RuntimeError, match="temporary execution is unavailable"):
-        asyncio.run(runtime._validate_extension_session_binding(binding))
+        asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
