@@ -18,6 +18,13 @@ from scripts.provider_probe.scenario_extensions import _ha_call_service_scenario
 
 
 def ha_tolerance_cases(tool: str = "ha_call_service") -> list[dict[str, Any]]:
+    if tool == "ha_list_services":
+        return [
+            {"id": "default", "arguments": {}},
+            {"id": "domain", "arguments": {"domain": "climate"}},
+            {"id": "case", "arguments": {"domain": " CLIMATE "}},
+            {"id": "invalid", "arguments": {"domain": "light/../sensor"}, "success": False},
+        ]
     if tool == "ha_list_entities":
         return [
             {"id": "default", "arguments": {}},
@@ -133,6 +140,14 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
             },
         ]
 
+        services = [
+            {"domain": "light", "services": {"turn_on": {"description": "Turn on", "fields": {}}}},
+            {
+                "domain": "climate",
+                "services": {"set_temperature": {"description": "Set temperature", "fields": {}}},
+            },
+        ]
+
         def receive(request: httpx.Request) -> httpx.Response:
             received.append(
                 {
@@ -140,6 +155,8 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                     "body": json.loads(request.content) if request.content else None,
                 }
             )
+            if name == "ha_list_services":
+                return httpx.Response(200, json=services)
             if name == "ha_list_entities":
                 return httpx.Response(200, json=entities)
             if name == "ha_get_state":
@@ -175,7 +192,14 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                 except ValueError as error:
                     results.append(tool_failure("invalid_arguments", str(error)))
         checks = {"one_call": len(calls) == len(results) == 1}
-        if name == "ha_list_entities" and case.get("success", True):
+        if name == "ha_list_services" and case.get("success", True):
+            domain = case["arguments"].get("domain", "").strip().lower()
+            expected_services = [s for s in services if not domain or s["domain"] == domain]
+            checks["receiver"] = received == [{"path": "/api/services", "body": None}]
+            checks["result"] = (
+                bool(results) and results[0].get("data", {}).get("domains") == expected_services
+            )
+        elif name == "ha_list_entities" and case.get("success", True):
             request = case["arguments"]
             expected = [
                 {
