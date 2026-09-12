@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -138,9 +139,20 @@ class ToolContext:
         """Resolve one user-supplied path against this call's working directory."""
 
         candidate = Path(path).expanduser()
-        if candidate.is_absolute():
-            return candidate.resolve()
-        return (self.effective_cwd / candidate).resolve()
+        target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
+        # Existing literal names win, including quotes/backslashes on POSIX.
+        # Otherwise recognize shell-style enclosing quotes and path separators.
+        text = path.strip() if isinstance(path, str) else ""
+        quoted = len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"')
+        foreign_separators = os.name != "nt" and "\\" in text
+        if (quoted or foreign_separators) and not (target.exists() or target.is_symlink()):
+            text = text[1:-1] if quoted else str(path)
+            candidate = Path(text).expanduser()
+            target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
+            if not (target.exists() or target.is_symlink()) and "\\" in text:
+                candidate = Path(text.replace("\\", "/")).expanduser()
+                target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
+        return target.resolve()
 
     def add_display_count(self, value: int, unit: str, *, at_least: bool = False) -> None:
         """Record one presentation-only count without changing the Tool result."""

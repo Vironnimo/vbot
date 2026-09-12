@@ -162,7 +162,9 @@ async def test_wake_scan_does_not_replay_messages_read_during_a_run(board):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("arguments", [{"limit": 0}, {"limit": True}, {"limit": "1"}, {"other": 1}])
+@pytest.mark.parametrize(
+    "arguments", [{"limit": 0}, {"limit": True}, {"limit": "unknown"}, {"other": 1}]
+)
 async def test_inbox_rejects_invalid_arguments_without_a_receipt(board, arguments):
     context = replace(board.contexts[0], tool_name="swarm_inbox")
     result = await board.tools.get("swarm_inbox").handler(context, arguments)

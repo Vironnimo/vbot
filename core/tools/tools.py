@@ -175,6 +175,7 @@ class ToolRegistry:
         open_input_schema: bool = False,
         handler_validates_arguments: bool = False,
         coerce_arguments: bool = True,
+        argument_normalizer: Callable[[Any], Any] | None = None,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
@@ -226,6 +227,7 @@ class ToolRegistry:
             open_input_schema=open_input_schema,
             handler_validates_arguments=handler_validates_arguments,
             coerce_arguments=coerce_arguments,
+            argument_normalizer=argument_normalizer,
             definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
@@ -507,6 +509,8 @@ class ToolRegistry:
                 retryable=False,
             )
         input_contract = context.input_contract or tool.contract
+        if tool.argument_normalizer is not None:
+            arguments = tool.argument_normalizer(copy.deepcopy(arguments))
         normalized_arguments = (
             input_contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         )

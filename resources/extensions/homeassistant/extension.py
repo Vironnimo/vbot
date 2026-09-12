@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -153,6 +154,56 @@ HA_CALL_SERVICE_PARAMETERS: JsonObject = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_CALL_SERVICE_CONTRACT = compile_tool_contract(
+    name=HA_CALL_SERVICE_NAME,
+    input_schema=HA_CALL_SERVICE_PARAMETERS,
+    require_closed_input=False,
+)
+
+
+def _identifier_normalizer(name: str, schema: JsonObject):
+    contract = compile_tool_contract(name=name, input_schema=schema, require_closed_input=False)
+
+    def normalize(arguments: Any) -> Any:
+        repaired = contract.normalize_arguments(arguments)
+        if isinstance(repaired, dict):
+            for field in ("domain", "entity_id"):
+                if isinstance(repaired.get(field), str):
+                    repaired[field] = repaired[field].strip().lower()
+        return repaired
+
+    return normalize
+
+
+def _normalize_call_service_arguments(arguments: Any) -> Any:
+    repaired = _CALL_SERVICE_CONTRACT.normalize_arguments(arguments)
+    if not isinstance(repaired, dict):
+        return repaired
+    for field in ("domain", "service", "entity_id"):
+        if isinstance(repaired.get(field), str):
+            repaired[field] = repaired[field].strip().lower()
+    service = repaired.get("service")
+    if isinstance(service, str) and service.count(".") == 1:
+        domain, service = service.split(".")
+        if repaired.get("domain") not in (None, domain):
+            raise ValueError(
+                "domain and service identify different domains; provide one intended service."
+            )
+        repaired.update(domain=domain, service=service)
+    data = repaired.get("data")
+    if isinstance(data, dict) and "entity_id" in data:
+        entity = data.pop("entity_id")
+        if isinstance(entity, str):
+            entity = entity.strip().lower()
+        if "entity_id" in repaired and repaired["entity_id"] != entity:
+            raise ValueError(
+                "entity_id and data.entity_id identify different targets; "
+                "provide one intended target."
+            )
+        repaired["entity_id"] = entity
+    return repaired
 
 
 def _normalize_text(raw: Any) -> str:
@@ -690,6 +741,9 @@ def register(api: Any) -> None:
         HA_LIST_ENTITIES_DESCRIPTION,
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
+        argument_normalizer=_identifier_normalizer(
+            HA_LIST_ENTITIES_NAME, HA_LIST_ENTITIES_PARAMETERS
+        ),
         result_schema={"type": "object", "required": ["count", "entities"]},
         parallel_safe=True,
         open_input_schema=True,
@@ -702,6 +756,7 @@ def register(api: Any) -> None:
         HA_GET_STATE_DESCRIPTION,
         HA_GET_STATE_PARAMETERS,
         get_state_handler,
+        argument_normalizer=_identifier_normalizer(HA_GET_STATE_NAME, HA_GET_STATE_PARAMETERS),
         result_schema={
             "type": "object",
             "required": ["entity_id", "state", "attributes", "last_changed", "last_updated"],
@@ -718,6 +773,9 @@ def register(api: Any) -> None:
         HA_LIST_SERVICES_DESCRIPTION,
         HA_LIST_SERVICES_PARAMETERS,
         list_services_handler,
+        argument_normalizer=_identifier_normalizer(
+            HA_LIST_SERVICES_NAME, HA_LIST_SERVICES_PARAMETERS
+        ),
         result_schema={"type": "object", "required": ["count", "domains"]},
         parallel_safe=True,
         open_input_schema=True,
@@ -730,6 +788,7 @@ def register(api: Any) -> None:
         HA_CALL_SERVICE_DESCRIPTION,
         HA_CALL_SERVICE_PARAMETERS,
         call_service_handler,
+        argument_normalizer=_normalize_call_service_arguments,
         result_schema={"type": "object", "required": ["result"]},
         display=ToolDisplay(summary_fields=("domain", "service", "entity_id")),
         open_input_schema=True,

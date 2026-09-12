@@ -17,6 +17,7 @@ from core.attachments import AttachmentError, sniff_media_type
 from core.tools._web_fetch_html import (
     extract_content as extract_content,
 )
+from core.tools.contracts import compile_tool_contract
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -113,6 +114,48 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["url"],
 }
+
+
+_WEB_FETCH_RUNTIME_CONTRACT = compile_tool_contract(
+    name=WEB_FETCH_TOOL_NAME,
+    input_schema={
+        **WEB_FETCH_TOOL_PARAMETERS,
+        "properties": {
+            **WEB_FETCH_TOOL_PARAMETERS["properties"],
+            "raw": {"type": "boolean"},
+            "include_links": {"type": "boolean"},
+        },
+    },
+    require_closed_input=False,
+)
+
+
+def _normalize_web_fetch_arguments(arguments: Any) -> Any:
+    repaired = _WEB_FETCH_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    if not isinstance(repaired, dict):
+        return repaired
+    raw = repaired.pop("raw", None)
+    links = repaired.pop("include_links", None)
+    if raw is not None and not isinstance(raw, bool):
+        raise ValueError(
+            "raw must indicate true or false; use output to select markdown, text, or raw."
+        )
+    if links is not None and not isinstance(links, bool):
+        raise ValueError("include_links must indicate true or false; use output markdown or text.")
+    output = repaired.get("output")
+    if raw is True:
+        if output not in (None, "raw"):
+            raise ValueError("raw and output conflict; select one intended output mode.")
+        repaired["output"] = "raw"
+    elif output == "raw":
+        if raw is False:
+            raise ValueError("raw and output conflict; select one intended output mode.")
+    elif links is not None:
+        mode = "markdown" if links else "text"
+        if output not in (None, mode):
+            raise ValueError("include_links and output conflict; select one intended output mode.")
+        repaired["output"] = mode
+    return repaired
 
 
 @dataclass(frozen=True)
@@ -882,6 +925,7 @@ def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) ->
         ),
         parallel_safe=True,
         open_input_schema=True,
+        argument_normalizer=_normalize_web_fetch_arguments,
     )
 
 

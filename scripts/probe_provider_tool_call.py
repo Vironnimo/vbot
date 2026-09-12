@@ -93,6 +93,7 @@ from scripts.provider_probe.workflow_recall import _probe_recall_workflow  # noq
 from scripts.provider_probe.workflow_reflection import _probe_reflection_workflow  # noqa: E402
 from scripts.provider_probe.workflow_swarm import _probe_swarm_tool  # noqa: E402
 from scripts.provider_probe.workflow_terminal import _probe_terminal  # noqa: E402
+from scripts.provider_probe.workflow_tolerance import _probe_tool_tolerance  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -123,7 +124,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
-        "--mcp-workflow-case", choices=("render", "no_match", "large_result"), default="render"
+        "--mcp-workflow-case",
+        choices=("render", "no_match", "large_result", "tolerance_true", "tolerance_false"),
+        default="render",
     )
     parser.add_argument(
         "--optional-case",
@@ -320,11 +323,33 @@ def _parser() -> argparse.ArgumentParser:
             "instruction before replaying it."
         ),
     )
+    parser.add_argument("--tolerance-report", type=Path)
+    parser.add_argument("--tolerance-case", default="all")
+    parser.add_argument(
+        "--tolerance-tool",
+        choices=(
+            "skill_manage",
+            "edit",
+            "cron",
+            "channel_send",
+            "web_fetch",
+            "ha_call_service",
+            "ha_get_state",
+            "ha_list_entities",
+            "ha_list_services",
+            "status",
+            "web_search",
+            "write",
+            "skill",
+        ),
+        default="skill_manage",
+    )
     return parser
 
 
 async def _run(args: argparse.Namespace) -> int:
     if args.scenario in {
+        "tool_tolerance",
         "terminal",
         "apply_patch",
         "mcp_workflow",
@@ -338,7 +363,9 @@ async def _run(args: argparse.Namespace) -> int:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 probe = (
-                    _probe_recall_workflow
+                    _probe_tool_tolerance
+                    if args.scenario == "tool_tolerance"
+                    else _probe_recall_workflow
                     if args.scenario == "recall_workflow"
                     else _probe_terminal
                     if args.scenario == "terminal"

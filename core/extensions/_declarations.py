@@ -146,6 +146,7 @@ class ToolDeclaration:
     parallel_safe: bool = True
     open_input_schema: bool = False
     coerce_arguments: bool = True
+    argument_normalizer: Callable[[Any], Any] | None = None
     session_scoped: bool = False
     activation: str = "configurable"
     # Local family id declared through ``register_tool_family``. The apply phase

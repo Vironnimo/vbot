@@ -174,3 +174,99 @@ async def test_old_target_cannot_call_changed_schema(context_service, host):
 
     assert not result["ok"]
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs,expected",
+    [
+        ({"value": 7}, {"value": "7"}),
+        ({"request": {"VALUE": "sentinel"}}, {"value": "sentinel"}),
+        ({"vlaue": "sentinel"}, {"value": "sentinel"}),
+    ],
+)
+async def test_target_repairs_recognizable_arguments_before_remote_call(
+    context_service, host, inputs, expected
+):
+    service, registry, runner, calls = context_service
+    original = json.dumps(inputs)
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host),
+        {
+            "action": "call",
+            "target": target,
+            "arguments": inputs,
+        },
+    )
+    assert result["ok"], result
+    assert calls == [("tools/call", {"name": "inspect", "arguments": expected})]
+    assert json.dumps(inputs) == original
+
+
+@pytest.mark.asyncio
+async def test_target_repairs_boolean_and_container_values(context_service, host):
+    service, registry, runner, calls = context_service
+    runner.catalog["tools"][0]["inputSchema"]["properties"] = {
+        "value": {"type": "string"},
+        "enabled": {"type": "boolean"},
+        "count": {"type": "integer"},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "metadata": {"type": "object"},
+    }
+    service._publish(runner, runner.catalog)
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host),
+        {
+            "action": "call",
+            "target": target,
+            "arguments": {
+                "value": "sentinel",
+                "enabled": "yes",
+                "count": "3.0",
+                "labels": "one",
+                "metadata": {"Enabled": "FALSE", "request": {"operation": "original"}},
+            },
+        },
+    )
+    assert result["ok"], result
+    assert calls[0][1]["arguments"] == {
+        "value": "sentinel",
+        "enabled": True,
+        "count": 3,
+        "labels": ["one"],
+        "metadata": {"Enabled": "FALSE", "request": {"operation": "original"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_target_conflicting_aliases_do_not_call_remote(context_service, host):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host),
+        {
+            "action": "call",
+            "target": target,
+            "arguments": {"value": "first", "VALUE": "second"},
+        },
+    )
+    assert result["error"]["code"] == "mcp_invalid_arguments"
+    assert "Conflicting" in result["error"]["message"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_operation_repairs_enum_spelling(context_service, host):
+    service, registry, runner, calls = context_service
+    result = await registry.dispatch(
+        context(host),
+        {
+            "action": "call",
+            "target": service._operation_target("logging/setLevel"),
+            "arguments": {"LEVEL": "DEBUG"},
+        },
+    )
+    assert result["ok"], result
+    assert calls == [("logging/setLevel", {"level": "debug"})]

@@ -790,3 +790,11 @@ def test_write_repeated_writes_in_one_run_count_once(tmp_path: Path) -> None:
         "removed": 0,
         "paths": [str(target.resolve())],
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permits literal quotes and backslashes in names")
+@pytest.mark.parametrize("name", ['"literal.txt"', "literal\\name.txt"])
+def test_path_repair_preserves_existing_literal_names(tmp_path: Path, name: str) -> None:
+    target = tmp_path / name
+    target.write_text("literal", encoding="utf-8")
+    assert make_context(tmp_path).resolve_path(name) == target.resolve()

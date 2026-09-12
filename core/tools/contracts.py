@@ -40,11 +40,6 @@ class ToolContract:
     def normalize_arguments(self, arguments: Any) -> Any:
         """Repair common unambiguous model encodings in a copied argument value."""
         copied_arguments = copy.deepcopy(arguments)
-        _omit_optional_empty_strings(
-            copied_arguments,
-            self.input_schema,
-            root_schema=self.input_schema,
-        )
         return _normalize_schema_value(
             copied_arguments,
             self.input_schema,
@@ -210,11 +205,28 @@ def _normalize_schema_value(
         return value
 
     validator = root_validator.evolve(schema=schema)
+    resolved = _resolve_schema_reference(schema, root_schema)
+    # Open schemas can already validate a misspelled optional field. Repair
+    # declared fields and nested values before deciding that no work is needed.
+    if isinstance(value, dict):
+        value = _normalize_object_value(
+            value, resolved, root_schema=root_schema, root_validator=root_validator
+        )
+    elif isinstance(value, list) and "array" in _declared_json_types(resolved):
+        value = _normalize_array_value(
+            value, resolved, root_schema=root_schema, root_validator=root_validator
+        )
+    if (
+        "integer" in _declared_json_types(resolved)
+        and isinstance(value, float)
+        and math.isfinite(value)
+        and value.is_integer()
+    ):
+        value = int(value)
     if validator.is_valid(value):
         return value
 
     candidates: list[Any] = []
-    resolved = _resolve_schema_reference(schema, root_schema)
     if resolved is not schema:
         candidates.append(
             _normalize_schema_value(
@@ -264,89 +276,6 @@ def _normalize_schema_value(
     return min(candidates, key=lambda candidate: _validation_score(validator, candidate))
 
 
-def _omit_optional_empty_strings(
-    value: Any,
-    schema: Any,
-    *,
-    root_schema: JsonObject,
-) -> None:
-    """Treat an exact empty optional string property as an omitted property.
-
-    Empty strings in required properties and array items remain untouched. A Tool
-    can therefore use an empty optional field as harmless omission without
-    weakening the schema's required-value or collection-item constraints.
-    """
-    if not isinstance(schema, dict):
-        return
-
-    resolved = _resolve_schema_reference(schema, root_schema)
-    if isinstance(value, dict):
-        properties, required = _object_schema_parts(resolved, root_schema=root_schema)
-        additional_schema = resolved.get("additionalProperties")
-        for key in list(value):
-            item = value[key]
-            item_schema = properties.get(key)
-            if item_schema is None and isinstance(additional_schema, dict):
-                item_schema = additional_schema
-            if (
-                key not in required
-                and item == ""
-                and _schema_has_string_type(item_schema, root_schema=root_schema)
-            ):
-                del value[key]
-                continue
-            _omit_optional_empty_strings(item, item_schema, root_schema=root_schema)
-        return
-
-    if isinstance(value, list):
-        item_schema = resolved.get("items")
-        for item in value:
-            _omit_optional_empty_strings(item, item_schema, root_schema=root_schema)
-
-
-def _object_schema_parts(
-    schema: JsonObject,
-    *,
-    root_schema: JsonObject,
-) -> tuple[dict[str, Any], set[str]]:
-    """Collect object properties and required names through local schema branches."""
-    resolved = _resolve_schema_reference(schema, root_schema)
-    properties = dict(resolved.get("properties", {})) if isinstance(resolved, dict) else {}
-    required = {name for name in resolved.get("required", []) if isinstance(name, str)}
-    for keyword in ("allOf", "oneOf", "anyOf"):
-        branches = resolved.get(keyword)
-        if not isinstance(branches, list):
-            continue
-        for branch in branches:
-            if not isinstance(branch, dict):
-                continue
-            branch_properties, branch_required = _object_schema_parts(
-                branch,
-                root_schema=root_schema,
-            )
-            properties.update(branch_properties)
-            required.update(branch_required)
-    return properties, required
-
-
-def _schema_has_string_type(schema: Any, *, root_schema: JsonObject) -> bool:
-    """Return whether a property schema accepts strings, excluding explicit empty enums."""
-    if not isinstance(schema, dict):
-        return False
-    resolved = _resolve_schema_reference(schema, root_schema)
-    if resolved.get("const") == "" or "" in resolved.get("enum", ()):
-        return False
-    if "string" in _declared_json_types(resolved):
-        return True
-    for keyword in ("oneOf", "anyOf", "allOf"):
-        branches = resolved.get(keyword)
-        if isinstance(branches, list) and any(
-            _schema_has_string_type(branch, root_schema=root_schema) for branch in branches
-        ):
-            return True
-    return False
-
-
 def _direct_normalization_candidates(
     value: Any,
     schema: JsonObject,
@@ -359,6 +288,11 @@ def _direct_normalization_candidates(
 
     if isinstance(value, str):
         text = value.strip()
+        options = schema.get("enum", [schema["const"]] if "const" in schema else [])
+        if options and all(isinstance(option, str) for option in options):
+            matched = _recognized_name(text, options)
+            if matched is not None:
+                candidates.append(matched)
         if "null" in declared_types and text.lower() == "null":
             candidates.append(None)
         if "integer" in declared_types:
@@ -391,6 +325,16 @@ def _direct_normalization_candidates(
             )
             if object_value is not None:
                 candidates.append(object_value)
+
+    if "boolean" in declared_types and isinstance(value, (int, float)) and value in (0, 1):
+        candidates.append(bool(value))
+    if (
+        "string" in declared_types
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and (isinstance(value, int) or math.isfinite(value))
+    ):
+        candidates.append(str(value))
 
     if "array" in declared_types and isinstance(value, list):
         candidates.append(
@@ -473,9 +417,9 @@ def _coerce_numeric_string(text: str, *, integer_only: bool) -> int | float | No
 
 def _coerce_boolean_string(text: str) -> bool | None:
     normalized = text.lower()
-    if normalized == "true":
+    if normalized in {"true", "yes", "1", "on"}:
         return True
-    if normalized == "false":
+    if normalized in {"false", "no", "0", "off"}:
         return False
     return None
 
@@ -548,22 +492,89 @@ def _normalize_object_value(
     properties = schema.get("properties")
     property_schemas = properties if isinstance(properties, dict) else {}
     additional_schema = schema.get("additionalProperties")
+    required = schema.get("required", [])
+    entries = list(value.items())
+    # Recognize an old envelope only when the schema does not own that name.
+    for key, item in list(entries):
+        if key in property_schemas or not property_schemas:
+            continue
+        action_schema = property_schemas.get("action", {})
+        action = _recognized_name(str(key), action_schema.get("enum", []))
+        wrapper = str(key).strip().casefold() in {"request", "arguments"}
+        if wrapper or action is not None:
+            if isinstance(item, str):
+                try:
+                    item = _load_json_value(item)
+                except ValueError:
+                    continue
+            if isinstance(item, dict):
+                entries.remove((key, value[key]))
+                entries.extend(item.items())
+                if action is not None:
+                    entries.append(("action", action))
     normalized: JsonObject = {}
-    for key, item in value.items():
-        item_schema = property_schemas.get(key)
+    for key, item in entries:
+        field = key
+        if key not in property_schemas and not isinstance(additional_schema, dict):
+            field = _recognized_name(str(key), list(property_schemas)) or key
+            if str(key).strip().casefold() == "operation" and "action" in property_schemas:
+                field = "action"
+        item_schema = property_schemas.get(field)
         if not isinstance(item_schema, dict) and isinstance(additional_schema, dict):
             item_schema = additional_schema
-        normalized[key] = (
-            _normalize_schema_value(
-                item,
-                item_schema,
-                root_schema=root_schema,
-                root_validator=root_validator,
+        if isinstance(item_schema, dict):
+            item_validator = root_validator.evolve(schema=item_schema)
+            # An empty payload accepted by its schema is meaningful (e.g. patch
+            # deletion). Only invalid empty optional selections mean omission.
+            if (
+                field not in required
+                and (item is None or item == "")
+                and not item_validator.is_valid(item)
+            ):
+                continue
+            item = _normalize_schema_value(
+                item, item_schema, root_schema=root_schema, root_validator=root_validator
             )
-            if isinstance(item_schema, dict)
-            else item
-        )
+        if field in normalized and normalized[field] != item:
+            raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
+        normalized[field] = item
     return normalized
+
+
+def _recognized_name(value: str, choices: list[Any]) -> str | None:
+    """Resolve spelling only when exactly one declared name matches."""
+    names = [name for name in choices if isinstance(name, str)]
+    if value in names:
+        return value
+
+    def spelling(text: str) -> str:
+        return re.sub(r"[\s_-]+", "", text.casefold())
+
+    source = spelling(value)
+    exact = [name for name in names if spelling(name) == source]
+    if len(exact) == 1:
+        return exact[0]
+    if exact or len(source) < 4:
+        return None
+    near = [name for name in names if _one_spelling_error(source, spelling(name))]
+    return near[0] if len(near) == 1 else None
+
+
+def _one_spelling_error(source: str, target: str) -> bool:
+    if abs(len(source) - len(target)) > 1:
+        return False
+    if len(source) == len(target):
+        differences = [i for i, (a, b) in enumerate(zip(source, target, strict=True)) if a != b]
+        if len(differences) == 1:
+            return True
+        return (
+            len(differences) == 2
+            and differences[1] == differences[0] + 1
+            and source[differences[0]] == target[differences[1]]
+            and source[differences[1]] == target[differences[0]]
+        )
+    shorter, longer = (source, target) if len(source) < len(target) else (target, source)
+    return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
 
 
 def _load_json_value(value: str) -> Any:

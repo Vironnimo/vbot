@@ -6,13 +6,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
-
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_TOOL_NAME,
     ToolContext,
-    ToolContractError,
     ToolRegistry,
     register_skill_tool,
     tool_failure,
@@ -448,13 +445,14 @@ def test_skill_tool_without_arguments_returns_grouped_live_catalog(tmp_path: Pat
     assert "<skill_content" not in str(result)
 
 
-def test_skill_tool_requires_non_blank_name(tmp_path: Path) -> None:
+def test_skill_tool_blank_optional_name_lists_available_skills(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    with pytest.raises(ToolContractError):
-        asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["count"] == 1
 
 
 def test_skill_registration_exposes_one_configurable_tool(tmp_path: Path) -> None:
