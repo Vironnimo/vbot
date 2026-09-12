@@ -323,7 +323,6 @@ def test_channel_config_gating_defaults() -> None:
 
     assert config.response_mode == "mention"
     assert config.mention_patterns == []
-    assert config.owner_user_ids == []
     assert config.observe_unaddressed is False
 
 
@@ -342,17 +341,6 @@ def test_channel_config_rejects_empty_mention_pattern() -> None:
         ChannelConfig.from_dict(make_config_payload(mention_patterns=["  "]))
 
 
-def test_channel_config_normalizes_owner_user_ids_to_strings() -> None:
-    config = ChannelConfig.from_dict(make_config_payload(owner_user_ids=[50, " 51 "]))
-
-    assert config.owner_user_ids == ["50", "51"]
-
-
-def test_channel_config_rejects_boolean_owner_user_id() -> None:
-    with pytest.raises(ChannelConfigError):
-        ChannelConfig.from_dict(make_config_payload(owner_user_ids=[True]))
-
-
 def test_channel_config_rejects_non_boolean_observe_unaddressed() -> None:
     with pytest.raises(ChannelConfigError):
         ChannelConfig.from_dict(make_config_payload(observe_unaddressed="true"))
@@ -363,7 +351,6 @@ def test_channel_config_round_trips_gating_fields() -> None:
         make_config_payload(
             response_mode="all",
             mention_patterns=["vbot", r"hey\s+bot"],
-            owner_user_ids=["50"],
             observe_unaddressed=True,
         )
     )
@@ -372,7 +359,6 @@ def test_channel_config_round_trips_gating_fields() -> None:
 
     assert restored.response_mode == "all"
     assert restored.mention_patterns == ["vbot", r"hey\s+bot"]
-    assert restored.owner_user_ids == []
     assert "owner_user_ids" not in config.to_dict()
     assert restored.observe_unaddressed is True
 
@@ -482,30 +468,19 @@ def test_channel_access_migration_merges_groups_and_removes_old_scope(tmp_path: 
     ] == [("50", "Alice"), ("51", "Bob")]
 
 
-def test_legacy_owner_ids_migrate_to_every_configured_group(tmp_path: Path) -> None:
+def test_retired_owner_ids_are_rejected_without_rewriting_files(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     config_dir = tmp_path / "channels" / "tg-assistant"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "channel.json"
-    config_path.write_text(
-        json.dumps(
-            make_config_payload(
-                allowed_chat_ids=["-100", "-200"],
-                owner_user_ids=[50, "51"],
-            )
-        ),
-        encoding="utf-8",
-    )
+    original = json.dumps(make_config_payload(allowed_chat_ids=["-100"], owner_user_ids=[50]))
+    config_path.write_text(original, encoding="utf-8")
 
-    loaded = storage.get("tg-assistant")
-
-    assert loaded.owner_user_ids == []
-    assert "owner_user_ids" not in json.loads(config_path.read_text(encoding="utf-8"))
-    state = storage.access_state("tg-assistant")
-    assert {group["access_scope_id"]: group["admin_user_ids"] for group in state["groups"]} == {
-        "-100": ["50", "51"],
-        "-200": ["50", "51"],
-    }
+    with pytest.raises(ChannelConfigError, match="owner_user_ids.*retired"):
+        storage.get("tg-assistant")
+    assert storage.load_all() == []
+    assert config_path.read_text(encoding="utf-8") == original
+    assert not (config_dir / "access.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -1662,3 +1637,47 @@ async def test_channel_service_keeps_attempt_count_without_healthy_run(
     service.stop()
     await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
     await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"id": "../bad"},
+        {"agent_id": "../bad"},
+        {"agent_id": "bad/name"},
+        {"allowed_chat_ids": [True]},
+        {"allowed_chat_ids": "123"},
+        {"mention_patterns": ["[invalid"]},
+        {"mention_patterns": None},
+        {"enabled": "yes"},
+        {"observe_unaddressed": 1},
+        {"platform": "unknown"},
+    ],
+)
+def test_channel_config_validation_agrees_across_all_entry_points(
+    tmp_path: Path, overrides: dict[str, Any]
+) -> None:
+    from core.channels import validate_channel_data
+
+    payload = make_config_payload(**overrides)
+    assert any(item.severity == "error" for item in validate_channel_data(payload))
+    with pytest.raises(ChannelConfigError):
+        ChannelConfig.from_dict(payload)
+    with pytest.raises(ChannelConfigError):
+        ChannelStorage(tmp_path).save(ChannelConfig(**payload))
+    assert not (tmp_path / "channels").exists()
+
+
+def test_channel_config_validation_normalizes_accepted_values_consistently(tmp_path: Path) -> None:
+    from core.channels import validate_channel_data
+
+    payload = make_config_payload(
+        id=" tg-assistant ", agent_id=" assistant ", allowed_chat_ids=[123, " 456 "]
+    )
+    assert not any(item.severity == "error" for item in validate_channel_data(payload))
+    config = ChannelConfig.from_dict(payload)
+    storage = ChannelStorage(tmp_path)
+    storage.save(ChannelConfig(**payload))
+    assert storage.get("tg-assistant").to_dict() == config.to_dict()
+    assert config.agent_id == "assistant"
+    assert config.allowed_chat_ids == ["123", "456"]

@@ -157,7 +157,10 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
 
     warn_unknown_keys(diagnostics, "$", data, _CHANNEL_CONFIG_FIELDS, "channel field")
-    validate_non_empty_string(diagnostics, "$.id", data.get("id"), required=True)
+    try:
+        _normalize_channel_id(data.get("id"))
+    except ChannelConfigError as error:
+        add_error(diagnostics, "$.id", str(error))
     validate_allowed_string(
         diagnostics, "$.platform", data.get("platform"), ALLOWED_CHANNEL_PLATFORMS
     )
@@ -183,14 +186,19 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         ALLOWED_CHANNEL_RESPONSE_MODES,
     )
     _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
-    _validate_user_id_list(diagnostics, "$.owner_user_ids", data.get("owner_user_ids", []))
+    if "owner_user_ids" in data:
+        add_error(
+            diagnostics,
+            "$.owner_user_ids",
+            "is retired; configure group admins in channel access settings and remove this field",
+        )
     return diagnostics
 
 
 def _validate_channel_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     if not isinstance(value, str) or not value:
         add_error(diagnostics, path, "must be a non-empty string")
-    elif not is_valid_agent_id(value):
+    elif not is_valid_agent_id(value.strip()):
         add_error(
             diagnostics,
             path,
@@ -223,17 +231,6 @@ def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: An
             add_error(diagnostics, f"{path}[{index}]", f"must be a valid regex: {error}")
 
 
-def _validate_user_id_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
-    if not isinstance(value, list):
-        add_error(diagnostics, path, "must be a list of platform user ids")
-        return
-    for index, item in enumerate(value):
-        if isinstance(item, bool) or not isinstance(item, (int, str)):
-            add_error(diagnostics, f"{path}[{index}]", "must be a string or integer user id")
-        elif isinstance(item, str) and not item.strip():
-            add_error(diagnostics, f"{path}[{index}]", "must not be empty")
-
-
 @dataclass(slots=True)
 class ChannelConfig:
     """Persisted channel configuration."""
@@ -247,8 +244,6 @@ class ChannelConfig:
     enabled: bool = True
     response_mode: str = _DEFAULT_RESPONSE_MODE
     mention_patterns: list[str] = field(default_factory=list)
-    # Legacy read-only migration input. New configs never persist or mutate this field.
-    owner_user_ids: list[str] = field(default_factory=list, repr=False)
     observe_unaddressed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -269,6 +264,7 @@ class ChannelConfig:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ChannelConfig:
         """Create one ChannelConfig from persisted JSON data."""
+        _raise_channel_config_errors(payload)
         config = cls(
             id=payload.get("id", ""),
             platform=payload.get("platform", ""),
@@ -279,90 +275,42 @@ class ChannelConfig:
             enabled=payload.get("enabled", True),
             response_mode=payload.get("response_mode", _DEFAULT_RESPONSE_MODE),
             mention_patterns=list(payload.get("mention_patterns") or []),
-            owner_user_ids=list(payload.get("owner_user_ids") or []),
             observe_unaddressed=payload.get("observe_unaddressed", False),
         )
         config.validate()
         return config
 
     def validate(self) -> None:
-        """Validate and normalize one channel config in-place."""
-        if not isinstance(self.id, str) or not self.id.strip():
-            raise ChannelConfigError("id must be a non-empty string")
+        """Validate with the persisted schema, then normalize accepted values."""
+        _raise_channel_config_errors(
+            {
+                "id": self.id,
+                "platform": self.platform,
+                "agent_id": self.agent_id,
+                "dm_scope": self.dm_scope,
+                "allowed_chat_ids": self.allowed_chat_ids,
+                "token_env_var": self.token_env_var,
+                "enabled": self.enabled,
+                "response_mode": self.response_mode,
+                "mention_patterns": self.mention_patterns,
+                "observe_unaddressed": self.observe_unaddressed,
+            }
+        )
         self.id = self.id.strip()
-        if _CHANNEL_ID_PATTERN.fullmatch(self.id) is None:
-            raise ChannelConfigError(
-                "id must contain only letters, numbers, underscore, and hyphen"
-            )
-
-        if not isinstance(self.platform, str) or self.platform not in ALLOWED_CHANNEL_PLATFORMS:
-            platforms = ", ".join(sorted(ALLOWED_CHANNEL_PLATFORMS))
-            raise ChannelConfigError(f"platform must be one of: {platforms}")
-
-        if not isinstance(self.agent_id, str) or not self.agent_id.strip():
-            raise ChannelConfigError("agent_id must be a non-empty string")
         self.agent_id = self.agent_id.strip()
-
-        if not isinstance(self.dm_scope, str) or self.dm_scope not in ALLOWED_CHANNEL_DM_SCOPES:
-            scopes = ", ".join(sorted(ALLOWED_CHANNEL_DM_SCOPES))
-            raise ChannelConfigError(f"dm_scope must be one of: {scopes}")
-
-        if not isinstance(self.allowed_chat_ids, list):
-            raise ChannelConfigError("allowed_chat_ids must be a list of platform ids")
-        normalized_chat_ids: list[str] = []
-        for chat_id in self.allowed_chat_ids:
-            if isinstance(chat_id, bool) or not isinstance(chat_id, (int, str)):
-                raise ChannelConfigError("allowed_chat_ids must contain strings or integers only")
-            normalized_chat_id = str(chat_id).strip()
-            if not normalized_chat_id:
-                raise ChannelConfigError("allowed_chat_ids must not contain empty values")
-            normalized_chat_ids.append(normalized_chat_id)
-        self.allowed_chat_ids = normalized_chat_ids
-
-        if not isinstance(self.token_env_var, str) or not self.token_env_var.strip():
-            raise ChannelConfigError("token_env_var must be a non-empty string")
         self.token_env_var = self.token_env_var.strip()
+        self.allowed_chat_ids = [str(value).strip() for value in self.allowed_chat_ids]
+        self.mention_patterns = list(self.mention_patterns)
 
-        if not isinstance(self.enabled, bool):
-            raise ChannelConfigError("enabled must be a boolean")
 
-        if not isinstance(self.observe_unaddressed, bool):
-            raise ChannelConfigError("observe_unaddressed must be a boolean")
-
-        if not isinstance(self.response_mode, str) or self.response_mode not in (
-            ALLOWED_CHANNEL_RESPONSE_MODES
-        ):
-            modes = ", ".join(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
-            raise ChannelConfigError(f"response_mode must be one of: {modes}")
-
-        if not isinstance(self.mention_patterns, list):
-            raise ChannelConfigError("mention_patterns must be a list of regex strings")
-        normalized_patterns: list[str] = []
-        for pattern in self.mention_patterns:
-            if not isinstance(pattern, str) or not pattern.strip():
-                raise ChannelConfigError("mention_patterns must contain non-empty strings only")
-            try:
-                re.compile(pattern)
-            except re.error as error:
-                raise ChannelConfigError(
-                    f"mention_patterns contains an invalid regex {pattern!r}: {error}"
-                ) from error
-            normalized_patterns.append(pattern)
-        self.mention_patterns = normalized_patterns
-
-        # Platform user ids are strings end-to-end (Telegram ids are numeric, Discord
-        # snowflakes are not); integers are accepted and normalized for convenience.
-        if not isinstance(self.owner_user_ids, list):
-            raise ChannelConfigError("owner_user_ids must be a list of platform user ids")
-        normalized_owner_ids: list[str] = []
-        for owner_user_id in self.owner_user_ids:
-            if isinstance(owner_user_id, bool) or not isinstance(owner_user_id, (int, str)):
-                raise ChannelConfigError("owner_user_ids must contain strings or integers only")
-            normalized_owner_id = str(owner_user_id).strip()
-            if not normalized_owner_id:
-                raise ChannelConfigError("owner_user_ids must not contain empty values")
-            normalized_owner_ids.append(normalized_owner_id)
-        self.owner_user_ids = normalized_owner_ids
+def _raise_channel_config_errors(payload: Any) -> None:
+    errors = [
+        diagnostic
+        for diagnostic in validate_channel_data(payload)
+        if diagnostic.severity == "error"
+    ]
+    if errors:
+        raise ChannelConfigError("; ".join(f"{error.path}: {error.message}" for error in errors))
 
 
 class ChannelStorage:
@@ -402,7 +350,7 @@ class ChannelStorage:
             if not config_path.is_file():
                 continue
             try:
-                configs.append(self._migrate_legacy_owner_ids(self._read_config(config_path)))
+                configs.append(self._read_config(config_path))
             except ChannelError as error:
                 _LOGGER.warning("Skipping invalid channel config %s: %s", config_path, error)
 
@@ -443,7 +391,7 @@ class ChannelStorage:
         config_path = self._channel_dir(normalized_id) / _CHANNEL_CONFIG_FILENAME
         if not config_path.is_file():
             raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
-        return self._migrate_legacy_owner_ids(self._read_config(config_path))
+        return self._read_config(config_path)
 
     def access_state(self, channel_id: str) -> JsonObject:
         """Return the saved own identity and per-group participant/admin state."""
@@ -690,26 +638,6 @@ class ChannelStorage:
 
     def _channel_dir(self, channel_id: str) -> Path:
         return self._channels_dir / channel_id
-
-    def _migrate_legacy_owner_ids(self, config: ChannelConfig) -> ChannelConfig:
-        if not config.owner_user_ids:
-            return config
-        with self._access_lock:
-            state = self._load_access_state(config.id)
-            changed = False
-            for access_scope_id in config.allowed_chat_ids:
-                group = self._access_group(state, access_scope_id)
-                admins = cast(list[str], group["admin_user_ids"])
-                for user_id in config.owner_user_ids:
-                    if user_id not in admins:
-                        admins.append(user_id)
-                        changed = True
-                admins.sort()
-            if changed:
-                self._write_access_state(config.id, state)
-            migrated = replace(config, owner_user_ids=[])
-            self.save(migrated)
-            return migrated
 
     def _load_access_state(self, channel_id: str) -> JsonObject:
         path = self._channel_dir(channel_id) / _CHANNEL_ACCESS_FILENAME
@@ -1955,7 +1883,7 @@ def _run_button_binding_from_dict(binding_id: str, payload: Any) -> RunButtonBin
     )
 
 
-def _normalize_channel_id(channel_id: str) -> str:
+def _normalize_channel_id(channel_id: Any) -> str:
     if not isinstance(channel_id, str) or not channel_id.strip():
         raise ChannelConfigError("channel_id must be a non-empty string")
     normalized = channel_id.strip()
