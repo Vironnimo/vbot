@@ -1,58 +1,45 @@
-"""Uniform agent resolution: one fork, two sources, one runtime-agent form.
-
-Every run path resolves an agent through one entry point —
-:meth:`AgentResolver.resolve_agent` — instead of reaching for
-``runtime.agents.get`` directly. The fork lives at exactly **one** place
-(decision #3 in the plan):
-
-- ``project_id is None`` → the **identity** path: return the store ``Agent``
-  unchanged (same model chain Model → global → empty that ``AgentStore`` already
-  applies, same workspace, same fields). Nothing about the identity path changes
-  here; the resolver only wraps it.
-- ``project_id`` set → the **config** path: the agent comes from the project's
-  Team scan, and a :class:`ConfigAgent` is *synthesized* from the scanned profile
-  plus a resolved model.
-
-Both branches return a :class:`RuntimeAgent` — a structural protocol the store
-``Agent`` already satisfies field-for-field, so a later run-path migration just
-re-types its parameter from ``Agent`` to ``RuntimeAgent`` and keeps reading the
-same attributes (model, tool_access, temperature, thinking_effort,
-allowed_skills, fallback_models, memory_prompt_mode, workspace, id, …).
-
-**Two freshness levels** (decision in the plan, "zwei Frische-Ebenen"):
-
-- **Team membership** — which agents exist — comes from the *scan*, run at
-  project-open and explicit re-scan, and cached per ``project_id`` here. A run
-  does not re-walk the whole repo every turn.
-- **Single-agent config** — model/tools/prompt for the run — is read **fresh from
-  the repo file** on every ``resolve_agent`` (mirroring how identity agents
-  re-read their ``agent.json`` each turn). The cached Team answers "is this agent
-  on the Team?"; the fresh per-file read answers "what is its current config?".
-
-**Model chain for config agents** (decision in the plan): agent model → project
-default → global default → **error**. A model counts only when it
-*exists/is configured in this instance* — its provider is registered, the model
-is in the catalog, and a connection the model's per-model allowlist permits has
-usable credentials (a pinned ``::connection[:account]`` suffix is checked
-verbatim). An unconfigured model is treated as **no model** and the chain falls
-through; if it falls all the way through, resolution raises (the agent cannot
-run). The same "exists/configured?" check produces the scan's ``BAD_MODEL``
-findings, hung onto the report through :meth:`ScanReport.with_model_findings`
-(the B3.1 seam).
-
-Constructor injection only; the runtime dependencies are declared as local
-structural Protocols so this module never imports ``core.runtime`` (import-cycle
-risk, mirroring ``core/providers/task_client.py`` / ``usage.py``).
-"""
+"""Identity, Project and temporary Agent resolution with fresh source reads."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from fnmatch import fnmatchcase
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
-from core.memory import MemoryPromptMode
+from core.projects._model_configuration import (
+    ConnectionRestrictedModel,
+    CredentialProbe,
+    ModelConfigurationChecker,
+    ModelConfigurationError,
+    ModelProbe,
+    ProviderProbe,
+)
+from core.projects._resolution_values import (
+    _build_config_agent,
+    _config_temperature_source,
+    _config_thinking_effort_source,
+    _config_tool_access_source,
+    _effective_allowed_agents,
+    _identity_optional_source,
+    _identity_string_list_source,
+    _identity_string_source,
+    _overridden_model,
+    _project_agent_tool_access,
+    _project_agent_tools,
+    _resolve_temperature,
+    _resolve_thinking_effort,
+    _temporary_project_allowed_skills,
+    _temporary_project_tool_access,
+    effective_project_allowed_skills,
+)
+from core.projects._runtime_agent import (
+    AgentResolutionError,
+    AgentRunOverrides,
+    ConfigAgent,
+    GlobalAgentDefaultsProvider,
+    ProjectSkillNamesProvider,
+    RuntimeAgent,
+)
 from core.projects.projects import ProjectError
 from core.projects.scan_report import FindingType, ScanFinding
 from core.projects.scanners.base import (
@@ -61,8 +48,7 @@ from core.projects.scanners.base import (
     ScanResult,
     scan_project,
 )
-from core.settings import AgentDefaults, validate_thinking_effort
-from core.skills import WILDCARD_ALLOWLIST
+from core.settings import AgentDefaults
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -75,228 +61,28 @@ if TYPE_CHECKING:
     from core.projects.store import ProjectStore
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
-    from core.tools.availability import ToolAccess
 
-# Config agents are workspace-less and memory-tool-less in v1 (plan: "Config-Agent
-# = kein Workspace, kein Memory-Tool"). The empty workspace path makes that
-# explicit on the runtime-agent surface; the memory mode is forced off so no
-# pinned-memory block is ever assembled for a config agent.
-_CONFIG_AGENT_WORKSPACE = ""
-_CONFIG_AGENT_MEMORY_MODE: MemoryPromptMode = "off"
-# Config agents have no fallback chain and no custom-prompt scope in v1; their
-# prompt body comes verbatim from the scanned source instead.
-_CONFIG_AGENT_FALLBACK_MODELS: tuple[str, ...] = ()
-_CONFIG_AGENT_CUSTOM_PROMPT_ENABLED = False
-# A config agent has no persisted timestamps (it is synthesized per run from the
-# repo file); the runtime-agent surface still needs the fields for compatibility.
-_CONFIG_AGENT_TIMESTAMP = ""
-
-
-@runtime_checkable
-class RuntimeAgent(Protocol):
-    """The uniform run-time agent surface both resolution branches return.
-
-    This is the contract the run consumers (chat loop, sub-agents, ``/status``,
-    prompt assembly) read. The store :class:`core.agents.agents.Agent` already
-    satisfies it field-for-field, so the identity branch returns the store agent
-    as-is and the config branch returns a :class:`ConfigAgent` exposing the same
-    surface. Keeping it a Protocol (not a new base class) is what makes the
-    later run-path migration a re-type, not a rewrite.
-
-    Every attribute here is one a run path reads today off the identity
-    ``Agent``:
-
-    - ``id`` — the project-local agent id (for a config agent, the slug).
-    - ``name`` — display name.
-    - ``model`` — the **resolved** ``<provider>/<model-id>`` the run uses (for a
-      config agent, the model chain has already run; never empty).
-    - ``fallback_models`` — ordered fallback chain (empty for a config agent in v1).
-    - ``workspace`` — identity/memory home; **empty** for a config agent.
-    - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
-    - ``tool_access`` — explicit Tool Access Policy; ``allowed_skills`` remains
-      an allow-list and ``tools`` carries optional Tool-owned settings (for a
-      config agent, Project-derived).
-    - ``memory_prompt_mode`` — pinned-memory selection (``"off"`` for config).
-    - ``custom_system_prompt_enabled`` — private prompt scope (``False`` for config).
-    - ``current_session_id`` — the agent's active session (empty for config; the
-      anchor owns project-session selection).
-    - ``created_at`` / ``updated_at`` — persisted timestamps (empty for config).
-    """
-
-    @property
-    def id(self) -> str: ...
-    @property
-    def name(self) -> str: ...
-    @property
-    def model(self) -> str: ...
-    @property
-    def fallback_models(self) -> list[str]: ...
-    @property
-    def workspace(self) -> str: ...
-
-    @property
-    def root_project_id(self) -> str | None: ...
-    @property
-    def temperature(self) -> float | None: ...
-    @property
-    def thinking_effort(self) -> str | None: ...
-    @property
-    def tool_access(self) -> ToolAccess: ...
-    @property
-    def allowed_skills(self) -> list[str]: ...
-    @property
-    def tools(self) -> dict[str, Any]: ...
-    @property
-    def memory_prompt_mode(self) -> MemoryPromptMode: ...
-    @property
-    def custom_system_prompt_enabled(self) -> bool: ...
-    @property
-    def current_session_id(self) -> str: ...
-    @property
-    def created_at(self) -> str: ...
-    @property
-    def updated_at(self) -> str: ...
-    @property
-    def compaction_policy(self) -> dict[str, Any] | None: ...
-
-
-@dataclass(frozen=True)
-class AgentRunOverrides:
-    """The only Agent fields one admitted Run may replace ephemerally."""
-
-    model: str | None = None
-    thinking_effort: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.model is not None and (not isinstance(self.model, str) or not self.model):
-            raise ValueError("model must be a non-empty string")
-        if self.thinking_effort is not None:
-            validate_thinking_effort(
-                self.thinking_effort,
-                label="thinking_effort",
-                allow_none=False,
-            )
-
-    @property
-    def is_empty(self) -> bool:
-        """Return whether this value changes neither permitted field."""
-        return self.model is None and self.thinking_effort is None
-
-
-@dataclass(frozen=True)
-class ConfigAgent:
-    """A run-time agent synthesized from a scanned project profile + a model.
-
-    Field set mirrors the store :class:`Agent` so it satisfies
-    :class:`RuntimeAgent`; the values come from the :class:`ScannedAgent` profile
-    (verbatim ``body`` becomes the system prompt later) plus the model resolved
-    through the chain and the project-derived ``tool_access``/``allowed_skills``.
-    It carries the scanned ``body`` and
-    ``source_path`` so the prompt builder (a later task) can insert the body
-    verbatim and so callers can point at the source repo file.
-    """
-
-    id: str
-    name: str
-    model: str
-    temperature: float | None
-    tool_access: ToolAccess
-    allowed_skills: list[str]
-    tools: dict[str, Any]
-    body: str
-    source_path: Path
-    source_format: str
-    # Resolved through the chain (agent → project default → global default); both
-    # ``temperature`` and ``thinking_effort`` carry the first tier that delivered,
-    # or ``None`` when all tiers fell through → the provider default.
-    project_id: str | None = None
-    thinking_effort: str | None = None
-    fallback_models: list[str] = field(default_factory=lambda: list(_CONFIG_AGENT_FALLBACK_MODELS))
-    workspace: str = _CONFIG_AGENT_WORKSPACE
-    root_project_id: str | None = None
-    memory_prompt_mode: MemoryPromptMode = _CONFIG_AGENT_MEMORY_MODE
-    custom_system_prompt_enabled: bool = _CONFIG_AGENT_CUSTOM_PROMPT_ENABLED
-    current_session_id: str = ""
-    created_at: str = _CONFIG_AGENT_TIMESTAMP
-    updated_at: str = _CONFIG_AGENT_TIMESTAMP
-    compaction_policy: dict[str, Any] | None = None
-
-
-class AgentResolutionError(ValueError):
-    """An agent could not be resolved into a runnable runtime agent.
-
-    Expected (handled-locally) failure: an unknown project/agent, or a config
-    agent whose model chain fell all the way through (no usable model). It is a
-    clear "cannot run" signal, never a silent degrade.
-    """
-
-
-class ModelConfigurationError(ValueError):
-    """A Model reference cannot run with this instance's configured routes."""
-
-
-# Structural protocols for the runtime dependencies, declared locally so the
-# resolver never imports core.runtime (cycle risk). Each mirrors exactly the
-# slice of the real service the resolver uses.
-
-
-class ConnectionRestrictedModel(Protocol):
-    """The catalog-model slice the checker reads: the per-model connection rule.
-
-    ``allows_connection`` is the single source of the connection allowlist
-    (``core.models.Model.allows_connection``): an empty allowlist permits every
-    connection, a non-empty one restricts the model to the listed connection ids.
-    """
-
-    @property
-    def connections(self) -> tuple[str, ...]: ...
-
-    def allows_connection(self, connection_id: str) -> bool: ...
-
-
-class ModelProbe(Protocol):
-    """The model-registry slice used to answer "does this model exist?"."""
-
-    def get(self, provider_id: str, model_id: str) -> ConnectionRestrictedModel: ...
-
-
-class ProviderProbe(Protocol):
-    """The provider-registry slice used to find a provider's connections."""
-
-    def get(self, provider_id: str) -> object: ...
-
-
-class CredentialProbe(Protocol):
-    """The credential slice used to answer "is a connection usable?".
-
-    Usability = enabled (settings override or type default) AND credentialed —
-    owned by ``ProviderCredentialResolver.is_usable``.
-    """
-
-    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool: ...
-
-
-class GlobalAgentDefaultsProvider(Protocol):
-    """Returns the instance-wide ``defaults.agent`` map (model, temperature, …).
-
-    One seam for the whole global tier of the resolution chains: the resolver
-    reads ``model`` / ``temperature`` / ``thinking_effort`` out of the returned
-    mapping. Missing keys mean "no global default" for that field. An empty map is
-    a valid answer (nothing configured globally)."""
-
-    def __call__(self) -> Mapping[str, Any]: ...
-
-
-class ProjectSkillNamesProvider(Protocol):
-    """Returns the names of a project's own scanned skills, by project id.
-
-    The skill-side counterpart to the model/credential probes: it lets the resolver
-    compute a config agent's effective skills without importing ``core.runtime`` or
-    the skills module. The runtime wires it to its cached project-skill scan; an
-    unknown project yields an empty set (the agent then has only its opted-in
-    bundled skills)."""
-
-    def __call__(self, project_id: str) -> frozenset[str]: ...
+__all__ = [
+    "AgentResolutionError",
+    "AgentResolver",
+    "AgentRunOverrides",
+    "ConfigAgent",
+    "ConnectionRestrictedModel",
+    "CredentialProbe",
+    "GlobalAgentDefaultsProvider",
+    "ModelConfigurationChecker",
+    "ModelConfigurationError",
+    "ModelProbe",
+    "ProjectSkillNamesProvider",
+    "ProviderProbe",
+    "RuntimeAgent",
+    "build_agent_resolver",
+    "effective_project_allowed_skills",
+    "resolve_prompt_project",
+    "resolve_skill_scope",
+    "resolve_working_project_id",
+    "runtime_agent_body",
+]
 
 
 def _no_project_skills(_project_id: str) -> frozenset[str]:
@@ -324,160 +110,6 @@ def _orphan_finding(agent_id: str, detail: str) -> ScanFinding:
     anchor (``project.json`` / the sessions subtree), not in a repo source file.
     """
     return ScanFinding(type=FindingType.ORPHAN, detail=detail, agent_id=agent_id)
-
-
-class ModelConfigurationChecker:
-    """Decides whether a ``<provider>/<model-id>[::connection[:account]]`` can run here.
-
-    "Configured in this instance" = the provider is registered, the model is in
-    that provider's catalog, and a connection is usable **for this model**: it
-    has usable credentials and the model's per-model connection allowlist
-    (``Model.allows_connection`` — empty means unrestricted) permits it. A pinned
-    ``::connection[:account]`` suffix narrows the question to exactly that
-    connection (and account). This mirrors what the chat runtime enforces at
-    request time (``core/chat/model_resolution.py`` — allowlist-filtered
-    connection pick, verbatim pinned suffix), so a model this gate accepts never
-    fails connection resolution at run time. It is the single rule the model
-    chain, the scan's ``BAD_MODEL`` check, and the ``/model`` set-time gate all
-    consult, so they cannot drift.
-    """
-
-    def __init__(
-        self,
-        models: ModelProbe,
-        providers: ProviderProbe,
-        provider_credentials: CredentialProbe,
-    ) -> None:
-        self._models = models
-        self._providers = providers
-        self._provider_credentials = provider_credentials
-
-    def is_configured(self, model: str) -> bool:
-        """Return whether *model* names a model that can actually run here."""
-        parsed = _parse_provider_model(model)
-        if parsed is None:
-            return False
-        provider_id, model_id, connection_suffix = parsed
-
-        try:
-            self._providers.get(provider_id)
-        except KeyError:
-            return False
-
-        try:
-            catalog_model = self._models.get(provider_id, model_id)
-        except KeyError:
-            return False
-
-        if connection_suffix:
-            return self._pinned_connection_usable(provider_id, catalog_model, connection_suffix)
-        return self._has_usable_allowed_connection(provider_id, catalog_model)
-
-    def require_configured(self, model: str) -> None:
-        """Require *model* to be runnable and retain precise Connection failures."""
-        parsed = _parse_provider_model(model)
-        if parsed is None:
-            raise self._unusable_error(model)
-        provider_id, model_id, connection_suffix = parsed
-
-        try:
-            provider_config = self._providers.get(provider_id)
-            catalog_model = self._models.get(provider_id, model_id)
-        except KeyError as error:
-            raise self._unusable_error(model) from error
-
-        if connection_suffix:
-            connection_local_id = connection_suffix.partition(":")[0]
-            if not catalog_model.allows_connection(connection_local_id):
-                allowed = ", ".join(catalog_model.connections)
-                raise ModelConfigurationError(
-                    f"model {provider_id}/{model_id} is not available on connection "
-                    f"'{connection_local_id}' (allowed connections: {allowed})"
-                )
-            connections = getattr(provider_config, "connections", [])
-            if all(connection.id != connection_local_id for connection in connections):
-                raise self._unusable_error(model)
-            if not self._provider_credentials.is_usable(
-                provider_id, f"{provider_id}:{connection_suffix}"
-            ):
-                raise self._unusable_error(model)
-            return
-
-        if not self._has_usable_allowed_connection(provider_id, catalog_model):
-            raise self._unusable_error(model)
-
-    @staticmethod
-    def _unusable_error(model: str) -> ModelConfigurationError:
-        return ModelConfigurationError(
-            f"model {model!r} is not usable in this instance "
-            "(unknown provider/model or no usable credential on an allowed connection)"
-        )
-
-    def _has_usable_allowed_connection(
-        self, provider_id: str, catalog_model: ConnectionRestrictedModel
-    ) -> bool:
-        """Whether any connection is both allowed by the model and credentialed.
-
-        Mirrors the runtime's unpinned pick (``_first_usable_connection_id``): a
-        connection outside the model's allowlist never counts, so a
-        connection-bound model (e.g. subscription-only) with credentials only on
-        a forbidden connection is *not* configured — the chain falls through
-        instead of the run failing later.
-        """
-        provider_config = self._providers.get(provider_id)
-        # ProviderConfig.connections is a list of ConnectionConfig with an ``id``
-        # local part; the usable check uses the compositional ``provider:conn`` id.
-        connections = getattr(provider_config, "connections", [])
-        for connection in connections:
-            if not catalog_model.allows_connection(connection.id):
-                continue
-            connection_id = f"{provider_id}:{connection.id}"
-            if self._provider_credentials.is_usable(provider_id, connection_id):
-                return True
-        return False
-
-    def _pinned_connection_usable(
-        self, provider_id: str, catalog_model: ConnectionRestrictedModel, connection_suffix: str
-    ) -> bool:
-        """Whether the pinned ``connection[:account]`` exists, is allowed, and is usable.
-
-        The runtime reconstructs the pinned connection verbatim and resolves its
-        credential downstream, so the gate checks exactly that path: the local
-        connection id must exist on the provider, pass the model's allowlist, and
-        ``is_usable`` (enabled + credentialed) must hold for the full (possibly
-        account-pinned) id.
-        """
-        connection_local_id = connection_suffix.partition(":")[0]
-        if not catalog_model.allows_connection(connection_local_id):
-            return False
-        provider_config = self._providers.get(provider_id)
-        connections = getattr(provider_config, "connections", [])
-        if all(connection.id != connection_local_id for connection in connections):
-            return False
-        return self._provider_credentials.is_usable(
-            provider_id, f"{provider_id}:{connection_suffix}"
-        )
-
-
-def _parse_provider_model(model: str) -> tuple[str, str, str] | None:
-    """Split ``<provider>/<model-id>[::connection[:account]]`` into its parts.
-
-    Returns ``(provider, model_id, suffix)`` with ``suffix == ""`` when unpinned,
-    or ``None`` for an empty or malformed string (no provider/model split, or an
-    empty suffix after ``::``), which the chain treats as "no model" so it falls
-    through cleanly. Uses ``rpartition`` like the canonical chat-side parse
-    (``parse_model_with_connection``) so the two can never split differently.
-    """
-    if not model:
-        return None
-    before, suffix_separator, connection_suffix = model.rpartition("::")
-    if suffix_separator and not connection_suffix:
-        return None
-    bare = before if suffix_separator else model
-    provider_id, separator, model_id = bare.partition("/")
-    if not separator or not provider_id or not model_id:
-        return None
-    return provider_id, model_id, connection_suffix if suffix_separator else ""
 
 
 class AgentResolver:
@@ -692,7 +324,7 @@ class AgentResolver:
           ``fallback_models``, ``temperature``, ``thinking_effort``. Sources:
           ``"agent"`` (the own persisted value) or ``"global_default"``, or ``None``
           when neither has a value. No ``is_configured`` gating — this mirrors
-          ``AgentStore._apply_defaults`` exactly: a default applies when the persisted
+          ``core.agents._config.apply_defaults`` exactly: a default applies when the persisted
           ``model`` is ``""`` / ``fallback_models`` is ``[]`` or
           ``temperature``/``thinking_effort`` is ``None``.
         """
@@ -1023,341 +655,6 @@ def resolve_skill_scope(
         return project_id, None
     rooted_project_id = prompt_project.project_id if prompt_project is not None else None
     return rooted_project_id, agent_id
-
-
-def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolAccess:
-    """Return the Project-scoped Tool policy for one Project Agent.
-
-    A vBot override replaces the repository-scanned Tool policy. ``all`` is
-    materialized against the Project Tool Whitelist so the shared runtime resolver
-    never interprets it as every Tool registered in the whole vBot instance.
-    """
-
-    from core.tools.availability import ToolAccess, normalize_tool_access
-
-    raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
-    if raw_override is not None:
-        override = normalize_tool_access(raw_override)
-        if override.mode == "none":
-            return override
-        if override.mode == "all":
-            return ToolAccess(
-                mode="selected",
-                allowed=tuple(project.allowed_tools),
-                denied=override.denied,
-                granted=override.granted,
-            )
-        return override
-
-    denied = tuple(sorted(scanned.denied_tools))
-    allowed = tuple(tool for tool in project.allowed_tools if tool not in scanned.denied_tools)
-    return ToolAccess(
-        mode="selected",
-        allowed=allowed,
-        denied=denied,
-    )
-
-
-def _temporary_project_tool_access(project: Project, access: ToolAccess) -> ToolAccess:
-    """Materialize a temporary profile inside an explicit Project Tool ceiling."""
-
-    from core.tools.availability import ToolAccess
-
-    if access.mode == "none":
-        return access
-    ceiling = tuple(project.allowed_tools)
-    allowed = (
-        ceiling if access.mode == "all" else [name for name in access.allowed if name in ceiling]
-    )
-    return ToolAccess(
-        mode="selected",
-        allowed=tuple(allowed),
-        denied=access.denied,
-        granted=tuple(name for name in access.granted if name in ceiling),
-    )
-
-
-def _temporary_project_allowed_skills(
-    profile_allowed: list[str],
-    project_allowed: list[str],
-) -> list[str]:
-    """Intersect a temporary profile's Skill selection with the Project ceiling."""
-
-    if not profile_allowed:
-        return []
-    if WILDCARD_ALLOWLIST in profile_allowed:
-        return project_allowed
-    return [
-        name
-        for name in project_allowed
-        if any(fnmatchcase(name, pattern) for pattern in profile_allowed)
-    ]
-
-
-def effective_project_allowed_skills(
-    project: Project, project_skill_names: frozenset[str]
-) -> list[str]:
-    """Return the effective names from the Project Skill Whitelist rule.
-
-    ``(project skills ∪ skills_bundled_enabled ∪ skills_global_enabled) −
-    (skills_project_disabled ∩ project skills)`` — the project's own scanned skills
-    are active by default, plus any bundled or global skills explicitly opted in
-    (decision 3). Two hardenings on top of the plain union:
-
-    - **A disabled project skill name is off entirely.** The merged registry
-      resolves a name collision to the project's own copy, so leaving the name
-      allowed through a same-named bundled/global opt-in would silently serve the
-      disabled project skill. A disabled name that is *not* a project skill stays
-      inert (the opt-ins keep working).
-    - **The literal wildcard is dropped.** This list is a resolved set of exact
-      names; a repo-scanned skill *named* ``*`` (the lenient loader accepts that
-      with a warning) must not smuggle the ``allowed_skills`` wildcard past the
-      whitelist and expose the whole global pool to a project agent.
-
-    OpenCode does not narrow skills per agent in v1, so this is purely
-    project-derived. Config-Agent resolution and Identity Project Context both use
-    this function so their interpretation cannot drift. The result is sorted for
-    determinism; ``filter_allowed`` harmlessly ignores any name that no longer
-    resolves to a loadable skill.
-    """
-    disabled = set(project.skills_project_disabled)
-    enabled_bundled = set(project.skills_bundled_enabled)
-    enabled_global = set(project.skills_global_enabled)
-    allowed = set(project_skill_names) | enabled_bundled | enabled_global
-    allowed -= disabled & project_skill_names
-    allowed.discard(WILDCARD_ALLOWLIST)
-    return sorted(allowed)
-
-
-def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -> list[str]:
-    """Materialize additional targets against the Team; self is always implicit."""
-    allowed: list[str] = []
-    for member in team:
-        if member.agent_id == scanned.agent_id:
-            continue
-        member_allowed = True
-        for rule in scanned.agent_target_rules:
-            if fnmatchcase(member.agent_id, rule.pattern):
-                member_allowed = rule.allowed
-        if member_allowed:
-            allowed.append(member.agent_id)
-    return sorted(allowed)
-
-
-def _project_agent_tools(tool_access: ToolAccess, allowed_agents: list[str]) -> dict[str, Any]:
-    """Project effective targets into the optional root Tool-settings block."""
-    if (
-        tool_access.mode == "none"
-        or "subagent" not in tool_access.allowed
-        or "subagent" in tool_access.denied
-    ):
-        return {}
-    return {"subagent": {"allowed_agents": allowed_agents}}
-
-
-def _build_config_agent(
-    scanned: ScannedAgent,
-    resolved_model: str,
-    resolved_temperature: float | None,
-    resolved_thinking_effort: str | None,
-    tool_access: ToolAccess,
-    allowed_skills: list[str],
-    tools: dict[str, Any],
-    compaction_policy: Any,
-    *,
-    project_id: str | None = None,
-) -> ConfigAgent:
-    return ConfigAgent(
-        id=scanned.agent_id,
-        project_id=project_id,
-        name=scanned.display_name,
-        model=resolved_model,
-        temperature=resolved_temperature,
-        thinking_effort=resolved_thinking_effort,
-        body=scanned.body,
-        source_path=scanned.source_path,
-        source_format=scanned.source_format,
-        tool_access=tool_access,
-        allowed_skills=allowed_skills,
-        tools=tools,
-        compaction_policy=(
-            dict(compaction_policy) if isinstance(compaction_policy, dict) else None
-        ),
-    )
-
-
-def _resolve_temperature(
-    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
-) -> float | None:
-    """Resolve temperature: override → agent value → project default → global default → None.
-
-    The first tier that carries a number wins; ``0.0`` is a real value (the
-    sampling floor) and stops the chain. An override present (not ``None``, including
-    ``0.0``) is the top tier and wins. Falling through every tier yields ``None`` →
-    the field is dropped at the wire and the provider default applies.
-    """
-    candidates = (
-        _overridden_temperature(project, scanned.agent_id),
-        scanned.temperature,
-        project.default_temperature,
-        global_defaults.temperature,
-    )
-    for candidate in candidates:
-        if candidate is not None:
-            return candidate
-    return None
-
-
-def _resolve_thinking_effort(
-    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
-) -> str | None:
-    """Resolve thinking effort: override → agent → project default → global default → None.
-
-    The first tier that is not ``None`` wins. ``""`` is a real value meaning
-    "provider default" and stops the chain, so an override (or project
-    ``default_thinking_effort``) of ``""`` blocks the lower tiers (forces the
-    provider default) while ``None`` lets them through. An override present (not
-    ``None``, including ``""``) is the top tier. Falling through every tier yields ``None``.
-    """
-    candidates = (
-        _overridden_thinking_effort(project, scanned.agent_id),
-        scanned.thinking_effort,
-        project.default_thinking_effort,
-        global_defaults.thinking_effort,
-    )
-    for candidate in candidates:
-        if candidate is not None:
-            return candidate
-    return None
-
-
-def _config_temperature_source(
-    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
-) -> dict[str, Any]:
-    """Return the effective temperature + source for a config agent.
-
-    Same chain as :func:`_resolve_temperature` (override → agent → project default →
-    global default) but reporting which tier won; ``0.0`` is a real stopping value.
-    """
-    tiers = (
-        ("override", _overridden_temperature(project, scanned.agent_id)),
-        ("agent", scanned.temperature),
-        ("project_default", project.default_temperature),
-        ("global_default", _global_default_temperature(global_defaults)),
-    )
-    for source, candidate in tiers:
-        if candidate is not None:
-            return {"value": candidate, "source": source}
-    return {"value": None, "source": None}
-
-
-def _config_thinking_effort_source(
-    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
-) -> dict[str, Any]:
-    """Return the effective thinking effort + source for a config agent.
-
-    Same chain as :func:`_resolve_thinking_effort` (override → agent → project default →
-    global default) but reporting which tier won; ``""`` is a real stopping value.
-    """
-    tiers = (
-        ("override", _overridden_thinking_effort(project, scanned.agent_id)),
-        ("agent", scanned.thinking_effort),
-        ("project_default", project.default_thinking_effort),
-        ("global_default", _global_default_thinking_effort(global_defaults)),
-    )
-    for source, candidate in tiers:
-        if candidate is not None:
-            return {"value": candidate, "source": source}
-    return {"value": None, "source": None}
-
-
-def _identity_string_source(own_value: str, default_value: Any) -> dict[str, Any]:
-    """Return the identity effective value + source for a string field.
-
-    Mirrors ``AgentStore._apply_defaults``: the persisted own value wins unless it is
-    ``""``, in which case the global default applies when present. Source is
-    ``"agent"`` / ``"global_default"`` / ``None``.
-    """
-    if own_value != "":
-        return {"value": own_value, "source": "agent"}
-    if default_value is not None and isinstance(default_value, str):
-        return {"value": default_value, "source": "global_default"}
-    return {"value": None, "source": None}
-
-
-def _identity_string_list_source(own_value: list[str], default_value: Any) -> dict[str, Any]:
-    """Return the identity effective value + source for a string-list field.
-
-    Mirrors ``AgentStore._apply_defaults`` for ``fallback_models``: the persisted
-    own value wins unless it is empty, in which case the global default applies
-    when present. Source is ``"agent"`` / ``"global_default"`` / ``None``.
-    """
-    if own_value:
-        return {"value": list(own_value), "source": "agent"}
-    if (
-        default_value is not None
-        and isinstance(default_value, list)
-        and all(isinstance(item, str) for item in default_value)
-    ):
-        return {"value": list(default_value), "source": "global_default"}
-    return {"value": None, "source": None}
-
-
-def _identity_optional_source(own_value: Any, default_value: Any) -> dict[str, Any]:
-    """Return the identity effective value + source for a nullable field.
-
-    Mirrors ``AgentStore._apply_defaults``: the persisted own value wins unless it is
-    ``None``, in which case the global default applies when present. Source is
-    ``"agent"`` / ``"global_default"`` / ``None``. A present own value (including
-    ``0.0`` for temperature or ``""`` for thinking effort) stops the chain.
-    """
-    if own_value is not None:
-        return {"value": own_value, "source": "agent"}
-    if default_value is not None:
-        return {"value": default_value, "source": "global_default"}
-    return {"value": None, "source": None}
-
-
-def _global_default_temperature(global_defaults: AgentDefaults) -> float | None:
-    value = global_defaults.temperature
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-
-def _global_default_thinking_effort(global_defaults: AgentDefaults) -> str | None:
-    value = global_defaults.thinking_effort
-    return value if isinstance(value, str) else None
-
-
-def _config_tool_access_source(project: Project, scanned: ScannedAgent) -> dict[str, Any]:
-    """Return the editable Project Agent Tool policy and its winning source."""
-
-    from core.tools.availability import normalize_tool_access
-
-    raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
-    if raw_override is not None:
-        return {
-            "value": normalize_tool_access(raw_override).to_dict(),
-            "source": "override",
-        }
-    policy = _project_agent_tool_access(project, scanned)
-    return {"value": policy.to_dict(), "source": "agent"}
-
-
-def _overridden_model(project: Project, agent_id: str) -> str:
-    """Return the agent's overridden model, or ``""`` when not overridden."""
-    return str(project.overrides.get(agent_id, {}).get("model", "") or "")
-
-
-def _overridden_temperature(project: Project, agent_id: str) -> float | None:
-    """Return the agent's overridden temperature, or ``None`` when not overridden."""
-    value = project.overrides.get(agent_id, {}).get("temperature")
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-
-def _overridden_thinking_effort(project: Project, agent_id: str) -> str | None:
-    """Return the agent's overridden thinking effort (``""`` allowed), or ``None`` when not set."""
-    value = project.overrides.get(agent_id, {}).get("thinking_effort")
-    return value if isinstance(value, str) else None
 
 
 def _project_root(project: Project) -> Path:
