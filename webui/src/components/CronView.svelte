@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
   import Banner from './ui/Banner.svelte';
@@ -47,6 +47,10 @@
     projectTeamEntry,
     visibleCronJobs,
   } from '$lib/cronView.js';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import InfoHint from './ui/InfoHint.svelte';
@@ -112,6 +116,28 @@
   let isDirty = $derived(
     showDetailForm && cronFormFingerprint(formValues) !== formBaseline,
   );
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => ({ jobId: selectedJobId, values: formValues }),
+    hasChanges: () => !isCreating && isDirty,
+    save: (reason) => persistForm(null, reason),
+  });
+  const unregisterAutosave = autosaveContext.register(autosave.participant);
+  $effect(() => {
+    if (isCreating || !isDirty || submittingForm) return;
+    autosave.scheduleRun();
+    return autosave.cancelPendingTimer;
+  });
+  onDestroy(() => {
+    unregisterAutosave();
+    autosave.cancelPendingTimer();
+  });
+  function submitForm(event) {
+    event.preventDefault();
+    if (isCreating) return persistForm();
+    return autosave.participant.runSave('manual', { force: true });
+  }
+
   let isCronSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON,
   );
@@ -373,6 +399,7 @@
   }
 
   function requestFormTransition(action) {
+    if (!isCreating) return autosaveContext.requestTransition(action);
     if (!isDirty) {
       action();
       return;
@@ -460,13 +487,19 @@
     return true;
   }
 
-  async function submitForm(event) {
-    event.preventDefault();
+  async function persistForm(event = null, reason = 'manual') {
+    event?.preventDefault();
 
     if (submittingForm || !validateFormValues()) {
-      return;
+      return false;
     }
 
+    if (!isCreating && !isDirty) {
+      if (reason === 'manual')
+        showToast(t('common.alreadySaved', 'Already saved'));
+      return true;
+    }
+    const submitted = cronFormFingerprint(formValues);
     const creating = isCreating;
     submittingForm = true;
     formErrorMessage = '';
@@ -482,7 +515,8 @@
         showToast(t('cron.messages.created', 'Cron job created.'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
-        showToast(t('cron.messages.updated', 'Cron job updated.'));
+        if (reason === 'manual')
+          showToast(t('cron.messages.updated', 'Cron job updated.'));
       }
 
       if (destroyed) {
@@ -495,13 +529,19 @@
       }
       await loadJobs({ silent: true });
       const savedJob = jobs.find((job) => job.id === targetJobId);
-      if (savedJob) {
+      if (creating && savedJob) {
         selectJobNow(savedJob);
       } else {
-        formBaseline = cronFormFingerprint(formValues);
+        formBaseline = savedJob
+          ? cronFormFingerprint(
+              createCronFormValues(savedJob, viewState.systemTimezone),
+            )
+          : submitted;
       }
+      return true;
     } catch (error) {
       formErrorMessage = `${t('cron.errors.save', 'Cron job could not be saved.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      return false;
     } finally {
       if (!destroyed) {
         submittingForm = false;
@@ -1035,7 +1075,7 @@
                         'cron.form.namePlaceholder',
                         'Optional — derived from the prompt',
                       )}
-                      disabled={submittingForm}
+                      disabled={isCreating && submittingForm}
                       onInput={(value) => updateFormField('name', value)}
                     />
                   </FormField>
@@ -1076,7 +1116,7 @@
                         'cron.form.promptPlaceholder',
                         'Describe the run to schedule…',
                       )}
-                      disabled={submittingForm}
+                      disabled={isCreating && submittingForm}
                       onInput={(value) => updateFormField('prompt', value)}
                     />
                   </FormField>
@@ -1108,7 +1148,7 @@
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_CRON}
                             checked={isCronSchedule}
-                            disabled={submittingForm}
+                            disabled={isCreating && submittingForm}
                             onchange={() =>
                               setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
                           />
@@ -1125,7 +1165,7 @@
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_INTERVAL}
                             checked={isIntervalSchedule}
-                            disabled={submittingForm}
+                            disabled={isCreating && submittingForm}
                             onchange={() =>
                               setScheduleType(CRON_SCHEDULE_TYPE_INTERVAL)}
                           />
@@ -1142,7 +1182,7 @@
                             name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_ONCE}
                             checked={isOnceSchedule}
-                            disabled={submittingForm}
+                            disabled={isCreating && submittingForm}
                             onchange={() =>
                               setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
                           />
@@ -1162,7 +1202,7 @@
                           value={selectedPreset}
                           options={presetOptions}
                           ariaLabel={t('cron.form.preset', 'Schedule preset')}
-                          disabled={submittingForm}
+                          disabled={isCreating && submittingForm}
                           triggerClass="cron-dropdown"
                           listClass="cron-dropdown-list"
                           onValueChange={applyPreset}
@@ -1186,7 +1226,7 @@
                             'cron.form.cronExpressionPlaceholder',
                             '0 9 * * 1-5',
                           )}
-                          disabled={submittingForm}
+                          disabled={isCreating && submittingForm}
                           onInput={(next) => updateCronExpression(next)}
                         />
                         {#if cronExpressionPreview}
@@ -1214,7 +1254,7 @@
                             'cron.form.intervalMinutesPlaceholder',
                             '120',
                           )}
-                          disabled={submittingForm}
+                          disabled={isCreating && submittingForm}
                           onInput={(next) =>
                             updateFormField('interval_minutes', next)}
                         />
@@ -1229,7 +1269,7 @@
                           id="cron-job-run-at"
                           type="datetime-local"
                           value={formValues.run_at}
-                          disabled={submittingForm}
+                          disabled={isCreating && submittingForm}
                           onInput={(next) => updateFormField('run_at', next)}
                         />
                       </FormField>
@@ -1248,7 +1288,7 @@
                         placeholder={isOnceSchedule
                           ? '1'
                           : t('cron.form.repeatPlaceholder', 'Unlimited')}
-                        disabled={submittingForm}
+                        disabled={isCreating && submittingForm}
                         onInput={(next) => updateFormField('repeat', next)}
                       />
                     </FormField>
@@ -1285,7 +1325,7 @@
                           'cron.form.sessionIdPlaceholder',
                           'Optional',
                         )}
-                        disabled={submittingForm}
+                        disabled={isCreating && submittingForm}
                         onInput={(next) => updateFormField('session_id', next)}
                       />
                     </FormField>
@@ -1337,16 +1377,16 @@
               {#if isCreating}
                 <Button
                   variant="secondary"
-                  disabled={submittingForm}
+                  disabled={isCreating && submittingForm}
                   onClick={cancelCreate}
                 >
                   {t('common.cancel', 'Cancel')}
                 </Button>
               {/if}
               <Button
-                variant="primary"
+                variant={isCreating ? 'primary' : 'tertiary'}
                 type="submit"
-                disabled={submittingForm || (!isCreating && !isDirty)}
+                disabled={isCreating && submittingForm}
               >
                 {submittingForm
                   ? t('common.saving', 'Saving…')

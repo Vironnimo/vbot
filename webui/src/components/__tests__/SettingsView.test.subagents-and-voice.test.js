@@ -65,6 +65,44 @@ describe('SettingsView', () => {
     });
   });
 
+  it('restarts the idle interval on every edit even while already dirty', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+    vi.useFakeTimers();
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+    await vi.advanceTimersByTimeAsync(600);
+    setInputValue('input[aria-label="Max sub-agent depth"]', '7');
+    await vi.advanceTimersByTimeAsync(600);
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+    expect(getSettingsUpdateCalls()[0][1].subagents.max_subagent_depth).toBe(7);
+  });
+
+  it('keeps a focused number editable through pauses and saves on blur', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+    vi.useFakeTimers();
+    const input = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    input.focus();
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+    expect(document.activeElement).toBe(input);
+    expect(input.disabled).toBe(false);
+    input.blur();
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+  });
+
   it('manual save cancels a pending debounce timer', async () => {
     let resolveFirstUpdate;
     let settingsUpdateCallCount = 0;

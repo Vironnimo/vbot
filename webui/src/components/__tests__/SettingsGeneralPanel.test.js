@@ -231,12 +231,10 @@ describe('SettingsGeneralPanel', () => {
       server: { keep_awake: true },
     });
     expect(onCommit).toHaveBeenCalledTimes(1);
-    expect(onToast).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'success' }),
-    );
+    expect(onToast).not.toHaveBeenCalled();
   });
 
-  it('shows an error banner and keeps the old value when saving fails', async () => {
+  it('shows the save error and preserves the pending choice for retry', async () => {
     listClientsMock.mockResolvedValue({ clients: [] });
     updateSettingsMock.mockRejectedValue(new Error('boom'));
     const onError = vi.fn();
@@ -260,6 +258,6 @@ describe('SettingsGeneralPanel', () => {
       document.body
         .querySelector('[role="switch"]')
         .getAttribute('aria-checked'),
-    ).toBe('false');
+    ).toBe('true');
   });
 });

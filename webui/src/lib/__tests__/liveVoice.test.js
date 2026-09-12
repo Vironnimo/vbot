@@ -33,11 +33,9 @@ function actionsFixture() {
       .fn()
       .mockResolvedValue({ terminal: { ...terminal(), state: 'exited' } }),
     forgetTerminal: vi.fn().mockResolvedValue({ terminal: terminal() }),
-    renameTerminalGroup: vi
-      .fn()
-      .mockResolvedValue({
-        group: { group_id: 'g1', name: 'Review', kind: 'user' },
-      }),
+    renameTerminalGroup: vi.fn().mockResolvedValue({
+      group: { group_id: 'g1', name: 'Review', kind: 'user' },
+    }),
     deleteTerminalGroup: vi
       .fn()
       .mockResolvedValue({ group_id: 'g1', terminals_killed: 2 }),

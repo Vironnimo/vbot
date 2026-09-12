@@ -28,7 +28,7 @@
     updateAgent,
   } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import {
@@ -59,7 +59,6 @@
   import Modal from '../ui/Modal.svelte';
 
   const EMPTY_VALUE = '—';
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const WILDCARD_ACCESS = '*';
   const MEMORY_SCOPES = ['agent', 'user'];
 
@@ -115,7 +114,6 @@
   let isSaving = $state(false);
   let isDeleting = $state(false);
   let errorMessage = $state('');
-  let agentAutoSaveTimer = null;
   let destroyed = false;
   // Open state for the "disable custom prompt while customizations exist" confirm.
   // Set only when the user switches the toggle off and the agent's scope reports
@@ -259,12 +257,12 @@
   );
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
   const autosaveContext = useAutosaveContext();
-  const agentAutosave = createAutosaveParticipant({
-    cancelPending: clearAgentAutoSaveTimer,
+  const agentSave = createDebouncedAutosave({
     getSnapshot: () => cloneAgentFormValues(formValues),
     hasChanges: agentAutosaveHasChanges,
     save: (source) => persistAgent(null, { source }),
   });
+  const agentAutosave = agentSave.participant;
   const unregisterAgentAutosave = autosaveContext.register(agentAutosave);
 
   $effect(() => {
@@ -304,10 +302,7 @@
       return;
     }
 
-    agentAutoSaveTimer = setTimeout(() => {
-      agentAutoSaveTimer = null;
-      void agentAutosave.runSave('auto');
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    agentSave.scheduleRun();
 
     return () => {
       clearAgentAutoSaveTimer();
@@ -410,7 +405,7 @@
           result.payload,
           draftValues,
         );
-        if (updatedSelectedAgent) {
+        if (updatedSelectedAgent && source === 'manual') {
           showAgentToast(t('agents.updated', 'Agent updated.'));
         }
       }
@@ -514,12 +509,7 @@
   }
 
   function clearAgentAutoSaveTimer() {
-    if (!agentAutoSaveTimer) {
-      return;
-    }
-
-    clearTimeout(agentAutoSaveTimer);
-    agentAutoSaveTimer = null;
+    agentSave.cancelPendingTimer();
   }
 
   function showAgentToast(title, variant = 'success') {
@@ -2231,19 +2221,11 @@
         {/if}
       </div>
     </div>
-  </div>
-  <div class="agent-detail-footer">
-    <span class="management-save-note"
-      >{isSaving
-        ? t('common.saving', 'Saving…')
-        : t(
-            'management.savedAutomatically',
-            'Changes save automatically',
-          )}</span
-    >
-    <Button variant="secondary" type="submit" disabled={isSaving}>
-      {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-    </Button>
+    <div class="agent-detail-footer">
+      <Button variant="tertiary" type="submit" disabled={isSaving}>
+        {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+      </Button>
+    </div>
   </div>
 </form>
 
