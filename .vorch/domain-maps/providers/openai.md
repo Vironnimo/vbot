@@ -121,7 +121,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 ## Response And Catalog Normalization
 
 - Text becomes `content` or `content_delta`; provider reasoning text fields such as `reasoning_content`/`thinking` become visible `reasoning`/`reasoning_delta`.
-- Malformed tool-call argument JSON is ignored for that tool call instead of becoming fake empty arguments; valid sibling tool calls are preserved.
+- Malformed Tool Call argument JSON produces a canonical rejected Call instead of fake empty arguments; valid sibling Calls are preserved. The shared canonical normalization contract applies to both Responses and Chat Completions.
 - Generic `/models` entries may expose modalities, supported parameters, context windows, and output limits through raw fields, `architecture`, or `top_provider`. Normalize discoverable facts into `Model.capabilities` and `Model.metadata`; do not treat sparse catalogs as negative evidence for every missing capability.
 - Missing per-model output-token limits remain `max_output_tokens: null`; request fallback limits come from provider defaults such as `max_tokens: 8192`.
 - `OpenAIAdapter.normalize_catalog_entry()` preserves provider-discovered ids, names, modalities, and limits, and normalizes capability parameters to vBot runtime names such as `tools`, `response_format`, `reasoning`, and `parallel_tool_calls`. Today only the `subscription` connection runs discovery; if `api-key` ever gains a `models_endpoint`, the adapter normalization must be reviewed for that path.
