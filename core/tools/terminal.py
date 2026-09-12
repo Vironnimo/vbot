@@ -66,18 +66,11 @@ TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
 TERMINAL_PROJECT_WORKDIR_PREFIX = "project:"
 
 TERMINAL_TOOL_DESCRIPTION = (
-    "Run and control a program through a real PTY/ConPTY when it waits for interactive input or "
-    "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
-    "or debugger. Terminal Sessions survive individual Runs. A Terminal Session started here is "
-    "attached to this vBot Session automatically. Use list to discover running Terminal Sessions "
-    "and attach to bind an unattached one to this vBot Session without changing its process, "
-    "screen, dimensions, or lifetime. detach removes only the vBot Session binding; "
-    "the process continues. While a Terminal Session is attached, vBot wakes you when "
-    "its output has been quiet "
-    "for a short period, or when the process exits or the terminal fails; quiet output is only an "
-    "activity boundary, so inspect status to decide whether the program is working, waiting for "
-    "input, or finished. Rendered cells cannot distinguish tabs from equivalent spaces or cursor "
-    "movement, so use read for exact file contents."
+    "Operate interactive programs by typing into and reading their live terminal screen "
+    "(REPLs, TUIs, debuggers). Terminal Sessions survive Runs. Attached terminals "
+    "notify you when output settles, the process exits, or the terminal fails. Quiet "
+    "output does not prove completion; decide from the supplied screen. Rendered "
+    "terminal text is not exact file content."
 )
 
 
@@ -113,13 +106,10 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": list(TERMINAL_ACTIONS),
             "description": (
-                "start launches and attaches a program, list returns discoverable Terminal "
-                "Sessions, attach binds an unattached running Terminal Session to this vBot "
-                "Session, detach removes that binding without stopping the process, status reads "
-                "a bounded screen page, wait pauses briefly for a new activity boundary, input "
-                "sends exact data or convenient text/keys, resize changes dimensions, kill "
-                "terminates the process tree. For status, address the whole buffer by absolute "
-                "zero-based line numbers with start_line."
+                "start launches and attaches; list discovers terminals; attach binds an "
+                "unattached terminal to this Session; detach releases it without "
+                "stopping; status reads screen/history; wait awaits activity; input "
+                "types; resize changes dimensions; kill stops the process tree."
             ),
         },
         "terminal_id": {
@@ -132,58 +122,49 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "command": {
             "type": "string",
             "description": (
-                "Executable for start; omit to open the host user's default interactive shell. "
-                "The value is the executable only \u2014 vBot does not interpolate it into a shell."
+                "Executable for start, without shell expansion. "
+                "Omit for the default interactive shell."
             ),
         },
         "args": {
             "type": "array",
             "items": {"type": "string"},
-            "description": ("Exact argument tokens for start, passed verbatim."),
+            "description": ("Arguments for start with command. Omit for no arguments."),
         },
         "data": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For input, exact terminal data sent in one write. Use for arbitrary "
-                "escape/control sequences or protocols. Cannot be combined with text or key."
+                "Exact input, including control sequences. "
+                "Omit when using text/key; cannot combine them."
             ),
         },
         "text": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For start, the first input to send after launch; omit to leave the TUI ready. "
-                "For input, text to type; multiline text uses bracketed paste when the program "
-                'enables it and does not append Enter \u2014 combine with key: "enter" to '
-                "submit. For exact control sequences, use data instead."
+                "For start, initial text followed by Enter after startup; omit to "
+                'inspect first. For input, type without Enter; add key: "enter" to '
+                "submit. Multiline text uses bracketed paste when enabled."
             ),
         },
         "workdir": {
             "type": "string",
             "description": (
-                "Working directory for start. Relative paths use the current working directory; "
-                "omit for that directory. Use 'project:<project-id>' to start in a registered "
-                "Project's directory."
+                "Start directory: absolute path, path relative to cwd, or project:<project-id>. "
+                "Omit for cwd."
             ),
         },
         "name": {
             "type": "string",
             "maxLength": 80,
-            "description": (
-                "Human-friendly label for the Terminal Session. Tool calls always use "
-                "terminal_id, never the name. Omit to leave it unnamed and rely on the "
-                "announced title or command."
-            ),
+            "description": ("Label for start. Omit if unnecessary; calls use terminal_id."),
         },
         "group": {
             "type": "string",
             "maxLength": TERMINAL_GROUP_NAME_MAX_CHARS,
             "description": (
-                "Optional group name for the Terminal Session. When a group with this name "
-                "already exists (created by you, the operator, or another Agent) the "
-                "Terminal joins it; otherwise a new group with this name is created and "
-                "shown in the Terminals tab until it becomes empty."
+                "Group name for start; reuse or create it. Omit for automatic grouping."
             ),
         },
         "columns": {
@@ -204,28 +185,23 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
-                "Prior scrollback lines for status. May be used with or without start_line; the "
-                "current rendered screen is returned separately."
+                "History page size for status. Omit for 30 lines. Without start_line, "
+                "the current screen is also returned."
             ),
         },
         "start_line": {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "For status: absolute zero-based line at which to start reading (0 = oldest "
-                "retained scrollback line; the current screen follows the scrollback). Combines "
-                "with lines to page forward through the whole buffer with plain numbers; the "
-                "result reports total_lines, start_line, end_line, and next_start_line. Omit to "
-                "read the newest lines."
+                "Zero-based buffer line for status; 0 is oldest retained. Returns only "
+                "that page. Omit for newest scrollback plus screen."
             ),
         },
         "after_revision": {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "For wait, return only after a newer generic activity revision. Omit to return for "
-                "any currently unacknowledged revision or the next output-settled, exit, or error "
-                "event."
+                "Activity revision to wait beyond. Omit for unacknowledged or next activity."
             ),
         },
         "timeout_ms": {
@@ -234,23 +210,23 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_MAX_WAIT_MS,
             "default": TERMINAL_DEFAULT_WAIT_MS,
             "description": (
-                "Maximum same-Run wait in milliseconds; the terminal continues after timeout."
+                "Maximum wait duration; timeout leaves the process running. Omit for 1000 ms."
             ),
         },
         "key": {
             "type": "string",
             "enum": list(TERMINAL_KEYS),
             "description": (
-                "Named terminal key for input; may be combined with text. Use data for any "
-                "other sequence."
+                "Key for input, optionally after text. "
+                "Omit for text/data only; use data for other sequences."
             ),
         },
         "expected_screen_revision": {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "For input, require the exact screen_revision previously inspected. Use this "
-                "when answering a prompt so stale input is rejected instead of sent elsewhere."
+                "Screen revision required for input. Use the observed revision for "
+                "prompts; omit for input independent of the screen."
             ),
         },
     },
@@ -405,12 +381,11 @@ async def _handle_start(
         {
             "delivery": "automatic_terminal_activity",
             "handoff_note": (
-                "The Terminal Session is attached to this vBot Session and continues independently "
-                "of this vBot Run. vBot will wake you after output settles while it remains "
-                "attached, or if the process exits or the terminal fails. Quiet output does not "
-                "prove that the program finished or needs input, so inspect status when resumed. "
-                "You may finish this Run after reporting that the program is running; do not poll "
-                "merely to wait and do not start a duplicate process."
+                "To continue this process in later Runs, use this terminal_id. "
+                "You may end this Run while the "
+                "program continues; await activity notifications instead of polling. "
+                "Decide from the supplied screen whether to act; use status only for "
+                "missing context. Quiet output alone does not prove completion."
             ),
         }
     )
@@ -492,8 +467,11 @@ async def _handle_status(
         lines=lines,
         start_line=start_line,
     )
-    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-    return tool_success(_project_snapshot(snapshot, page_lines=lines))
+    if start_line is None:
+        _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    return tool_success(
+        _project_snapshot(snapshot, page_lines=lines, include_screen=start_line is None)
+    )
 
 
 async def _handle_wait(
@@ -623,8 +601,11 @@ def _project_snapshot(
     snapshot: dict[str, Any],
     *,
     page_lines: int = TERMINAL_STATUS_DEFAULT_LINES,
+    include_screen: bool = True,
 ) -> JsonObject:
     projected = dict(snapshot)
+    if not include_screen:
+        projected.pop("screen", None)
     scrollback = dict(projected.get("scrollback", {}))
     scrollback.pop("next_before", None)
     next_start = scrollback.get("next_start_line")
