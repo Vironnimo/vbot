@@ -1,0 +1,500 @@
+.voice-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Live state dot */
+.voice-settings .voice-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.voice-settings .voice-state-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-lo);
+}
+.voice-settings .voice-dot--off {
+  background: var(--text-lo);
+}
+.voice-settings .voice-dot--listening {
+  background: var(--green);
+  animation: voice-pulse 1.6s ease-in-out infinite;
+}
+.voice-settings .voice-dot--detected {
+  background: var(--green);
+  animation: voice-pulse 0.6s ease-in-out infinite;
+}
+.voice-settings .voice-dot--recording {
+  background: var(--amber);
+}
+.voice-settings .voice-dot--processing {
+  background: var(--accent);
+  animation: voice-spin 1s linear infinite;
+}
+.voice-settings .voice-dot--warning {
+  background: var(--amber);
+}
+.voice-settings .voice-dot--error {
+  background: var(--red);
+}
+.voice-settings .voice-state-label {
+  font-size: var(--fs-body-md);
+  color: var(--text-hi);
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes voice-spin {
+  0% {
+    opacity: 1;
+  }
+  25% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.2;
+  }
+  75% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.voice-settings .voice-slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fs-body-sm);
+  color: var(--text-lo);
+}
+
+.voice-settings .voice-microphone-control,
+.voice-settings .voice-model-control,
+.voice-settings .voice-calibration-control,
+.voice-settings .voice-settings .voice-microphone-dropdown.dropdown {
+  min-width: 300px;
+}
+
+/* In a stacked row the control owns the full content width, so the narrow
+     right-floating column and its dead gutter go away. */
+.voice-settings .s-row--stacked .voice-model-control,
+.voice-settings .s-row--stacked .voice-calibration-control {
+  width: 100%;
+  min-width: 0;
+  margin-left: 0;
+  justify-content: flex-start;
+}
+
+.voice-settings .voice-model-control {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.voice-settings .voice-model-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+.voice-settings .voice-model-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
+}
+.voice-settings .voice-model-card--active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+}
+.voice-settings .voice-model-card__header,
+.voice-settings .voice-model-card__identity,
+.voice-settings .voice-model-card__sensitivity,
+.voice-settings .voice-model-card__actions {
+  display: flex;
+  align-items: center;
+}
+.voice-settings .voice-model-card__header,
+.voice-settings .voice-model-card__sensitivity {
+  justify-content: space-between;
+  gap: 12px;
+}
+.voice-settings .voice-model-card__identity {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.voice-settings .voice-model-card__name {
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+}
+.voice-settings .voice-model-card__tuning {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 10px;
+}
+.voice-settings .voice-model-card__sensitivity,
+.voice-settings .voice-slider-labels,
+.voice-settings .voice-model-limit {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+.voice-settings .voice-model-card__tuning input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.voice-settings .voice-model-card__actions {
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+.voice-settings .voice-model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.voice-settings .voice-model-limit {
+  min-width: 0;
+}
+.voice-settings .voice-model-file {
+  display: none;
+}
+
+.voice-settings .voice-calibration-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.voice-settings .voice-calibration-entry > span {
+  min-width: 0;
+  flex: 1;
+  max-width: 62ch;
+}
+.voice-settings .voice-calibration-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+.voice-settings .voice-calibration-header,
+.voice-settings .voice-calibration-model__header,
+.voice-settings .voice-calibration-actions,
+.voice-settings .voice-calibration-actions__decision,
+.voice-settings .voice-calibration-legend {
+  display: flex;
+  align-items: center;
+}
+.voice-settings .voice-calibration-header,
+.voice-settings .voice-calibration-model__header,
+.voice-settings .voice-calibration-actions {
+  justify-content: space-between;
+}
+.voice-settings .voice-calibration-header {
+  align-items: flex-start;
+  gap: 12px;
+}
+.voice-settings .voice-calibration-heading {
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+}
+.voice-settings .voice-calibration-instruction {
+  max-width: 58ch;
+  margin-top: 4px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}
+.voice-settings .voice-calibration-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.voice-settings .voice-calibration-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+.voice-settings .voice-calibration-steps li span {
+  display: grid;
+  flex: 0 0 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 10px;
+}
+.voice-settings .voice-calibration-steps li[data-state='current'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
+}
+.voice-settings .voice-calibration-steps li[data-state='complete'] {
+  color: var(--green);
+}
+.voice-settings .voice-calibration-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.voice-settings .voice-calibration-model {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.voice-settings .voice-calibration-model--target {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.voice-settings .voice-calibration-model--complete {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+}
+.voice-settings .voice-calibration-model__header {
+  gap: 12px;
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+  font-weight: 500;
+}
+.voice-settings .voice-calibration-model__identity,
+.voice-settings .voice-calibration-model__result {
+  display: flex;
+  align-items: center;
+}
+.voice-settings .voice-calibration-model__identity {
+  min-width: 0;
+  gap: 7px;
+}
+.voice-settings .voice-calibration-model__target {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+}
+.voice-settings .voice-calibration-model__check {
+  color: var(--green);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+}
+.voice-settings .voice-calibration-model__retry {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.voice-settings .voice-calibration-model-progress {
+  margin-top: 4px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+.voice-settings .voice-calibration-noise-warning {
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: var(--r-md);
+  background: rgba(245, 158, 11, 0.12);
+  font-size: var(--fs-body-sm);
+  color: var(--text-hi);
+  line-height: 1.4;
+}
+.voice-settings .voice-calibration-model__values {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.voice-settings .voice-calibration-model__result {
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+.voice-settings .voice-calibration-model__result strong {
+  color: var(--green);
+  font-weight: 500;
+}
+.voice-settings .voice-calibration-meter {
+  position: relative;
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background:
+    repeating-linear-gradient(
+      to right,
+      transparent 0 calc(25% - 1px),
+      var(--border) calc(25% - 1px) 25%
+    ),
+    var(--bg);
+}
+.voice-settings .voice-calibration-meter__score {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--score);
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+.voice-settings .voice-calibration-meter__score--match {
+  background: var(--green);
+}
+.voice-settings .voice-calibration-meter__peak,
+.voice-settings .voice-calibration-meter__threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+.voice-settings .voice-calibration-meter__peak {
+  left: calc(var(--peak) - 1px);
+  background: var(--green);
+}
+.voice-settings .voice-calibration-meter__threshold {
+  left: calc(var(--threshold) - 1px);
+  background: var(--text-hi);
+}
+.voice-settings .voice-calibration-legend {
+  justify-content: flex-end;
+  gap: 14px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+.voice-settings .voice-calibration-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.voice-settings .voice-calibration-legend i {
+  display: inline-block;
+  width: 2px;
+  height: 10px;
+}
+.voice-settings .voice-calibration-legend__peak {
+  background: var(--green);
+}
+.voice-settings .voice-calibration-legend__threshold {
+  background: var(--text-hi);
+}
+.voice-settings .voice-calibration-actions,
+.voice-settings .voice-calibration-actions__decision {
+  gap: 8px;
+}
+
+/* Privacy note */
+.voice-settings .voice-privacy-note {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--fs-body-sm);
+  color: var(--text-med);
+  line-height: 1.5;
+}
+.voice-settings .voice-privacy-note p {
+  margin: 8px 0 0;
+}
+
+.voice-settings .voice-attention-banner {
+  margin: 8px 0 12px;
+}
+.voice-settings .voice-attention-copy {
+  color: var(--text-hi);
+}
+.voice-settings .voice-attention-copy p {
+  margin: 4px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
+}
+.voice-settings .voice-retry {
+  white-space: nowrap;
+}
+
+.voice-settings .voice-save-state {
+  min-height: 20px;
+  padding: 10px 0 0;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  text-align: right;
+}
+
+/* Mock-mode warning */
+.voice-settings .voice-mock-warning {
+  margin: 8px 0 12px;
+  padding: 12px 16px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: var(--r-md);
+  background: rgba(245, 158, 11, 0.12);
+  font-size: var(--fs-body-sm);
+  color: var(--text-hi);
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-settings .voice-dot--listening,
+  .voice-settings .voice-dot--detected,
+  .voice-settings .voice-dot--processing {
+    animation: none;
+  }
+  .voice-settings .voice-calibration-meter__score {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .voice-settings .voice-calibration-entry,
+  .voice-settings .voice-calibration-header,
+  .voice-settings .voice-calibration-model__header,
+  .voice-settings .voice-calibration-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .voice-settings .voice-calibration-steps {
+    grid-template-columns: 1fr;
+  }
+  .voice-settings .voice-calibration-actions__decision {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .voice-settings .voice-calibration-model__values {
+    white-space: normal;
+  }
+}
