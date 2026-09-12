@@ -6,7 +6,7 @@ Before changing editor-replacing navigation or pending-save handling, read `webu
 
 ## Ownership
 
-`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
+`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. Its private `components/shell/menu.svelte.js` owns menu selection snapshots, editing/native actions, positioning and keyboard/focus handling; the shell keeps navigation and mounting. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
