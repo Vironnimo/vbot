@@ -10,13 +10,15 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._chat_completions_catalog import (
+    _read_optional_non_empty_string,
+    _read_string,
+)
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.errors import ProviderError
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _read_optional_non_empty_string,
-    _read_string,
 )
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
