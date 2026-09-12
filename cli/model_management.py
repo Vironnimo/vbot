@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -102,7 +103,7 @@ def _format_model_row(model: object) -> str:
     tasks = _string_items(model.get("capabilities"), "task_types")
     if tasks:
         fields.append(f"tasks: {','.join(tasks)}")
-    return "  ".join(fields)
+    return record_fields(fields, separator="  ")
 
 
 def _capability_names(value: object) -> list[str]:

@@ -355,7 +355,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         project_subparsers,
         "set-override",
         PROJECT_HELP["set-override"],
-        example="project set-override vbot builder model openrouter/openai/gpt-5",
+        example="project override set vbot builder model openrouter/openai/gpt-5",
     )
     set_override_parser.add_argument("id", metavar="<project-id>", help="Project id")
     set_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
@@ -380,7 +380,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         project_subparsers,
         "clear-override",
         PROJECT_HELP["clear-override"],
-        example="project clear-override vbot builder model",
+        example="project override clear vbot builder model",
     )
     clear_override_parser.add_argument("id", metavar="<project-id>", help="Project id")
     clear_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
@@ -397,7 +397,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
 
     rm_parser = _add_command_parser(
-        project_subparsers, "rm", PROJECT_HELP["rm"], example="project rm vbot"
+        project_subparsers, "rm", PROJECT_HELP["rm"], example="project remove vbot"
     )
     rm_parser.add_argument("id", metavar="<project-id>", help="Project id to remove")
     rm_parser.add_argument(
@@ -539,7 +539,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         session_subparsers,
         "set-compaction-policy",
         SESSION_HELP["set-compaction-policy"],
-        example="session set-compaction-policy assistant <session-id> --clear",
+        example="session policy set assistant <session-id> --clear",
     )
     policy_parser.add_argument("agent", metavar="<agent>", help="Agent address")
     policy_parser.add_argument("session", metavar="<session-id>", help="Session id")
@@ -561,7 +561,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         session_subparsers,
         "link-channel",
         SESSION_HELP["link-channel"],
-        example="session link-channel assistant <session-id> --channel tg-main --conversation 99",
+        example="session channel link assistant <session-id> --channel tg-main --conversation 99",
     )
     link_parser.add_argument("agent", metavar="<agent-id>", help="Agent owning the session")
     link_parser.add_argument("session", metavar="<session-id>", help="Session id to link")

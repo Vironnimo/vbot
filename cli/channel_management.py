@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cli.formatting import bool_text as _bool_text
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -73,6 +74,7 @@ def channel_add(
         ok=True,
         message=_format_channel_operation("created", payload.data, channel_id),
         instance=instance,
+        attention=_channel_attention(payload.data),
     )
 
 
@@ -120,6 +122,7 @@ def channel_update(
         ok=True,
         message=_format_channel_operation("updated", payload.data, channel_id),
         instance=instance,
+        attention=_channel_attention(payload.data),
     )
 
 
@@ -133,6 +136,7 @@ def channel_enable(instance: ServerInstance, channel_id: str) -> CommandResult:
         ok=True,
         message=_format_channel_operation("enabled", payload.data, channel_id),
         instance=instance,
+        attention=_channel_attention(payload.data),
     )
 
 
@@ -146,6 +150,7 @@ def channel_disable(instance: ServerInstance, channel_id: str) -> CommandResult:
         ok=True,
         message=_format_channel_operation("disabled", payload.data, channel_id),
         instance=instance,
+        attention=_channel_attention(payload.data),
     )
 
 
@@ -170,7 +175,12 @@ def channel_status(instance: ServerInstance, channel_id: str) -> CommandResult:
         f"failed={failed_text}{failure_suffix}"
     ]
     lines.extend(_format_denied_chats(resolved_id, payload.data.get("denied_chats")))
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=True,
+        message="\n".join(lines),
+        instance=instance,
+        attention=_channel_attention(payload.data),
+    )
 
 
 def channel_set_token(
@@ -195,6 +205,7 @@ def channel_set_token(
         ok=True,
         message=_format_channel_token_result(payload.data, channel_id),
         instance=instance,
+        attention=_channel_attention(payload.data),
     )
 
 
@@ -389,25 +400,26 @@ def _format_channel_row(channel: object) -> str:
     token_env_var = _string_or_default(channel.get("token_env_var"), "?")
     allowed_chat_ids = _format_allowed_chat_ids(channel.get("allowed_chat_ids"))
     enabled_text = _bool_text(channel.get("enabled"))
-    line = (
-        "- id="
-        f"{channel_id}"
-        f" platform={platform}"
-        f" agent={agent_id}"
-        f" dm_scope={dm_scope}"
-        f" enabled={enabled_text}"
-        f" allowed_chat_ids={allowed_chat_ids}"
-        f" token_env_var={token_env_var}"
-    )
+    fields = [
+        f"- id={channel_id}",
+        f" platform={platform}",
+        f" agent={agent_id}",
+        f" dm_scope={dm_scope}",
+        f" enabled={enabled_text}",
+        f" allowed_chat_ids={allowed_chat_ids}",
+        f" token_env_var={token_env_var}",
+    ]
     if "response_mode" in channel:
-        line = f"{line} response_mode={_string_or_default(channel.get('response_mode'), 'mention')}"
+        fields.append(
+            f" response_mode={_string_or_default(channel.get('response_mode'), 'mention')}"
+        )
     if "mention_patterns" in channel:
-        line = (
-            f"{line} mention_patterns={_format_allowed_chat_ids(channel.get('mention_patterns'))}"
+        fields.append(
+            f" mention_patterns={_format_allowed_chat_ids(channel.get('mention_patterns'))}"
         )
     if "observe_unaddressed" in channel:
-        line = f"{line} observe_unaddressed={_bool_text(channel.get('observe_unaddressed'))}"
-    return line
+        fields.append(f" observe_unaddressed={_bool_text(channel.get('observe_unaddressed'))}")
+    return record_fields(fields, separator="")
 
 
 def _format_allowed_chat_ids(value: object) -> str:
@@ -472,3 +484,18 @@ def _format_credential_warning_lines(value: object) -> list[str]:
     if value.get("effective_source") != "process_environment":
         return []
     return ["warning: the process environment still overrides the saved data-dir token"]
+
+
+def _channel_attention(channel: Mapping[str, Any]) -> tuple[str, ...]:
+    notes: list[str] = []
+    if channel.get("failed") is True:
+        notes.append("Channel listener failed; inspect the failure details")
+    elif channel.get("enabled") is True and channel.get("running") is False:
+        notes.append("Channel is enabled but its listener is not running")
+    credential = channel.get("credential")
+    if (
+        isinstance(credential, Mapping)
+        and credential.get("effective_source") == "process_environment"
+    ):
+        notes.append("Process environment overrides the saved token")
+    return tuple(notes)

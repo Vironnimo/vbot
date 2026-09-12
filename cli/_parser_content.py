@@ -12,7 +12,6 @@ from cli._parser_common import (
     SKILL_HELP,
     TOOL_HELP,
     _add_command_parser,
-    _add_target_arguments,
     _json_array_argument,
 )
 
@@ -30,45 +29,43 @@ def _add_tool_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
 def _add_extensions_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    # The extension name is dynamic, so this area is name-first with routing in
-    # dispatch_extensions_command rather than a fixed sub-command set:
-    #   extensions list
-    #   extensions reload
-    #   extensions enable|disable <name>
-    #   extensions <name>                    -> show that extension's settings
-    #   extensions <name> set <field> <value>-> write one setting (schema-routed)
     extensions_parser = subparsers.add_parser(
         "extensions",
         help=AREA_HELP["extensions"],
         description=(
-            "Inspect and configure loaded extensions. "
-            "'extensions list' lists all; 'extensions reload' rebuilds the whole "
-            "extension layer from disk (applies code changes live); 'extensions "
-            "<name>' shows one extension's settings; 'extensions <name> set <field> "
-            "<value>' writes one setting (a secret field is stored in .env, other "
-            "fields go to live config, both applied without a restart); 'extensions "
-            "enable|disable <name>' toggles an extension (applied live). "
-            "Use 'extensions <name> operations' to discover managed operations, "
-            "then 'extensions <name> <operation> --help' for its arguments."
+            "Inspect and manage Extensions. Use an action followed by the Extension name. "
+            "Discover managed operations with extensions operations <name>, then use "
+            "extensions run <name> <operation> --help. Name-first commands remain compatible."
         ),
     )
-    _add_target_arguments(extensions_parser)
-    extensions_parser.add_argument(
-        "selector",
-        metavar="<list|reload|enable|disable|extension-name>",
-        help="'list', 'reload', 'enable', 'disable', or an extension name to inspect/configure",
-    )
-    extensions_parser.add_argument(
-        "rest",
-        nargs="*",
-        metavar="args",
-        help="'<name>' for enable/disable, or 'set <field> <value>' for a name selector",
-    )
-    extensions_parser.add_argument(
-        "--stdin",
-        action="store_true",
-        help="read the value for 'set <field>' from stdin (keeps a secret out of shell history)",
-    )
+    commands = extensions_parser.add_subparsers(dest="command", required=True)
+    for action, description in (
+        ("list", "List loaded, failed and disabled Extensions"),
+        ("reload", "Reload all Extensions and check their load results"),
+        ("enable", "Enable an Extension and verify that it loads"),
+        ("disable", "Disable an Extension"),
+        ("show", "Show an Extension's settings and schema"),
+        ("set", "Set an Extension setting; secret fields are stored in .env"),
+        ("operations", "List an Extension's managed operations"),
+        ("run", "Run an Extension operation; put vBot options before the operation"),
+    ):
+        leaf = _add_command_parser(commands, action, description)
+        leaf.set_defaults(stdin=False, rest=[])
+        if action in {"list", "reload", "enable", "disable"}:
+            leaf.set_defaults(selector=action)
+            if action in {"enable", "disable"}:
+                leaf.add_argument("rest", nargs=1, metavar="<extension-name>")
+        else:
+            leaf.add_argument("selector", metavar="<extension-name>")
+        if action == "set":
+            leaf.add_argument("field")
+            leaf.add_argument("value", nargs="?")
+            leaf.add_argument(
+                "--stdin", action="store_true", help="Read the value from UTF-8 stdin"
+            )
+        elif action == "run":
+            leaf.add_argument("operation", help="Operation from extensions operations <name>")
+            leaf.add_argument("rest", nargs=argparse.REMAINDER, help="Operation arguments")
 
 
 def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -146,7 +143,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         prompt_subparsers,
         "set-layout",
         PROMPT_HELP["set-layout"],
-        example='prompt set-layout --layout-json \'[{"id":"core:tools","enabled":true}]\'',
+        example='prompt layout set --layout-json \'[{"id":"core:tools","enabled":true}]\'',
     )
     layout_parser.add_argument(
         "--layout-json",
@@ -161,7 +158,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         prompt_subparsers,
         "reset-layout",
         PROMPT_HELP["reset-layout"],
-        example="prompt reset-layout --scope agent:assistant",
+        example="prompt layout reset --scope agent:assistant",
     )
     _add_prompt_scope_argument(reset_layout_parser)
 
@@ -310,7 +307,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "write-file",
         SKILL_HELP["write-file"],
-        example="skill write-file librarian references/schema.md --scope global --file schema.md",
+        example="skill file write librarian references/schema.md --scope global --file schema.md",
     )
     write_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
     write_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
@@ -325,7 +322,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         skill_subparsers,
         "remove-file",
         SKILL_HELP["remove-file"],
-        example="skill remove-file librarian references/schema.md --scope global --yes",
+        example="skill file remove librarian references/schema.md --scope global --yes",
     )
     remove_file_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
     remove_file_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")

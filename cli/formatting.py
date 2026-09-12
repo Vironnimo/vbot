@@ -7,6 +7,30 @@ their one home. Modules import them under their local ``_name`` convention.
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Sequence
+from contextvars import ContextVar
+
+output_mode: ContextVar[str] = ContextVar("cli_output_mode", default="auto")
+
+
+def human_output() -> bool:
+    mode = output_mode.get()
+    return mode == "human" or (mode == "auto" and sys.stdout.isatty())
+
+
+def record_fields(fields: Sequence[str], *, separator: str = " ") -> str:
+    """Lay out already formatted fields without parsing or truncating their values."""
+    if not human_output():
+        return separator.join(fields)
+    # Concatenated legacy fields carry one separator space. Values themselves
+    # (including leading whitespace in Tool/Skill descriptions) stay untouched.
+    readable = [
+        field.removeprefix(" ") if index and separator == "" else field
+        for index, field in enumerate(fields)
+    ]
+    return "\n  ".join(readable)
+
 
 def bool_text(value: object) -> str:
     """Render a tri-state boolean as ``yes`` / ``no`` / ``unknown``."""

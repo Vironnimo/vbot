@@ -6,10 +6,14 @@ import os
 import sys
 import threading
 import time
+from contextvars import ContextVar
 from types import TracebackType
 from typing import Literal, TextIO
 
+from cli.formatting import output_mode
+
 Status = Literal["busy", "success", "warning", "error", "info"]
+current_progress: ContextVar[ProgressPrinter | None] = ContextVar("cli_progress", default=None)
 _MARKERS: dict[Status, tuple[str, str, str]] = {
     "busy": ("…", "WORK", "36"),
     "success": ("✓", "OK", "32"),
@@ -17,6 +21,13 @@ _MARKERS: dict[Status, tuple[str, str, str]] = {
     "error": ("✗", "ERROR", "31"),
     "info": ("·", "INFO", "36"),
 }
+
+
+def operation_progress(message: str) -> None:
+    """Report a real operation phase only inside the CLI's active command scope."""
+    progress = current_progress.get()
+    if progress is not None:
+        progress.emit("busy", message)
 
 
 def _windows_color(stream: TextIO) -> bool:
@@ -43,7 +54,7 @@ def status_line(status: Status, message: str, *, stream: TextIO | None = None) -
 
     stream = stream or sys.stdout
     symbol, label, color = _MARKERS[status]
-    terminal = stream.isatty() and os.environ.get("TERM") != "dumb"
+    terminal = stream.isatty() and os.environ.get("TERM") != "dumb" and output_mode.get() != "plain"
     if terminal:
         try:
             symbol.encode(stream.encoding or "ascii")
@@ -64,6 +75,7 @@ class ProgressPrinter:
 
     def __init__(self, *, interval: float = 10.0, stream: TextIO | None = None) -> None:
         self.messages: set[str] = set()
+        self._plain = output_mode.get() == "plain"
         self._stream = stream or sys.stdout
         self._interval = interval
         self._stop = threading.Event()
@@ -85,6 +97,8 @@ class ProgressPrinter:
         self._thread.join()
 
     def emit(self, status: Status, message: str) -> None:
+        if self._plain:
+            return
         with self._lock:
             self.messages.update(message.splitlines())
             if status == "busy":
@@ -92,6 +106,13 @@ class ProgressPrinter:
             elif status != "info":
                 self._active = None
             print(status_line(status, message, stream=self._stream), file=self._stream, flush=True)
+
+    def track(self, message: str) -> None:
+        """Track work silently until the first heartbeat; fast reads stay quiet."""
+        if self._plain:
+            return
+        with self._lock:
+            self._active = (message, time.monotonic())
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(self._interval):

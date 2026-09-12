@@ -309,6 +309,7 @@ def test_config_patch_reports_pending_restart_value(
     assert "pending: 9000" in result.message
     assert "application: restart" in result.message
     assert "restart_required: yes" in result.message
+    assert result.attention == ("Settings saved; restart required for pending values",)
 
 
 @pytest.mark.parametrize(

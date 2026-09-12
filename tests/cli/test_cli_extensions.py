@@ -404,13 +404,15 @@ def test_run_extensions_reload_extra_arg_is_usage_error(
         calls.append(resolved_instance)
         return CommandResult(ok=True, message="unexpected", instance=instance)
 
-    exit_code = cli_main.run(
-        ["extensions", "reload", "extra"],
-        resolve=fake_resolve,
-        reload_extensions_fn=fake_reload,
-    )
+    with pytest.raises(SystemExit) as error:
+        cli_main.run(
+            ["extensions", "reload", "extra"],
+            resolve=fake_resolve,
+            reload_extensions_fn=fake_reload,
+        )
 
-    assert exit_code == 1
+    assert error.value.code == 2
+    assert "vbot extensions reload --help" in capsys.readouterr().err
     # The usage error short-circuits before the reload RPC runs.
     assert calls == []
 
@@ -565,7 +567,7 @@ def test_extensions_show_renders_schema_fields(
     assert '  url (text): "http://homeassistant.local:8123"   Server URL' in lines
     # A secret shows only its set-state, never a value.
     assert "  token (secret): not set   Access token" in lines
-    assert "set with: vbot extensions homeassistant set <field> <value>" in lines
+    assert "set with: vbot extensions set homeassistant <field> <value>" in lines
 
 
 def test_extensions_show_unknown_name_suggests(

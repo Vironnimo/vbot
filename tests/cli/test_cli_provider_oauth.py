@@ -134,7 +134,7 @@ def test_provider_connect_prints_device_flow_instructions(
     assert "user_code: ABCD-1234" in result.message
     assert "verification_uri: https://example.com/device" in result.message
     assert "expires_in_seconds: 900" in result.message
-    assert "provider connect-status openai --connection openai:subscription" in result.message
+    assert "provider connection status openai --connection openai:subscription" in result.message
     assert calls == [
         {
             "method": "provider.connect",
@@ -178,7 +178,7 @@ def test_provider_connect_passes_account_and_suggests_account_status_command(
     assert "openai:subscription" in result.message
     assert "account: work" in result.message
     assert (
-        "provider connect-status openai --connection openai:subscription --account work"
+        "provider connection status openai --connection openai:subscription --account work"
         in lines[-1]
     )
     assert calls == [
@@ -346,6 +346,7 @@ def test_provider_connect_status_passes_account_through(
         ok=True,
         message="openai:subscription: account=work connected=no flow_active=yes",
         instance=instance,
+        attention=("Account is not connected; inspect the device-flow state",),
     )
 
 

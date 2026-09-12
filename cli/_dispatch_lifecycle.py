@@ -174,9 +174,13 @@ def dispatch_server_command(
     if context.command == "stop":
         return context.stop(instance)
     if context.command == "restart":
+        from cli._progress import operation_progress
+
+        operation_progress("Checking how the server is managed")
         via_systemd = restart_via_systemd_if_managed(instance, service_name=context.service_name)
         if via_systemd is not None:
             return via_systemd
+        operation_progress("Stopping the current server")
         stop_result = context.stop(instance)
         if not stop_result.ok:
             return stop_result
@@ -185,6 +189,7 @@ def dispatch_server_command(
             port=context.port,
             data_dir=context.data_dir,
         )
+        operation_progress("Starting the server and checking its health")
         return context.start(restarted_instance)
     if context.command == "status":
         return context.status(instance)

@@ -172,6 +172,7 @@ Runner = Callable[[list[str]], CommandRun]
 class _Step:
     ok: bool
     message: str
+    attention: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,10 @@ def enable_autostart(
                 f"autostart enabled ({registered.message}); server start requested via the service"
             ),
             instance=instance,
+            attention=(
+                *registered.attention,
+                "Server start requested; runtime health has not been verified",
+            ),
         )
 
     start_result = start(instance)
@@ -255,6 +260,7 @@ def enable_autostart(
         ok=start_result.ok,
         message=f"autostart enabled ({registered.message}); server: {state}",
         instance=instance,
+        attention=registered.attention,
     )
 
 
@@ -485,6 +491,9 @@ def _linux_enable(
             True,
             f"systemd user unit '{service_name}'; warning: login lingering could not be "
             f"enabled ({detail}), so boot-before-login is not guaranteed",
+            attention=(
+                "Login lingering could not be enabled; boot-before-login is not guaranteed",
+            ),
         )
     return _Step(True, f"systemd user unit '{service_name}' with login lingering")
 

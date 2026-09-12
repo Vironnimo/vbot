@@ -342,7 +342,7 @@ def dispatch_task_model_command(
         if args.stdin and args.value is not None:
             return CommandResult(
                 ok=False,
-                message="task-model set-option accepts either <value> or --stdin, not both",
+                message="task-model option set accepts either <value> or --stdin, not both",
                 instance=instance,
             )
         if args.stdin:
@@ -359,7 +359,7 @@ def dispatch_task_model_command(
         if value is None:
             return CommandResult(
                 ok=False,
-                message="task-model set-option requires <value> or --stdin",
+                message="task-model option set requires <value> or --stdin",
                 instance=instance,
             )
         return set_option_fn(instance, args.task_type, args.name, value)
@@ -427,7 +427,7 @@ def _dispatch_extensions_set(
 
     if args.stdin:
         if len(rest) != 2:
-            return _extensions_usage(instance, f"usage: extensions {name} set <field> --stdin")
+            return _extensions_usage(instance, f"usage: extensions set {name} <field> --stdin")
         field = rest[1]
         try:
             value = _read_stdin_utf8()
@@ -440,7 +440,7 @@ def _dispatch_extensions_set(
     else:
         if len(rest) != 3:
             return _extensions_usage(
-                instance, f"usage: extensions {name} set <field> <value>  (or --stdin)"
+                instance, f"usage: extensions set {name} <field> <value>  (or --stdin)"
             )
         field = rest[1]
         value = rest[2]
