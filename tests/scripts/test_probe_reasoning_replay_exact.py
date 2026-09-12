@@ -12,8 +12,8 @@ from core.providers.openai import OpenAIAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
-from scripts.probe_reasoning_replay_exact import (
-    _build_adapter,
+from scripts._reasoning_probe_connection import _build_adapter
+from scripts._reasoning_probe_wire import (
     _build_tool_calls,
     _client_tools_expected,
     _encrypted_reasoning_expected,
