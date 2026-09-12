@@ -150,7 +150,7 @@ export function createProjectDialogs({
     if (error?.code === PROJECT_BUSY_CODE) {
       return translate(
         'projects.remove.busy',
-        'This project has an isActive() or queued run and cannot be removed right now.',
+        'This project has an active or queued run and cannot be removed right now.',
       );
     }
     if (error?.code === PROJECT_IN_USE_CODE) {

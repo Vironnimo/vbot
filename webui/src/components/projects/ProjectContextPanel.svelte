@@ -5,7 +5,11 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import { tick } from 'svelte';
-  let { projectsState, projectsController, activeDetail } = $props();
+  let {
+    projectsState = $bindable(),
+    projectsController,
+    activeDetail,
+  } = $props();
 
   let autoLoadDrag = $state(null);
 
