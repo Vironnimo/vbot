@@ -9,6 +9,8 @@ The single deep task module: bindings from specialized task types to concrete pr
 1. **Bindings & discovery** (`model_tasks.py` main file plus constants/local targets/options) - normalized settings, target ID parsing, credential-gated discovery, local target descriptors, backend-owned option schemas for the Settings UI.
 2. **Execution** - per-task services and their wire clients for speech, image, embeddings, video, and music. Bindings and execution change together when a task type is added - one module on purpose. Shared internals: `TaskBindingResolver` (binding lookup + options merge + target parse) and central artifact handling; image/video/music write to caller-owned directories selected by their Tools.
 
+`options.py` owns option validation and task dispatch. Its internal `_option_types.py` holds field records and shared constructors; `_image_options.py` and `_media_options.py` build image and speech/video/music fields from existing Model facts. Public option imports and schema behavior remain unchanged.
+
 Execution details live in child maps (`model_tasks/speech.md`, `image.md`, `embeddings.md`, `video.md`, `music.md`); the shared wire base class is `ProviderTaskClient` in `core/providers/task_client.py` (see `providers.md`). Runtime wires `TaskModelService` after providers/models/credentials/storage, then constructs the per-task execution services. Provider-backed target visibility delegates to `ModelRegistry.query()` plus usable credentials; local targets bypass catalogs/credentials but must register explicitly with `LocalTaskTargetRegistry`.
 
 ## Data Model
