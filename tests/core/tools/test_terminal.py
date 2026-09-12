@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+import json
+import re
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,6 +13,7 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.tools import terminal as terminal_module
+from core.tools import terminal_manager as manager_module
 from core.tools.terminal import (
     TERMINAL_ACTIONS,
     TERMINAL_DEFAULT_WAIT_MS,
@@ -24,7 +27,7 @@ from core.tools.terminal import (
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
-from tests.core.tools.test_terminal_manager import AdapterFactory, eventually
+from tests.core.tools.test_terminal_manager import AdapterFactory, FakeTerminalAdapter, eventually
 
 
 @pytest_asyncio.fixture
@@ -158,8 +161,6 @@ async def test_start_uses_compact_default_until_explicit_resize(
     assert data["columns"] == 80
     assert data["rows"] == 24
     assert data["delivery"] == "automatic_terminal_activity"
-    assert isinstance(data["handoff_note"], str)
-    assert data["handoff_note"]
     assert factory.calls[0][0] == [command or "host-shell"]
     assert factory.calls[0][3:] == (24, 80)
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
@@ -172,6 +173,95 @@ async def test_start_uses_compact_default_until_explicit_resize(
     resized = cast(dict[str, Any], status["data"])
     assert (resized["columns"], resized["rows"]) == (153, 43)
     assert factory.adapters[0].resizes == [(43, 153)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["codex", "claude-code", "opencode"])
+async def test_coding_agent_reference_launches_exact_arguments_and_submits_task(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, reference: str
+) -> None:
+    package = Path(__file__).resolve().parents[3] / "resources" / "skills" / "coding-agents"
+    document = (package / "references" / f"{reference}.md").read_text(encoding="utf-8")
+    examples = re.findall(r"```json\s*(.*?)```", document, re.DOTALL)
+    assert examples
+    terminal_manager, factory = manager
+    registry = ToolRegistry()
+    register_terminal_tool(registry, terminal_manager, ProjectStore(tmp_path))
+    context = make_context(tmp_path)
+    for example in examples:
+        arguments = json.loads(example)
+        arguments["workdir"] = str(tmp_path)
+        result = await registry.dispatch(context, arguments, [TERMINAL_TOOL_NAME])
+        assert result["ok"] is True
+        assert factory.calls[-1][0] == [arguments["command"], *arguments["args"]]
+        assert factory.calls[-1][1] == tmp_path
+        adapter = factory.adapters[-1]
+        assert adapter.writes == []
+        adapter.emit("Ready> ")
+        await eventually(
+            lambda adapter=adapter, task=arguments["text"]: adapter.writes == [task, "\r"]
+        )
+        assert adapter.alive
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "launch_error",
+    [
+        FileNotFoundError(2, "fixture executable is missing", "fixture-missing"),
+        PermissionError(13, "fixture launch denied", "fixture-denied"),
+        RuntimeError("fixture transport could not initialize"),
+    ],
+    ids=["missing-executable", "permission-denied", "transport-failure"],
+)
+async def test_dispatch_returns_launch_failure_and_releases_capacity(
+    tmp_path: Path, launch_error: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
+    monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_GLOBAL", 1)
+
+    class RecoveringFactory(AdapterFactory):
+        failing = True
+
+        def __call__(
+            self,
+            argv: Sequence[str],
+            cwd: Path,
+            env: Mapping[str, str],
+            rows: int,
+            columns: int,
+        ) -> FakeTerminalAdapter:
+            if self.failing:
+                raise launch_error
+            return super().__call__(argv, cwd, env, rows, columns)
+
+    factory = RecoveringFactory()
+    terminal_manager = TerminalManager(
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+    )
+    terminal_manager.start()
+    try:
+        registry = ToolRegistry()
+        register_terminal_tool(registry, terminal_manager, ProjectStore(tmp_path))
+        context = make_context(tmp_path)
+        arguments: JsonObject = {"action": "start", "command": "fixture-command"}
+        result = await registry.dispatch(context, arguments, [TERMINAL_TOOL_NAME])
+        assert result == tool_failure(
+            "terminal_launch_failed",
+            f"Terminal process could not be started: {launch_error}",
+            retryable=False,
+        )
+        assert terminal_manager.list_sessions() == []
+        assert factory.adapters == []
+
+        factory.failing = False
+        recovered = await registry.dispatch(context, arguments, [TERMINAL_TOOL_NAME])
+        assert recovered["ok"] is True
+        assert len(factory.adapters) == 1
+        assert factory.adapters[0].alive
+    finally:
+        await terminal_manager.aclose()
 
 
 @pytest.mark.asyncio

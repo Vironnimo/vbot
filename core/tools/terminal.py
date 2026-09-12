@@ -28,6 +28,7 @@ from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
     TerminalCursorError,
+    TerminalLaunchError,
     TerminalManager,
     TerminalNotAttachedError,
     TerminalNotFoundError,
@@ -143,8 +144,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For start, initial text followed by Enter after startup; omit to "
-                'inspect first. For input, type without Enter; add key: "enter" to '
+                "For start, queue text plus Enter after launch; omit for no initial input. "
+                'For input, type without Enter; add key: "enter" to '
                 "submit. Multiline text uses bracketed paste when enabled."
             ),
         },
@@ -164,7 +165,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "maxLength": TERMINAL_GROUP_NAME_MAX_CHARS,
             "description": (
-                "Group name for start; reuse or create it. Omit for automatic grouping."
+                "Group name for start; automatically joins or creates it. "
+                "Omit for automatic grouping."
             ),
         },
         "columns": {
@@ -201,7 +203,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "Activity revision to wait beyond. Omit for unacknowledged or next activity."
+                "attention_revision to wait beyond. Omit for unacknowledged or next activity."
             ),
         },
         "timeout_ms": {
@@ -306,6 +308,8 @@ async def _handle_terminal(
         return tool_failure("project_not_found", str(error), retryable=False)
     except _ProjectWorkdirUnavailableError as error:
         return tool_failure("project_unavailable", str(error), retryable=False)
+    except TerminalLaunchError as error:
+        return tool_failure("terminal_launch_failed", str(error), retryable=False)
     except FileNotFoundError as error:
         command = error.filename or "the requested program"
         return tool_failure(
@@ -377,18 +381,7 @@ async def _handle_start(
     snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _project_snapshot(snapshot)
-    data.update(
-        {
-            "delivery": "automatic_terminal_activity",
-            "handoff_note": (
-                "To continue this process in later Runs, use this terminal_id. "
-                "You may end this Run while the "
-                "program continues; await activity notifications instead of polling. "
-                "Decide from the supplied screen whether to act; use status only for "
-                "missing context. Quiet output alone does not prove completion."
-            ),
-        }
-    )
+    data["delivery"] = "automatic_terminal_activity"
     return tool_success(data)
 
 
