@@ -9,23 +9,63 @@ touch the live dispatch table directly.
 
 from __future__ import annotations
 
-import asyncio
-import importlib.util
-import inspect
-import json
-import re
-import sys
-import threading
 import time
-import types
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
+from core.extensions._api import (
+    ExtensionAPI,
+)
+from core.extensions._callbacks import (
+    _log_slow_extension_handler,
+    invoke_extension_handler,
+)
+from core.extensions._capabilities import ExtensionCapabilityInstaller
+from core.extensions._declarations import (
+    API_VERSION,
+    CommandDeclaration,
+    CommandHandler,
+    Deny,
+    ExtensionDeclarations,
+    ExtensionManifest,
+    ExtensionRecord,
+    ExtensionRegistrationIdentity,
+    ExtensionStatus,
+    HookContext,
+    HookHandler,
+    LifecycleHandler,
+    Modify,
+    PageDeclaration,
+    PreparedSessionDelivery,
+    PromptBlockDeclaration,
+    RecallBackendDeclaration,
+    RegisteredHandler,
+    Replace,
+    SessionCapability,
+    SessionCapabilityExpiredError,
+    SessionPromptBlockDeclaration,
+    SessionRequestContext,
+    SessionRuntimeDeclaration,
+    ToolBatchDecision,
+    ToolCallDecision,
+    ToolDeclaration,
+    ToolFamilyDeclaration,
+    ToolResultValidator,
+    _diagnose_capability,
+)
+from core.extensions._loading import (
+    _await_pending_registers,
+    _await_pending_registers_async,
+    _discover_extension_paths,
+    _overridden_record,
+    _register_extension,
+    _run_coroutine_to_completion,
+    purge_extension_modules,
+)
 from core.extensions.interactions import (
     RESERVED_INTERACTION_PREFIXES,
     InteractionEvent,
@@ -33,9 +73,7 @@ from core.extensions.interactions import (
     InteractionResponder,
 )
 from core.extensions.operations import ExtensionHost, ExtensionOperations
-from core.extensions.settings_schema import SettingsFieldDeclaration, parse_settings_fields
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat.commands import CommandDispatcher
@@ -43,703 +81,11 @@ if TYPE_CHECKING:
     from core.tools.tools import ToolRegistry
 
 _LOGGER = get_logger("extensions")
-_EXTENSION_PARENT_PACKAGE = "vbot_ext"
-_MANIFEST_FILENAME = "extension.json"
-_ASYNC_REGISTER_TIMEOUT_SECONDS = 10.0
-_EXTENSION_WORKER_LIMIT = 8
-_SLOW_EXTENSION_HANDLER_SECONDS = 1.0
 
-_EXTENSION_WORKERS = BoundedWorkerPool(
-    name="extension",
-    max_workers=_EXTENSION_WORKER_LIMIT,
-)
-
-# Public extension API version. Bumped when the extension contract changes in a
-# way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 6
-
-HookHandler = Callable[..., Any]
-LifecycleHandler = Callable[[], Any]
-CommandHandler = Callable[..., Any]
-RegisteredHandler = tuple[str, HookHandler]
-# Injected by chat so tool-result-envelope schema knowledge stays in the chat
-# domain: given (extension_name, candidate dict) it returns the validated
-# envelope or ``None`` when the candidate is rejected.
-ToolResultValidator = Callable[[str, dict[str, Any]], "dict[str, Any] | None"]
-
-ExtensionStatus = Literal["loaded", "failed", "disabled", "overridden"]
 
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
 _HANDLER_FAILED = object()
-
-
-def _is_page_id(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and 1 <= len(value) <= 64
-        and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is not None
-    )
-
-
-async def invoke_extension_handler(
-    handler: Callable[..., Any],
-    *arguments: Any,
-    **keyword_arguments: Any,
-) -> Any:
-    """Invoke one sync or async Extension callback without loop-blocking sync work."""
-    if inspect.iscoroutinefunction(handler):
-        result = handler(*arguments, **keyword_arguments)
-    else:
-        result = await _EXTENSION_WORKERS.run(
-            handler,
-            *arguments,
-            **keyword_arguments,
-        )
-    if inspect.isawaitable(result):
-        return await result
-    return result
-
-
-def _log_slow_extension_handler(
-    *,
-    extension_name: str,
-    handler_kind: str,
-    started_at: float,
-) -> None:
-    elapsed = time.perf_counter() - started_at
-    if elapsed < _SLOW_EXTENSION_HANDLER_SECONDS:
-        return
-    _LOGGER.warning(
-        "Extension %r %s handler completed slowly (duration=%.3fs)",
-        extension_name,
-        handler_kind,
-        elapsed,
-    )
-
-
-def _ignore_note(text: str) -> None:
-    """Default no-op note sink for contexts built without a live session."""
-    return None
-
-
-@dataclass(frozen=True)
-class HookContext:
-    """First positional argument to every handler. Constructed in ``core/chat/``.
-
-    ``add_note`` appends a kernel-internal ``role: "note"`` entry to the active
-    session; chat wires it to ``session.add_note`` when constructing the context.
-    """
-
-    session_id: str
-    agent_id: str
-    run_id: str
-    add_note: Callable[[str], None] = _ignore_note
-
-
-@dataclass(frozen=True)
-class Deny:
-    """``tool_call`` decision: stop the pipeline and refuse execution with a reason."""
-
-    reason: str
-
-
-@dataclass(frozen=True)
-class Modify:
-    """``tool_call`` decision: replace the tool input; the pipeline keeps going."""
-
-    input: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class Replace:
-    """``tool_call`` decision: skip execution and use this result envelope instead."""
-
-    result: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ToolCallDecision:
-    """Outcome of the ``tool_call`` decision pipeline handed back to chat.
-
-    Exactly one disposition holds:
-
-    - proceed — both ``deny_reason`` and ``replacement`` are ``None``: execute the
-      tool with ``effective_input`` (reflects any ``Modify`` applied in the pipeline).
-    - denied — ``deny_reason``/``deny_extension`` set: the tool is not executed and
-      chat builds a deny error envelope naming the extension.
-    - replaced — ``replacement`` is a validated result envelope used as the result;
-      the tool is not executed.
-    """
-
-    effective_input: dict[str, Any]
-    deny_reason: str | None = None
-    deny_extension: str | None = None
-    replacement: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class ExtensionManifest:
-    """Optional ``extension.json`` enrichment for a directory-form extension.
-
-    Identity stays the filesystem name; ``display_name`` (the manifest ``name``
-    field) is display-only. ``api_version`` greater than :data:`API_VERSION`
-    fails the extension at load time.
-    """
-
-    version: str | None = None
-    description: str | None = None
-    api_version: int | None = None
-    display_name: str | None = None
-
-
-@dataclass(frozen=True)
-class ToolDeclaration:
-    """One ``api.register_tool`` declaration, mirroring ``ToolRegistry.register``.
-
-    Collected during ``register`` and applied into the runtime ``ToolRegistry``
-    after the last built-in tool is registered. ``display`` is forwarded
-    untouched (a ``core.tools.ToolDisplay`` or ``None``) so the extensions
-    module needs no dependency on the tools domain. ``ready`` is the optional
-    zero-arg readiness predicate forwarded the same way — a not-ready tool stays
-    registered but is hidden from the model-facing surfaces (see
-    ``core.tools.tool_is_ready``).
-    """
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-    handler: Callable[..., Any]
-    internal: bool = False
-    catalog_visible: bool = True
-    requires_opt_in: bool = False
-    display: Any = None
-    ready: Callable[[], bool] | None = None
-    # Optional English hint explaining the tool's readiness precondition, forwarded
-    # verbatim into ``ToolRegistry.register`` and surfaced by ``tool.list``.
-    readiness_hint: str | None = None
-    result_schema: dict[str, Any] | None = None
-    parallel_safe: bool = True
-    open_input_schema: bool = False
-    coerce_arguments: bool = True
-    session_scoped: bool = False
-    activation: str = "configurable"
-    # Local family id declared through ``register_tool_family``. The apply phase
-    # namespaces it by Extension identity before it reaches ToolRegistry.
-    family: str | None = None
-
-
-@dataclass(frozen=True)
-class ToolFamilyDeclaration:
-    """One Extension-local Tool family id and its human-facing label."""
-
-    id: str
-    label: str
-
-
-@dataclass(frozen=True)
-class SessionPromptBlockDeclaration:
-    slug: str
-    render: Callable[..., str]
-
-
-@dataclass(frozen=True)
-class SessionRuntimeDeclaration:
-    before_request: Callable[..., Any]
-    run_finished: Callable[..., Any]
-    quiesce: Callable[..., Any]
-    acknowledge_delivery: Callable[..., Any] | None = None
-    reconcile_tool_batch: Callable[..., Any] | None = None
-
-
-@dataclass(frozen=True)
-class SessionCapability:
-    """The effective private capability set for one bound temporary Session."""
-
-    tool_names: tuple[str, ...]
-    prompt_blocks: tuple[SessionPromptBlockDeclaration, ...]
-    runtime: SessionRuntimeDeclaration | None
-    identity: ExtensionRegistrationIdentity
-
-
-class SessionCapabilityExpiredError(RuntimeError):
-    """A bound Session callback outlived its Extension registration."""
-
-
-@dataclass(frozen=True)
-class SessionRequestContext:
-    """Narrow identity supplied to an owner at a safe Session request boundary."""
-
-    binding: Any
-    run_id: str
-    agent_id: str
-    session_id: str
-    execution_owner: Any | None = None
-
-
-@dataclass(frozen=True)
-class PreparedSessionDelivery:
-    """One owner-prepared note batch whose receipt is committed by Chat."""
-
-    delivery_id: str
-    content_hash: str
-    entries: tuple[str, ...]
-    settings_revision: str
-    effect_kind: str = "before_request"
-
-
-@dataclass(frozen=True)
-class ToolBatchDecision:
-    """Owner reconciliation after every sibling Tool Result is durable."""
-
-    end: bool
-    continuation: PreparedSessionDelivery | None = None
-
-
-@dataclass(frozen=True)
-class PageDeclaration:
-    """One Extension-owned page asset contributed to the application shell."""
-
-    page_id: str
-    title: str
-    entry: str
-    icon: str = "network"
-
-
-@dataclass(frozen=True)
-class ExtensionRegistrationIdentity:
-    """Opaque identity for declarations belonging to one loaded registry epoch."""
-
-    name: str
-    epoch: str
-
-
-@dataclass(frozen=True)
-class CommandDeclaration:
-    """One ``api.register_command`` declaration for Chat-owned application.
-
-    The Extensions domain stores only primitive metadata plus the handler. Chat
-    validates and applies the declaration later so command recognition,
-    scheduling, execution, and outcome semantics remain in ``CommandDispatcher``.
-    """
-
-    name: str
-    description: str
-    handler: CommandHandler
-    argument: str = "optional"
-    catalog_result: str = "notice"
-    execution_mode: str = "serialized"
-    argument_execution_mode: str | None = None
-    unavailable_surfaces: object = ()
-
-
-@dataclass(frozen=True)
-class RecallBackendDeclaration:
-    """One ``api.register_recall_backend`` declaration: name + backend factory.
-
-    The factory is a ``core.recall.RecallBackendFactory``
-    (``RecallBackendContext -> RecallBackend``); kept loosely typed so the
-    extensions module stays decoupled from the recall domain.
-    """
-
-    name: str
-    factory: Callable[..., Any]
-
-
-@dataclass(frozen=True)
-class PromptBlockDeclaration:
-    """One ``api.register_prompt_block`` declaration (D6): a System Prompt block.
-
-    Mirrors a tool/recall declaration — collected during ``register`` and turned
-    into a ``core.prompts.BlockDefinition`` by the registry's
-    :meth:`ExtensionRegistry.prompt_block_declarations` accessor (a lazy import, so
-    the extensions module stays decoupled from the prompts domain). An extension's
-    block is sourced/owned ``extension:<name>`` so gate 2 only renders it while the
-    extension is loaded. Exactly one of ``default_text`` (static, editable via the
-    override cascade) / ``render`` (dynamic, non-editable, build-time function) is
-    set — the same static-vs-dynamic split as a core block.
-    """
-
-    slug: str
-    default_text: str | None = None
-    render: Callable[..., str] | None = None
-
-
-@dataclass
-class ExtensionDeclarations:
-    """What an extension declares through :class:`ExtensionAPI` during ``register``.
-
-    Collected per extension; applied to the dispatch table / domain registries
-    or fired by the registry only after every extension has registered.
-    """
-
-    hooks: dict[str, list[HookHandler]] = field(default_factory=lambda: defaultdict(list))
-    startup: list[LifecycleHandler] = field(default_factory=list)
-    shutdown: list[LifecycleHandler] = field(default_factory=list)
-    tools: list[ToolDeclaration] = field(default_factory=list)
-    tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
-    commands: list[CommandDeclaration] = field(default_factory=list)
-    pages: list[PageDeclaration] = field(default_factory=list)
-    recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
-    prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
-    session_prompt_blocks: list[SessionPromptBlockDeclaration] = field(default_factory=list)
-    session_runtime: SessionRuntimeDeclaration | None = None
-    interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
-    settings_schema: list[SettingsFieldDeclaration] | None = None
-    operations: ExtensionOperations | None = None
-
-
-@dataclass
-class ExtensionRecord:
-    """One discovered extension and the outcome of loading it.
-
-    ``name`` is the identity (directory or file name). ``status`` is ``loaded``
-    (importable and registered), ``failed`` (import/register/manifest error —
-    ``error`` carries the detail), ``disabled`` (listed disabled, never
-    imported), or ``overridden`` (a later same-name copy an earlier root already
-    claimed, never imported — see :meth:`ExtensionRegistry.load`).
-    ``declarations`` are only meaningful for ``loaded`` records.
-    """
-
-    name: str
-    root_path: Path
-    entry_path: Path
-    status: ExtensionStatus
-    error: str | None = None
-    manifest: ExtensionManifest | None = None
-    declarations: ExtensionDeclarations = field(default_factory=ExtensionDeclarations)
-    # Non-fatal per-capability diagnostics (e.g. a tool name collision skipped a
-    # single tool). The extension still ``loaded``; only that capability dropped.
-    capability_errors: list[str] = field(default_factory=list)
-    # The winning record's ``entry_path`` (as a string) when this record was
-    # shadowed (``status == "overridden"``); ``None`` for every other status.
-    overridden_by: str | None = None
-
-
-class _ManifestError(Exception):
-    """Raised when an ``extension.json`` manifest is missing required shape."""
-
-
-class _AsyncRegisterTimeoutError(TimeoutError):
-    """Raised when an async Extension registration exceeds its hard deadline."""
-
-    def __init__(self, timeout_seconds: float) -> None:
-        super().__init__(f"async register() timed out after {timeout_seconds:g} seconds")
-
-
-class ExtensionAPI:
-    """Registration facade passed into an extension's ``register(api)``.
-
-    Every call only *collects a declaration* onto the extension's record;
-    nothing goes live until the loader's apply phase runs after all extensions
-    have registered. ``config`` is the per-extension settings **snapshot** taken
-    at register time (empty dict by default) — for structural decisions inside
-    ``register()``. ``logger`` is a ``vbot.extensions.<name>`` logger.
-
-    ``config_provider`` and ``credential_resolver`` (both already bound to this
-    extension) back the **live** per-call reads :meth:`get_config` /
-    :meth:`resolve_credential`, so values and secrets set through the settings
-    UI take effect without a restart. Both default to ``None`` for standalone
-    construction (tests), in which case the live reads fall back to the snapshot
-    / an empty string.
-    """
-
-    def __init__(
-        self,
-        extension_name: str,
-        declarations: ExtensionDeclarations,
-        *,
-        config: dict[str, Any],
-        logger: Any,
-        config_provider: Callable[[], dict[str, Any]] | None = None,
-        credential_resolver: Callable[[str], str] | None = None,
-    ) -> None:
-        self._extension_name = extension_name
-        self._declarations = declarations
-        self.config = config
-        self.logger = logger
-        self._config_provider = config_provider
-        self._credential_resolver = credential_resolver
-        self.operations = ExtensionOperations(extension_name)
-        declarations.operations = self.operations
-
-    def register_settings(self, fields: list[Any]) -> None:
-        """Declare this extension's settings schema (see :mod:`settings_schema`).
-
-        Validates *fields* through :func:`parse_settings_fields` (a violation
-        raises ``ValueError`` naming the bad field, failing the extension) and
-        stores the parsed schema on the declarations. Calling it twice raises
-        ``ValueError`` — an extension declares exactly one schema.
-        """
-        if self._declarations.settings_schema is not None:
-            raise ValueError("settings schema already declared")
-        self._declarations.settings_schema = parse_settings_fields(fields)
-
-    def get_config(self) -> dict[str, Any]:
-        """Return the extension's config, read **live** per call (fresh dict).
-
-        Unlike :attr:`config` (the register-time snapshot), this reflects a
-        config change persisted through the settings UI without a restart. Falls
-        back to a copy of the snapshot when no live provider is wired.
-        """
-        if self._config_provider is None:
-            return dict(self.config)
-        return self._config_provider()
-
-    def resolve_credential(self, key: str) -> str:
-        """Resolve one credential **live** per call (process env, then ``.env``).
-
-        Returns ``""`` when no resolver is wired (standalone construction).
-        """
-        if self._credential_resolver is None:
-            return ""
-        return self._credential_resolver(key)
-
-    def on(self, event: str, handler: HookHandler) -> None:
-        """Declare a hook handler for *event*. Called as ``handler(ctx, **payload)``."""
-        self._declarations.hooks[event].append(handler)
-
-    def register_tool(
-        self,
-        name: str,
-        description: str,
-        parameters: dict[str, Any],
-        handler: Callable[..., Any],
-        *,
-        internal: bool = False,
-        catalog_visible: bool = True,
-        requires_opt_in: bool = False,
-        display: Any = None,
-        ready: Callable[[], bool] | None = None,
-        readiness_hint: str | None = None,
-        result_schema: dict[str, Any] | None = None,
-        parallel_safe: bool = True,
-        open_input_schema: bool = False,
-        family: str | None = None,
-    ) -> None:
-        """Declare an agent tool, mirroring ``ToolRegistry.register``.
-
-        Only collects the declaration; the runtime applies it into the live
-        ``ToolRegistry`` after the last built-in tool is registered. A name
-        that collides with a built-in or another extension's tool is skipped
-        and diagnosed on this extension's record — extensions never override
-        an existing tool.
-
-        ``family`` references an Extension-local id declared through
-        :meth:`register_tool_family`. ``ready`` is an optional zero-arg readiness
-        predicate (cheap, I/O-free):
-        a not-ready tool stays registered but is hidden from the System Prompt,
-        the provider tool definitions, and the tool picker until it is ready
-        (e.g. once the extension's credential is set). ``None`` means always
-        ready. ``readiness_hint`` is optional English text explaining that
-        precondition, surfaced by the ``tool.list`` RPC.
-        """
-        self._declarations.tools.append(
-            ToolDeclaration(
-                name=name,
-                description=description,
-                parameters=parameters,
-                handler=handler,
-                internal=internal,
-                catalog_visible=catalog_visible,
-                requires_opt_in=requires_opt_in,
-                display=display,
-                ready=ready,
-                readiness_hint=readiness_hint,
-                result_schema=result_schema,
-                parallel_safe=parallel_safe,
-                open_input_schema=open_input_schema,
-                family=family,
-            )
-        )
-
-    def register_page(
-        self,
-        page_id: str,
-        title: str,
-        entry: str,
-        *,
-        icon: str = "network",
-    ) -> None:
-        """Declare one page whose asset remains under this Extension's root."""
-        if not _is_page_id(page_id):
-            raise ValueError("page_id must use lowercase letters, digits, hyphens, or underscores")
-        if not isinstance(title, str) or not title.strip() or len(title) > 120:
-            raise ValueError("page title must be a non-empty string up to 120 characters")
-        entry_path = Path(entry) if isinstance(entry, str) else None
-        if (
-            entry_path is None
-            or not entry.strip()
-            or "\x00" in entry
-            or entry.startswith(("/", "\\"))
-            or ":" in entry
-            or entry_path.is_absolute()
-            or ".." in entry.replace("\\", "/").split("/")
-            or entry_path.suffix.lower() != ".html"
-        ):
-            raise ValueError("page entry must be a relative HTML asset path")
-        if not isinstance(icon, str) or icon not in {"network", "panel", "grid", "sparkles"}:
-            raise ValueError("page icon is not supported")
-        if any(item.page_id == page_id for item in self._declarations.pages):
-            raise ValueError(f"page already declared: {page_id}")
-        self._declarations.pages.append(PageDeclaration(page_id, title.strip(), entry, icon))
-
-    def register_session_tool(
-        self,
-        name: str,
-        description: str,
-        parameters: dict[str, Any],
-        handler: Callable[..., Any],
-        **kwargs: Any,
-    ) -> None:
-        """Declare a hidden Tool available only through an exact Session grant."""
-        self._declarations.tools.append(
-            ToolDeclaration(
-                name=name,
-                description=description,
-                parameters=parameters,
-                handler=handler,
-                catalog_visible=False,
-                open_input_schema=True,
-                coerce_arguments=False,
-                session_scoped=True,
-                activation="session_grant",
-                **kwargs,
-            )
-        )
-
-    def register_session_prompt_block(self, slug: str, *, render: Callable[..., str]) -> None:
-        if not isinstance(slug, str) or not slug or not callable(render):
-            raise ValueError("invalid session prompt block declaration")
-        self._declarations.session_prompt_blocks.append(SessionPromptBlockDeclaration(slug, render))
-
-    def register_session_runtime(
-        self,
-        *,
-        before_request: Callable[..., Any],
-        run_finished: Callable[..., Any],
-        quiesce: Callable[..., Any],
-        acknowledge_delivery: Callable[..., Any] | None = None,
-        reconcile_tool_batch: Callable[..., Any] | None = None,
-    ) -> None:
-        if self._declarations.session_runtime is not None:
-            raise ValueError("session runtime already declared")
-        if not all(callable(item) for item in (before_request, run_finished, quiesce)) or any(
-            item is not None and not callable(item)
-            for item in (acknowledge_delivery, reconcile_tool_batch)
-        ):
-            raise ValueError("session runtime handlers must be callable")
-        self._declarations.session_runtime = SessionRuntimeDeclaration(
-            before_request, run_finished, quiesce, acknowledge_delivery, reconcile_tool_batch
-        )
-
-    def register_tool_family(self, family_id: str, label: str) -> None:
-        """Declare a presentation family that this Extension's Tools may join.
-
-        The id is local to this Extension. The apply phase namespaces it by the
-        Extension identity so unrelated Extensions cannot merge families by
-        accidentally choosing the same id.
-        """
-        self._declarations.tool_families.append(ToolFamilyDeclaration(id=family_id, label=label))
-
-    def register_command(
-        self,
-        name: str,
-        description: str,
-        handler: CommandHandler,
-        *,
-        argument: str = "optional",
-        catalog_result: str = "notice",
-        execution_mode: str = "serialized",
-        argument_execution_mode: str | None = None,
-        unavailable_surfaces: frozenset[str] | set[str] | tuple[str, ...] = (),
-    ) -> None:
-        """Declare a slash command for later application by Chat.
-
-        Declaration is intentionally inert here. ``CommandDispatcher`` validates
-        the metadata and installs the handler after Runtime has created its
-        canonical dispatcher. A malformed or colliding command is diagnosed as
-        one skipped capability without failing the rest of the Extension.
-        """
-        self._declarations.commands.append(
-            CommandDeclaration(
-                name=name,
-                description=description,
-                handler=handler,
-                argument=argument,
-                catalog_result=catalog_result,
-                execution_mode=execution_mode,
-                argument_execution_mode=argument_execution_mode,
-                unavailable_surfaces=unavailable_surfaces,
-            )
-        )
-
-    def register_recall_backend(self, name: str, factory: Callable[..., Any]) -> None:
-        """Declare a session-recall backend (``RecallBackendContext -> RecallBackend``).
-
-        Only collects the declaration; the runtime applies it onto the recall
-        registry before the persisted ``recall.backend`` is resolved. A
-        duplicate or non lowercase-snake_case name is skipped and diagnosed on
-        this extension's record.
-        """
-        self._declarations.recall_backends.append(
-            RecallBackendDeclaration(name=name, factory=factory)
-        )
-
-    def register_interaction_handler(self, prefix: str, handler: Callable[..., Any]) -> None:
-        """Declare a channel-interaction (button-tap) handler for *prefix*.
-
-        Only collects the declaration; the runtime builds the prefix map after
-        every extension has registered. The handler is called
-        ``handler(event, responder)`` for each tap whose callback ``data`` begins
-        with ``"<prefix>:"`` (see :mod:`core.extensions.interactions`). A prefix
-        already claimed by an earlier-loaded extension is skipped and diagnosed
-        on this extension's record — extensions never override an existing
-        prefix.
-        """
-        self._declarations.interaction_handlers.append(
-            InteractionHandlerDeclaration(prefix=prefix, handler=handler)
-        )
-
-    def register_prompt_block(
-        self,
-        slug: str,
-        *,
-        default_text: str | None = None,
-        render: Callable[..., str] | None = None,
-    ) -> None:
-        """Declare a System Prompt block (D6), static **or** dynamic.
-
-        Only collects the declaration; the runtime rebuilds the block-definition
-        list on every extension (re)load and hands it to the prompt manager (no
-        live registry, no per-run reload). The block id is ``extension:<slug>`` and
-        its owner is ``extension:<extension-name>`` — so gate 2 renders the block
-        only while this extension is loaded, and an extension may declare several
-        blocks by using distinct slugs (e.g. a static one and a dynamic one).
-
-        Pass **exactly one** of ``default_text`` (a static, editable block whose
-        text flows through the override cascade) or ``render`` (a dynamic,
-        non-editable block whose text is produced at build time; a raising render
-        drops only that block). Passing both or neither raises ``ValueError`` at
-        declaration so the mistake surfaces in ``register()``, not deep in assembly.
-        A slug colliding with another contributor's block id is resolved first-wins
-        with a diagnostic when the definitions are built (mirroring tool collisions).
-        """
-        has_text = default_text is not None
-        has_render = render is not None
-        if has_text == has_render:
-            raise ValueError("register_prompt_block requires exactly one of default_text / render")
-        self._declarations.prompt_blocks.append(
-            PromptBlockDeclaration(slug=slug, default_text=default_text, render=render)
-        )
-
-    def on_startup(self, handler: LifecycleHandler) -> None:
-        """Declare a startup handler (sync or async, no args) fired post-bootstrap."""
-        self._declarations.startup.append(handler)
-
-    def on_shutdown(self, handler: LifecycleHandler) -> None:
-        """Declare a shutdown handler (sync or async, no args) fired on runtime stop."""
-        self._declarations.shutdown.append(handler)
 
 
 class ExtensionRegistry:
@@ -747,6 +93,7 @@ class ExtensionRegistry:
         self._handlers: dict[str, list[RegisteredHandler]] = defaultdict(list)
         self._interaction_handlers: dict[str, RegisteredHandler] = {}
         self._records: list[ExtensionRecord] = []
+        self._capabilities = ExtensionCapabilityInstaller(self._records)
         self._host: ExtensionHost | None = None
         self._owner_hosts: dict[ExtensionRegistrationIdentity, ExtensionHost] = {}
         self._quiesced: set[str] = set()
@@ -785,12 +132,12 @@ class ExtensionRegistry:
                 try:
                     entry.relative_to(record.root_path.resolve())
                 except ValueError:
-                    self._diagnose_capability(
+                    _diagnose_capability(
                         record, f"page {declaration.page_id!r} skipped: entry escapes root"
                     )
                     continue
                 if not entry.is_file():
-                    self._diagnose_capability(
+                    _diagnose_capability(
                         record, f"page {declaration.page_id!r} skipped: entry is missing"
                     )
                     continue
@@ -971,7 +318,7 @@ class ExtensionRegistry:
     ) -> None:
         prefix = declaration.prefix
         if prefix in RESERVED_INTERACTION_PREFIXES:
-            self._diagnose_capability(
+            _diagnose_capability(
                 record,
                 f"interaction handler {prefix!r} skipped: prefix is reserved by the runtime",
             )
@@ -979,7 +326,7 @@ class ExtensionRegistry:
         other_declarers = [other for other in declarers[prefix] if other != record.name]
         if prefix in self._interaction_handlers:
             winner = repr(other_declarers[0]) if other_declarers else "another extension"
-            self._diagnose_capability(
+            _diagnose_capability(
                 record,
                 f"interaction handler {prefix!r} skipped: prefix already declared "
                 f"by extension {winner}",
@@ -988,7 +335,7 @@ class ExtensionRegistry:
         self._interaction_handlers[prefix] = (record.name, declaration.handler)
         if other_declarers:
             joined = ", ".join(repr(other) for other in other_declarers)
-            self._diagnose_capability(
+            _diagnose_capability(
                 record,
                 f"interaction handler {prefix!r} registered; also declared by "
                 f"extension(s) {joined} (skipped there)",
@@ -1020,39 +367,16 @@ class ExtensionRegistry:
         return record.declarations.operations
 
     def apply_tools(self, tool_registry: ToolRegistry) -> None:
-        """Register every loaded extension's declared tools into *tool_registry*.
+        self._capabilities.apply_tools(tool_registry)
 
-        Called by the runtime after the last built-in tool is registered.
-        Collision policy (load order is deterministic, so it must not silently
-        decide behavior): a name already used by a built-in or by an
-        earlier-loaded extension is **skipped** and diagnosed on the record;
-        between two extensions declaring the same name the first-loaded wins and
-        **both** sides are diagnosed. Per-tool registration errors fail open.
-        """
-        loaded = [record for record in self._records if record.status == "loaded"]
-        declarers: dict[str, list[str]] = defaultdict(list)
-        for record in loaded:
-            for declaration in record.declarations.tools:
-                declarers[declaration.name].append(record.name)
+    def apply_commands(self, command_dispatcher: CommandDispatcher) -> None:
+        self._capabilities.apply_commands(command_dispatcher)
 
-        for record in loaded:
-            if record.declarations.operations is not None:
-                record.declarations.operations.bind(tool_registry)
+    def prompt_block_declarations(self) -> list[Any]:
+        return self._capabilities.prompt_block_declarations()
 
-        applied_families = self._apply_tool_families(tool_registry, loaded)
-        builtin_names = {tool.name for tool in tool_registry.list_tools(include_internal=True)}
-        applied: set[str] = set()
-        for record in loaded:
-            for declaration in record.declarations.tools:
-                self._apply_one_tool(
-                    tool_registry,
-                    record,
-                    declaration,
-                    declarers,
-                    builtin_names,
-                    applied,
-                    applied_families.get(record.name, {}),
-                )
+    def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
+        self._capabilities.apply_recall_backends(recall_registry)
 
     def session_capability(
         self,
@@ -1207,261 +531,6 @@ class ExtensionRegistry:
         if not self._session_capability_current(binding, capability, tool_registry):
             raise SessionCapabilityExpiredError("session capability expired")
 
-    def _apply_tool_families(
-        self,
-        tool_registry: ToolRegistry,
-        loaded: list[ExtensionRecord],
-    ) -> dict[str, dict[str, str]]:
-        """Register namespaced Extension family declarations, isolating failures."""
-        applied: dict[str, dict[str, str]] = {}
-        for record in loaded:
-            local_families: dict[str, str] = {}
-            for declaration in record.declarations.tool_families:
-                if not isinstance(declaration.id, str) or not declaration.id.strip():
-                    self._diagnose_capability(
-                        record, "tool family skipped: id must be a non-empty string"
-                    )
-                    continue
-                local_id = declaration.id.strip()
-                if local_id in local_families:
-                    self._diagnose_capability(
-                        record, f"tool family {local_id!r} duplicate declaration skipped"
-                    )
-                    continue
-                qualified_id = self._extension_tool_family_id(record.name, local_id)
-                try:
-                    tool_registry.register_family(
-                        qualified_id,
-                        declaration.label,
-                        extension=record.name,
-                    )
-                except Exception as exc:
-                    self._diagnose_capability(
-                        record, f"tool family {local_id!r} registration failed: {exc}"
-                    )
-                    continue
-                local_families[local_id] = qualified_id
-            applied[record.name] = local_families
-        return applied
-
-    @staticmethod
-    def _extension_tool_family_id(extension_name: str, local_id: str) -> str:
-        return f"extension:{extension_name}:{local_id}"
-
-    def apply_commands(self, command_dispatcher: CommandDispatcher) -> None:
-        """Apply loaded Extensions' commands to the canonical Chat dispatcher.
-
-        Built-ins always win. Extension load order is first-wins, including
-        duplicate declarations inside one Extension. Invalid declarations and
-        collisions remain non-fatal capability diagnostics.
-        """
-        claimed: dict[str, tuple[ExtensionRecord, CommandDeclaration]] = {}
-        built_in_names = command_dispatcher.built_in_command_names()
-        for record in self._records:
-            if record.status != "loaded":
-                continue
-            for declaration in record.declarations.commands:
-                name = declaration.name
-                if not isinstance(name, str):
-                    self._diagnose_capability(
-                        record,
-                        f"command {name!r} skipped: name must be a string",
-                    )
-                    continue
-                if name in built_in_names:
-                    self._diagnose_capability(
-                        record,
-                        f"command {name!r} skipped: a Built-in Command already uses this name",
-                    )
-                    continue
-                winner = claimed.get(name)
-                if winner is not None:
-                    winner_record, _winner_declaration = winner
-                    if winner_record is record:
-                        self._diagnose_capability(
-                            record,
-                            f"command {name!r} duplicate declaration skipped",
-                        )
-                    else:
-                        self._diagnose_capability(
-                            record,
-                            f"command {name!r} skipped: name already declared by extension "
-                            f"{winner_record.name!r}",
-                        )
-                        self._diagnose_capability(
-                            winner_record,
-                            f"command {name!r} registered; also declared by extension "
-                            f"{record.name!r} (skipped there)",
-                        )
-                    continue
-                try:
-                    command_dispatcher.register_extension_command(
-                        record.name,
-                        name=name,
-                        description=declaration.description,
-                        handler=declaration.handler,
-                        argument=declaration.argument,
-                        catalog_result=declaration.catalog_result,
-                        execution_mode=declaration.execution_mode,
-                        argument_execution_mode=declaration.argument_execution_mode,
-                        unavailable_surfaces=declaration.unavailable_surfaces,
-                        page_ids=frozenset(page.page_id for page in record.declarations.pages),
-                    )
-                except ValueError as exc:
-                    self._diagnose_capability(record, f"command {name!r} skipped: {exc}")
-                    continue
-                claimed[name] = (record, declaration)
-
-    def _apply_one_tool(
-        self,
-        tool_registry: ToolRegistry,
-        record: ExtensionRecord,
-        declaration: ToolDeclaration,
-        declarers: dict[str, list[str]],
-        builtin_names: set[str],
-        applied: set[str],
-        applied_families: dict[str, str],
-    ) -> None:
-        name = declaration.name
-        other_declarers = [other for other in declarers[name] if other != record.name]
-        if name in builtin_names:
-            self._diagnose_capability(
-                record, f"tool {name!r} skipped: a built-in tool already uses this name"
-            )
-            return
-        if name in applied:
-            winner = repr(other_declarers[0]) if other_declarers else "another extension"
-            self._diagnose_capability(
-                record, f"tool {name!r} skipped: name already declared by extension {winner}"
-            )
-            return
-        family = None
-        if declaration.family is not None:
-            local_family = declaration.family.strip() if isinstance(declaration.family, str) else ""
-            family = applied_families.get(local_family)
-            if family is None:
-                self._diagnose_capability(
-                    record,
-                    f"tool {name!r} references undeclared tool family {declaration.family!r}; "
-                    "registered without a family",
-                )
-        try:
-            tool_registry.register(
-                name,
-                declaration.description,
-                declaration.parameters,
-                declaration.handler,
-                internal=declaration.internal,
-                catalog_visible=declaration.catalog_visible,
-                requires_opt_in=declaration.requires_opt_in,
-                display=declaration.display,
-                ready=declaration.ready,
-                readiness_hint=declaration.readiness_hint,
-                extension=record.name,
-                family=family,
-                result_schema=declaration.result_schema,
-                parallel_safe=declaration.parallel_safe,
-                open_input_schema=declaration.open_input_schema,
-                coerce_arguments=declaration.coerce_arguments,
-                session_scoped=declaration.session_scoped,
-                activation=declaration.activation,
-            )
-        except Exception as exc:
-            self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
-            return
-        applied.add(name)
-        if other_declarers:
-            joined = ", ".join(repr(other) for other in other_declarers)
-            self._diagnose_capability(
-                record,
-                f"tool {name!r} registered; also declared by extension(s) {joined} (skipped there)",
-            )
-
-    def prompt_block_declarations(self) -> list[Any]:
-        """Return the loaded extensions' blocks as ``core.prompts.BlockDefinition``s.
-
-        The runtime calls this after extensions load (and on every reload) and
-        hands the list to the prompt manager — the contributor path D6 unifies with
-        tools. Only ``status == "loaded"`` records contribute; a disabled/failed
-        extension yields nothing, and gate 2 additionally requires the owning
-        extension to be in :meth:`loaded_extension_names`.
-
-        Each declaration becomes a block with id ``extension:<slug>`` and owner
-        ``extension:<extension-name>``. Id collisions (two extensions choosing the
-        same slug, or a slug colliding with a core/tool id later) are resolved
-        first-wins **with a diagnostic** on the losing record — the same policy as
-        :meth:`_apply_one_tool` — so a collision never silently changes behavior.
-
-        The ``core.prompts`` import is lazy so the extensions module carries no
-        import-time dependency on the prompts domain (this runs at collection, not
-        at module load).
-        """
-        from core.prompts import BlockDefinition
-
-        loaded = [record for record in self._records if record.status == "loaded"]
-        declarers: dict[str, list[str]] = defaultdict(list)
-        for record in loaded:
-            for declaration in record.declarations.prompt_blocks:
-                declarers[declaration.slug].append(record.name)
-
-        definitions: list[Any] = []
-        claimed: set[str] = set()
-        for record in loaded:
-            for declaration in record.declarations.prompt_blocks:
-                definition = self._build_one_prompt_block(
-                    BlockDefinition, record, declaration, declarers, claimed
-                )
-                if definition is not None:
-                    definitions.append(definition)
-        return definitions
-
-    def _build_one_prompt_block(
-        self,
-        block_definition_cls: Any,
-        record: ExtensionRecord,
-        declaration: PromptBlockDeclaration,
-        declarers: dict[str, list[str]],
-        claimed: set[str],
-    ) -> Any | None:
-        """Turn one block declaration into a ``BlockDefinition``, first-wins on slug.
-
-        Mirrors :meth:`_apply_one_tool`: an id already claimed by an earlier-loaded
-        extension is skipped and diagnosed on this record (naming the winner); the
-        first claimant also gets a diagnostic naming the skipped extension(s). A
-        construction error (e.g. a malformed slug yielding a bad id) is diagnosed
-        and the block dropped — never aborting the others.
-        """
-        slug = declaration.slug
-        block_id = f"extension:{slug}"
-        owner = f"extension:{record.name}"
-        other_declarers = [other for other in declarers[slug] if other != record.name]
-        if slug in claimed:
-            winner = repr(other_declarers[0]) if other_declarers else "another extension"
-            self._diagnose_capability(
-                record,
-                f"prompt block {block_id!r} skipped: slug already declared by extension {winner}",
-            )
-            return None
-        try:
-            definition = block_definition_cls(
-                id=block_id,
-                owner=owner,
-                default_text=declaration.default_text,
-                render=declaration.render,
-            )
-        except Exception as exc:
-            self._diagnose_capability(record, f"prompt block {block_id!r} skipped: {exc}")
-            return None
-        claimed.add(slug)
-        if other_declarers:
-            joined = ", ".join(repr(other) for other in other_declarers)
-            self._diagnose_capability(
-                record,
-                f"prompt block {block_id!r} registered; also declared by extension(s) "
-                f"{joined} (skipped there)",
-            )
-        return definition
-
     def loaded_extension_names(self) -> set[str]:
         """Return the set of loaded extension names (gate 2's ``extension:<name>``).
 
@@ -1474,27 +543,6 @@ class ExtensionRegistry:
     def has_tool_hooks(self) -> bool:
         """Return whether active Extensions can modify Tool calls or results."""
         return bool(self._handlers.get("tool_call") or self._handlers.get("tool_result"))
-
-    def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
-        """Register every loaded extension's recall backends into *recall_registry*.
-
-        Called by the runtime on a ``with_builtins()`` registry before the
-        persisted ``recall.backend`` is resolved (and again on every
-        ``reload_recall_backend``). The registry's own rules hold: a duplicate
-        name (built-ins are registered first) or a non lowercase-snake_case name
-        raises ``ValueError``, which is caught, diagnosed on the record, and the
-        backend skipped.
-        """
-        for record in self._records:
-            if record.status != "loaded":
-                continue
-            for declaration in record.declarations.recall_backends:
-                try:
-                    recall_registry.register(declaration.name, declaration.factory)
-                except ValueError as exc:
-                    self._diagnose_capability(
-                        record, f"recall backend {declaration.name!r} skipped: {exc}"
-                    )
 
     async def deactivate(
         self,
@@ -1539,8 +587,8 @@ class ExtensionRegistry:
         self._remove_handlers(name)
         self._remove_interaction_handlers(name)
         if tool_registry is not None:
-            self._unregister_extension_tools(tool_registry, declarations.tools)
-            self._unregister_extension_tool_families(
+            self._capabilities._unregister_extension_tools(tool_registry, declarations.tools)
+            self._capabilities._unregister_extension_tool_families(
                 tool_registry, name, declarations.tool_families
             )
         if command_dispatcher is not None:
@@ -1595,8 +643,8 @@ class ExtensionRegistry:
                 continue
             if record.declarations.operations is not None:
                 record.declarations.operations.retire()
-            self._unregister_extension_tools(tool_registry, record.declarations.tools)
-            self._unregister_extension_tool_families(
+            self._capabilities._unregister_extension_tools(tool_registry, record.declarations.tools)
+            self._capabilities._unregister_extension_tool_families(
                 tool_registry, record.name, record.declarations.tool_families
             )
             self._retire_owner_host(record.name)
@@ -1621,43 +669,6 @@ class ExtensionRegistry:
             for prefix, entry in self._interaction_handlers.items()
             if entry[0] != extension_name
         }
-
-    def _unregister_extension_tools(
-        self, tool_registry: ToolRegistry, tools: list[ToolDeclaration]
-    ) -> None:
-        """Unregister only the tools this extension actually applied.
-
-        A declared name is unregistered only when the live registry entry's handler
-        is this declaration's handler — so a name skipped on a collision (owned by a
-        built-in or another extension) is never yanked out from under its real owner.
-        """
-        for declaration in tools:
-            try:
-                registered = tool_registry.get(declaration.name)
-            except Exception:
-                continue
-            if registered.handler is declaration.handler:
-                tool_registry.unregister(declaration.name)
-
-    def _unregister_extension_tool_families(
-        self,
-        tool_registry: ToolRegistry,
-        extension_name: str,
-        families: list[ToolFamilyDeclaration],
-    ) -> None:
-        """Remove only namespaced family metadata owned by this Extension."""
-        for declaration in families:
-            if not isinstance(declaration.id, str) or not declaration.id.strip():
-                continue
-            tool_registry.unregister_family(
-                self._extension_tool_family_id(extension_name, declaration.id.strip()),
-                extension=extension_name,
-            )
-
-    def _diagnose_capability(self, record: ExtensionRecord, message: str) -> None:
-        """Record a non-fatal capability diagnostic and log it at ``warning``."""
-        record.capability_errors.append(message)
-        _LOGGER.warning("Extension %r %s", record.name, message)
 
     def records(self) -> list[ExtensionRecord]:
         """Return every discovered extension record in load order."""
@@ -1916,389 +927,6 @@ class ExtensionRegistry:
         return True
 
 
-@dataclass(frozen=True)
-class _DiscoveredExtension:
-    """One discovered entry point: identity plus on-disk paths."""
-
-    name: str
-    root_path: Path
-    entry_path: Path
-
-
-def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension]:
-    if not extensions_dir.is_dir():
-        return []
-
-    discovered: list[_DiscoveredExtension] = []
-    try:
-        entries = list(extensions_dir.iterdir())
-    except OSError as exc:
-        _LOGGER.warning("Skipping unreadable Extension directory %s: %s", extensions_dir, exc)
-        return []
-
-    for entry in entries:
-        if entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":
-            discovered.append(_DiscoveredExtension(entry.stem, entry, entry))
-            continue
-
-        if not entry.is_dir():
-            continue
-
-        init_entry = entry / "__init__.py"
-        if init_entry.is_file():
-            discovered.append(_DiscoveredExtension(entry.name, entry, init_entry))
-            continue
-
-        extension_entry = entry / "extension.py"
-        if extension_entry.is_file():
-            discovered.append(_DiscoveredExtension(entry.name, entry, extension_entry))
-
-    return sorted(discovered, key=lambda item: item.name)
-
-
-def _register_extension(
-    discovered: _DiscoveredExtension,
-    disabled_names: set[str],
-    config_map: dict[str, dict[str, Any]],
-    pending: list[tuple[ExtensionRecord, Any]],
-    *,
-    config_provider: Callable[[str], dict[str, Any]] | None = None,
-    credential_resolver: Callable[[str], str] | None = None,
-) -> ExtensionRecord:
-    """Load one discovered extension into a record (collecting declarations).
-
-    Disabled extensions are never imported. Manifest/import/``register()``
-    failures produce a ``failed`` record with detail and never abort the others.
-    Async ``register()`` coroutines are appended to *pending* for the loader to
-    await before applying declarations. *config_provider* / *credential_resolver*
-    are bound to this extension's *name* when its ``ExtensionAPI`` is built, so
-    the extension's live reads see only its own config / all credentials.
-    """
-    name = discovered.name
-    if name in disabled_names:
-        return ExtensionRecord(
-            name=name,
-            root_path=discovered.root_path,
-            entry_path=discovered.entry_path,
-            status="disabled",
-        )
-
-    manifest: ExtensionManifest | None = None
-    if discovered.root_path.is_dir():
-        try:
-            manifest = _load_manifest(discovered.root_path)
-        except _ManifestError as exc:
-            _LOGGER.error("Extension %r manifest invalid: %s", name, exc, exc_info=True)
-            return _failed_record(discovered, str(exc))
-        if (
-            manifest is not None
-            and manifest.api_version is not None
-            and manifest.api_version > API_VERSION
-        ):
-            message = (
-                f"manifest api_version {manifest.api_version} is newer than supported "
-                f"API_VERSION {API_VERSION}"
-            )
-            _LOGGER.error("Extension %r %s", name, message)
-            return _failed_record(discovered, message, manifest=manifest)
-
-    try:
-        module = _import_extension_module(name, discovered.entry_path)
-    except Exception as exc:
-        _LOGGER.error(
-            "Failed to load extension %r from %s: %s",
-            name,
-            discovered.entry_path,
-            exc,
-            exc_info=True,
-        )
-        return _failed_record(discovered, f"import failed: {exc}", manifest=manifest)
-
-    record = ExtensionRecord(
-        name=name,
-        root_path=discovered.root_path,
-        entry_path=discovered.entry_path,
-        status="loaded",
-        manifest=manifest,
-    )
-
-    register_fn = getattr(module, "register", None)
-    if register_fn is None:
-        return record
-
-    bound_config_provider = (lambda: config_provider(name)) if config_provider is not None else None
-    api = ExtensionAPI(
-        name,
-        record.declarations,
-        config=config_map.get(name, {}),
-        logger=get_logger(f"extensions.{name}"),
-        config_provider=bound_config_provider,
-        credential_resolver=credential_resolver,
-    )
-    try:
-        result = register_fn(api)
-    except Exception as exc:
-        _LOGGER.error("Extension %r register() raised: %s", name, exc, exc_info=True)
-        record.status = "failed"
-        record.error = f"register() raised: {exc}"
-        return record
-
-    if inspect.iscoroutine(result):
-        pending.append((record, result))
-    return record
-
-
-def _failed_record(
-    discovered: _DiscoveredExtension,
-    error: str,
-    *,
-    manifest: ExtensionManifest | None = None,
-) -> ExtensionRecord:
-    return ExtensionRecord(
-        name=discovered.name,
-        root_path=discovered.root_path,
-        entry_path=discovered.entry_path,
-        status="failed",
-        error=error,
-        manifest=manifest,
-    )
-
-
-def _overridden_record(
-    discovered: _DiscoveredExtension,
-    winner: ExtensionRecord,
-) -> ExtensionRecord:
-    """Record a same-name copy an earlier root already claimed (never imported)."""
-    return ExtensionRecord(
-        name=discovered.name,
-        root_path=discovered.root_path,
-        entry_path=discovered.entry_path,
-        status="overridden",
-        overridden_by=str(winner.entry_path),
-    )
-
-
-def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None:
-    """Drive every async ``register()`` coroutine to completion, fail-open."""
-    for record, coro in pending:
-        try:
-            _run_coroutine_to_completion(coro, _ASYNC_REGISTER_TIMEOUT_SECONDS)
-        except _AsyncRegisterTimeoutError as exc:
-            _LOGGER.error("Extension %r %s", record.name, exc)
-            record.status = "failed"
-            record.error = str(exc)
-        except Exception as exc:
-            _LOGGER.error(
-                "Extension %r async register() raised: %s", record.name, exc, exc_info=True
-            )
-            record.status = "failed"
-            record.error = f"async register() raised: {exc}"
-
-
-_detached_register_tasks: set[asyncio.Task[None]] = set()
-
-
-async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, Any]]) -> None:
-    """Drive every async ``register()`` on the live loop, fail-open.
-
-    Same contract as :func:`_await_pending_registers` - sequential order, one
-    hard deadline per registration, a timeout failing only that Extension -
-    but without the blocking thread join that froze the whole serving loop for
-    up to the deadline per Extension during startup and reload. A coroutine
-    that suppresses its timeout cancellation is detached after the deadline:
-    it may keep running, but it can no longer hold server start or reload.
-    """
-    loop = asyncio.get_running_loop()
-    for record, coro in pending:
-        task = loop.create_task(coro)
-        _detached_register_tasks.add(task)
-        task.add_done_callback(_detached_register_tasks.discard)
-        done, _ = await asyncio.wait({task}, timeout=_ASYNC_REGISTER_TIMEOUT_SECONDS)
-        if not done:
-            task.cancel()
-            message = str(_AsyncRegisterTimeoutError(_ASYNC_REGISTER_TIMEOUT_SECONDS))
-            _LOGGER.error("Extension %r %s", record.name, message)
-            record.status = "failed"
-            record.error = message
-            continue
-        try:
-            await task
-        except Exception as exc:
-            _LOGGER.error(
-                "Extension %r async register() raised: %s", record.name, exc, exc_info=True
-            )
-            record.status = "failed"
-            record.error = f"async register() raised: {exc}"
-
-
-def _run_coroutine_to_completion(coro: Any, timeout_seconds: float | None = None) -> None:
-    """Run *coro* on a private loop, enforcing a hard deadline when supplied.
-
-    A timed daemon worker is required even when this thread has no running loop:
-    an asyncio timeout still waits for cancellation, which uncooperative
-    Extension code can suppress. The loader instead stops waiting at the hard
-    deadline and requests cancellation as best effort; a coroutine that ignores
-    it may keep its daemon worker alive, but cannot hold server start or reload
-    hostage. Callers without a deadline retain deterministic blocking behavior.
-    """
-    if timeout_seconds is None:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(coro)
-            return
-
-    error: list[BaseException] = []
-    worker_state: list[tuple[asyncio.AbstractEventLoop, asyncio.Task[Any]]] = []
-    worker_state_lock = threading.Lock()
-
-    async def _drive_coroutine() -> None:
-        loop = asyncio.get_running_loop()
-        task = loop.create_task(coro)
-        with worker_state_lock:
-            worker_state.append((loop, task))
-        await task
-
-    def _runner() -> None:
-        try:
-            asyncio.run(_drive_coroutine())
-        except BaseException as exc:  # surfaced to the caller's thread
-            error.append(exc)
-
-    thread = threading.Thread(
-        target=_runner,
-        name="vbot-extension-async",
-        daemon=timeout_seconds is not None,
-    )
-    thread.start()
-    thread.join(timeout_seconds)
-    if thread.is_alive():
-        with worker_state_lock:
-            state = worker_state[0] if worker_state else None
-        if state is not None:
-            loop, task = state
-            try:
-                loop.call_soon_threadsafe(task.cancel)
-            except RuntimeError:
-                _LOGGER.debug("Async Extension registration loop closed at its timeout boundary")
-        if timeout_seconds is None:  # defensive: an unbounded join cannot time out
-            raise RuntimeError("Coroutine worker remained alive after an unbounded join")
-        raise _AsyncRegisterTimeoutError(timeout_seconds)
-    if error:
-        raise error[0]
-
-
-def _load_manifest(directory: Path) -> ExtensionManifest | None:
-    """Parse an optional ``extension.json``; raise ``_ManifestError`` if malformed."""
-    manifest_path = directory / _MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        return None
-
-    try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except UnicodeError as exc:
-        raise _ManifestError(f"{_MANIFEST_FILENAME} is not valid UTF-8: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise _ManifestError(f"invalid JSON in {_MANIFEST_FILENAME}: {exc.msg}") from exc
-    except OSError as exc:
-        raise _ManifestError(f"cannot read {_MANIFEST_FILENAME}: {exc}") from exc
-
-    if not isinstance(raw, dict):
-        raise _ManifestError(f"{_MANIFEST_FILENAME} must be a JSON object")
-
-    api_version = raw.get("api_version")
-    if api_version is not None and (
-        isinstance(api_version, bool) or not isinstance(api_version, int)
-    ):
-        raise _ManifestError("api_version must be an integer")
-
-    return ExtensionManifest(
-        version=_manifest_optional_str(raw, "version"),
-        description=_manifest_optional_str(raw, "description"),
-        api_version=api_version,
-        display_name=_manifest_optional_str(raw, "name"),
-    )
-
-
-def _manifest_optional_str(raw: dict[str, Any], key: str) -> str | None:
-    value = raw.get(key)
-    if value is not None and not isinstance(value, str):
-        raise _ManifestError(f"{key} must be a string")
-    return value
-
-
-def _ensure_extension_parent_package() -> None:
-    parent_module = sys.modules.get(_EXTENSION_PARENT_PACKAGE)
-    if parent_module is None:
-        parent_module = types.ModuleType(_EXTENSION_PARENT_PACKAGE)
-        parent_module.__package__ = _EXTENSION_PARENT_PACKAGE
-        parent_module.__path__ = []
-        sys.modules[_EXTENSION_PARENT_PACKAGE] = parent_module
-        return
-
-    if not isinstance(getattr(parent_module, "__path__", None), list):
-        parent_module.__path__ = []
-
-
-def purge_extension_modules() -> None:
-    """Drop the synthetic ``vbot_ext`` namespace and every extension module.
-
-    Removes from ``sys.modules`` the parent package ``vbot_ext`` plus every
-    ``vbot_ext.<name>`` entry point **and** ``vbot_ext.<name>.<sub>`` submodule.
-    ``Runtime.reload_extensions`` calls this between tearing the old layer down and
-    building the new one. Without it, a fresh :meth:`ExtensionRegistry.load`
-    replaces only an extension's **entry-point** module, so an edited **submodule**
-    of a package extension would silently keep its stale cached version — a
-    relative ``import`` inside the reloaded entry point resolves through
-    ``sys.modules`` first and finds the old submodule. Purging is safe for a
-    still-referenced old registry: its handlers hold direct function references
-    that never go back through ``sys.modules``, and
-    :func:`_ensure_extension_parent_package` recreates the parent namespace on the
-    next load.
-    """
-    prefix = f"{_EXTENSION_PARENT_PACKAGE}."
-    for module_name in list(sys.modules):
-        if module_name == _EXTENSION_PARENT_PACKAGE or module_name.startswith(prefix):
-            del sys.modules[module_name]
-
-
-def _extension_spec(module_name: str, entry_path: Path) -> Any:
-    if entry_path.name == "__init__.py":
-        return importlib.util.spec_from_file_location(
-            module_name,
-            entry_path,
-            submodule_search_locations=[str(entry_path.parent)],
-        )
-
-    return importlib.util.spec_from_file_location(module_name, entry_path)
-
-
-def _import_extension_module(name: str, entry_path: Path) -> types.ModuleType:
-    """Import one extension entry point under the synthetic ``vbot_ext`` namespace."""
-    module_name = f"{_EXTENSION_PARENT_PACKAGE}.{name}"
-    spec = _extension_spec(module_name, entry_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"No loader for extension entry point: {entry_path}")
-
-    _ensure_extension_parent_package()
-    module = importlib.util.module_from_spec(spec)
-    previous_module = sys.modules.get(module_name)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        if previous_module is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = previous_module
-        raise
-
-    parent_module = sys.modules.get(_EXTENSION_PARENT_PACKAGE)
-    if parent_module is not None:
-        setattr(parent_module, name, module)
-    return module
-
-
 __all__ = [
     "API_VERSION",
     "CommandDeclaration",
@@ -2317,4 +945,20 @@ __all__ = [
     "ToolFamilyDeclaration",
     "ToolResultValidator",
     "purge_extension_modules",
+    "HookHandler",
+    "LifecycleHandler",
+    "CommandHandler",
+    "RegisteredHandler",
+    "ExtensionStatus",
+    "ToolDeclaration",
+    "SessionPromptBlockDeclaration",
+    "SessionRuntimeDeclaration",
+    "SessionCapability",
+    "SessionCapabilityExpiredError",
+    "SessionRequestContext",
+    "PreparedSessionDelivery",
+    "ToolBatchDecision",
+    "RecallBackendDeclaration",
+    "ExtensionDeclarations",
+    "invoke_extension_handler",
 ]

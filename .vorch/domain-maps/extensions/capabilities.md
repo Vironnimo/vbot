@@ -72,7 +72,7 @@ Live disable removes the Extension's hook and interaction entries, unregisters i
 
 ## Source and tests
 
-- Contracts and application: `core/extensions/extensions.py`, `core/extensions/interactions.py`
+- Public contracts: `core/extensions/extensions.py`, `core/extensions/interactions.py`; internal declaration collection: `_api.py`; capability application: `_capabilities.py`; callback execution: `_callbacks.py` (internal files under `core/extensions/`).
 - Chat integration: `core/chat/chat.py`, `core/chat/commands.py`, `core/chat/tool_dispatch.py`
 - Runtime application/teardown: `core/runtime/runtime.py`
 - Focused coverage: `tests/core/extensions/test_capabilities.py`, `test_dispatch.py`, `test_interactions.py`, `test_deactivate.py`, and relevant Chat/Runtime tests

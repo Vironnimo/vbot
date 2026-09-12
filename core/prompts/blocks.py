@@ -260,7 +260,7 @@ def dedupe_definitions(
 ) -> list[BlockDefinition]:
     """Return the definitions with id collisions removed, first-collected wins.
 
-    Mirrors ``ExtensionRegistry._apply_one_tool``'s first-wins-and-diagnose
+    Mirrors Extension Tool application's first-wins-and-diagnose
     policy: on two definitions sharing an id, the first in iteration order is
     kept and a warning naming **both** sources is logged. Assembly is always
     handed an already-deduplicated list (this is the seam that guarantees it).
@@ -273,7 +273,7 @@ def dedupe_definitions(
             continue
         # Same id -> same source prefix by construction; name the kept and the
         # skipped owners so a collision between two contributors is diagnosable
-        # (mirrors ExtensionRegistry._apply_one_tool naming both sides).
+        # (mirrors Extension Tool application naming both sides).
         _LOGGER.warning(
             "Block id %r (source %s) already declared by owner %r; "
             "skipping the duplicate from owner %r",
