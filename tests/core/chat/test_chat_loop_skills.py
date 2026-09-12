@@ -147,7 +147,9 @@ def test_compaction_checkpoint_expires_triggered_skill_content(tmp_path: Path) -
         )
     )
 
-    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(
+        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    )
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
@@ -178,7 +180,9 @@ def test_skill_carried_in_checkpoint_tail_is_expired(tmp_path: Path) -> None:
         )
     )
 
-    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(
+        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    )
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
@@ -209,7 +213,9 @@ def test_changed_skill_versions_do_not_cross_compaction(tmp_path: Path) -> None:
         )
     )
 
-    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(
+        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    )
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert all("<skill_content" not in content for content in contents)
@@ -331,7 +337,7 @@ def test_announce_newly_available_skills_seeds_then_announces_once(tmp_path: Pat
     loop = build_chat_loop(runtime)
 
     def announce(skills: Any) -> None:
-        loop._announce_newly_available_skills("coder", "s1", session, agent, skills, None)
+        loop._requests._announce_newly_available_skills("coder", "s1", session, agent, skills, None)
 
     def available_notes() -> list[ChatMessage]:
         return [message for message in session.load() if is_skill_available_note(message)]

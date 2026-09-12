@@ -217,7 +217,9 @@ async def test_reasoning_scope_includes_resolved_named_account(tmp_path: Path) -
 
 class TestParseModelWithConnection:
     def test_no_suffix(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         assert parse_model_with_connection("openai/gpt-5.2") == (
             "openai",
@@ -226,7 +228,9 @@ class TestParseModelWithConnection:
         )
 
     def test_suffix_present(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         assert parse_model_with_connection("openai/gpt-5.2::oauth") == (
             "openai",
@@ -235,7 +239,9 @@ class TestParseModelWithConnection:
         )
 
     def test_model_id_with_colon(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         assert parse_model_with_connection("openrouter/poolside/laguna-xs.2:free::api-key") == (
             "openrouter",
@@ -244,13 +250,17 @@ class TestParseModelWithConnection:
         )
 
     def test_empty_model_raises(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         with pytest.raises(ChatError):
             parse_model_with_connection("")
 
     def test_model_id_with_slashes(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         assert parse_model_with_connection("openrouter/anthropic/claude-sonnet-4::oauth") == (
             "openrouter",
@@ -259,7 +269,9 @@ class TestParseModelWithConnection:
         )
 
     def test_dangling_suffix_raises(self) -> None:
-        from core.chat.chat import parse_model_with_connection
+        from core.chat.model_resolution import (
+            parse_model_with_connection,
+        )
 
         with pytest.raises(ChatError):
             parse_model_with_connection("openai/gpt-5.2::")
@@ -267,7 +279,9 @@ class TestParseModelWithConnection:
 
 class TestParseBareModel:
     def test_strips_suffix(self) -> None:
-        from core.chat.chat import parse_bare_model
+        from core.chat.model_resolution import (
+            parse_bare_model,
+        )
 
         assert parse_bare_model("openai/gpt-5.2::oauth") == "openai/gpt-5.2"
 

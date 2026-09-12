@@ -16,12 +16,17 @@ from core.chat import (
     ChatMessage,
     ToolCall,
 )
-from core.chat.chat import (
+from core.chat._request_builder import (
     SEEN_SKILLS_META_KEY,
+)
+from core.chat._request_history import (
+    _restore_in_run_tool_result_content,
+)
+from core.chat._run_state import (
     RequestBuildInputs,
     _RequestState,
-    _restore_in_run_tool_result_content,
     _RunRequest,
+    create_run_execution_context,
 )
 from core.chat.continuation import (
     ContinuationTracker,
@@ -317,13 +322,16 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
         models=models,
     )
     api_loop = build_chat_loop(api_runtime)
-    assert api_loop.resolve_context_window(api_agent) == 1_050_000
+    assert api_loop._requests.resolve_context_window(api_agent) == 1_050_000
     subscription_target = SimpleNamespace(
         provider_id="openai",
         connection_id="openai:subscription",
         model_id="gpt-5.4",
     )
-    assert api_loop.resolve_context_window(api_agent, cast(Any, subscription_target)) == 272_000
+    assert (
+        api_loop._requests.resolve_context_window(api_agent, cast(Any, subscription_target))
+        == 272_000
+    )
 
     subscription_agent = StubAgent(
         id="subscription",
@@ -340,7 +348,8 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
         models=models,
     )
     assert (
-        build_chat_loop(subscription_runtime).resolve_context_window(subscription_agent) == 272_000
+        build_chat_loop(subscription_runtime)._requests.resolve_context_window(subscription_agent)
+        == 272_000
     )
 
 
@@ -402,7 +411,9 @@ async def _maybe_auto_compact(
     """Build the same Run context used by production before probing Compaction."""
     del agent, model_id
     prior_continuation = await recover_continuation(session) if continuation_reminder else None
-    context = await loop._create_run_execution_context(
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
         run,
         _RunRequest(content="test"),
         session=session,
@@ -430,7 +441,9 @@ async def _maybe_auto_compact(
 
 
 def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
-    from core.chat.chat import latest_compaction_checkpoint
+    from core.chat._message_history import (
+        latest_compaction_checkpoint,
+    )
 
     first_user = ChatMessage.user("first")
     second_user = ChatMessage.user("second")
@@ -453,7 +466,9 @@ def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
 
 
 def test_compaction_latest_checkpoint_helper_returns_none_when_absent() -> None:
-    from core.chat.chat import latest_compaction_checkpoint
+    from core.chat._message_history import (
+        latest_compaction_checkpoint,
+    )
 
     assert latest_compaction_checkpoint([ChatMessage.user("only")]) is None
 
@@ -498,7 +513,9 @@ def test_compaction_build_request_messages_without_checkpoint_keeps_existing_pat
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
 
-    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(
+        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    )
 
     assert [message["role"] for message in request_messages] == ["system", "user", "assistant"]
     assert request_messages[1]["content"] == "Hi"
@@ -526,7 +543,9 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
         )
     )
 
-    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(
+        build_chat_loop(runtime)._requests._build_request_messages(agent, session)
+    )
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
 
     assert [message["role"] for message in request_messages] == [
@@ -570,7 +589,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(
@@ -621,7 +640,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(
@@ -677,7 +696,7 @@ async def test_compaction_keeps_measured_anchor_despite_higher_wire_estimate(
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -734,7 +753,7 @@ async def test_compaction_new_run_estimates_selected_wire_instead_of_reusing_old
     )
     session.append(ChatMessage.user("Current"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -793,7 +812,7 @@ async def test_compaction_records_post_projection_with_selected_wire_estimator(
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Head"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -846,7 +865,7 @@ async def test_compaction_maybe_auto_compact_skips_without_new_compactable_conte
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Keep working in this same turn"))
-    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     result = await _maybe_auto_compact(
@@ -909,7 +928,7 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
 
     first = await _maybe_auto_compact(
         loop,
@@ -927,7 +946,7 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
     assert compaction_service.compactable_context_calls == []
 
     session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
-    consumed_messages = await loop._build_request_messages(agent, session)
+    consumed_messages = await loop._requests._build_request_messages(agent, session)
     await _maybe_auto_compact(
         loop,
         agent,
@@ -963,7 +982,7 @@ async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    messages = await build_chat_loop(runtime)._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     loop = build_chat_loop(
@@ -1019,7 +1038,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         checkpoint=checkpoint,
     )
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
     affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(
         session_address("coder", session.id)
@@ -1160,7 +1179,7 @@ async def test_compaction_resolves_model_recommended_temperatures_for_both_targe
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -1206,7 +1225,9 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-    context = await loop._create_run_execution_context(
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
         run,
         _RunRequest(content="test"),
         session=session,
@@ -1214,7 +1235,7 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop.build_request_state(
+    context.request_state = await loop._requests.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -1563,7 +1584,7 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
-    post_compaction_state = await loop.build_request_state(
+    post_compaction_state = await loop._requests.build_request_state(
         agent, session, inputs=RequestBuildInputs()
     )
     expected_context_tokens_after, _ = estimate_request_input_tokens(
@@ -1761,7 +1782,7 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     )
     reminder = render_continuation_reminder(prior, context_window=100)
     messages = inject_continuation_reminder(
-        await loop._build_request_messages(agent, session),
+        await loop._requests._build_request_messages(agent, session),
         reminder,
     )
     run = Run(run_id="run-two", agent_id=agent.id, session_id=session.id)
@@ -1825,7 +1846,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     )
     calls_before = runtime.system_prompts.render_skill_catalog_calls
 
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     await _maybe_auto_compact(
         loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
     )
@@ -1874,7 +1895,9 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     pinned_soul_context(loop._dependencies, "coder", "session-one", agent, None)
     pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
 
-    context = await loop._create_run_execution_context(
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
         run,
         _RunRequest(content="test"),
         session=session,
@@ -1882,7 +1905,7 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop.build_request_state(
+    context.request_state = await loop._requests.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -1896,7 +1919,7 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     )
     assert context.soul_context == "NEW_SOUL_SENTINEL"
     assert context.memory_files_context == "NEW_MEMORY_SENTINEL"
-    await loop.build_request_state(
+    await loop._requests.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -1957,7 +1980,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         raise RuntimeError("scan failed")
 
     runtime.refresh_skills_for = fail_refresh
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -2028,7 +2051,9 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
         session_id=session.id,
         working_project_id="proj",
     )
-    context = await loop._create_run_execution_context(
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
         run,
         _RunRequest(content="test"),
         session=session,
@@ -2036,7 +2061,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop.build_request_state(
+    context.request_state = await loop._requests.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -2094,7 +2119,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malfo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -2145,7 +2170,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_loo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await _maybe_auto_compact(
@@ -2195,7 +2220,7 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     with caplog.at_level("WARNING"):
@@ -2264,7 +2289,7 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     original_history = session.load()
     original_skills = session.activated_skill_contents()
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
@@ -2273,7 +2298,9 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
         loop, agent, adapter, "gpt-5.2", session, messages, usage=None, run=run
     )
 
-    request_after = await loop.build_request_state(agent, session, inputs=RequestBuildInputs())
+    request_after = await loop._requests.build_request_state(
+        agent, session, inputs=RequestBuildInputs()
+    )
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", session.id))
     assert result == messages
     assert session.load() == original_history
@@ -2320,13 +2347,13 @@ async def test_compaction_projection_failure_does_not_persist_checkpoint(
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    messages = await loop._build_request_messages(agent, session)
+    messages = await loop._requests._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     async def fail_projected_request(*_args: Any, **_kwargs: Any) -> _RequestState:
         raise RuntimeError("projected request broke")
 
-    monkeypatch.setattr(loop, "build_request_state", fail_projected_request)
+    monkeypatch.setattr(loop._requests, "build_request_state", fail_projected_request)
 
     with caplog.at_level("WARNING"):
         result = await _maybe_auto_compact(
@@ -2735,7 +2762,9 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
     assert reply == "Compaction failed: compaction broke"
     assert persisted_roles(session.load()) == ["user"]
     assert runtime.refresh_skills_for_calls == []
-    request_state = await loop.build_request_state(agent, session, inputs=RequestBuildInputs())
+    request_state = await loop._requests.build_request_state(
+        agent, session, inputs=RequestBuildInputs()
+    )
     assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]
 
 
@@ -2841,7 +2870,9 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         if child
         else _RunRequest(content="test", temporary_binding=binding)
     )
-    context = await loop._create_run_execution_context(
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
         run,
         request,
         session=session,
@@ -2849,7 +2880,7 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop.build_request_state(
+    context.request_state = await loop._requests.build_request_state(
         context.agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),

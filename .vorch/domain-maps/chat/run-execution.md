@@ -50,7 +50,7 @@ The checkpoint remains internal to Chat. Its normalized cause is also stored on 
 
 ## Streaming recovery
 
-`core/chat/streaming.py::decide_stream_recovery` is the single provider-agnostic decision owner. It sees normalized errors plus whether a finish arrived, partial answer content exists, and a same-Model restart remains. It returns `ACCEPT_COMPLETE`, `RESTART`, `FALLBACK`, `PRESERVE_PARTIAL`, `INTERRUPT`, or `FAIL`; `ChatLoop._consume_stream_attempt` owns the side effects.
+`core/chat/streaming.py::decide_stream_recovery` is the single provider-agnostic decision owner. It sees normalized errors plus whether a finish arrived, partial answer content exists, and a same-Model restart remains. It returns `ACCEPT_COMPLETE`, `RESTART`, `FALLBACK`, `PRESERVE_PARTIAL`, `INTERRUPT`, or `FAIL`; `request_runner.py::WireRequestRunner._consume_stream_attempt` owns the side effects.
 
 - After a normalized finish delta, a later transport/provider failure accepts the completed response; later Usage deltas already accumulated remain valid.
 - Before answer text, unsupported streaming falls back once to non-streaming; retryable transient failures restart the identical request while the two-restart budget remains; other failures propagate. Readable Reasoning and an in-flight Tool Call preview do not block a restart because neither has produced user-visible answer text nor executed a Tool. Before replay, Chat appends `stream_attempt_discarded`, clears that attempt's pending readable deltas from the active Continuation Checkpoint, emits the transient `stream_attempt_restarted` Run event so consumers can discard the failed attempt's previews, and discards every incomplete Tool Call. If the restart budget is exhausted, readable Reasoning becomes an interrupted partial result; no-output network or timeout exhaustion interrupts without fabricating Assistant text, while a retryable Provider error propagates to the Run-local Model fallback policy and fails normally when no usable fallback exists. A Provider adapter may select a safer transport for the retry, while the replay decision remains provider-neutral.
@@ -65,6 +65,6 @@ When readable reasoning or answer content already exists at cancellation, Chat u
 
 ## Source and tests
 
-- Loop/admission/fallback: `core/chat/chat.py`, `model_resolution.py`, `events.py`; tests in `test_chat_loop_lifecycle.py`, `test_chat_loop_fallback.py`, `test_chat_loop_model_resolution.py`, and `test_chat_loop_tools.py`.
+- Admission: `core/chat/chat.py`; Run setup/fallback/terminal cleanup: `_run_execution.py`; completed Model/Tool progression: `_agentic_progression.py`; resolved state/context preparation: `_run_state.py`; route resolution: `model_resolution.py`; tests in `test_chat_loop_lifecycle.py`, `test_chat_loop_fallback.py`, `test_chat_loop_model_resolution.py`, and `test_chat_loop_tools.py`.
 - Continuation: `core/chat/continuation.py`; tests in `test_continuation.py` and `test_chat_loop_continuation.py`.
-- Streaming and cancellation: `core/chat/streaming.py`, `chat.py`; tests in `test_streaming.py`, `test_chat_loop_stream_recovery.py`, and `test_chat_loop_streaming.py`.
+- Streaming and cancellation: `core/chat/streaming.py`, `request_runner.py`, `_agentic_progression.py`; tests in `test_streaming.py`, `test_chat_loop_stream_recovery.py`, and `test_chat_loop_streaming.py`.

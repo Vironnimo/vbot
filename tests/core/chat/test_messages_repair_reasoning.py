@@ -169,7 +169,7 @@ class TestRepairDanglingToolCalls:
         # Act: build the compacted request history through the same path the
         # chat loop uses (which calls _embed_notes_into_request internally).
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._build_request_messages(agent, session)
+            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
         )
 
         # Assert: dangling tool call is answered with a synthesized failure.
@@ -202,7 +202,7 @@ class TestRepairDanglingToolCalls:
         session.append(ChatMessage.user("Fresh question", timestamp=FIXED_TIMESTAMP))
 
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._build_request_messages(agent, session)
+            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
         )
 
         summary_entries = [
@@ -300,7 +300,7 @@ class TestRepairDanglingToolCalls:
 
         # Act: run the build path that synthesizes the missing tool result.
         request_messages = asyncio.run(
-            build_chat_loop(runtime)._build_request_messages(agent, session)
+            build_chat_loop(runtime)._requests._build_request_messages(agent, session)
         )
         history_after = session.load()
 

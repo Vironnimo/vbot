@@ -15,11 +15,15 @@ if TYPE_CHECKING:
         latest_compaction_checkpoint,
         reply_surface_from_note,
     )
-    from core.chat.chat import (
-        MAX_TOOL_ITERATIONS,
-        ChatLoop,
+    from core.chat._run_state import (
         ChatLoopDependencies,
-        parse_bare_model,
+        RequestState,
+    )
+    from core.chat._step_outcomes import (
+        MAX_TOOL_ITERATIONS,
+    )
+    from core.chat.chat import (
+        ChatLoop,
     )
     from core.chat.commands import (
         AgentArgument,
@@ -58,6 +62,9 @@ if TYPE_CHECKING:
         ToolCallRejection,
         queue_content_is_editable,
     )
+    from core.chat.model_resolution import (
+        parse_bare_model,
+    )
     from core.chat.usage import (
         aggregate_session_usage,
         latest_session_context_usage,
@@ -68,6 +75,7 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "RequestState": "core.chat._run_state",
     "compaction_projection_without_active_skills": "core.chat._message_history",
     "compaction_projection_without_provider_state": "core.chat._message_history",
     "effective_compaction_messages": "core.chat._message_history",
@@ -78,7 +86,7 @@ _EXPORT_MODULES = {
     "AgentArgument": "core.chat.commands",
     "ChatError": "core.chat.errors",
     "ChatLoop": "core.chat.chat",
-    "ChatLoopDependencies": "core.chat.chat",
+    "ChatLoopDependencies": "core.chat._run_state",
     "ChatMessage": "core.chat.messages",
     "ChatMessageValidationError": "core.chat.errors",
     "ChatSession": "core.sessions",
@@ -99,12 +107,12 @@ _EXPORT_MODULES = {
     "HandoffArgument": "core.chat.commands",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.messages",
     "InputOrigin": "core.chat.messages",
-    "MAX_TOOL_ITERATIONS": "core.chat.chat",
+    "MAX_TOOL_ITERATIONS": "core.chat._step_outcomes",
     "MessageSender": "core.chat.messages",
     "ReplySurface": "core.chat.messages",
     "PreparedCommand": "core.chat.commands",
     "parse_agent_argument": "core.chat.commands",
-    "parse_bare_model": "core.chat.chat",
+    "parse_bare_model": "core.chat.model_resolution",
     "parse_handoff_argument": "core.chat.commands",
     "queue_content_is_editable": "core.chat.messages",
     "ToolCall": "core.chat.messages",
@@ -115,6 +123,7 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
+    "RequestState",
     "compaction_projection_without_active_skills",
     "compaction_projection_without_provider_state",
     "effective_compaction_messages",
