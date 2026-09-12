@@ -1,5 +1,7 @@
 # Interactive Terminal Sessions (`terminal`)
 
+`terminal_manager.py` owns Session admission, attachment/lifecycle scope, and shutdown coordination. Its internal catalog (`_terminal_catalog.py`) owns groups, ordering and operator summaries; `_terminal_events.py` owns streamed state and rendered observations; `_terminal_io.py` drives PTY input/output, initial-command readiness, activity and completion delivery. `_terminal_input.py` contains shell/input encoding, and `_terminal_state.py` holds Session values, limits and resource cleanup. Each component receives explicit Session/data dependencies, never the manager. The public manager and Tool contracts remain unchanged.
+
 New Terminal Session ids use `term_` plus 12 lowercase base32 characters, allocated against the retained catalog after async launch and before synchronous publication. Created groups use `grp_` with the same suffix; automatic group identities stay deterministic (`terminal_manager.py`, `test_terminal_manager.py`).
 
 ## Boundary and invariants
