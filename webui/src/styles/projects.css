@@ -290,11 +290,40 @@
 }
 
 .projects-view .projects-file-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-hi);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono-body);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-view .projects-file-row--drop {
+  border-color: var(--accent);
+  background: var(--accent-06);
+}
+
+.projects-view .projects-file-handle {
+  flex-shrink: 0;
+  cursor: grab;
+}
+
+.projects-view .projects-file-handle:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.projects-view .projects-file-handle:disabled {
+  cursor: default;
+}
+
+.projects-view .projects-file-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 

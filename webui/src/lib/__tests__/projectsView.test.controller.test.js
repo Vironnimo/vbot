@@ -38,6 +38,39 @@ afterEach(() => {
 });
 
 describe('Projects controller', () => {
+  it('preserves duplicate auto-load entries and rejects invalid or busy moves', () => {
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: operations(),
+      state,
+    });
+    state.editForm.auto_load = ['AGENTS.md', 'NOTES.md', 'AGENTS.md'];
+    for (const [from, to] of [
+      [0, 0],
+      [-1, 1],
+      [0, 3],
+      [3, 0],
+      [null, 1],
+      [0, 1.5],
+    ]) {
+      expect(controller.moveAutoLoadEntry(from, to)).toBe(false);
+    }
+    state.editSaving = true;
+    expect(controller.moveAutoLoadEntry(0, 1)).toBe(false);
+    state.editSaving = false;
+    expect(state.editForm.auto_load).toEqual([
+      'AGENTS.md',
+      'NOTES.md',
+      'AGENTS.md',
+    ]);
+    expect(controller.moveAutoLoadEntry(0, 1)).toBe(true);
+    expect(state.editForm.auto_load).toEqual([
+      'NOTES.md',
+      'AGENTS.md',
+      'AGENTS.md',
+    ]);
+  });
+
   it('rejects an older Projects list response after a newer load wins', async () => {
     const older = deferred();
     const newer = deferred();
