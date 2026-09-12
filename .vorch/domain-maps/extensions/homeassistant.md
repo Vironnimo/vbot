@@ -34,7 +34,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 - `POST /api/services/{domain}/{service}`. Model-facing schema: open flat object with required non-empty strings `domain` and `service`, optional non-empty string `entity_id`, and optional open `data` object; the handler rejects unknown top-level fields and invalid values.
 - `domain`/`service` validated `^[a-z][a-z0-9_]*$`; `entity_id` validated with the entity regex when provided. Display summary fields: `domain`, `service`, `entity_id`.
-- `data` must not include `entity_id`; callers use the top-level `entity_id` field so entity targeting always passes the strict validator.
+- The preferred target is top-level `entity_id`. Runtime repair lifts `data.entity_id` to that field before the same target validation, accepts matching duplicates, and rejects contradictory targets before HTTP. Domain/service/entity identifiers accept surrounding whitespace and capitalization; a qualified service such as `light.turn_on` supplies its domain unless an explicit domain contradicts it.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.
 
 ## Settings Schema & live reads
@@ -66,7 +66,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 | Condition | Code |
 |---|---|
-| Invalid input (unknown arguments, wrong types, entity_id/domain/service, non-object `data`, or `data.entity_id`) | `validation_error` |
+| Invalid input (unknown arguments, wrong types, entity_id/domain/service, non-object `data`, or malformed nested targets) | `validation_error` |
 | Blocked domain | `blocked_domain` |
 | HA HTTP error or unreachable | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("HASS_TOKEN is not configured") |

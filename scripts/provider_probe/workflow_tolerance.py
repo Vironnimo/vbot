@@ -332,7 +332,11 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
 
         return await probe_cron_tolerance(adapter, args)
-    if args.tolerance_tool == "web_fetch":
+    if args.tolerance_tool == "ha_call_service":
+        from scripts.provider_probe.workflow_ha_tolerance import ha_case, ha_tolerance_cases
+
+        runner, cases = ha_case, ha_tolerance_cases()
+    elif args.tolerance_tool == "web_fetch":
         from scripts.provider_probe.workflow_web_tolerance import web_case, web_tolerance_cases
 
         runner, cases = web_case, web_tolerance_cases()
@@ -348,7 +352,9 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
     else:
         runner, cases = _skill_case, skill_tolerance_cases()
     rows = []
-    semaphore = asyncio.Semaphore(1 if args.tolerance_tool == "web_fetch" else 3)
+    semaphore = asyncio.Semaphore(
+        1 if args.tolerance_tool in {"web_fetch", "ha_call_service"} else 3
+    )
 
     async def run(case: dict[str, Any]) -> None:
         async with semaphore:
