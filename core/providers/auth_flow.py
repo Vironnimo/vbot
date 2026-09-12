@@ -110,9 +110,76 @@ class DeviceFlowEngine:
     def __init__(self, token_store: TokenStore) -> None:
         self._token_store = token_store
         self._active_flows: dict[tuple[str, str, str], asyncio.Task[None]] = {}
+        self._poll_tasks: set[asyncio.Task[None]] = set()
         self._minimax_code_verifiers: dict[tuple[str, str, str, str], str] = {}
 
-    async def start_device_flow(
+    async def connect(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        oauth_config: OAuthConfig,
+        on_complete: OnCompleteCallback,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> DeviceFlowSession:
+        """Authorize and own polling before returning the user-facing session.
+
+        A replacement cancels the previous poll for this exact Account. Cancelled
+        tasks remain owned until settled, so shutdown also drains replacements.
+        """
+        session = await self._request_device_session(
+            provider_id, local_connection_id, oauth_config, account_id=account_id
+        )
+        flow_key = (provider_id, local_connection_id, account_id)
+        previous = self._active_flows.get(flow_key)
+        if previous is not None:
+            previous.cancel()
+        task = asyncio.create_task(
+            self._poll_for_token(
+                provider_id,
+                local_connection_id,
+                oauth_config,
+                session.device_code,
+                session.interval,
+                session.expires_in,
+                on_complete,
+                user_code=session.user_code,
+                account_id=account_id,
+            )
+        )
+        self._active_flows[flow_key] = task
+        self._poll_tasks.add(task)
+
+        def settled(completed: asyncio.Task[None]) -> None:
+            self._poll_tasks.discard(completed)
+            if self._active_flows.get(flow_key) is completed:
+                self._active_flows.pop(flow_key, None)
+            # Also runs when cancellation preceded the coroutine's first step.
+            self._minimax_code_verifiers.pop((*flow_key, session.user_code), None)
+            if not completed.cancelled():
+                error = completed.exception()
+                if error is not None:
+                    _LOGGER.error(
+                        "OAuth polling task failed (provider=%s connection=%s): %s",
+                        provider_id,
+                        local_connection_id,
+                        type(error).__name__,
+                    )
+
+        task.add_done_callback(settled)
+        return session
+
+    def is_flow_active(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> bool:
+        """Whether this exact Account has an accepted, unfinished poll."""
+        task = self._active_flows.get((provider_id, local_connection_id, account_id))
+        return task is not None and not task.done()
+
+    async def _request_device_session(
         self,
         provider_id: str,
         local_connection_id: str,
@@ -170,14 +237,6 @@ class DeviceFlowEngine:
     ) -> None:
         """Poll for Device Flow completion, store the token, and notify the caller."""
 
-        flow_key = (provider_id, local_connection_id, account_id)
-        current_task = asyncio.current_task()
-        if current_task is not None:
-            previous_task = self._active_flows.get(flow_key)
-            if previous_task is not None and previous_task is not current_task:
-                previous_task.cancel()
-            self._active_flows[flow_key] = current_task
-
         try:
             await self._poll_until_complete(
                 provider_id,
@@ -223,8 +282,6 @@ class DeviceFlowEngine:
             )
             await self._notify_complete(on_complete, success=True)
         finally:
-            if self._active_flows.get(flow_key) is current_task:
-                self._active_flows.pop(flow_key, None)
             self._minimax_code_verifiers.pop(
                 (provider_id, local_connection_id, account_id, user_code),
                 None,
@@ -245,7 +302,7 @@ class DeviceFlowEngine:
 
     async def aclose(self) -> None:
         """Cancel and await all active Device Flow polling tasks."""
-        tasks = list(self._active_flows.values())
+        tasks = list(self._poll_tasks)
         self._active_flows.clear()
         for task in tasks:
             if not task.done():
