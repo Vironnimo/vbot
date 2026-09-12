@@ -286,6 +286,8 @@ class TerminalSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     attention_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    termination_pending: bool = False
+    termination_targets: list[Any] = field(default_factory=list, repr=False)
     reader_task: asyncio.Task[None] | None = field(default=None, repr=False)
     initial_input_task: asyncio.Task[None] | None = field(default=None, repr=False)
     operator_command_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -375,11 +377,18 @@ class TerminalManager:
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
+        failures: list[str] = []
         for session in list(self._sessions.values()):
             session.suppress_exit_attention = True
             self._cancel_delivery(session)
-            if session.state not in {"exited", "error"}:
-                terminate_process_tree(session.adapter)
+            if session.termination_pending or session.state not in {"exited", "error"}:
+                session.termination_pending = True
+                try:
+                    terminate_process_tree(session.adapter, targets=session.termination_targets)
+                except OSError:
+                    failures.append(session.terminal_id)
+                    continue
+                session.termination_pending = False
             session.adapter.close()
             for task in (
                 session.reader_task,
@@ -390,17 +399,27 @@ class TerminalManager:
                 if task is not None and not task.done():
                     task.cancel()
             self._finish_files(session)
+        if failures:
+            raise TerminalManagerError(
+                "Could not terminate terminal process trees: " + ", ".join(failures)
+            )
         self._reader_executor.shutdown(wait=False, cancel_futures=True)
 
     async def aclose(self) -> None:
         """Stop all children and await reader, event, notification, and sweep tasks."""
         sweeper = self._sweeper_task
-        self.stop()
+        failure: TerminalManagerError | None = None
+        try:
+            self.stop()
+        except TerminalManagerError as error:
+            failure = error
         tasks: list[asyncio.Task[Any]] = []
         tasks.extend(self._pending_spawns)
         if sweeper is not None and not sweeper.done():
             tasks.append(sweeper)
         for session in self._sessions.values():
+            if session.termination_pending:
+                continue
             for task in (
                 session.reader_task,
                 session.initial_input_task,
@@ -412,6 +431,8 @@ class TerminalManager:
                     tasks.append(task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if failure is not None:
+            raise failure
 
     async def spawn(
         self,
@@ -1652,6 +1673,9 @@ class TerminalManager:
             return
 
     async def _mark_finished(self, session: TerminalSession, error: BaseException | None) -> None:
+        # A root process EOF cannot confirm that captured descendants exited.
+        if session.termination_pending:
+            return
         initial_task = session.initial_input_task
         if (
             initial_task is not None
@@ -1795,8 +1819,18 @@ class TerminalManager:
         settle_task = session.settle_task
         if settle_task is not None and not settle_task.done():
             settle_task.cancel()
-        if session.state not in {"exited", "error"}:
-            await asyncio.to_thread(terminate_process_tree, session.adapter)
+        if session.termination_pending or session.state not in {"exited", "error"}:
+            session.termination_pending = True
+            try:
+                await asyncio.to_thread(
+                    terminate_process_tree, session.adapter, targets=session.termination_targets
+                )
+            except OSError as error:
+                raise TerminalManagerError(
+                    f"Could not terminate terminal {session.terminal_id}; "
+                    "its process tree may still be running. Retry the kill operation."
+                ) from error
+            session.termination_pending = False
         await asyncio.to_thread(session.adapter.close)
         reader = session.reader_task
         if reader is not None and reader is not asyncio.current_task() and not reader.done():

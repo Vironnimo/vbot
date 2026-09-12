@@ -33,7 +33,7 @@ from core.tools.bash import (
     register_bash_tool,
 )
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
-from core.tools.process_manager import ProcessManager, subprocess_creation_flags
+from core.tools.process_manager import ProcessManager
 from core.tools.tools import (
     ToolCall,
     ToolContext,
@@ -42,6 +42,7 @@ from core.tools.tools import (
     ToolRegistry,
     tool_success,
 )
+from core.utils.processes import subprocess_creation_flags
 
 AGENT_ID = "agent-a"
 RUN_ID = "run-a"
@@ -225,7 +226,7 @@ async def test_windows_shell_eof_and_command_pipelines(manager, tmp_path, comman
 
 @pytest.mark.asyncio
 async def test_shell_pipeline_and_script_owned_input_remain_available(manager, tmp_path):
-    from core.tools.process_manager import subprocess_creation_flags
+    from core.utils.processes import subprocess_creation_flags
 
     child = (
         "import sys\nvalue = 0\n"

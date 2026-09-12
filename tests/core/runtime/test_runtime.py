@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -32,7 +33,7 @@ from core.subagents import SubAgentCoordinator
 from core.tools import ToolAccess
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -2005,3 +2006,49 @@ async def test_failed_bootstrap_cleans_resources_and_can_retry(
         assert runtime._log_manager._configured
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_close", [False, True])
+async def test_runtime_finishes_cleanup_before_reporting_terminal_shutdown_failure(
+    config: Config, monkeypatch: pytest.MonkeyPatch, async_close: bool
+) -> None:
+    runtime = Runtime(config)
+    failure = TerminalManagerError("terminal tree is still alive")
+    terminal = SimpleNamespace(
+        stop=Mock(side_effect=failure), aclose=AsyncMock(side_effect=failure)
+    )
+    keep_awake = SimpleNamespace(close=Mock())
+    temporary_files = SimpleNamespace(stop=Mock(), aclose=AsyncMock())
+    sessions = SimpleNamespace(close=Mock())
+    speech = SimpleNamespace(close=Mock(), aclose=AsyncMock())
+    logging_close = Mock()
+    monkeypatch.setattr(runtime, "_terminal_manager", terminal)
+    monkeypatch.setattr(runtime, "_keep_awake", keep_awake)
+    monkeypatch.setattr(runtime, "_storage", SimpleNamespace(temporary_files=temporary_files))
+    monkeypatch.setattr(runtime, "_chat_sessions", sessions)
+    monkeypatch.setattr(runtime, "_speech", speech)
+    monkeypatch.setattr(runtime._log_manager, "close", logging_close)
+
+    with pytest.raises(TerminalManagerError) as raised:
+        if async_close:
+            await runtime.aclose()
+        else:
+            runtime.stop()
+
+    assert raised.value is failure
+    keep_awake.close.assert_called_once_with()
+    sessions.close.assert_called_once_with()
+    logging_close.assert_called_once_with()
+    if async_close:
+        terminal.aclose.assert_awaited_once_with()
+        temporary_files.aclose.assert_awaited_once_with()
+        speech.aclose.assert_awaited_once_with()
+    else:
+        terminal.stop.assert_called_once_with()
+        temporary_files.stop.assert_called_once_with()
+        speech.close.assert_called_once_with()
+    with pytest.raises(RuntimeError):
+        _ = runtime.terminal_manager
+    with pytest.raises(RuntimeError):
+        _ = runtime.chat_sessions
