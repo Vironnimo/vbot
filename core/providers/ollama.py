@@ -26,8 +26,7 @@ Key wire facts (verified live against Ollama 0.24.0 on 2026-07-07):
   Cloud Models are recognized by ``remote_host`` (the ``:cloud`` suffix is
   convention, ``remote_host`` is the fact), while direct Cloud scope is known
   from its Connection. Capabilities and theoretical context come from
-  ``POST /api/show`` per Model (the discovery enrichment hook).
-"""
+  ``POST /api/show`` per Model (the discovery enrichment hook)."""
 
 from __future__ import annotations
 
@@ -39,21 +38,10 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import (
     REASONING_CONTROL_LEVELS,
-    REASONING_CONTROL_ON_OFF,
     Capabilities,
     Model,
-    ReasoningCapabilities,
-)
-from core.providers._chat_completions_stream import (
-    _stream_choices,
-)
-from core.providers._chat_completions_wire import (
-    _first_choice_message,
 )
 from core.providers._http_shared import (
     build_async_client,
@@ -63,339 +51,79 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
+from core.providers._ollama_catalog import (
+    _enrich_from_show,
+    _is_gpt_oss_model,
+    _ollama_reasoning_capabilities,
+    _positive_int,
+)
+from core.providers._ollama_cloud import (
+    OllamaCloudAdapter,
+)
+from core.providers._ollama_constants import (
+    _CAPABILITY_THINKING,
+    _CAPABILITY_TOOLS,
+    _CAPABILITY_VISION,
+    _LOGGER,
+    _OPTION_KWARG_MAP,
+    _SHOW_DETAIL_CONCURRENCY,
+    CHAT_ENDPOINT,
+    LOCAL_METADATA_FIELD,
+    OLLAMA_CLOUD_MODE,
+    OLLAMA_CLOUD_REASONING_EFFORTS,
+    OLLAMA_EFFORT_FLOOR,
+    OLLAMA_GPT_OSS_EFFORTS,
+    OLLAMA_LOCAL_MODE,
+    OLLAMA_METADATA_KEY,
+    REMOTE_METADATA_FIELD,
+    SHOW_ENDPOINT,
+)
+from core.providers._ollama_wire import (
+    _build_error_detail,
+    _extract_ollama_tool_calls,
+    _extract_ollama_usage,
+    _normalize_ollama_done_reason,
+    _ollama_stream_tool_calls,
+    _to_ollama_messages,
+)
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     ProviderAdapter,
-    normalize_tool_call_candidates,
-    project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.openai_compatible import (
-    OpenAICompatibleAdapter,
-)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
-    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
-    ReasoningIntent,
-    ReasoningReplayFidelity,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
-    normalize_thinking_effort,
-    remove_reasoning_kwargs,
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
-from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
-_LOGGER = get_logger("providers.ollama")
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
 
-CHAT_ENDPOINT = "/api/chat"
-SHOW_ENDPOINT = "/api/show"
-
-OLLAMA_LOCAL_MODE = "local"
-OLLAMA_CLOUD_MODE = "cloud"
-
-# Provider-scoped metadata key: ``metadata.ollama.local`` / ``metadata.ollama.remote``
-# mark where a discovered model actually runs (see ``normalize_catalog_entry``).
-OLLAMA_METADATA_KEY = "ollama"
-LOCAL_METADATA_FIELD = "local"
-REMOTE_METADATA_FIELD = "remote"
-
-# ``/api/show`` capability strings.
-_CAPABILITY_TOOLS = "tools"
-_CAPABILITY_VISION = "vision"
-_CAPABILITY_THINKING = "thinking"
-_CAPABILITY_COMPLETION = "completion"
-_CAPABILITY_EMBEDDING = "embedding"
-
-# Effort ladder used only for snapping when a model has no feed ladder; the
-# ``on_off`` render is binary, so the snapped level never reaches the wire.
-OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
-OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
-OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
-_OLLAMA_CLOUD_OPENAI_PATH = "/v1"
-_OLLAMA_CLOUD_REASONING_PARAMETERS = (
-    "thinking_effort",
-    "reasoning_effort",
-    "reasoning",
-    "include_reasoning",
-)
-
-# Reasoning carrier fields Ollama Cloud backends use on the compatible wire;
-# the response scan picks the one that actually carries text.
-_OLLAMA_CLOUD_REASONING_FIELDS = ("reasoning_content", "reasoning")
-# De-facto standard carrier for the first replay of an unprofiled Model,
-# before any real response has been scanned.
-_OLLAMA_CLOUD_REASONING_FIELD_DEFAULT = "reasoning_content"
-
-# Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
-# host with many installed models is not hit with dozens of simultaneous
-# requests during a refresh.
-_SHOW_DETAIL_CONCURRENCY = 8
-
-# Caller kwargs that translate onto Ollama's ``options`` object.
-_OPTION_KWARG_MAP = {
-    "temperature": "temperature",
-    "max_tokens": "num_predict",
-    "top_p": "top_p",
-}
-
-_OLLAMA_TOOL_DONE_REASONS = frozenset({"tool_calls"})
-
-
-class OllamaCloudAdapter(OpenAICompatibleAdapter):
-    """OpenAI-compatible chat transport for direct Ollama Cloud connections.
-
-    Discovery deliberately remains mapped to :class:`OllamaAdapter`; this class
-    owns only the Cloud chat wire and its verified response quirks.
-    """
-
-    def request_body_limit(self, model_id: str) -> int | None:
-        """Direct Cloud Chat rejects bodies above 16 MiB (verified 2026-09-11)."""
-        del model_id
-        return 16 * 1024 * 1024
-
-    def __init__(
-        self,
-        config: ProviderConfig,
-        token_getter: TokenGetter | str,
-        base_url: str | None = None,
-        auth_config: AuthConfig | None = None,
-        model_lookup: ModelLookup | None = None,
-        debug_recorder: ProviderDebugRecorder | None = None,
-        *,
-        connection_mode: str | None = None,
-    ) -> None:
-        native_base_url = base_url or config.base_url
-        self._cloud_base_url = _ollama_cloud_openai_base_url(native_base_url)
-        # Run-local carrier observation: the first real response of an
-        # unprofiled Model decides which reasoning field replay uses.
-        self._scanned_reasoning_field: str | None = None
-        super().__init__(
-            config,
-            token_getter,
-            self._cloud_base_url,
-            auth_config,
-            model_lookup=model_lookup,
-            debug_recorder=debug_recorder,
-            connection_mode=connection_mode,
-        )
-
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Return the Model's verified Cloud image formats when profiled."""
-        model = self._model_lookup(model_id.split("::", 1)[0]) if self._model_lookup else None
-        metadata = model.metadata.get("ollama_cloud") if model else None
-        media_types = metadata.get("image_media_types") if isinstance(metadata, Mapping) else None
-        if isinstance(media_types, tuple | list):
-            return frozenset(
-                media_type
-                for media_type in media_types
-                if isinstance(media_type, str) and media_type in IMAGE_WIRE_MEDIA_TYPES
-            )
-        return IMAGE_WIRE_MEDIA_TYPES
-
-    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
-        """The compatible Cloud wire round-trips readable reasoning text only."""
-        del model_id
-        return REASONING_REPLAY_FIDELITY_READABLE_ONLY
-
-    def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
-        """Preserve the Provider-specific direct Cloud connection diagnostic."""
-
-        if isinstance(exc, httpx.ConnectError):
-            return NetworkError(f"Ollama Cloud is not reachable at {self._cloud_base_url} ({exc})")
-        return super()._wrap_transport_error(exc)
-
-    def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:
-        """Intersect the Model ladder with Ollama Cloud's accepted wire values."""
-
-        return self._reasoning_effort_ladder(self._model_lookup, self._config, model_id)
-
-    @classmethod
-    def _reasoning_effort_ladder(
-        cls,
-        model_lookup: ModelLookup | None,
-        provider_config: ProviderConfig | None,
-        model_id: str,
-    ) -> tuple[str, ...]:
-        """Class-level twin of :meth:`_supported_reasoning_efforts`.
-
-        The render path snaps against this through the instance; the render
-        description (``describe_reasoning_render``) snaps against the same
-        Cloud ladder without needing an adapter instance.
-        """
-
-        del provider_config
-        declared = model_reasoning_levels(model_lookup, model_id)
-        if declared is None:
-            return OLLAMA_CLOUD_REASONING_EFFORTS
-        supported: list[str] = ["none"]
-        for effort in declared:
-            wire_effort = "max" if effort == "xhigh" else effort
-            if wire_effort in OLLAMA_CLOUD_REASONING_EFFORTS and wire_effort not in supported:
-                supported.append(wire_effort)
-        return tuple(supported)
-
-    def _apply_reasoning(
-        self,
-        payload: dict[str, Any],
-        request_kwargs: dict[str, Any],
-        model_id: str,
-    ) -> None:
-        """Render the Cloud effort vocabulary, mapping vBot ``xhigh`` to ``max``."""
-
-        if self._model_reasoning_supported(model_id) is not True:
-            # Match Ollama's catalog contract: only send a reasoning control
-            # after /api/show has positively identified the Model as a thinker.
-            remove_reasoning_kwargs(
-                request_kwargs,
-                *_OLLAMA_CLOUD_REASONING_PARAMETERS,
-            )
-            return
-
-        selected_key = (
-            "thinking_effort" if request_kwargs.get("thinking_effort") else "reasoning_effort"
-        )
-        selected_effort = normalize_thinking_effort(request_kwargs.get(selected_key))
-        if selected_effort == "xhigh":
-            request_kwargs[selected_key] = "max"
-        super()._apply_reasoning(payload, request_kwargs, model_id)
-        if selected_effort == "none" and self._model_reasoning_supported(model_id) is True:
-            # Ollama Cloud defaults thinking on. Its OpenAI wire spells the off
-            # switch as an effort even when native /api/show describes the Model
-            # as a binary on/off thinker.
-            payload["reasoning_effort"] = "none"
-
-    @classmethod
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the Cloud render, mapping vBot ``xhigh`` to Ollama's ``max``.
-
-        Mirrors :meth:`_apply_reasoning`: the selected effort is normalized
-        into Ollama Cloud's wire vocabulary before the shared generic-wire
-        description resolves it against the Cloud ladder.
-        """
-
-        if normalize_thinking_effort(effort) == "xhigh":
-            effort = "max"
-        return super().describe_reasoning_render(
-            model_lookup=model_lookup,
-            model_id=model_id,
-            effort=effort,
-            provider_config=provider_config,
-        )
-
-    def _format_assistant_message(
-        self,
-        message: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Replay readable reasoning under the Model's declared wire field.
-
-        Ollama Cloud's OpenAI-compatible endpoint returns reasoning in a
-        provider-specific ``reasoning_content`` or ``reasoning`` field. The
-        GLM and Kimi backends require the
-        full historical reasoning to be replayed for multi-turn quality, and
-        MiniMax documents that preserving the reasoning chain is essential for
-        best performance. The base ``readable_only`` fidelity already injects
-        ``reasoning_content``; this override renames it to the Model's scanned
-        carrier field when that differs. Gated on the Model's catalog
-        ``reasoning_response_field`` so only Models whose wire actually carries
-        the field get it injected.
-        """
-
-        formatted = super()._format_assistant_message(message, model_id=model_id)
-        target_model_id = (model_id or str(message.get("model") or "")).rsplit("/", 1)[-1]
-        field = self._reasoning_replay_field(target_model_id)
-        if field not in _OLLAMA_CLOUD_REASONING_FIELDS:
-            return formatted
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
-            if field != "reasoning_content":
-                formatted.pop("reasoning_content", None)
-            formatted[field] = reasoning
-        return formatted
-
-    def _reasoning_replay_field(self, model_id: str) -> str:
-        """Resolve the wire field for replaying readable reasoning.
-
-        Precedence: the Model's catalog ``reasoning_response_field`` (the
-        verified profile wins), then the field observed on this Run's real
-        provider responses (the scan), then the de-facto standard
-        ``reasoning_content`` for the first replay of an unprofiled Model.
-        """
-
-        profiled = self._reasoning_response_field(model_id)
-        if profiled in _OLLAMA_CLOUD_REASONING_FIELDS:
-            return profiled
-        if self._scanned_reasoning_field in _OLLAMA_CLOUD_REASONING_FIELDS:
-            return self._scanned_reasoning_field
-        return _OLLAMA_CLOUD_REASONING_FIELD_DEFAULT
-
-    def _scan_reasoning_field(self, raw_message: Any) -> None:
-        """Remember which reasoning carrier this Run's responses actually use.
-
-        Unprofiled Models cannot be trusted to a guessed field, so the first
-        real response decides: the first non-empty carrier among
-        ``reasoning_content`` and ``reasoning`` wins for the rest of the Run.
-        Profiled Models never reach the scan — their override already won.
-        """
-
-        if self._scanned_reasoning_field in _OLLAMA_CLOUD_REASONING_FIELDS:
-            return
-        if not isinstance(raw_message, Mapping):
-            return
-        for field in _OLLAMA_CLOUD_REASONING_FIELDS:
-            value = raw_message.get(field)
-            if isinstance(value, str) and value:
-                self._scanned_reasoning_field = field
-                return
-
-    def normalize_response(
-        self, response: dict[str, Any], *, model_id: str | None = None
-    ) -> dict[str, Any]:
-        """Normalize a Cloud response without trusting impossible zero input usage."""
-
-        self._scan_reasoning_field(_first_choice_message(response))
-        normalized = super().normalize_response(response, model_id=model_id)
-        _drop_ollama_cloud_zero_prompt_tokens(normalized.get("usage"), response.get("usage"))
-        return normalized
-
-    def _normalize_stream_chunk(
-        self,
-        raw_chunk: dict[str, Any],
-        tool_call_slots: set[int],
-        normalization_state: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        deltas = super()._normalize_stream_chunk(
-            raw_chunk,
-            tool_call_slots,
-            normalization_state,
-        )
-        raw_usage = raw_chunk.get("usage")
-        for delta in deltas:
-            if delta.get("type") == "usage":
-                _drop_ollama_cloud_zero_prompt_tokens(delta, raw_usage)
-        for choice in _stream_choices(raw_chunk):
-            raw_delta = choice.get("delta")
-            if isinstance(raw_delta, dict):
-                self._scan_reasoning_field(raw_delta)
-        return deltas
+__all__ = [
+    "CHAT_ENDPOINT",
+    "LOCAL_METADATA_FIELD",
+    "OLLAMA_CLOUD_MODE",
+    "OLLAMA_CLOUD_REASONING_EFFORTS",
+    "OLLAMA_EFFORT_FLOOR",
+    "OLLAMA_GPT_OSS_EFFORTS",
+    "OLLAMA_LOCAL_MODE",
+    "OLLAMA_METADATA_KEY",
+    "OllamaAdapter",
+    "OllamaCloudAdapter",
+    "REMOTE_METADATA_FIELD",
+    "SHOW_ENDPOINT",
+]
 
 
 class OllamaAdapter(ProviderAdapter):
@@ -890,329 +618,3 @@ class OllamaAdapter(ProviderAdapter):
             raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Message translation: canonical → Ollama wire
-# ---------------------------------------------------------------------------
-
-
-def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        _to_ollama_message(message) for message in project_tool_result_content_fallbacks(messages)
-    ]
-
-
-def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
-    role = message.get("role")
-    if role == "tool":
-        tool_message = {
-            "role": "tool",
-            "content": _flatten_text_content(message.get("content", "")),
-            "tool_call_id": message.get("tool_call_id", ""),
-        }
-        tool_name = message.get("name")
-        if isinstance(tool_name, str) and tool_name:
-            # Native Ollama supports both fields. ``tool_name`` is the
-            # documented template-facing identity; ``tool_call_id`` preserves
-            # exact pairing when a Model returns ids.
-            tool_message["tool_name"] = tool_name
-        return tool_message
-    if role == "assistant":
-        return _to_ollama_assistant_message(message)
-
-    content, images = _split_content_blocks(message.get("content", ""))
-    wire_message: dict[str, Any] = {"role": role, "content": content}
-    if images:
-        wire_message["images"] = images
-    return wire_message
-
-
-def _to_ollama_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
-    wire_message: dict[str, Any] = {
-        "role": "assistant",
-        "content": _flatten_text_content(message.get("content") or ""),
-    }
-    reasoning = message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning:
-        # Ollama round-trips visible thinking text via the ``thinking`` field.
-        wire_message["thinking"] = reasoning
-    tool_calls = message.get("tool_calls")
-    if tool_calls:
-        wire_message["tool_calls"] = [
-            {
-                "id": tool_call["id"],
-                "function": {
-                    "name": tool_call["name"],
-                    # Ollama's wire takes arguments as a JSON object, matching
-                    # the canonical dict — no string encoding (unlike OpenAI).
-                    "arguments": tool_call.get("arguments", {}),
-                },
-            }
-            for tool_call in tool_calls
-        ]
-    return wire_message
-
-
-def _split_content_blocks(content: Any) -> tuple[str, list[str]]:
-    """Split canonical content into flat text plus a base64 image list.
-
-    Ollama carries images as a per-message ``images`` array of bare base64
-    strings, separate from the text content.
-    """
-
-    if not isinstance(content, list):
-        return ("" if content is None else str(content), [])
-
-    text_parts: list[str] = []
-    images: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
-            text_parts.append(str(block))
-            continue
-        block_type = block.get("type")
-        if block_type == "text":
-            text = block.get("text")
-            if text:
-                text_parts.append(str(text))
-        elif block_type == "media":
-            base64_data = block.get("base64")
-            media_type = block.get("media_type")
-            if not isinstance(base64_data, str) or not isinstance(media_type, str):
-                raise ProviderError(
-                    "media content block requires string base64 and media_type fields",
-                    retryable=False,
-                )
-            if not media_type.startswith("image/"):
-                raise ProviderError(
-                    f"Ollama adapter supports only image media blocks; received {media_type}",
-                    retryable=False,
-                )
-            images.append(base64_data)
-        else:
-            raise ProviderError(
-                f"Ollama adapter does not support '{block_type}' content blocks",
-                retryable=False,
-            )
-    return ("\n\n".join(text_parts), images)
-
-
-def _flatten_text_content(content: Any) -> str:
-    text, _images = _split_content_blocks(content)
-    return text
-
-
-# ---------------------------------------------------------------------------
-# Response extraction: Ollama wire → canonical
-# ---------------------------------------------------------------------------
-
-
-def _extract_ollama_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]] | None:
-    if not raw_tool_calls:
-        return None
-    raw_call_values = raw_tool_calls if isinstance(raw_tool_calls, list) else [raw_tool_calls]
-    tool_calls: list[dict[str, Any]] = []
-    for position, raw_call_value in enumerate(raw_call_values):
-        raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
-        function_value = raw_call.get("function")
-        function = function_value if isinstance(function_value, Mapping) else {}
-        tool_calls.extend(
-            normalize_tool_call_candidates(
-                tool_call_id=raw_call.get("id"),
-                name=function.get("name"),
-                arguments=function.get("arguments"),
-                fallback_id=f"tool_call_{position}",
-            )
-        )
-    return tool_calls or None
-
-
-def _ollama_stream_tool_calls(raw_tool_calls: Any, *, start_index: int = 0) -> list[dict[str, Any]]:
-    """Preserve malformed wire values so Chat can reject rather than dispatch them."""
-
-    if not raw_tool_calls:
-        return []
-    raw_call_values = raw_tool_calls if isinstance(raw_tool_calls, list) else [raw_tool_calls]
-    tool_calls: list[dict[str, Any]] = []
-    for position, raw_call_value in enumerate(raw_call_values):
-        raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
-        function_value = raw_call.get("function")
-        function = function_value if isinstance(function_value, Mapping) else {}
-        tool_call_id = raw_call.get("id")
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            tool_call_id = f"tool_call_{start_index + position}"
-        name = function.get("name")
-        arguments = function.get("arguments")
-        tool_calls.append(
-            {
-                "id": tool_call_id,
-                "name": name if isinstance(name, str) else "",
-                "arguments": arguments if arguments is not None else {},
-            }
-        )
-    return tool_calls
-
-
-def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
-    input_tokens = response.get("prompt_eval_count")
-    output_tokens = response.get("eval_count")
-    usage: dict[str, Any] = {}
-    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0:
-        usage["input_tokens"] = input_tokens
-    if (
-        isinstance(output_tokens, int)
-        and not isinstance(output_tokens, bool)
-        and output_tokens >= 0
-    ):
-        usage["output_tokens"] = output_tokens
-    return usage or None
-
-
-def _ollama_cloud_openai_base_url(native_base_url: str) -> str:
-    """Return the direct Cloud OpenAI base without disturbing native endpoints."""
-
-    normalized = native_base_url.rstrip("/")
-    return (
-        normalized
-        if normalized.endswith(_OLLAMA_CLOUD_OPENAI_PATH)
-        else (f"{normalized}{_OLLAMA_CLOUD_OPENAI_PATH}")
-    )
-
-
-def _drop_ollama_cloud_zero_prompt_tokens(normalized_usage: Any, raw_usage: Any) -> None:
-    """Treat Cloud ``prompt_tokens: 0`` as absent for non-empty chat requests.
-
-    MiniMax M3 returns zero for short and Tool requests while returning positive
-    counts for longer prompts. Every vBot chat request has at least one message,
-    so zero cannot be a truthful input-token measurement. Removing only that
-    field lets the chat layer retain measured output while estimating input.
-    """
-
-    if not isinstance(normalized_usage, dict) or not isinstance(raw_usage, Mapping):
-        return
-    prompt_tokens = raw_usage.get("prompt_tokens")
-    if (
-        isinstance(prompt_tokens, int)
-        and not isinstance(prompt_tokens, bool)
-        and prompt_tokens == 0
-    ):
-        normalized_usage.pop("input_tokens", None)
-
-
-def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> str:
-    if done_reason in _OLLAMA_TOOL_DONE_REASONS or has_tool_calls:
-        return "tool_calls"
-    return "stop"
-
-
-def _build_error_detail(status_code: int, response_body: str = "") -> str:
-    """Build an error detail from Ollama's ``{"error": "..."}`` response shape."""
-
-    detail = str(status_code)
-    try:
-        error_data = json.loads(response_body) if response_body else {}
-        error_message = error_data.get("error", "") if isinstance(error_data, dict) else ""
-        if error_message:
-            detail = f"{status_code}: {error_message}"
-    except json.JSONDecodeError:
-        if response_body:
-            detail = f"{status_code}: {response_body}"
-    return detail
-
-
-# ---------------------------------------------------------------------------
-# Discovery enrichment helpers
-# ---------------------------------------------------------------------------
-
-
-def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
-    """Return *model* enriched with capabilities and window from ``/api/show``."""
-
-    capabilities_list = show_response.get("capabilities")
-    capability_names = (
-        {name for name in capabilities_list if isinstance(name, str)}
-        if isinstance(capabilities_list, list)
-        else set()
-    )
-
-    tools = _CAPABILITY_TOOLS in capability_names
-    vision = _CAPABILITY_VISION in capability_names
-    thinking = _CAPABILITY_THINKING in capability_names
-
-    reasoning = _ollama_reasoning_capabilities(model.model_id, thinking)
-    input_modalities = ("text", "image") if vision else ("text",)
-
-    return Model(
-        model_id=model.model_id,
-        name=model.name,
-        capabilities=Capabilities(
-            vision=vision,
-            tools=tools,
-            json_mode=False,
-            reasoning=reasoning,
-            input_modalities=input_modalities,
-            output_modalities=("text",),
-        ),
-        context_window=_context_window_from_show(show_response),
-        max_output_tokens=model.max_output_tokens,
-        family=model.family,
-        metadata=_ollama_enriched_metadata(model),
-        connections=model.connections,
-    )
-
-
-def _ollama_reasoning_capabilities(
-    model_id: str,
-    thinking: bool,
-) -> ReasoningCapabilities:
-    if not thinking:
-        return ReasoningCapabilities(supported=False)
-    if _is_gpt_oss_model(model_id):
-        return ReasoningCapabilities(
-            supported=True,
-            control=REASONING_CONTROL_LEVELS,
-            levels=OLLAMA_GPT_OSS_EFFORTS,
-        )
-    return ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
-
-
-def _is_gpt_oss_model(model_id: str) -> bool:
-    return model_id.split("::", 1)[0].split(":", 1)[0].lower() == "gpt-oss"
-
-
-def _ollama_enriched_metadata(model: Model) -> dict[str, Any]:
-    metadata = {
-        key: dict(value) if isinstance(value, Mapping) else value
-        for key, value in model.metadata.items()
-    }
-    ollama_metadata = metadata.get(OLLAMA_METADATA_KEY)
-    provider_metadata = dict(ollama_metadata) if isinstance(ollama_metadata, Mapping) else {}
-    metadata[OLLAMA_METADATA_KEY] = provider_metadata
-    return metadata
-
-
-def _context_window_from_show(show_response: Mapping[str, Any]) -> int | None:
-    """Read the model's theoretical max context from ``model_info``.
-
-    The window lives under the key ``"<architecture>.context_length"`` where
-    ``<architecture>`` is ``model_info["general.architecture"]`` (e.g.
-    ``mistral3.context_length``). Only that exact key is read — a suffix scan
-    would wrongly match ``*.rope.scaling.original_context_length``.
-    """
-
-    model_info = show_response.get("model_info")
-    if not isinstance(model_info, Mapping):
-        return None
-    architecture = model_info.get("general.architecture")
-    if not isinstance(architecture, str) or not architecture:
-        return None
-    value = model_info.get(f"{architecture}.context_length")
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        return None
-    return value
-
-
-def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        return None
-    return value

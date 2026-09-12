@@ -8,6 +8,8 @@ Providers translate canonical vBot requests and responses at the external-servic
 
 A Provider can expose multiple Connection variants through one Adapter or route Models to different wire implementations inside a Provider-owned Adapter. Runtime selects only the outer Adapter from Provider config; per-Model protocol selection remains Provider policy.
 
+Internal source routing: shared Responses request construction stays in `github_copilot_responses.py`, with event decoding in `_responses_stream.py`, completed-output normalization in `_responses_output.py`, and shared wire values/policy protocol in `_responses_values.py`. OpenAI connection/authentication and HTTP fallback stay in `openai.py`; `_codex_websocket.py` owns the cached socket, route lock and connection-local Continuation using rendered payloads/headers. `_openai_policy.py` holds catalog and request policy. Ollama native transport stays in `ollama.py`, its Cloud Adapter in `_ollama_cloud.py`, and catalog/wire helpers in `_ollama_catalog.py` / `_ollama_wire.py`. OpenRouter keeps its Adapter in `openrouter.py`, with policy and task catalog projections in `_openrouter_policy.py` / `_openrouter_catalog.py`. OpenCode Zen's existing protocol dispatch stays in `opencode_zen.py`; `_opencode_zen_profiles.py` holds exact Model profiles and `_opencode_zen_gemini.py` its native Gemini wire translation. These are internal files of the existing Provider owners, with public Adapter imports preserved.
+
 ## Terms
 
 Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB terms live in `models.md`.
