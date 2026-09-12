@@ -2259,12 +2259,13 @@ def _attention_body(session: TerminalSession, attention: TerminalAttention) -> s
     if attention.kind == "output_settled":
         sections.extend(
             (
-                "The current screen tail is embedded below so you can usually act "
-                "without a follow-up status call. Decide from it whether the program "
-                "is still working, is waiting for input, has returned to a prompt, or "
-                "needs no action. Use terminal status for the full screen and older "
-                "scrollback when needed. Reuse this Terminal Session; do not start a "
-                "duplicate process.",
+                (
+                    "Decide from the screen tail below whether to act or keep waiting; "
+                    "quiet output does not prove completion. For prompt input, pass the "
+                    "screen_revision below as expected_screen_revision. Use status only for "
+                    "missing screen/history context. Send replies to this terminal_id."
+                ),
+                f"screen_revision: {session.renderer.revision}",
                 "",
                 "```",
                 session.renderer.screen_tail(TERMINAL_DELIVERY_TAIL_LINES),
