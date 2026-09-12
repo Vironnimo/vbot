@@ -64,3 +64,5 @@ Read only when your task matches:
 - Chat selection/Sessions/history/streaming/Queue/timeline/composer/attachments/speech -> `webui/chat.md`
 - Settings, Providers, Extensions, Agents, onboarding, appearance, logs, channels, Desktop Voice -> `webui/settings.md`
 - Projects management view/discovery/scans/Team rows/overrides -> `webui/projects.md`
+
+`components/skills/SkillsView.svelte` retains inventory/inspection generations, filters and selection. Its internal `actions.svelte.js` owns create/edit/share/delete and enablement drafts and mutations; the existing public view interface and refresh callbacks remain unchanged. `skills.css` holds the uniquely named Skills selectors, including portaled modal content.
