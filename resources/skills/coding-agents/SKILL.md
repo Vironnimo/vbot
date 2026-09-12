@@ -9,13 +9,11 @@ Use a real interactive Terminal Session for the coding agent's entire lifecycle.
 
 ## Start a task
 
-For a delegation such as "let Codex do this", call `start` directly with the task. This also applies when another terminal for that CLI is already visible in context: its pending prompts belong to its existing task. Search for, attach to, or send the new task to an existing Terminal Session only when the user requests that. For a requested continuation, use a supplied `terminal_id` directly; use `list` only if you need to locate the requested Session.
-
 Call `start` with the interactive command, the intended `workdir`, any explicitly chosen model or safety arguments, and the initial instruction in `text`. For a registered Project, `workdir: "project:<project-id>"` resolves its current cwd by stable id without loading Project Context or changing Terminal ownership. `start` sends the text followed by Enter after the PTY is ready.
 
 Translate user-selected launch settings into the CLI's exact `args`. Model, reasoning or effort, named agent, profile, permission mode, sandbox, extra directories, and other startup choices are independent: pass every value the user specifies and preserve the CLI or project default for every value they omit. Never silently substitute a different model or reasoning level. If the CLI rejects a requested launch setting, inspect its help or model catalog and report the supported choices.
 
-Attempt the launch without checking installation or configuration first. If the program is not found, inform the user that the requested CLI could not be started. If setup, login, or workspace trust appears, handle the displayed prompt or tell the user what needs attention, then send the task once the CLI is ready.
+If the program is not found, inform the user that the requested CLI could not be started. If setup, login, or workspace trust appears, handle the displayed prompt or tell the user what needs attention, then send the task once the CLI is ready.
 
 Read the matching reference before starting a known CLI:
 
