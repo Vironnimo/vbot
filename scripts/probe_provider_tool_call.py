@@ -340,6 +340,7 @@ def _parser() -> argparse.ArgumentParser:
             "status",
             "web_search",
             "write",
+            "skill",
         ),
         default="skill_manage",
     )
