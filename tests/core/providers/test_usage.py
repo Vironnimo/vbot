@@ -13,6 +13,15 @@ from typing import Any
 
 import pytest
 
+from core.providers._usage_parsers import (
+    _epoch_to_iso,
+    _parse_copilot_usage,
+    _parse_minimax_usage,
+    _parse_ollama_usage,
+    _parse_openai_usage,
+    _parse_openrouter_usage,
+    _secondary_window_label,
+)
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -22,13 +31,6 @@ from core.providers.usage import (
     UsageCredits,
     UsageFetchError,
     UsageWindow,
-    _epoch_to_iso,
-    _parse_copilot_usage,
-    _parse_minimax_usage,
-    _parse_ollama_usage,
-    _parse_openai_usage,
-    _parse_openrouter_usage,
-    _secondary_window_label,
     clamp_percent,
 )
 
