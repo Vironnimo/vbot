@@ -10,11 +10,8 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.messages import (
-    COMPACTION_SKILL_NOTE_PREFIX,
-    COMPACTION_SUMMARY_NOTE_PREFIX,
-    _effective_compaction_messages,
-)
+from core.chat._message_history import effective_compaction_messages
+from core.chat.messages import COMPACTION_SKILL_NOTE_PREFIX, COMPACTION_SUMMARY_NOTE_PREFIX
 from core.chat.wire_shaping import _embed_notes_into_request, _restore_in_run_assistant_reasoning
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
@@ -145,7 +142,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    first_effective = _effective_compaction_messages([*first_messages, first])
+    first_effective = effective_compaction_messages([*first_messages, first])
     first_guidance = [
         item
         for item in first_effective
@@ -170,7 +167,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    second_effective = _effective_compaction_messages([*second_messages, second])
+    second_effective = effective_compaction_messages([*second_messages, second])
     second_guidance = [
         item
         for item in second_effective
@@ -196,7 +193,7 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    third_effective = _effective_compaction_messages([*third_messages, third])
+    third_effective = effective_compaction_messages([*third_messages, third])
 
     assert all(
         not (
@@ -250,7 +247,7 @@ async def test_compaction_compacts_skill_tool_carrier_without_breaking_its_cycle
         storage=StubStorage(),
         settings=CompactionSettings(strategy="retain-context"),
     )
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     projected_result = next(item for item in effective if item.id == "t-skill")
     projected_payload = json.loads(str(projected_result.content))
 
@@ -387,7 +384,7 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
         )
         == 1
     )
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     assert effective[0].role == "note"
     assert effective[0].content == (
         f"{COMPACTION_SUMMARY_NOTE_PREFIX}{COMPACTION_REFERENCE_PREFIX}\n"
@@ -424,7 +421,7 @@ async def test_summary_tail_discards_copied_outer_system_reminder_tags() -> None
     assert result.content == (
         f"{COMPACTION_REFERENCE_PREFIX}\nSUMMARY\n{COMPACTION_SUMMARY_END_MARKER}"
     )
-    rendered = _embed_notes_into_request(_effective_compaction_messages([result]))[0]["content"]
+    rendered = _embed_notes_into_request(effective_compaction_messages([result]))[0]["content"]
     assert rendered.count("<system-reminder>") == 1
     assert rendered.count("</system-reminder>") == 1
 
@@ -936,7 +933,7 @@ async def test_historical_user_quote_survives_repeated_compaction() -> None:
         settings=CompactionSettings(tail_tokens=10),
         request_messages=provider_request(messages),
     )
-    after_first = _effective_compaction_messages([*messages, first])
+    after_first = effective_compaction_messages([*messages, first])
     first_quote = next(
         item for item in after_first if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
     )
@@ -958,7 +955,7 @@ async def test_historical_user_quote_survives_repeated_compaction() -> None:
         settings=CompactionSettings(tail_tokens=10),
         request_messages=provider_request([*after_first, continued]),
     )
-    after_second = _effective_compaction_messages([*messages, first, continued, second])
+    after_second = effective_compaction_messages([*messages, first, continued, second])
 
     retained_users = [item for item in after_second if item.role == "user"]
     assert retained_users == []
@@ -1040,7 +1037,7 @@ async def test_summary_tail_summarizes_old_tool_batch_without_rewriting_retained
     assert "latest result" not in str(compact_request)
     assert "<retained_tail>" not in str(compact_request)
     assert [item.to_dict() for item in messages] == original_snapshot
-    effective = _effective_compaction_messages([*messages, result])
+    effective = effective_compaction_messages([*messages, result])
     assert [item.id for item in effective if item.role in {"user", "assistant", "tool"}] == [
         "a-latest",
         "t-latest",
@@ -1261,7 +1258,7 @@ def test_legacy_checkpoint_is_read_only_input_to_the_new_projection_engine() -> 
     )
     newer = assistant("a2", "new response")
 
-    effective = _effective_compaction_messages([old, tail, legacy, newer])
+    effective = effective_compaction_messages([old, tail, legacy, newer])
 
     assert [message.role for message in effective] == ["note", "user", "assistant"]
     assert effective[0].content == (f"{COMPACTION_SUMMARY_NOTE_PREFIX}old checkpoint summary")
@@ -1357,7 +1354,7 @@ async def test_long_run_compaction_budgets_and_replays_the_actual_tail(opaque: b
         settings=CompactionSettings(tail_tokens=budget),
         request_messages=live,
     )
-    effective = _effective_compaction_messages([result])
+    effective = effective_compaction_messages([result])
     rebuilt = _restore_in_run_assistant_reasoning(_embed_notes_into_request(effective), live)
     tail = [item for item in rebuilt if item.get("id")]
     start = next(index for index, item in enumerate(live) if item.get("id") == tail[0]["id"])
@@ -1407,11 +1404,11 @@ async def test_user_quote_escapes_reminder_delimiters_and_is_replaced_by_newer_u
             summary_model_id="gpt-5",
             storage=StubStorage(),
             settings=CompactionSettings(tail_tokens=1),
-            request_messages=provider_request(_effective_compaction_messages(history)),
+            request_messages=provider_request(effective_compaction_messages(history)),
         )
 
     first = await compact(messages)
-    effective = _effective_compaction_messages([first])
+    effective = effective_compaction_messages([first])
     quote = next(
         item for item in effective if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
     )
@@ -1423,7 +1420,7 @@ async def test_user_quote_escapes_reminder_delimiters_and_is_replaced_by_newer_u
     second = await compact([first, newer, assistant("next", "later step")])
     second_quotes = [
         item
-        for item in _effective_compaction_messages([second])
+        for item in effective_compaction_messages([second])
         if str(item.content).startswith(COMPACTION_USER_QUOTE_PREFIX)
     ]
     assert len(second_quotes) == 1

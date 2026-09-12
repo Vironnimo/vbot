@@ -7,12 +7,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from core.chat import checkpoint_ordinal, has_unconsumed_skill_activation
 from core.chat.chat import RequestState
-from core.chat.messages import (
-    JsonObject,
-    checkpoint_ordinal,
-    has_unconsumed_skill_activation,
-)
+from core.chat.messages import JsonObject
 from core.chat.usage import (
     RequestContextUsage,
     aggregate_session_usage,

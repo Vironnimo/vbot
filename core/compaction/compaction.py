@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, Protocol, cast
 
+from core.chat import (
+    compaction_projection_without_active_skills,
+    compaction_projection_without_provider_state,
+    effective_compaction_messages,
+    latest_compaction_checkpoint,
+)
 from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_END_MARKER,
@@ -15,10 +21,6 @@ from core.chat.messages import (
     TOOL_RESULT_COMPACTED_FIELD,
     ChatMessage,
     JsonObject,
-    _compaction_projection_without_active_skills,
-    _compaction_projection_without_provider_state,
-    _effective_compaction_messages,
-    _latest_compaction_checkpoint,
 )
 from core.chat.streaming import StreamingAccumulator
 from core.chat.wire_shaping import (
@@ -344,7 +346,7 @@ class CompactionService:
         if strategy.id != STRATEGY_SUMMARY_TAIL:
             return True
 
-        effective = _effective_compaction_messages(messages)
+        effective = effective_compaction_messages(messages)
         if not effective:
             return False
         try:
@@ -462,8 +464,8 @@ class CompactionService:
         strategy = self._strategies.get(settings.strategy)
         if strategy is None:
             raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
-        effective = _effective_compaction_messages(messages)
-        checkpoint = _latest_compaction_checkpoint(messages)
+        effective = effective_compaction_messages(messages)
+        checkpoint = latest_compaction_checkpoint(messages)
         context = CompactionContext(
             messages=tuple(effective),
             request_messages=tuple(dict(message) for message in request_messages or []),
@@ -526,7 +528,7 @@ def _finalize_compaction(
     if plan.user_quote is not None:
         projection.append(plan.user_quote)
     projection.extend(plan.after_summary)
-    projection = _compaction_projection_without_active_skills(
+    projection = compaction_projection_without_active_skills(
         [
             message
             for message in projection
@@ -641,7 +643,7 @@ def _plan_working_tail(
         boundary_id=messages[selected_start].id,
         boundary_index=selected_start,
         projected_suffix=tuple(
-            _compaction_projection_without_provider_state(messages[selected_start:])
+            compaction_projection_without_provider_state(messages[selected_start:])
         ),
     )
 

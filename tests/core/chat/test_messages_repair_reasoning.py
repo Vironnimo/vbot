@@ -14,11 +14,11 @@ from .messages_test_support import (
     ChatMessage,
     ToolCall,
     _assistant_continuation_dict,
-    _effective_compaction_messages,
     _embed_notes_into_request,
     _repair_dangling_tool_calls,
     _restore_in_run_assistant_reasoning,
     asyncio,
+    effective_compaction_messages,
     json,
     pytest,
 )
@@ -700,7 +700,7 @@ class TestReasoningReplayShaping:
             ),
         ]
 
-        effective = _effective_compaction_messages(messages)
+        effective = effective_compaction_messages(messages)
         request = _embed_notes_into_request(
             effective,
             replay_policy=REASONING_REPLAY_FULL_HISTORY,

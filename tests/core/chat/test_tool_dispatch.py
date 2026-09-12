@@ -12,10 +12,10 @@ from typing import Any, cast
 
 import pytest
 
+from core.chat._skill_activation import _activate_triggered_skills
 from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
-    _activate_triggered_skills,
     _resolve_tool_cwd,
 )
 from core.chat.tool_dispatch import (

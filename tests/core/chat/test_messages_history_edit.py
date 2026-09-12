@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
-from core.chat.messages import _effective_compaction_messages
+from core.chat._message_history import effective_compaction_messages
 from core.sessions import (
     ChatSessionError,
     active_session_messages,
@@ -122,4 +122,4 @@ def test_editable_ids_and_compaction_projection_use_only_active_lineage() -> Non
     raw = [first, old_checkpoint, marker, replacement]
 
     assert editable_session_message_ids(raw) == frozenset({replacement.id})
-    assert _effective_compaction_messages(raw) == [replacement]
+    assert effective_compaction_messages(raw) == [replacement]
