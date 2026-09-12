@@ -15,6 +15,8 @@ Start with `vbot help` or `vbot <area>`, then narrow to `vbot <area> <group> --h
 
 ## Start with the task
 
+For a focused question about a past conversation, use `session_search` and answer from sufficient evidence. Read `references/session-search.md` when you need more evidence, complete wording, a Session list, or a Tool Result.
+
 1. Read the relevant reference below before writing. It explains scope, replacement rules, and verification. Use `vbot <area> <command> --help` for exact arguments; primary ids are positional.
 2. Inspect the affected resource. Reuse exact ids from results. Read the complete content before replacing a Skill, prompt block, or automation prompt; a list preview is insufficient.
 3. Apply the requested change, preserving unrelated fields. Omitted update flags normally leave fields unchanged; list and policy flags replace their entire value. Read the area's exceptions.

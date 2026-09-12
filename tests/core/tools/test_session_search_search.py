@@ -94,16 +94,6 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
         "agent_id": "coder",
         "session_id": "repeated-context",
         "title": "Repeated context",
-        "run_kinds": ["user"],
-        "is_subagent_session": False,
-        "subagent_parent": None,
-        "platform": None,
-        "fork_source": None,
-        "message_count": 2,
-        "first_user_excerpt": {
-            "text": "needle opening context",
-            "trailing_truncated": False,
-        },
     }
     assert all("title" not in item and "run_kinds" not in item for item in data["items"])
 
@@ -289,11 +279,7 @@ async def test_fts_tool_search_does_not_reconstruct_complete_session_histories(
     )
 
     assert [item["message_id"] for item in data["items"]] == [message.id]
-    assert data["sessions"][0]["message_count"] == 1
-    assert data["sessions"][0]["first_user_excerpt"] == {
-        "text": "indexed needle",
-        "trailing_truncated": False,
-    }
+    assert data["sessions"] == [{"agent_id": "coder", "session_id": "indexed"}]
     missing = success(
         await session_search_handler(
             make_context(tmp_path),
@@ -355,7 +341,6 @@ async def test_sync_extension_search_runs_outside_event_loop(tmp_path: Path) -> 
         await session_search_handler(make_context(tmp_path), {"query": "extension"}, backend)
     )
 
-    assert data["result_type"] == "message"
     assert data["items"] == []
     assert backend.search_thread is not None
     assert backend.search_thread != caller_thread

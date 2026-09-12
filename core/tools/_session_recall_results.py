@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
 from core.recall import (
     RecallSearchHit,
@@ -12,15 +11,12 @@ from core.recall import (
 )
 from core.recall.canonical import (
     compact_text,
-    message_search_text,
 )
 from core.runs import RunKind
 from core.sessions import (
-    FORK_SOURCE_META_KEY,
     SESSION_RUN_KINDS_META_KEY,
     ChatSessionManager,
     SessionAddress,
-    SessionDescriptorSource,
 )
 from core.tools.tools import (
     JsonObject,
@@ -36,34 +32,8 @@ SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_EXCERPT_MAX_CHARS = 1800
 
 
-SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS = 240
-
-
 SESSION_DESCRIPTOR_TITLE_MAX_CHARS = 200
-
-
-SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS = 64
-
-
-SESSION_DESCRIPTOR_AGENT_ID_MAX_CHARS = 64
-
-
-SESSION_DESCRIPTOR_SESSION_ID_MAX_CHARS = 128
-
-
-SESSION_DESCRIPTOR_PROJECT_ID_MAX_CHARS = 128
-
-
-SESSION_DESCRIPTOR_TIMESTAMP_MAX_CHARS = 64
-
-
 SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
-
-
-SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
-
-
-CHANNEL_PLATFORM_METADATA_KEY = "platform"
 
 
 _VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
@@ -97,6 +67,7 @@ class _SessionSearchError(ValueError):
 class _SearchSessionContext:
     descriptor: JsonObject
     conversations: dict[str, list[JsonObject]]
+    is_subagent: bool
 
 
 def _render_search_page(
@@ -104,12 +75,15 @@ def _render_search_page(
     targets: list[JsonObject],
     session_contexts: dict[str, _SearchSessionContext],
     *,
+    agent_id: str,
     project_id: str | None = None,
 ) -> JsonObject:
     hits = list(page.hits)
     if len(targets) != len(hits):
         raise _SessionSearchError(
-            "session_search_error", "Search targets do not match the result page."
+            "session_search_error",
+            "Search returned inconsistent results. Repeat the search; if it "
+            "fails again, report the failure.",
         )
     count = len(hits)
     while count > 0:
@@ -130,17 +104,22 @@ def _render_search_page(
             _session_descriptors_for_hits(hits[:count], session_contexts),
             has_more=has_more,
             project_id=project_id,
+            agent_id=agent_id,
         )
         if _serialized_result_bytes(data) <= SESSION_SEARCH_RESULT_MAX_BYTES:
             break
         count -= 1
     if count == 0 and hits:
         raise _SessionSearchError(
-            "session_search_error", "Search result metadata exceeds the result safety limit."
+            "session_search_error",
+            "Search results exceed the output limit. Narrow the query or "
+            "restrict it to one session_id.",
         )
     selected = hits[:count]
     if not selected:
-        return _search_data(page, [], [], has_more=False, project_id=project_id)
+        return _search_data(
+            page, [], [], has_more=page.has_more, project_id=project_id, agent_id=agent_id
+        )
 
     maximum = max(len(hit.text) for hit in selected)
     low = 1
@@ -165,6 +144,7 @@ def _render_search_page(
             _session_descriptors_for_hits(selected, session_contexts),
             has_more=has_more,
             project_id=project_id,
+            agent_id=agent_id,
         )
         if _serialized_result_bytes(candidate) <= SESSION_SEARCH_RESULT_MAX_BYTES:
             best = candidate
@@ -173,7 +153,9 @@ def _render_search_page(
             high = excerpt_chars - 1
     if best is None:
         raise _SessionSearchError(
-            "session_search_error", "Search excerpts exceed the result safety limit."
+            "session_search_error",
+            "Search results exceed the output limit. Narrow the query or "
+            "restrict it to one session_id.",
         )
     return best
 
@@ -185,17 +167,50 @@ def _search_data(
     *,
     has_more: bool,
     project_id: str | None,
+    agent_id: str,
 ) -> JsonObject:
     data: JsonObject = {
-        "result_type": page.result_type,
+        "agent_id": agent_id,
         "project_id": project_id,
         "items": items,
         "sessions": session_descriptors,
         "has_more": has_more,
         "searched_sessions": page.total_candidate_sessions,
     }
+    guidance: list[str] = []
+    if not items:
+        guidance.append(
+            "No matching conversation text was returned in this scope. Try fewer or different "
+            "query terms, or remove unneeded period/session_id filters. Tool "
+            "Results are not searched."
+        )
+    else:
+        guidance.append(
+            "These are selected excerpts and context, not a full transcript. Use them for "
+            "focused answers; inspect the saved transcript when complete wording "
+            "or later revisions matter."
+        )
     if has_more:
-        data["guidance"] = "Narrow query, period or session_id to find additional matches."
+        guidance.append(
+            "More matches exist. Refine query, period or session_id; there is no "
+            "next-page parameter."
+        )
+    if any(
+        item["excerpt"]["leading_truncated"] or item["excerpt"]["trailing_truncated"]
+        for item in items
+    ):
+        guidance.append(
+            "Some excerpts are cut short. A trailing_truncated excerpt does not show the "
+            "ending of the source text: do not quote its last visible sentence as the "
+            "Message's last sentence. Read the complete Message when its ending or full "
+            "wording is needed. If that is unavailable, state what you cannot verify."
+        )
+    if any(item.get("content_kind") == "conversation_excerpt" for item in items):
+        guidance.append(
+            "Conversation excerpts can span several speakers. Read original "
+            "Messages before attributing quotations."
+        )
+    data["guidance"] = " ".join(guidance)
     if page.degraded:
         data["degraded"] = True
         data["degradation_reason"] = page.degradation_reason
@@ -222,21 +237,20 @@ def _hit_item(
         "context_is_partial": True,
         "excerpt": {
             "text": hit.text[start:end],
-            "source_start": start,
-            "source_end": end,
             "leading_truncated": start > 0,
             "trailing_truncated": end < len(hit.text),
         },
     }
     if hit.result_type == "passage":
-        item["passage_id"] = hit.passage_id
+        item["end_message_id"] = hit.end_message_id
+        if hit.end_message_id is not None and hit.end_message_id != hit.message_id:
+            item.pop("role")
+            item["content_kind"] = "conversation_excerpt"
         item["end_timestamp"] = hit.end_timestamp
     if "include_subagents" in target:
         item["include_subagents"] = True
     if hit.role == "compaction_checkpoint":
         item["content_kind"] = "compaction_summary"
-    if hit.sources:
-        item["sources"] = list(hit.sources)
     return item
 
 
@@ -247,68 +261,33 @@ def _search_context_for_hits(
     project_id: str | None,
     sessions: ChatSessionManager | None,
     include_subagents: bool,
+    summaries: dict[str, JsonObject],
 ) -> tuple[list[JsonObject], dict[str, _SearchSessionContext]]:
     loaded: dict[str, _SearchSessionContext] = {}
-    refs: list[JsonObject] = []
-    addresses = {
-        hit.session_id: SessionAddress(
-            project_id=project_id,
-            agent_id=agent_id,
-            session_id=hit.session_id,
-        )
-        for hit in hits
-    }
-    try:
-        sources = {} if sessions is None else sessions.descriptor_sources(tuple(addresses.values()))
-    except Exception:
-        sources = {}
+    targets: list[JsonObject] = []
     for hit in hits:
         if hit.session_id not in loaded:
-            source = sources.get(addresses[hit.session_id])
-            loaded[hit.session_id] = _search_hit_session_context(
-                agent_id,
-                hit.session_id,
-                source,
+            metadata = summaries.get(hit.session_id, {})
+            title = metadata.get("title") or metadata.get("auto_title")
+            descriptor: JsonObject = {"agent_id": agent_id, "session_id": hit.session_id}
+            if isinstance(title, str) and title.strip():
+                descriptor["title"] = compact_text(title)[:SESSION_DESCRIPTOR_TITLE_MAX_CHARS]
+            loaded[hit.session_id] = _SearchSessionContext(
+                descriptor=descriptor,
+                conversations={},
+                is_subagent=_is_subagent_session(metadata, _session_run_kinds(metadata)) is True,
             )
-        target: JsonObject = {
-            "agent_id": agent_id,
-            "session_id": hit.session_id,
-            "message_id": hit.message_id,
-        }
-        if (
-            include_subagents
-            and loaded[hit.session_id].descriptor.get("is_subagent_session") is True
-        ):
+        source = loaded[hit.session_id]
+        target: JsonObject = {"agent_id": agent_id}
+        if include_subagents and source.is_subagent:
             target["include_subagents"] = True
-        if sessions is not None:
-            loaded[hit.session_id].conversations[hit.message_id] = sessions.recall_context(
-                addresses[hit.session_id], hit.message_id
+        if sessions is not None and hit.message_id not in source.conversations:
+            source.conversations[hit.message_id] = sessions.recall_context(
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=hit.session_id),
+                hit.message_id,
             )
-        refs.append(target)
-    return refs, loaded
-
-
-def _search_hit_session_context(
-    agent_id: str,
-    session_id: str,
-    source: SessionDescriptorSource | None,
-) -> _SearchSessionContext:
-    if source is None:
-        return _SearchSessionContext(
-            descriptor=_session_descriptor(agent_id, session_id, {}, None),
-            conversations={},
-        )
-    return _SearchSessionContext(
-        descriptor=_session_descriptor(
-            agent_id,
-            session_id,
-            source.metadata,
-            None,
-            message_count=source.message_count,
-            first_user_message=source.first_user_message,
-        ),
-        conversations={},
-    )
+        targets.append(target)
+    return targets, loaded
 
 
 def _session_descriptors_for_hits(
@@ -339,42 +318,6 @@ def _excerpt_bounds(hit: RecallSearchHit, excerpt_chars: int) -> tuple[int, int]
     return start, end
 
 
-def _session_descriptor(
-    agent_id: str,
-    session_id: str,
-    metadata: JsonObject,
-    messages: list[Any] | None,
-    *,
-    message_count: int | None = None,
-    first_user_message: Any | None = None,
-) -> JsonObject:
-    if messages is not None:
-        message_count = len(messages)
-        first_user_message = next(
-            (message for message in messages if str(message.role) == "user"),
-            None,
-        )
-    run_kinds = _session_run_kinds(metadata)
-    return {
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "title": _descriptor_text(
-            metadata.get("title") or metadata.get("auto_title"),
-            SESSION_DESCRIPTOR_TITLE_MAX_CHARS,
-        ),
-        "run_kinds": run_kinds,
-        "is_subagent_session": _is_subagent_session(metadata, run_kinds),
-        "subagent_parent": _session_address(metadata.get(SUBAGENT_PARENT_METADATA_KEY)),
-        "platform": _descriptor_text(
-            metadata.get(CHANNEL_PLATFORM_METADATA_KEY),
-            SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS,
-        ),
-        "fork_source": _fork_source(metadata.get(FORK_SOURCE_META_KEY)),
-        "message_count": message_count,
-        "first_user_excerpt": _user_message_excerpt(first_user_message),
-    }
-
-
 def _session_run_kinds(metadata: JsonObject) -> list[str] | None:
     raw = metadata.get(SESSION_RUN_KINDS_META_KEY)
     if not isinstance(raw, list) or not raw:
@@ -393,66 +336,6 @@ def _is_subagent_session(metadata: JsonObject, run_kinds: list[str] | None) -> b
     if run_kinds is not None:
         return False
     return None
-
-
-def _session_address(value: Any) -> JsonObject | None:
-    if not isinstance(value, dict):
-        return None
-    agent_id = _descriptor_identifier(value.get("agent_id"), SESSION_DESCRIPTOR_AGENT_ID_MAX_CHARS)
-    session_id = _descriptor_identifier(
-        value.get("session_id"), SESSION_DESCRIPTOR_SESSION_ID_MAX_CHARS
-    )
-    if agent_id is None or session_id is None:
-        return None
-    return {
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "project_id": _descriptor_identifier(
-            value.get("project_id"), SESSION_DESCRIPTOR_PROJECT_ID_MAX_CHARS
-        ),
-    }
-
-
-def _fork_source(value: Any) -> JsonObject | None:
-    address = _session_address(value)
-    if address is None:
-        return None
-    assert isinstance(value, dict)
-    address["forked_at"] = _descriptor_text(
-        value.get("forked_at"), SESSION_DESCRIPTOR_TIMESTAMP_MAX_CHARS
-    )
-    return address
-
-
-def _descriptor_identifier(value: Any, max_chars: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    if not normalized or len(normalized) > max_chars:
-        return None
-    return normalized
-
-
-def _descriptor_text(value: Any, max_chars: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = compact_text(value)
-    if not normalized:
-        return None
-    return normalized[:max_chars]
-
-
-def _user_message_excerpt(message: Any | None) -> JsonObject | None:
-    if message is None:
-        return None
-    text = compact_text(message_search_text(message))
-    if not text:
-        return None
-    end = min(len(text), SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS)
-    return {
-        "text": text[:end],
-        "trailing_truncated": end < len(text),
-    }
 
 
 def _serialized_result_bytes(data: JsonObject) -> int:
