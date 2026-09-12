@@ -1,0 +1,104 @@
+.s-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.s-row:last-child {
+  border-bottom: 0;
+}
+
+.s-provider-card {
+  border-bottom: 1px solid var(--border);
+}
+
+.s-provider-card:last-of-type {
+  border-bottom: 0;
+}
+
+.s-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+}
+
+.s-row--stacked {
+  align-items: stretch;
+  flex-direction: column;
+  /* A column flex row that also wraps reserves phantom line height its
+     content never fills (seen as ~100px dead space per stacked row); stacked
+     rows must size strictly to their content. */
+  flex-wrap: nowrap;
+}
+
+.s-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.s-row-label {
+  color: var(--text-hi);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.s-row-desc {
+  margin-top: 2px;
+  color: var(--text-lo);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.s-value-box,
+.s-select,
+.s-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 11px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Read-only value: structural border + flat background so it cannot be
+   mistaken for an editable input. */
+.s-value-box {
+  overflow: hidden;
+  border-color: var(--border);
+  color: var(--text-med);
+  background: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.s-select {
+  appearance: none;
+  cursor: pointer;
+}
+
+.s-input:focus-visible {
+  border-color: var(--accent-40);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.s-select:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.s-row-desc code {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}

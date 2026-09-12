@@ -1,0 +1,175 @@
+/* Mobile (≤640, matching the breakpoint convention above): the sidebar collapses to a top
+   band and the navigation becomes a single compact horizontal scroll row so it
+   doesn't eat vertical space. Touch targets grow to a ≥40px hit area. */
+@media (max-width: 640px) {
+  .view-frame {
+    padding: 16px;
+  }
+
+  .view-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .view-header__actions,
+  .view-toolbar__actions {
+    justify-content: flex-start;
+  }
+
+  .view-toolbar--tabs {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+  }
+
+  .view-toolbar--tabs .view-toolbar__tabs {
+    width: 100%;
+    padding-inline: 4px;
+  }
+
+  .view-toolbar--tabs .view-toolbar__actions {
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .server-availability-notice {
+    top: 18vh;
+    width: calc(100vw - 28px);
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .server-availability-notice__actions {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-shell__sidebar,
+  .sidebar {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__sidebar {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .app-shell__brand,
+  .sidebar-logo {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 12px 14px;
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__brand {
+    justify-content: flex-start;
+    padding-inline: 14px;
+  }
+
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__brand > div,
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-label,
+  .app-shell[data-sidebar-collapsed='true'] .footer-text,
+  .app-shell[data-sidebar-collapsed='true'] .sidebar-footer__label {
+    display: initial;
+  }
+
+  .app-shell__navigation,
+  .nav {
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 8px 10px;
+    scroll-padding-inline: 10px;
+    scrollbar-width: none;
+  }
+
+  .app-shell__footer {
+    grid-column: 2;
+    grid-row: 1;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+    padding: 12px 14px;
+  }
+
+  .app-shell__sidebar-toggle {
+    display: none;
+  }
+
+  .app-shell__navigation::-webkit-scrollbar,
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Collapse the group wrappers so every nav item sits directly in the single
+     horizontal scroll row, and drop the section labels — the grouped labels
+     would break the one-row top-bar layout. */
+  .app-shell__nav-group {
+    display: contents;
+  }
+
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__nav-group
+    + .app-shell__nav-group {
+    margin-top: 0;
+  }
+
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__nav-group
+    + .app-shell__nav-group::before {
+    content: none;
+  }
+
+  .app-shell__nav-group-label {
+    display: none;
+  }
+
+  .app-shell__nav-item,
+  .nav-item {
+    width: auto;
+    flex: 0 0 auto;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  .secondary-pane {
+    width: 100%;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Touch targets: buttons, dropdown triggers, and composer controls all reach
+     a ≥40px hit area on phone widths. */
+  .btn-primary,
+  .btn-secondary,
+  .btn-tertiary,
+  .btn-danger,
+  .dropdown-trigger,
+  .s-dropdown-trigger {
+    min-height: 40px;
+  }
+
+  .btn-icon {
+    min-width: 40px;
+    min-height: 40px;
+    width: 40px;
+    height: 40px;
+  }
+}

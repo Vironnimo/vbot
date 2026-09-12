@@ -1,18 +1,17 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
 
+import { readStyleSheet } from '../../__tests__/styles.support.js';
 import { init } from '../../lib/i18n.js';
 import { CONNECTION_STATUS_CONNECTED } from '../../lib/connectionState.js';
 
-const appStyles = readFileSync(
+const appStyles = readStyleSheet(
   join(dirname(fileURLToPath(import.meta.url)), '../../styles/app.css'),
-  'utf8',
 );
 
 const desktopBridge = vi.hoisted(() => ({

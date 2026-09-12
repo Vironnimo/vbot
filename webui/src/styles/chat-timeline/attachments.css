@@ -1,0 +1,280 @@
+/* Attachment card — one design shared by the composer tray (pre-send preview)
+   and the chat timeline (sent user messages): a compact card with a small
+   thumbnail and the filename, plus a hover preview that enlarges the image
+   (capped, never full size). The composer wraps the thumbnail in a button and
+   adds remove/status controls (its own scoped styles); the timeline wraps it in
+   a link (`a.inline-attachment`) that opens the lightbox / raw image. */
+.attachment-item {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  max-width: min(320px, 100%);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.attachment-thumb-trigger,
+a.inline-attachment {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-decoration: none;
+}
+
+a.inline-attachment:focus-visible {
+  outline: 1px solid var(--accent-40);
+  outline-offset: 2px;
+}
+
+.attachment-thumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  background: var(--bg);
+}
+
+.inline-attachment-card .attachment-thumb {
+  cursor: zoom-in;
+}
+
+.attachment-hover-preview {
+  position: fixed;
+  z-index: var(--z-floating);
+  width: min(300px, 72vw);
+  max-height: min(340px, 50vh);
+  padding: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
+}
+
+.attachment-hover-preview[data-floating-open='true'] {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.attachment-hover-image {
+  display: block;
+  width: 100%;
+  max-height: min(328px, calc(50vh - 12px));
+  border-radius: var(--r-sm);
+  object-fit: contain;
+  background: var(--bg);
+}
+
+.attachment-file-icon {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: var(--surface-3);
+}
+
+.attachment-file-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+}
+
+.attachment-meta {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-name {
+  overflow: hidden;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-status {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.inline-file {
+  display: flex;
+  width: fit-content;
+  max-width: min(30rem, 100%);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+}
+
+.inline-file-icon {
+  flex-shrink: 0;
+  color: var(--text-lo);
+}
+
+.inline-file-link,
+.inline-file-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-file-link {
+  border-bottom: 1px solid var(--accent-30);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.inline-file-link:hover {
+  border-bottom-color: var(--accent);
+  color: var(--text-hi);
+}
+
+.inline-file-link:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid var(--accent-40);
+  outline-offset: 2px;
+}
+
+.inline-file-name {
+  color: var(--text-med);
+}
+
+.inline-file-status {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .btn-secondary.btn-icon.chat-timeline__jump-latest {
+    width: 40px;
+    height: 40px;
+  }
+
+  .tool-event-body {
+    max-width: 100%;
+  }
+
+  .teb-field {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .teb-field + .teb-field {
+    margin-top: 5px;
+  }
+
+  .attachment-item {
+    max-width: 100%;
+  }
+
+  .attachment-hover-preview {
+    width: min(260px, calc(100vw - 48px));
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-copy-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Tool media stays compact within the existing detail rail. */
+.tool-image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 4px 0 8px;
+}
+
+.tool-image-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 128px;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-med);
+  text-decoration: none;
+  cursor: zoom-in;
+}
+
+.tool-image-preview:hover {
+  border-color: var(--accent);
+  color: var(--text-hi);
+}
+
+.tool-image-preview img {
+  width: 100%;
+  height: 88px;
+  object-fit: contain;
+}
+
+.tool-image-preview > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.tool-image-preview .image-unavailable {
+  display: none;
+  height: 88px;
+  width: 100%;
+  padding: 4px;
+  font-size: var(--fs-mono-xs);
+}
+
+.tool-image-preview img[hidden] + .image-unavailable {
+  display: flex;
+}

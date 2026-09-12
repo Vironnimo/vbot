@@ -16,7 +16,7 @@ Paths beginning `webui/`, `desktop/`, or `resources/` are repository-relative. O
 
 ### Tokens and assets
 
-`webui/src/styles/app.css` owns the implemented CSS tokens, bundled font declarations, primitive styles, and app-shell geometry. There is no separate machine-consumed token catalog in this map. `webui/src/styles/settings.css`, `projects.css`, and `cron.css`, plus component-local styles, specialize those foundations.
+`webui/src/styles/app.css` is the ordered stylesheet entrypoint; its private `app/foundation.css` owns the implemented CSS tokens and bundled font declarations, while adjacent `app/` files own primitive styles and app-shell geometry. There is no separate machine-consumed token catalog in this map. `webui/src/styles/settings.css`, `projects.css`, and `cron.css`, plus component-local styles, specialize those foundations.
 
 The current palette is warm brown with orange accents. The main surface roles are:
 
@@ -36,7 +36,7 @@ The metallic `V_` assets live under `webui/public/brand/`. `vbot-mark-transparen
 
 ### Typography, spacing, and depth
 
-The bundled typefaces are IBM Plex Sans (`--font-ui`) and IBM Plex Mono (`--font-mono`). Sans carries prose and ordinary navigation; Mono appears in technical names, values, timestamps, and small section labels. The current `--fs-*` scale runs from 10.5px (`mono-xs`) to 22px (`display`); body roles are 12.5px, 13.5px, and 14px. Full values are in `app.css`, rather than duplicated as a second token schema here.
+The bundled typefaces are IBM Plex Sans (`--font-ui`) and IBM Plex Mono (`--font-mono`). Sans carries prose and ordinary navigation; Mono appears in technical names, values, timestamps, and small section labels. The current `--fs-*` scale runs from 10.5px (`mono-xs`) to 22px (`display`); body roles are 12.5px, 13.5px, and 14px. Full values are in `styles/app/foundation.css`, rather than duplicated as a second token schema here.
 
 Typography is not uniform across every control. The base `.form-field__label` uses muted uppercase Mono, while scoped rules for Agents, Projects, and Settings replace it with readable sentence-case Sans. `FormField.svelte` owns the associated label/help/error structure, not a universal visual label style. Inspect the complete CSS cascade before changing one of these surfaces. The existing variation is not a recommendation for new forms.
 
