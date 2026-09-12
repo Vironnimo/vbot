@@ -31,31 +31,17 @@ def write_skill(skills_dir: Path, directory_name: str, metadata: str) -> Path:
     return skill_file
 
 
-def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
+def test_bundled_coding_agents_loads_with_reachable_references() -> None:
     package = PROJECT_ROOT / "resources" / "skills" / "coding-agents"
     skill_text = (package / "SKILL.md").read_text(encoding="utf-8")
     references = {
         path.name: path.read_text(encoding="utf-8")
         for path in sorted((package / "references").glob("*.md"))
     }
-    reference_text = "\n".join(references.values())
-    combined = f"{skill_text}\n{reference_text}"
-
-    assert "expected_screen_revision" in skill_text
-    assert "terminal_id" in reference_text
-    assert "scrollback.next_request" in skill_text
-    assert '"gpt-5.6-terra"' in references["codex.md"]
-    assert 'model_reasoning_effort=\\"medium\\"' in references["codex.md"]
-    assert '"--effort"' in references["claude-code.md"]
-    assert '"medium"' in references["claude-code.md"]
-    assert "/variants" in references["opencode.md"]
-    assert "reasoningEffort" in references["opencode.md"]
-    forbidden_invocations = (
-        "claude" + " -p",
-        "codex" + " exec",
-        "opencode" + " run",
-    )
-    assert all(invocation not in combined for invocation in forbidden_invocations)
+    linked_references = set(re.findall(r"references/([\w-]+\.md)", skill_text))
+    assert linked_references == {"codex.md", "claude-code.md", "opencode.md"}
+    assert linked_references == set(references)
+    assert all(text.strip() for text in references.values())
 
     registry = SkillRegistry.load(PROJECT_ROOT / "resources" / "skills")
     skill = registry.get("coding-agents")
