@@ -12,7 +12,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import core.channels.telegram as telegram_module
+import core.channels._telegram_api as telegram_api
+import core.channels._telegram_inbound as telegram_inbound
+import core.channels._telegram_transport as telegram_transport
 from core.attachments import AttachmentStore
 from core.channels import ChannelConfig
 from core.channels.telegram import (
@@ -263,7 +265,7 @@ def make_adapter(
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
     # Keep unit tests fast while preserving the production behavior: the task still
     # yields once, so a following forwarded-media handler can claim the pending text.
-    monkeypatch.setattr(telegram_module, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(telegram_inbound, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
     if set_process_token:
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
     else:
@@ -339,7 +341,7 @@ def make_adapter(
 
 
 async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> None:
-    pending_flushes = list(adapter._forward_comment_tasks.values())
+    pending_flushes = list(adapter._inbound._forward_comment_tasks.values())
     if pending_flushes:
         await asyncio.gather(*pending_flushes)
     queue = adapter._engine._chat_queues.get(str(chat_id))
@@ -389,7 +391,8 @@ def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
         InlineKeyboardButton=FakeInlineKeyboardButton,
         InlineKeyboardMarkup=FakeInlineKeyboardMarkup,
     )
-    monkeypatch.setattr(telegram_module, "_load_telegram", lambda: fake_telegram)
+    monkeypatch.setattr(telegram_api, "_load_telegram", lambda: fake_telegram)
+    monkeypatch.setattr(telegram_transport, "_load_telegram", lambda: fake_telegram)
 
 
 def make_group_update(

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import core.channels.telegram as telegram_module
+import core.channels._telegram_api as telegram_api
 from core.channels import ChannelConfigError
 from core.channels.adapter import (
     FileData,
@@ -400,7 +400,7 @@ async def test_responder_answer_calls_bot_and_marks_answered(
         monkeypatch,
         allowed_chat_ids=[12345],
     )
-    responder = telegram_module._TelegramInteractionResponder(
+    responder = telegram_api._TelegramInteractionResponder(
         bot,
         callback_id="cb1",
         chat_id=12345,
@@ -430,7 +430,7 @@ async def test_responder_edit_renders_buttons_and_text(
         monkeypatch,
         allowed_chat_ids=[12345],
     )
-    responder = telegram_module._TelegramInteractionResponder(
+    responder = telegram_api._TelegramInteractionResponder(
         bot,
         callback_id="cb1",
         chat_id=12345,
@@ -467,7 +467,7 @@ async def test_responder_edit_empty_buttons_removes_keyboard(
         monkeypatch,
         allowed_chat_ids=[12345],
     )
-    responder = telegram_module._TelegramInteractionResponder(
+    responder = telegram_api._TelegramInteractionResponder(
         bot,
         callback_id="cb1",
         chat_id=12345,
@@ -484,8 +484,8 @@ async def test_responder_edit_empty_buttons_removes_keyboard(
 
 
 def test_markup_to_buttons_empty_without_keyboard() -> None:
-    assert telegram_module._markup_to_buttons(None) == ()
-    assert telegram_module._markup_to_buttons([]) == ()
+    assert telegram_api._markup_to_buttons(None) == ()
+    assert telegram_api._markup_to_buttons([]) == ()
 
 
 @pytest.mark.asyncio

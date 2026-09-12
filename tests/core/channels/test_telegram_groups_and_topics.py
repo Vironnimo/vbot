@@ -406,7 +406,7 @@ async def test_typing_indicator_targets_topic(
         allowed_chat_ids=[-10001],
     )
 
-    typing_task = asyncio.create_task(adapter._keep_typing("-10001", "42"))
+    typing_task = asyncio.create_task(adapter._transport._keep_typing("-10001", "42"))
     await asyncio.sleep(0)
     typing_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):

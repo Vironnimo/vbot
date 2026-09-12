@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.channels._telegram_inbound as telegram_inbound
 import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
@@ -322,7 +323,7 @@ async def test_typing_indicator_refreshes_chat_action_and_stops_after_block(
         allowed_chat_ids=[12345],
     )
 
-    async with adapter._typing_indicator("12345"):
+    async with adapter._transport._typing_indicator("12345"):
         await asyncio.sleep(0.05)
 
     bot.send_chat_action.assert_awaited_with(chat_id=12345, action="typing")
@@ -906,7 +907,7 @@ async def test_oversized_inbound_media_rejected_before_download(
     ).effective_message
 
     with pytest.raises(AttachmentTooLargeError):
-        await adapter.build_media_blocks(raw_message)
+        await adapter._transport.build_media_blocks(raw_message)
 
     # The oversized file is refused on its reported size; the body is never downloaded.
     download_mock.assert_not_awaited()
@@ -918,7 +919,7 @@ async def test_album_flush_window_resets_per_item(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(telegram_module, "_ALBUM_FLUSH_SECONDS", 0.15)
+    monkeypatch.setattr(telegram_inbound, "_ALBUM_FLUSH_SECONDS", 0.15)
     attachment_store = AttachmentStore(tmp_path)
     session_id = "ch-tg-assistant-12345"
     trigger_mock = AsyncMock(

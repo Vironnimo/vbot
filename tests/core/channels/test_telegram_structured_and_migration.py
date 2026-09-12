@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import core.channels._telegram_messages as telegram_messages
 import core.channels.engine as engine_module
-import core.channels.telegram as telegram_module
 from core.sessions import SessionAddress
 from tests.core.channels.telegram_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -71,13 +71,13 @@ def test_render_structured_message_variants(
     base_fields: dict[str, Any] = {"venue": None, "location": None, "contact": None, "poll": None}
     message = SimpleNamespace(**{**base_fields, **message_fields})
 
-    assert telegram_module._render_structured_message(message) == expected
+    assert telegram_messages._render_structured_message(message) == expected
 
 
 def test_render_structured_message_returns_none_without_payload() -> None:
     message = SimpleNamespace(venue=None, location=None, contact=None, poll=None)
 
-    assert telegram_module._render_structured_message(message) is None
+    assert telegram_messages._render_structured_message(message) is None
 
 
 @pytest.mark.asyncio
@@ -258,7 +258,7 @@ async def test_group_start_command_keeps_normal_command_path(
     ],
 )
 def test_parse_start_command(text: str, expected: str | None) -> None:
-    assert telegram_module._parse_start_command(text) == expected
+    assert telegram_messages._parse_start_command(text) == expected
 
 
 @pytest.mark.asyncio

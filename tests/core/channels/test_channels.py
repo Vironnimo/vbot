@@ -643,7 +643,7 @@ def test_channel_service_adapter_factory_injects_attachment_store(
     adapter = service._create_adapter(make_config())
 
     assert isinstance(adapter, TelegramChannelAdapter)
-    assert adapter._attachment_store is attachment_store
+    assert adapter._transport._attachment_store is attachment_store
 
 
 def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:
