@@ -5225,7 +5225,8 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
 async def _probe_apply_patch_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any]
 ) -> dict[str, Any]:
-    from core.tools.apply_patch import _parse, register_apply_patch_tool
+    from core.tools._patch_syntax import _parse
+    from core.tools.apply_patch import register_apply_patch_tool
     from core.tools.file_state import FileReadState
     from core.tools.tools import ToolContext, ToolRegistry
 
