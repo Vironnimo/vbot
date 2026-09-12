@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import copy
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
 
 from core.models.models import Model
 from core.providers._http_shared import (
@@ -22,17 +18,40 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
+from core.providers._opencode_zen_gemini import (
+    _apply_gemini_response_format,
+    _content_text,
+    _gemini_tool_choice,
+    _move_integer,
+    _move_number,
+    _normalize_gemini_response,
+    _normalize_gemini_stream_chunk,
+    _to_gemini_content,
+)
+from core.providers._opencode_zen_profiles import (
+    _AUTH_401_MARKERS,
+    _FREE_MODELS,
+    _IMMINENT_DEPRECATIONS,
+    _KNOWN_PROTOCOLS,
+    _NON_AUTH_401_MARKERS,
+    _PERMANENT_429_MARKERS,
+    _PROTOCOL_BY_MODEL,
+    _RETIRED_MODELS,
+    _ZEN_GEMINI_MEDIA_TYPES,
+    _ZEN_INLINE_REQUEST_MAX_BYTES,
+    _ZEN_MAX_IMAGES_PER_REQUEST,
+    DEPRECATES_AT_METADATA_KEY,
+    OPENCODE_ZEN_METADATA_KEY,
+    PRIVACY_METADATA_KEY,
+    PROTOCOL_CHAT,
+    PROTOCOL_GEMINI,
+    PROTOCOL_MESSAGES,
+    PROTOCOL_METADATA_KEY,
+    PROTOCOL_RESPONSES,
+)
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
-    TERMINAL_OUTCOME_CONTENT_FILTERED,
-    TERMINAL_OUTCOME_ERROR,
-    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
-    TERMINAL_OUTCOME_STOP,
-    TERMINAL_OUTCOME_TOOL_CALLS,
-    TERMINAL_OUTCOME_UNKNOWN,
     ModelLookup,
-    TerminalOutcome,
-    normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
 from core.providers.anthropic_compatible import (
@@ -58,171 +77,20 @@ from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.utils.retry import retry_async
 
-OPENCODE_ZEN_METADATA_KEY = "opencode_zen"
-PROTOCOL_METADATA_KEY = "protocol"
-PRIVACY_METADATA_KEY = "privacy"
-DEPRECATES_AT_METADATA_KEY = "deprecates_at"
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
 
-PROTOCOL_RESPONSES = "responses"
-PROTOCOL_MESSAGES = "messages"
-PROTOCOL_CHAT = "chat_completions"
-PROTOCOL_GEMINI = "gemini_generate_content"
-_KNOWN_PROTOCOLS = frozenset(
-    {PROTOCOL_RESPONSES, PROTOCOL_MESSAGES, PROTOCOL_CHAT, PROTOCOL_GEMINI}
-)
-
-# OpenCode publishes the endpoint family per exact model id. The public /models
-# response contains no route metadata, so a new id stays unavailable until its
-# official wire is reviewed instead of being guessed from a name prefix.
-_RESPONSES_MODELS = frozenset(
-    {
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.5-pro",
-        "gpt-5.4",
-        "gpt-5.4-pro",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.2",
-        "gpt-5.2-codex",
-        "gpt-5.1",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
-        "gpt-5",
-        "gpt-5-codex",
-        "gpt-5-nano",
-        "grok-4.5",
-        "grok-build-0.1",
-    }
-)
-_MESSAGES_MODELS = frozenset(
-    {
-        "claude-fable-5",
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-opus-4-6",
-        "claude-opus-4-5",
-        "claude-opus-4-1",
-        "claude-sonnet-5",
-        "claude-sonnet-4-6",
-        "claude-sonnet-4-5",
-        "claude-sonnet-4",
-        "claude-haiku-4-5",
-        "qwen3.7-max",
-        "qwen3.7-plus",
-        "qwen3.6-plus",
-        "qwen3.5-plus",
-    }
-)
-_GEMINI_MODELS = frozenset(
-    {
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro",
-        "gemini-3-flash",
-    }
-)
-_CHAT_MODELS = frozenset(
-    {
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "minimax-m3",
-        "minimax-m2.7",
-        "minimax-m2.5",
-        "glm-5.2",
-        "glm-5.1",
-        "glm-5",
-        "kimi-k3",
-        "kimi-k2.7-code",
-        "kimi-k2.6",
-        "kimi-k2.5",
-        "big-pickle",
-        "mimo-v2.5-free",
-        "laguna-s-2.1-free",
-        "ling-3.0-flash-free",
-        "north-mini-code-free",
-        "nemotron-3-ultra-free",
-        "deepseek-v4-flash-free",
-    }
-)
-_PROTOCOL_BY_MODEL = {
-    **dict.fromkeys(_RESPONSES_MODELS, PROTOCOL_RESPONSES),
-    **dict.fromkeys(_MESSAGES_MODELS, PROTOCOL_MESSAGES),
-    **dict.fromkeys(_GEMINI_MODELS, PROTOCOL_GEMINI),
-    **dict.fromkeys(_CHAT_MODELS, PROTOCOL_CHAT),
-}
-_FREE_MODELS = frozenset(
-    model_id for model_id in _CHAT_MODELS if model_id == "big-pickle" or model_id.endswith("-free")
-)
-_IMMINENT_DEPRECATIONS = {
-    "claude-opus-4-1": "2026-08-05",
-    "kimi-k2.5": "2026-08-05",
-    "minimax-m2.5": "2026-08-05",
-}
-_RETIRED_MODELS = frozenset(
-    {
-        "gpt-5.2-codex",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
-        "gpt-5-codex",
-        "claude-sonnet-4",
-        "glm-5",
-    }
-)
-
-_ZEN_GEMINI_MEDIA_TYPES = frozenset(
-    {
-        "image/png",
-        "image/jpeg",
-        "image/webp",
-        "image/heic",
-        "image/heif",
-        "audio/wav",
-        "audio/mp3",
-        "audio/mpeg",
-        "audio/aiff",
-        "audio/aac",
-        "audio/ogg",
-        "audio/flac",
-        "video/mp4",
-        "video/mpeg",
-        "video/quicktime",
-        "video/avi",
-        "video/x-flv",
-        "video/mpg",
-        "video/webm",
-        "video/wmv",
-        "video/3gpp",
-        "application/pdf",
-    }
-)
-_ZEN_INLINE_REQUEST_MAX_BYTES = 20_000_000
-_ZEN_MAX_IMAGES_PER_REQUEST = 3_600
-
-_PERMANENT_429_MARKERS = (
-    "freeusagelimiterror",
-    "gousagelimiterror",
-    "blackusagelimiterror",
-    "monthly limit",
-    "weekly limit",
-    "usage limit",
-    "quota exceeded",
-)
-_NON_AUTH_401_MARKERS = (
-    "creditserror",
-    "monthlylimiterror",
-    "userlimiterror",
-    "modelerror",
-)
-_AUTH_401_MARKERS = ("autherror", "invalid api key", "missing api key")
+__all__ = [
+    "DEPRECATES_AT_METADATA_KEY",
+    "OPENCODE_ZEN_METADATA_KEY",
+    "OpenCodeZenAdapter",
+    "PRIVACY_METADATA_KEY",
+    "PROTOCOL_CHAT",
+    "PROTOCOL_GEMINI",
+    "PROTOCOL_MESSAGES",
+    "PROTOCOL_METADATA_KEY",
+    "PROTOCOL_RESPONSES",
+]
 
 
 def _classify_zen_status(
@@ -720,373 +588,5 @@ def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
-def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | None, int]:
-    role = message.get("role")
-    if role == "assistant":
-        replay = message.get("reasoning_meta")
-        if isinstance(replay, Mapping) and isinstance(replay.get("gemini_parts"), list):
-            replay_parts = [
-                copy.deepcopy(part) for part in replay["gemini_parts"] if isinstance(part, Mapping)
-            ]
-            if replay_parts:
-                return {"role": "model", "parts": replay_parts}, 0
-        parts: list[dict[str, Any]] = []
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            parts.append({"text": content})
-        for tool_call in message.get("tool_calls") or []:
-            if not isinstance(tool_call, Mapping):
-                continue
-            parts.append(
-                {
-                    "functionCall": {
-                        "id": tool_call.get("id"),
-                        "name": tool_call.get("name"),
-                        "args": tool_call.get("arguments", {}),
-                    }
-                }
-            )
-        return ({"role": "model", "parts": parts} if parts else None), 0
-    if role == "tool":
-        raw_content = message.get("content", "")
-        try:
-            parsed_content = (
-                json.loads(raw_content) if isinstance(raw_content, str) else raw_content
-            )
-        except json.JSONDecodeError:
-            parsed_content = raw_content
-        response = (
-            parsed_content if isinstance(parsed_content, Mapping) else {"result": parsed_content}
-        )
-        return (
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "functionResponse": {
-                            "id": message.get("tool_call_id"),
-                            "name": message.get("name") or "tool",
-                            "response": response,
-                        }
-                    }
-                ],
-            },
-            0,
-        )
-    if role != "user":
-        return None, 0
-    user_parts, image_count = _to_gemini_user_parts(message.get("content", ""))
-    return {"role": "user", "parts": user_parts}, image_count
-
-
-def _to_gemini_user_parts(content: Any) -> tuple[list[dict[str, Any]], int]:
-    if not isinstance(content, list):
-        return [{"text": _content_text(content)}], 0
-    parts: list[dict[str, Any]] = []
-    image_count = 0
-    for block in content:
-        if not isinstance(block, Mapping):
-            parts.append({"text": _content_text(block)})
-            continue
-        block_type = block.get("type")
-        if block_type == "text":
-            parts.append({"text": _content_text(block.get("text"))})
-            continue
-        if block_type not in {"media", "document"}:
-            raise ProviderError(
-                f"Unsupported Gemini content block type: {block_type}",
-                retryable=False,
-            )
-        base64_data = block.get("base64")
-        media_type = block.get("media_type")
-        if not isinstance(base64_data, str) or not isinstance(media_type, str):
-            raise ProviderError(
-                "Gemini media blocks require string base64 and media_type fields",
-                retryable=False,
-            )
-        if media_type not in _ZEN_GEMINI_MEDIA_TYPES:
-            raise ProviderError(f"Unsupported Gemini media type: {media_type}", retryable=False)
-        parts.append({"inlineData": {"mimeType": media_type, "data": base64_data}})
-        if media_type.startswith("image/"):
-            image_count += 1
-    return parts, image_count
-
-
-def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
-    candidates = response.get("candidates")
-    candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
-    candidate = candidate if isinstance(candidate, Mapping) else {}
-    content = candidate.get("content")
-    raw_parts = content.get("parts") if isinstance(content, Mapping) else None
-    parts = (
-        raw_parts
-        if isinstance(raw_parts, list)
-        else [raw_parts]
-        if isinstance(raw_parts, Mapping)
-        else []
-    )
-    replay_parts = [copy.deepcopy(dict(part)) for part in parts if isinstance(part, Mapping)]
-    text_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    tool_calls: list[dict[str, Any]] = []
-    for index, part in enumerate(replay_parts):
-        text = part.get("text")
-        if isinstance(text, str):
-            (reasoning_parts if part.get("thought") is True else text_parts).append(text)
-        function_call = part.get("functionCall")
-        if isinstance(function_call, Mapping):
-            tool_calls.extend(
-                normalize_tool_call_candidates(
-                    tool_call_id=_gemini_tool_call_id(function_call, response, index),
-                    name=function_call.get("name"),
-                    arguments=function_call.get("args"),
-                    fallback_id=f"tool_call_{index}",
-                )
-            )
-    result: dict[str, Any] = {
-        "role": "assistant",
-        "content": "".join(text_parts),
-        "reasoning": "".join(reasoning_parts) or None,
-        "reasoning_meta": {"gemini_parts": replay_parts} if replay_parts else None,
-        "tool_calls": tool_calls,
-        "terminal_outcome": _gemini_finish_reason(
-            candidate.get("finishReason"),
-            has_tool_calls=bool(tool_calls),
-            prompt_feedback=response.get("promptFeedback"),
-        ),
-    }
-    usage = _normalize_gemini_usage(response.get("usageMetadata"))
-    if usage is not None:
-        result["usage"] = usage
-    return result
-
-
-def _normalize_gemini_stream_chunk(
-    chunk: Mapping[str, Any],
-    replay_parts: list[dict[str, Any]],
-    *,
-    has_tool_calls: bool,
-) -> tuple[list[dict[str, Any]], bool, bool]:
-    error = chunk.get("error")
-    if isinstance(error, Mapping):
-        raise ProviderError(
-            f"OpenCode Zen Gemini stream error: {error.get('message') or error}",
-            retryable=False,
-        )
-    deltas: list[dict[str, Any]] = []
-    chunk_has_tools = False
-    candidates = chunk.get("candidates")
-    candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
-    candidate = candidate if isinstance(candidate, Mapping) else {}
-    content = candidate.get("content")
-    parts = content.get("parts") if isinstance(content, Mapping) else []
-    part_values = (
-        parts if isinstance(parts, list) else [parts] if isinstance(parts, Mapping) else []
-    )
-    for raw_part in part_values:
-        if not isinstance(raw_part, Mapping):
-            continue
-        part = copy.deepcopy(dict(raw_part))
-        replay_parts.append(part)
-        text = part.get("text")
-        if isinstance(text, str) and text:
-            deltas.append(
-                {
-                    "type": "reasoning_delta" if part.get("thought") is True else "content_delta",
-                    "text": text,
-                }
-            )
-        function_call = part.get("functionCall")
-        if isinstance(function_call, Mapping):
-            chunk_has_tools = True
-            name = function_call.get("name")
-            arguments = function_call.get("args")
-            deltas.append(
-                {
-                    "type": "tool_call_delta",
-                    "id": _gemini_tool_call_id(function_call, chunk, len(replay_parts) - 1),
-                    "name_delta": name if isinstance(name, str) else "",
-                    "arguments_delta": json.dumps(
-                        arguments if arguments is not None else {},
-                        separators=(",", ":"),
-                    ),
-                }
-            )
-    if replay_parts:
-        deltas.append(
-            {
-                "type": "reasoning_meta",
-                "reasoning_meta": {"gemini_parts": copy.deepcopy(replay_parts)},
-            }
-        )
-    finish_reason = candidate.get("finishReason")
-    finished = finish_reason is not None
-    if finished:
-        deltas.append(
-            {
-                "type": "finish",
-                "reason": _gemini_finish_reason(
-                    finish_reason,
-                    has_tool_calls=has_tool_calls or chunk_has_tools,
-                    prompt_feedback=chunk.get("promptFeedback"),
-                ),
-            }
-        )
-    usage = _normalize_gemini_usage(chunk.get("usageMetadata"))
-    if usage is not None:
-        deltas.append({"type": "usage", **usage})
-    return deltas, chunk_has_tools, finished
-
-
-def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
-    if not isinstance(raw, Mapping):
-        return None
-    input_tokens = _nonnegative_int(raw.get("promptTokenCount"))
-    visible_output = _nonnegative_int(raw.get("candidatesTokenCount"))
-    reasoning_tokens = _nonnegative_int(raw.get("thoughtsTokenCount"))
-    cache_read = _nonnegative_int(raw.get("cachedContentTokenCount"))
-    usage = {
-        "input_tokens": input_tokens,
-        "output_tokens": visible_output + reasoning_tokens,
-    }
-    if reasoning_tokens:
-        usage["reasoning_tokens"] = reasoning_tokens
-    if cache_read:
-        usage["cache_read_tokens"] = cache_read
-    return usage
-
-
-def _gemini_finish_reason(
-    value: Any,
-    *,
-    has_tool_calls: bool,
-    prompt_feedback: Any = None,
-) -> TerminalOutcome:
-    if isinstance(prompt_feedback, Mapping) and prompt_feedback.get("blockReason"):
-        return TERMINAL_OUTCOME_CONTENT_FILTERED
-    if value == "STOP":
-        return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
-    if value == "MAX_TOKENS":
-        return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-    if value in {
-        "SAFETY",
-        "RECITATION",
-        "LANGUAGE",
-        "BLOCKLIST",
-        "PROHIBITED_CONTENT",
-        "SPII",
-        "IMAGE_SAFETY",
-        "IMAGE_PROHIBITED_CONTENT",
-        "IMAGE_RECITATION",
-    }:
-        return TERMINAL_OUTCOME_CONTENT_FILTERED
-    if value in {
-        "MALFORMED_FUNCTION_CALL",
-        "UNEXPECTED_TOOL_CALL",
-        "TOO_MANY_TOOL_CALLS",
-        "MISSING_THOUGHT_SIGNATURE",
-        "MALFORMED_RESPONSE",
-        "ESCALATION",
-    }:
-        return TERMINAL_OUTCOME_ERROR
-    return TERMINAL_OUTCOME_UNKNOWN
-
-
-def _gemini_tool_call_id(call: Mapping[str, Any], response: Mapping[str, Any], index: int) -> str:
-    call_id = call.get("id")
-    if isinstance(call_id, str) and call_id:
-        return call_id
-    response_id = response.get("responseId")
-    suffix = response_id if isinstance(response_id, str) and response_id else "response"
-    return f"gemini_{suffix}_{index}"
-
-
-def _gemini_tool_choice(value: Any) -> dict[str, Any]:
-    if value == "auto":
-        return {"mode": "AUTO"}
-    if value == "required":
-        return {"mode": "ANY"}
-    if value == "none":
-        return {"mode": "NONE"}
-    if isinstance(value, Mapping):
-        function = value.get("function")
-        if isinstance(function, Mapping) and isinstance(function.get("name"), str):
-            return {"mode": "ANY", "allowedFunctionNames": [function["name"]]}
-    raise ProviderError("Unsupported Gemini tool_choice", retryable=False)
-
-
-def _apply_gemini_response_format(generation: dict[str, Any], value: Any) -> None:
-    if not isinstance(value, Mapping):
-        raise ProviderError("Gemini response_format must be an object", retryable=False)
-    format_type = value.get("type")
-    if format_type == "json_object":
-        generation["responseMimeType"] = "application/json"
-        return
-    if format_type == "json_schema":
-        json_schema = value.get("json_schema")
-        schema = json_schema.get("schema") if isinstance(json_schema, Mapping) else None
-        if not isinstance(schema, Mapping):
-            raise ProviderError("Gemini json_schema requires an object schema", retryable=False)
-        generation["responseMimeType"] = "application/json"
-        generation["responseJsonSchema"] = copy.deepcopy(dict(schema))
-        return
-    raise ProviderError(f"Unsupported Gemini response_format type: {format_type}", retryable=False)
-
-
-def _move_number(
-    source: dict[str, Any],
-    target: dict[str, Any],
-    source_key: str,
-    target_key: str,
-    *,
-    minimum: float,
-    maximum: float,
-) -> None:
-    value = source.pop(source_key, None)
-    if value is None:
-        return
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not minimum <= value <= maximum
-    ):
-        raise ProviderError(
-            f"Gemini {source_key} must be between {minimum} and {maximum}",
-            retryable=False,
-        )
-    target[target_key] = value
-
-
-def _move_integer(
-    source: dict[str, Any],
-    target: dict[str, Any],
-    source_key: str,
-    target_key: str,
-    *,
-    minimum: int | None = None,
-) -> None:
-    value = source.pop(source_key, None)
-    if value is None:
-        return
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or (minimum is not None and value < minimum)
-    ):
-        raise ProviderError(f"Gemini {source_key} must be an integer", retryable=False)
-    target[target_key] = value
-
-
-def _content_text(value: Any) -> str:
-    return value if isinstance(value, str) else "" if value is None else str(value)
-
-
-def _nonnegative_int(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
-
-
 def _response_detail(response: httpx.Response) -> str:
     return f"{response.status_code} {response.text}".strip()
-
-
-__all__ = ["OpenCodeZenAdapter"]

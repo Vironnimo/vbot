@@ -12,16 +12,22 @@ import respx
 
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.models.query import ModelQuery
+from core.providers._openrouter_catalog import (
+    _normalize_image_parameters,
+    _passthrough_from_detail,
+)
+from core.providers._openrouter_constants import (
+    _REASONING_TRAILING_NEWLINES_STATE_KEY,
+)
+from core.providers._openrouter_policy import (
+    _collapse_reasoning_newline_runs,
+    _is_claude_family,
+)
 from core.providers.errors import ProviderError, ProviderRateLimitError
 from core.providers.openrouter import (
-    _REASONING_TRAILING_NEWLINES_STATE_KEY,
     OPENROUTER_RESPONSES_ENDPOINT,
     SUPPLEMENTARY_OUTPUT_MODALITIES,
     OpenRouterAdapter,
-    _collapse_reasoning_newline_runs,
-    _is_claude_family,
-    _normalize_image_parameters,
-    _passthrough_from_detail,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
