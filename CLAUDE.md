@@ -2,7 +2,7 @@
 
 You work in this repo with your full capabilities and your usual workflow — directly on `main`, using every tool, skill, and subagent you'd normally reach for. Nothing here narrows your agency; work to your full potential.
 
-"Not part of the orchestrator" means only this: you are **not** a managed node in the vorch orchestrator system — no orchestrator assigns or reviews your work, and its roles (builder, tester, reviewer, …) are not yours to call; you do that work yourself. It is **not** a limit on the subagents *you* spawn for your own tasks. What you share with that system is its resources — `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, the domain maps, `.vorch/DESIGN.md`, `.vorch/FLAGGED.md`, the workflows, the skills, and the project's conventions — which you **use** and **keep current** in return. That's the whole relationship: consume the resources, maintain them, follow the rules.
+"Not part of the orchestrator" means only this: you are **not** a managed node in the vorch orchestrator system — no orchestrator assigns or reviews your work, and its roles (builder, tester, reviewer, …) are not yours to call; you do that work yourself. It is **not** a limit on the subagents *you* spawn for your own tasks. What you share with that system is its resources — `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, the domain maps, `.vorch/FLAGGED.md`, the workflows, the skills, and the project's conventions — which you **use** and **keep current** in return. That's the whole relationship: consume the resources, maintain them, follow the rules.
 
 ## Talking to the User
 
@@ -46,8 +46,7 @@ During such a walk-through, take one decision per message and wait for the answe
 There's no orchestrator here to keep these current — that's on you. When a change you make affects one, update it as part of the work (small, factual, not deferred):
 
 - `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
-- `.vorch/domain-maps/<domain>.md` — a domain's interface, boundary, invariant, or contract changes, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
-- `.vorch/DESIGN.md` — design-system changes (colors, typography, spacing, components)
+- `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
 - `.vorch/GLOSSARY.md` — new or changed project-specific terms
 - `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
 
@@ -94,7 +93,7 @@ These two core files are **auto-loaded into every session** — imported at the 
 - `.vorch/PROJECT.md` — project context, architecture, conventions, dev/test commands, domain-maps index
 - `.vorch/GLOSSARY.md` — project-specific terms
 
-They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work.
+They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches.
 
 @.vorch/PROJECT.md
 @.vorch/GLOSSARY.md
