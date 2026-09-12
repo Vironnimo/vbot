@@ -374,7 +374,7 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
 
 
 def test_build_handoff_prompt_weaves_instruction_and_preserves_base() -> None:
-    from core.chat.commands import _build_handoff_prompt
+    from core.chat._command_builtin import _build_handoff_prompt
 
     base = "Write a handoff for the next agent."
 
