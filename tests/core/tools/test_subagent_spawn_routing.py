@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import core.subagents._constants as subagent_constants
 from core.projects import ModelConfigurationError
 from core.sessions import SessionAddress
 from core.tools.subagent import (
@@ -32,7 +33,6 @@ from .subagent_test_support import (
     make_runtime,
     pytest,
     register_subagent_tools,
-    subagent_module,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
     assert Path(activity_file).exists()
     assert emitted_events[:2] == [
         (
-            subagent_module.SUBAGENT_SESSION_STARTED_EVENT,
+            subagent_constants.SUBAGENT_SESSION_STARTED_EVENT,
             {
                 "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
                 "data": {
@@ -381,7 +381,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
             },
         ),
         (
-            subagent_module.SUBAGENT_SESSION_STARTED_EVENT,
+            subagent_constants.SUBAGENT_SESSION_STARTED_EVENT,
             {
                 "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
                 "data": {

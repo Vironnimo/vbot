@@ -30,15 +30,11 @@ from core.runs import (
 )
 from core.sessions import ChatSession, SessionAddress
 from core.storage import TemporaryFileManager
-from core.subagents.subagents import (
-    SubAgentBatchTracker,
-    SubAgentCoordinator,
-    _handle_subagent_status,
-    _track_subagent_completion,
-)
-from core.subagents.subagents import (
-    _handle_subagent as _handle_subagent_impl,
-)
+from core.subagents._completion import _track_subagent_completion
+from core.subagents._status import _handle_subagent_status
+from core.subagents.subagents import SubAgentCoordinator
+from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
+from core.subagents.tracker import SubAgentBatchTracker
 from core.tools.tools import ToolContext
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
