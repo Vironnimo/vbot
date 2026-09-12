@@ -10,6 +10,7 @@ import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import schema as session_schema
+from core.sessions._types import SessionAddress
 from core.sessions.errors import SessionStoreCorruptError, SessionStoreSchemaMismatchError
 from core.sessions.schema import (
     APPLICATION_ID,
@@ -21,7 +22,6 @@ from core.sessions.schema import (
     is_wal_reset_vulnerable,
     reconcile_schema,
 )
-from core.sessions.sessions import SessionAddress
 from core.sessions.store import SessionStore
 
 

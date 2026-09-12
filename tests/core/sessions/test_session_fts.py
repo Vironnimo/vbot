@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import _store_codec as codec_module
 from core.sessions.schema import (
     FTS_COMPLETED_HIGH_WATER_KEY,
     FTS_DEGRADED_REASON_KEY,
@@ -23,7 +24,7 @@ from core.sessions.schema import (
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.sessions import store as store_module
+    from core.sessions import _store_fts as store_module
 
     def fail_backfill(_connection: sqlite3.Connection) -> None:
         raise AssertionError("an empty FTS projection must become healthy in its bootstrap commit")
@@ -42,7 +43,7 @@ def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
 def test_search_availability_uses_lifecycle_markers_without_coverage_scans(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.sessions import store as store_module
+    from core.sessions import _store_fts as store_module
 
     sessions = ChatSessionManager(tmp_path)
     message = ChatMessage.user("marker backed search")
@@ -238,7 +239,6 @@ def test_healthy_fts_null_result_does_not_fall_back_to_canonical_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.sessions import store as store_module
 
     sessions = ChatSessionManager(tmp_path)
     sessions.create("agent", session_id="no-match").append(ChatMessage.user("present text"))
@@ -246,7 +246,7 @@ def test_healthy_fts_null_result_does_not_fall_back_to_canonical_scan(
     def fail_decode(_row: sqlite3.Row) -> ChatMessage:
         raise AssertionError("healthy FTS null results must not scan canonical rows")
 
-    monkeypatch.setattr(store_module, "message_from_row", fail_decode)
+    monkeypatch.setattr(codec_module, "message_from_row", fail_decode)
     try:
         assert (
             sessions.fts_search(
@@ -359,7 +359,7 @@ def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
 
 
 def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypatch) -> None:
-    from core.sessions import store as store_module
+    from core.sessions import _store_fts as store_module
 
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="resumable")

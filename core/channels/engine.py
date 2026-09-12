@@ -53,10 +53,7 @@ from core.runs import (
     WaitingWorkAdmission,
     WaitingWorkLimitError,
 )
-from core.sessions.sessions import (
-    CHANNEL_MESSAGE_NOTE_PREFIX,
-    SessionAddress,
-)
+from core.sessions import CHANNEL_MESSAGE_NOTE_PREFIX, SessionAddress
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool

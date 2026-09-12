@@ -25,6 +25,8 @@ from typing import Any, cast
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.sessions import SessionAddress
+from core.sessions._store_codec import messages_from_connection
+from core.sessions._store_continuation import continuation_from_connection
 from core.sessions.format import (
     MAINTENANCE_GUARD_FILE_NAME,
     publish_ready_marker,
@@ -32,11 +34,7 @@ from core.sessions.format import (
 )
 from core.sessions.schema import APPLICATION_ID, SCHEMA_VERSION
 from core.sessions.snapshots import create_snapshot
-from core.sessions.store import (
-    SessionStore,
-    continuation_from_connection,
-    messages_from_connection,
-)
+from core.sessions.store import SessionStore
 from scripts.converters.jsonl_sessions import (
     CapturedArtifact,
     CaptureInventory,

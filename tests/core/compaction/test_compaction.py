@@ -43,7 +43,7 @@ from core.providers.github_copilot_responses import (
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.sessions import SessionAddress
-from core.sessions.sessions import _skill_context_note_content
+from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE, estimate_request_input_tokens
 

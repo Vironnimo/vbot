@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import core.sessions.store as session_store_module
+import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.chat.continuation import fold_continuation_records
@@ -31,6 +31,7 @@ from core.sessions import (
     current_skill_activation_contents,
     editable_session_message_ids,
 )
+from core.sessions import _store_values as store_values
 
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
@@ -839,7 +840,7 @@ def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> N
                     "coder",
                     "project",
                     "reviewer",
-                    session_store_module._LIST_VISIBILITY_BACKGROUND,
+                    store_values._LIST_VISIBILITY_BACKGROUND,
                 ),
             )
         )
@@ -855,7 +856,7 @@ def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> N
                     "coder",
                     "project",
                     "reviewer",
-                    session_store_module._LIST_VISIBILITY_BACKGROUND,
+                    store_values._LIST_VISIBILITY_BACKGROUND,
                 ),
             )
         )

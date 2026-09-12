@@ -19,11 +19,10 @@ from cli.server_management import (
 )
 from core.sessions.errors import SessionStorageError
 from core.sessions.format import read_session_store_marker
+from core.sessions.recovery import read_recovery_incident, restore_snapshot_with_incident
 from core.sessions.snapshots import (
     list_snapshots,
-    read_recovery_incident,
     read_snapshot_health,
-    restore_snapshot_with_incident,
     snapshot_root,
     snapshot_summaries,
 )

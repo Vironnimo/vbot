@@ -15,7 +15,7 @@ import pytest
 from core.chat.messages import ChatMessage, ToolCall
 from core.runs import RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
+from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import (
     AgentDirectory,
     CountEntry,

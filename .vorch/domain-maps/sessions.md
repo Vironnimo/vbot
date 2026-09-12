@@ -6,6 +6,14 @@ Canonical Session history, metadata, completion activity, continuation state, an
 
 `core/sessions/` owns the system-managed Session domain and the single canonical database `<data-dir>/sessions.db`. Chat, Agents, Projects, Channels, Recall, Statistics, and server orchestration address Sessions only through `ChatSessionManager`; no caller constructs storage paths or queries the database directly. Legacy JSONL artifacts are accepted only by the explicit offline converter under `scripts/converters/` and are rejected at Runtime startup.
 
+## Internal source routing
+
+The public `core.sessions` package routes stable imports to the Session service in `sessions.py`, the buffered Session handle in `session.py`, immutable records in `_types.py`, and semantic history helpers in `history.py`. Metadata validation/cursors and bounded I/O/write leases live in `_metadata.py` and `_io.py`.
+
+`store.py` retains Runtime connection lifecycle, read/write admission, FTS error recovery and the offline bulk transaction. Private `_store_*` functions receive its connection: `codec` owns normalized Message graphs, `continuation` folds recoverable work, `history` builds bounded Message projections, `queries` reads the catalog, `mutations` updates canonical history/metadata, and `owned` commits temporary bindings, receipts and Run attribution. `values` supplies shared relational projections, `fts` owns disposable index lifecycle, `search` executes bounded search, `schema` reconciles an opening database, and `import` inserts a converter generation. Do not open independent runtime connections or commit within a mutation helper; metadata, Message relations, revisions, receipts and FTS effects must share the caller's transaction.
+
+`snapshots.py` owns capture, verified inventory and shared file/lock primitives. `recovery.py` owns quarantine, restore and durable incident acknowledgement, using the same operation lock. The offline converter imports Message/Continuation reconstruction directly from their private implementation modules; ordinary consumers use `core.sessions`.
+
 ## Terms
 
 Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
