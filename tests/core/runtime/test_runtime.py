@@ -22,7 +22,8 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import CanonicalSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
-from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
+from core.runtime._configuration import _VBOT_ROOT, _detect_vbot_version, _resolve_resources_path
+from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
@@ -712,7 +713,7 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
 
     seed_agent_store = AgentStore(
         config.data_dir,
-        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+        template_dir=_resolve_resources_path(runtime.config) / "workspace-templates",  # noqa: SLF001
     )
     seed_agent_store.create("assistant", "Assistant")
 
@@ -796,7 +797,7 @@ async def test_runtime_start_registers_channel_send_when_enabled_channel_starts(
 
     seed_agent_store = AgentStore(
         config.data_dir,
-        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+        template_dir=_resolve_resources_path(runtime.config) / "workspace-templates",  # noqa: SLF001
     )
     seed_agent_store.create("assistant", "Assistant")
 
@@ -841,7 +842,7 @@ def test_runtime_registers_channel_send_for_enabled_channel_without_running_adap
     runtime = Runtime(config)
     seed_agent_store = AgentStore(
         config.data_dir,
-        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+        template_dir=_resolve_resources_path(runtime.config) / "workspace-templates",  # noqa: SLF001
     )
     seed_agent_store.create("assistant", "Assistant")
     channel_dir = config.data_dir / "channels" / "tg-assistant"
@@ -1956,7 +1957,7 @@ class _StubPrompts:
 async def test_failed_bootstrap_cleans_resources_and_can_retry(
     config: Config, monkeypatch: pytest.MonkeyPatch, owner: str, method: str | None
 ) -> None:
-    import core.runtime.runtime as runtime_module
+    import core.runtime._bootstrap as bootstrap_module
 
     runtime = Runtime(config)
     resources: dict[str, Any] = {}
@@ -1979,9 +1980,11 @@ async def test_failed_bootstrap_cleans_resources_and_can_retry(
 
     with monkeypatch.context() as patch:
         if method is None:
-            patch.setattr(runtime_module, owner, fail)
+            patch.setattr(bootstrap_module, owner, fail)
         else:
-            patch.setattr(getattr(runtime_module, owner), method, fail)
+            patch.setattr(
+                Runtime if owner == "Runtime" else getattr(bootstrap_module, owner), method, fail
+            )
         with pytest.raises(RuntimeError) as caught:
             runtime.start()
     assert caught.value is failure
@@ -2052,3 +2055,19 @@ async def test_runtime_finishes_cleanup_before_reporting_terminal_shutdown_failu
         _ = runtime.terminal_manager
     with pytest.raises(RuntimeError):
         _ = runtime.chat_sessions
+
+
+def test_service_access_preserves_readiness_availability_and_readonly_contract(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config)
+    with pytest.raises(RuntimeError, match="Runtime not started"):
+        _ = runtime.providers
+    monkeypatch.setattr(runtime, "_started", True)
+    with pytest.raises(RuntimeError, match="Provider registry not available"):
+        _ = runtime.providers
+    with pytest.raises(AttributeError, match="has no setter"):
+        runtime.providers = object()
+    runtime.stop()
+    with pytest.raises(RuntimeError, match="Runtime not started"):
+        _ = runtime.providers

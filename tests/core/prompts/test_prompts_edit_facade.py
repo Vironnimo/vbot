@@ -357,7 +357,7 @@ def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:
     "body", [b"{broken", b"{}", b"[null]", b"\xff", b'[{"id":"core:tools","enabled":"false"}]']
 )
 def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
-    from core.runtime.runtime import _StorageManagerBlockStore
+    from core.runtime._prompt_blocks import _StorageManagerBlockStore
     from core.storage import StorageManager
 
     storage = StorageManager(data_dir=tmp_path / "data")

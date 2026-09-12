@@ -2,6 +2,8 @@
 
 Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
+`runtime.py::Runtime` owns readiness, service references, shutdown, and the stable public access/reload surface. `_bootstrap.py` assembles its dependency-ordered service graph; `_configuration.py` interprets bootstrap paths and live Settings callbacks. These are internal files of the same Runtime owner, not additional service layers.
+
 Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core/utils/workers.py`: each pool owns a dedicated executor, admits at most its worker count per Event Loop, and defers cancellation until an already-started mutation settles; continuous Terminal I/O stays on its own executor so it cannot consume parser/prompt/Session/Tool capacity.
 
 ## DI Contracts
@@ -34,6 +36,8 @@ close (after active Chat Runs drain), and failed-startup cleanup. Coverage:
 
 ## Service properties
 
+Explicit typed service declarations share the read-only readiness/availability guard in `_service_access.py`; special properties retain their individual contracts. Initial construction and every shutdown use the same service-reference initializer, including Extension host groups and the selected Recall integration.
+
 All service properties raise `RuntimeError` outside a started runtime, **except `extensions`** (returns `None`); `chat_runs` is a plain attribute until `start()`. `config` is available pre-start (bind resolution). Non-obvious members beyond self-describing services:
 
 - `provider_credentials` - the central resolver also exposed via `has_provider_credentials`/`get_provider_credentials`; `resolve_environment_credential(key)` resolves env-first without exposing values, `environment_credential_source(key)` reports provenance. Web Search, Extensions, and Channels consume this shared instance so live `.env` reloads reach every credential-backed subsystem.
@@ -43,20 +47,22 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 
 ### Hot-reload seams
 
-All reload methods keep registry/service identity stable so already-wired consumers observe changes without restart:
+Reload methods refresh already-wired consumers without restart. Provider/Model registry identities stay stable; Skill, Extension, and Recall registries can be replaced through the live callbacks and installation paths below:
 
 - `reload_custom_providers()` - Settings-owned Providers + manual Models into existing registries.
 - `maybe_refresh_local_catalogs(force=False)` - staged copy refresh for auto-refresh Connections, published atomically after validation; failures never raise and leave the last database untouched.
 - `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers use it instead of the synchronous variant.
 - `reload_skills()` - asks `core/skills/runtime.py::SkillRuntime` for a replacement global registry, then re-registers Skill Tools and updates prompts. `SkillRuntime` owns scan-layer resolution, Project/Agent/shared scoping, inventory, and both scoped registry caches; Runtime preserves the existing public facade methods.
-- `reload_recall_backend()` re-registers both Recall Tools from settings without restart.
+- `reload_recall_backend()` re-registers both Recall Tools from settings without restart. `_recall.py::RecallIntegration` owns the live backend/registry, Extension fallback, and best-effort deleted-Session index cleanup; Runtime retains the public readiness boundary.
 - `reload_keep_awake()` holds/releases the Windows power request per persisted setting (no-op elsewhere).
 - `reload_channel_tool()` syncs `channel_send` registration with enabled-Channel existence.
 - `reload_environment_credentials()` refreshes the `.env` fallback inside the same resolver instance so every startup-injected consumer sees key/secret/token writes immediately.
 - `reload_extensions()` and `apply_extension_disabled_change(...)` delegate the serialized rebuild/deactivation sequence to `core/extensions/runtime.py::ExtensionRuntime`. Runtime supplies the stable Tool/Command registries plus Recall, Skill, and Prompt refresh callbacks; the Extension owner holds the mutation lock, module purge, registry swap, lifecycle ordering, and last-write-wins behavior. Session-owning Extensions quiesce their exact owned work before capability removal; retired registration callbacks fail closed. Ordinary hooks retain their existing failure isolation.
-- Owner-bound Extension hosts receive temporary execution groups, safe editor catalogs and existing Statistics projections through injection. Whole-roster preflight uses ordinary Model, Tool/settings and Project-ceiling validators off the Event Loop, then rechecks the loaded registration before admission. Source/tests: `runtime.py`, `tests/core/runtime/test_runtime_extensions.py`.
+- Owner-bound Extension hosts receive temporary execution groups, safe editor catalogs and existing Statistics projections through injection. Whole-roster preflight uses ordinary Model, Tool/settings and Project-ceiling validators off the Event Loop, then rechecks the loaded registration before admission. `_extension_host.py::ExtensionHostFactory` owns these groups and projections with explicit services and live registry/Skill callbacks; it never receives the Runtime object. Source/tests: `_extension_host.py`, `tests/core/runtime/test_runtime_extensions.py`.
 - Editor catalogs project Model reasoning capabilities and context size, plus Tool family/activation metadata, from their existing registry owners so isolated editors can use the shared selectors without inventing capability defaults (`test_runtime_extensions.py`).
 - Editor catalogs also expose System Prompt block metadata. Owner-bound `inspect_prompt` resolves a prospective temporary Agent with ordinary Project ceilings, applies Chat's Model-specific Tool routing and the owner's private Tool grants, then returns the combined prompt, rendered block details and effective Tool definitions. Inspection creates no Session or Run and rechecks registration identity after asynchronous work (`test_runtime_extensions.py`).
+
+The storage scope adapter and Tool/Extension Prompt-block contributions live together in `_prompt_blocks.py`; bootstrap and reload use the same projection.
 
 ### Provider operations
 
