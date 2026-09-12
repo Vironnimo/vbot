@@ -1,3 +1,4 @@
+import { formatAgentAddress } from './agentAddress.js';
 import { reconnectBackoffDelay } from './backoff.js';
 import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
@@ -7,7 +8,6 @@ import {
   appendRunEvent,
   applyRunControls,
   ensureSessionState,
-  formatAgentAddress,
   highestContiguousRunEventSequence,
   isRunActive,
   removeQueuedMessage,
