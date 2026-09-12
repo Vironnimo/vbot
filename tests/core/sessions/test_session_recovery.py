@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import recovery as recovery_module
 from core.sessions import snapshots as snapshots_module
 from core.sessions.errors import SessionStoreCorruptError
 from core.sessions.format import read_session_store_marker
@@ -69,7 +70,7 @@ def test_failed_quarantine_prevents_snapshot_replacement_and_preserves_original(
 
     monkeypatch.setattr(snapshots_module.os, "replace", fail_quarantine)
 
-    assert snapshots_module.restore_snapshot(tmp_path, database, snapshot) is False
+    assert recovery_module.restore_snapshot(tmp_path, database, snapshot) is False
     assert database.read_bytes() == original
 
 
@@ -112,7 +113,7 @@ def test_final_incident_failure_leaves_pending_evidence_and_retries_on_next_open
     monkeypatch.setattr(snapshots_module.os, "replace", fail_final_incident)
     with pytest.raises(SessionStoreCorruptError):
         ChatSessionManager(tmp_path)
-    pending = snapshots_module.read_recovery_incident(tmp_path)
+    pending = recovery_module.read_recovery_incident(tmp_path)
     assert pending is not None
     assert pending["verification"] == "pending"
 
@@ -122,7 +123,7 @@ def test_final_incident_failure_leaves_pending_evidence_and_retries_on_next_open
         assert [item.content for item in reopened.get(address).load()] == [message.content]
     finally:
         reopened.close()
-    completed = snapshots_module.read_recovery_incident(tmp_path)
+    completed = recovery_module.read_recovery_incident(tmp_path)
     assert completed is not None
     assert completed["incident_id"] == pending["incident_id"]
     assert completed["verification"] == "ok"
@@ -152,7 +153,7 @@ def test_concurrent_recovery_reprobes_after_the_first_owner_finishes(tmp_path: P
 
     def recover() -> None:
         barrier.wait()
-        results.append(snapshots_module.auto_restore_if_needed(tmp_path, database))
+        results.append(recovery_module.auto_restore_if_needed(tmp_path, database))
 
     workers = [threading.Thread(target=recover) for _ in range(2)]
     for worker in workers:

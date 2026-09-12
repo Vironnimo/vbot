@@ -11,7 +11,7 @@ import pytest
 from core.sessions import ChatSessionManager
 from core.sessions import snapshots as snapshots_module
 from core.sessions.format import write_bootstrap_marker
-from core.sessions.snapshots import write_recovery_incident
+from core.sessions.recovery import write_recovery_incident
 from server.events import ServerEventBus
 from server.rpc.methods import build_method_handlers, dispatch_rpc
 
