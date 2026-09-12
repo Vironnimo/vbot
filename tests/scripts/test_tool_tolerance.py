@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from typing import Any
 
 import pytest
@@ -140,3 +141,24 @@ def test_edit_probe_executes_mistakes_and_checks_file_effects() -> None:
         ]
     }
     assert not asyncio.run(_edit_case(Adapter(wrong), args, case))["passed"]
+
+
+def test_cron_probe_verifies_persisted_effects_for_every_case() -> None:
+    from scripts.provider_probe.workflow_cron_tolerance import cron_case, cron_tolerance_cases
+
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            arguments = json.loads(
+                messages[-1]["content"]
+                .split("\n", 1)[0]
+                .removeprefix("Make one Tool Call with these arguments: ")
+            )
+            return {"tool_calls": [{"id": "fixture", "name": "cron", "arguments": arguments}]}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args([])
+    for case in cron_tolerance_cases():
+        row = asyncio.run(cron_case(Adapter(), args, case))
+        assert row["passed"], row
