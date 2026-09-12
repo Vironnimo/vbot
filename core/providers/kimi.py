@@ -6,9 +6,6 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import ModelLookup
 from core.providers.errors import ProviderError
@@ -22,6 +19,10 @@ from core.providers.reasoning import (
     remove_reasoning_kwargs,
 )
 from core.providers.token_getter import TokenGetter
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
+
 
 KIMI_CODING_MODE = "coding_plan"
 KIMI_K3_MODEL_IDS = frozenset({"kimi-k3", "k3", "k3-256k"})

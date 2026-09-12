@@ -6,9 +6,6 @@ import math
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from core.debug import ProviderDebugRecorder
-
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._chat_completions_catalog import (
     _read_optional_non_empty_string,
@@ -35,6 +32,10 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import TokenGetter
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
+
 
 MINIMAX_M3_MODEL_ID = "MiniMax-M3"
 MINIMAX_ANTHROPIC_MODE = "anthropic_messages"
