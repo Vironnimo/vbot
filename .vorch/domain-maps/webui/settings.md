@@ -2,6 +2,8 @@
 
 Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, onboarding, appearance, channel, logs, or Desktop Voice work. Backend policy and persistence remain in the corresponding domain maps.
 
+`settingsView.js` retains the public pure-helper interface. Internal `lib/settingsView/` modules own appearance/audio, Agent defaults, retrieval, Channels, Extensions and Provider/account projections; forms keep their existing payload and normalization contracts.
+
 ## Settings shell
 
 `SettingsView.svelte` opens General and exposes five category destinations: General, Sessions & Memory, Tools & Media, Connections, and System. A category shows its related feature cards together; expanded editors stay mounted to preserve drafts and Provider authentication state. The General page exposes Appearance and Region/setup directly. Feature headings open compact editors; deep links select the owning category and expand the exact feature. Search indexes hidden rendered text, normalizes punctuation/spacing/diacritics, and points to the canonical editor. Shared Model/Thinking/fallback defaults and Compaction live in Agents; a Settings search result routes there without mounting duplicate editors. `SettingsGeneralPanel` still owns the Region/setup and System projections, each rendered once.
