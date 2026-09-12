@@ -1251,6 +1251,77 @@ describe('StatisticsView', () => {
     expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
   });
 
+  it.each(['failed', 'pending'])(
+    'opens independent Limits when the local report is %s',
+    async (state) => {
+      let finishReport;
+      const route = routedRpc(makeUsageReport());
+      rpcMock.mockImplementation((method, params) => {
+        if (method === 'statistics.report') {
+          return state === 'failed'
+            ? Promise.reject(new Error('local report unavailable'))
+            : new Promise((resolve) => {
+                finishReport = resolve;
+              });
+        }
+        return route(method, params);
+      });
+      mountedComponent = mount(StatisticsView, { target: document.body });
+      await waitForCondition(() => document.querySelector('[role="tab"]'));
+      openLimitsTab();
+      await waitForCondition(() => document.querySelector('.stats-limit-card'));
+      expect(document.body.textContent).toContain('OpenAI');
+      expect(document.body.textContent).not.toContain(
+        'local report unavailable',
+      );
+      if (finishReport) {
+        finishReport(makeReport());
+        await waitForCondition(() =>
+          document.querySelector('.stats-limit-card'),
+        );
+        expect(
+          document.querySelector('[role="tab"][aria-selected="true"]')
+            .textContent,
+        ).toContain('Limits');
+      }
+    },
+  );
+
+  it('keeps one pending Limits request across tab changes and stops after teardown', async () => {
+    vi.useFakeTimers();
+    let finishUsage;
+    const route = routedRpc(makeUsageReport());
+    rpcMock.mockImplementation((method, params) =>
+      method === 'provider.usage'
+        ? new Promise((resolve) => {
+            finishUsage = resolve;
+          })
+        : route(method, params),
+    );
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    openLimitsTab();
+    await waitForCondition(() => finishUsage);
+    const overview = [...document.querySelectorAll('[role="tab"]')].find(
+      (tab) => tab.textContent.trim() === 'Overview',
+    );
+    overview.click();
+    flushSync();
+    openLimitsTab();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
+    ).toHaveLength(1);
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    finishUsage(makeUsageReport());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
+    ).toHaveLength(1);
+    expect(document.querySelector('.stats-limit-card')).toBeNull();
+  });
+
   it('shows an error message and retries on failure', async () => {
     rpcMock.mockRejectedValueOnce(new Error('boom'));
 
