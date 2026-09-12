@@ -14,7 +14,7 @@ Fetches public HTTP(S) content: readable text for pages, a viewable image for im
 
 - Uses `curl_cffi`'s `AsyncSession` with Chrome browser impersonation for HTTP (real TLS/HTTP-2 fingerprint, so fingerprint-based bot walls - Cloudflare, Akamai, DataDome - that reject a plain HTTP client no longer see one). `impersonate` target is `_IMPERSONATE_TARGET` (`"chrome"`, latest supported). Interactive JS-challenge interstitials (e.g. Cloudflare Turnstile) still can't be passed by any non-browser client - that's expected.
 - Every response body is streamed into a bounded 50 MB buffer, not materialized by the HTTP client first; an oversized declared or chunked response ends as the non-retryable `response_too_large` failure.
-- Uses BeautifulSoup for HTML-to-text extraction.
+- Uses BeautifulSoup for HTML-to-text extraction. `_web_fetch_html.py` owns noise removal and readable Markdown/text rendering; `web_fetch.py` retains target validation, bounded transport, and response shaping.
 - PDF/Word/Excel text extraction is delegated to `core/tools/read_extract.py` (shared with the read tool: `pypdf` for PDF, stdlib `zipfile`/`xml.etree` for Office), not owned here.
 
 ## Constraints & Gotchas
