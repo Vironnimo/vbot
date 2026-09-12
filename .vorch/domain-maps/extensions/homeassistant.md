@@ -69,7 +69,8 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 | Condition | Code |
 |---|---|
-| Invalid input (unknown arguments, wrong types, entity_id/domain/service, non-object `data`, or malformed nested targets) | `validation_error` |
+| Unrepairable schema mismatch or contradictory target/service fields | `invalid_arguments` |
+| Handler validation (unknown arguments or other invalid intended input) | `validation_error` |
 | Blocked domain | `blocked_domain` |
 | HA HTTP error or unreachable | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("HASS_TOKEN is not configured") |
