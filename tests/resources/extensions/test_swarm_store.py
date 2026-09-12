@@ -8,7 +8,8 @@ import pytest
 import pytest_asyncio
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
-from resources.extensions.swarm.store import _PARTICIPANT_NAMES, SwarmStore, SwarmStoreError
+from resources.extensions.swarm._participant_names import _PARTICIPANT_NAMES
+from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 
 
 def _profile(*, slug: str = "research", count: int = 2) -> dict[str, object]:
@@ -118,7 +119,7 @@ async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_
         await original.set_participant_state(sid, pid, "failed")
         post = await original.post_human(sid, text="Still pending", request_id="post")
         snapshot = await original.get_swarm(sid)
-        schema = original._connection.execute(
+        schema = original._database._connection.execute(
             "SELECT name,sql FROM sqlite_master ORDER BY name"
         ).fetchall()
     finally:
@@ -133,7 +134,7 @@ async def test_current_store_reopens_with_profile_board_and_execution_state(tmp_
             "post_id"
         ]
         assert (
-            reopened._connection.execute(
+            reopened._database._connection.execute(
                 "SELECT name,sql FROM sqlite_master ORDER BY name"
             ).fetchall()
             == schema
@@ -944,7 +945,7 @@ async def test_unadmitted_wake_coalesces_without_advancing_watermark(store: Swar
             started["swarm_id"], recipient, expected_epoch=0, admission_boundary=4
         )
     )["wake"]
-    connection = store._connection  # noqa: SLF001 - durable watermark assertion
+    connection = store._database._connection  # noqa: SLF001 - durable watermark assertion
     assert connection is not None
     assert (
         connection.execute(
@@ -1249,12 +1250,14 @@ async def test_no_participant_lifecycle_storage_or_summary_contract(store):
     )
     assert "done_count" not in (await store.list_swarms()).entries[0]
     assert (
-        store._connection.execute(
+        store._database._connection.execute(
             "SELECT name FROM sqlite_master WHERE name='lifecycle_intents'"
         ).fetchone()
         is None
     )
-    columns = {r["name"] for r in store._connection.execute("PRAGMA table_info(participants)")}
+    columns = {
+        r["name"] for r in store._database._connection.execute("PRAGMA table_info(participants)")
+    }
     assert not {"wait_reason", "summary_json", "artifacts_json", "completion_call_id"} & columns
 
 

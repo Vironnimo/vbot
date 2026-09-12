@@ -595,7 +595,7 @@ async def test_bundled_package_entrypoint_registers_management(tmp_path):
         assert all(item["description"] != item["name"] for item in descriptions)
         assert len({item["description"] for item in descriptions}) == len(descriptions)
 
-    from resources.extensions.swarm.store import _validate_profile
+    from resources.extensions.swarm._store_values import _validate_profile
 
     profile_save = next(
         item for item in registry.management("swarm").describe() if item["name"] == "profiles.save"
