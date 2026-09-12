@@ -83,7 +83,7 @@ reads additionally resolve the discussion target from its creation request outco
 so the page can render a localized navigation action without parsing message text.
 Ordinary posts cannot acquire that action by copying an announcement's content.
 Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
-`test_swarm_store.py`, and `SwarmPage.test.js`.
+`test_swarm_store_board.py`, and `SwarmPage.test.js`.
 
 Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
 routing for that recipient, without creating duplicate deliveries. A mutation's
@@ -145,7 +145,7 @@ Messages are retained for every addressed participant, including failed or
 cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
 failed/cancelled/interrupted peers. Stop and startup recovery mark only active
 Runs cancelled/interrupted, retaining other participants' last outcomes.
-Evidence: `test_swarm_store.py`, `test_swarm_board.py`, `test_swarm_lifecycle.py`.
+Evidence: `test_swarm_store_execution.py`, `test_swarm_board.py`, `test_swarm_lifecycle.py`.
 
 Run callbacks recompute the open Swarm's aggregate state: any running peer keeps
 it running, unsuccessful inactive peers require attention, and all-idle peers
@@ -172,7 +172,7 @@ admitting work again. A completed Stop returns its saved drain result, and an
 unfinished Stop can drain only its original lifecycle epoch. The receipts survive
 restart and later Resume attempts. An interrupted admission requires a new explicit
 Resume request, not replay of the old Start/Resume request. Evidence:
-`test_swarm_store.py`, `test_swarm_lifecycle.py`.
+`test_swarm_store_execution.py`, `test_swarm_lifecycle.py`.
 
 ## Verification routes
 
@@ -181,14 +181,16 @@ Store source routing: `store.py` retains asynchronous validation/admission and t
 Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
 
 - Board/profile/policy transactions, races, receipt recovery and lifecycle:
-  `tests/resources/extensions/test_swarm_store.py`.
+  `tests/resources/extensions/test_swarm_store.py` (profiles),
+  `test_swarm_store_board.py`, `test_swarm_store_delivery.py`, and
+  `test_swarm_store_execution.py`.
 - Registered private Tool behavior and management boundaries:
   `tests/resources/extensions/test_swarm_board.py`.
 - Actual Chat participants, terminal proofs and Stop/Resume:
   `tests/resources/extensions/test_swarm_lifecycle.py`.
 - Production-definition Model probes and independent first-use evaluation:
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
-  under `tests/scripts/test_probe_provider_tool_call.py`. The `unassisted` case
+  under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
   supplies the goal without prescribing Tools; success requires receiving peer
   feedback, a later public contribution, and a normal final response. It evaluates
   coordination effects, not the semantic quality of the generated checklist.
@@ -222,7 +224,7 @@ and reattach an active Run when its id is unchanged. Activity loads older canoni
 History pages through `next_before`, retaining the loaded page depth on refresh.
 Board, discussion, audit and Usage replies commit only for the current selection
 and request; delayed reads cannot overwrite newer navigation.
-Evidence: `SwarmPage.test.js` and `test_swarm_store.py`.
+Evidence: `SwarmPage.test.js` and `test_swarm_store_board.py`.
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
 host-provided timezone and separates the author/time header from the body.
@@ -243,7 +245,7 @@ This is a Swarm presentation choice; canonical usage remains separated
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
 selected participant, leaving other participants unchanged. The existing group
-admission path starts only the returned targets (test_swarm_store.py,
+admission path starts only the returned targets (test_swarm_store_execution.py,
 test_swarm_board.py). Activity offers this action for an inactive
 participant and consumes canonical context usage from history and Run events;
 it never substitutes cumulative Session usage.

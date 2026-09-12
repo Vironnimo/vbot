@@ -16,5 +16,5 @@ Music generation uses `POST /chat/completions` with text/audio output modalities
 
 ## Tests
 
-Music-vs-generic-Audio classification lives in `tests/core/providers/test_openrouter.py`; payload and streamed Base64 assembly live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.
+Music-vs-generic-Audio classification lives in `tests/core/providers/test_openrouter_catalog.py`; payload and streamed Base64 assembly live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.
 

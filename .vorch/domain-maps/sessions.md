@@ -12,7 +12,7 @@ The public `core.sessions` package routes stable imports to the Session service 
 
 `store.py` retains Runtime connection lifecycle, read/write admission, FTS error recovery and the offline bulk transaction. Private `_store_*` functions receive its connection: `codec` owns normalized Message graphs, `continuation` folds recoverable work, `history` builds bounded Message projections, `queries` reads the catalog, `mutations` updates canonical history/metadata, and `owned` commits temporary bindings, receipts and Run attribution. `values` supplies shared relational projections, `fts` owns disposable index lifecycle, `search` executes bounded search, `schema` reconciles an opening database, and `import` inserts a converter generation. Do not open independent runtime connections or commit within a mutation helper; metadata, Message relations, revisions, receipts and FTS effects must share the caller's transaction.
 
-`snapshots.py` owns capture, verified inventory and shared file/lock primitives. `recovery.py` owns quarantine, restore and durable incident acknowledgement, using the same operation lock. The offline converter imports Message/Continuation reconstruction directly from their private implementation modules; ordinary consumers use `core.sessions`.
+`snapshots.py` owns capture, verified inventory and shared file/lock primitives. `recovery.py` owns quarantine, restore and durable incident acknowledgement, using the same operation lock. The offline converter imports Message/Continuation reconstruction directly from their private implementation modules; ordinary consumers use `core.sessions`. Its `session_sqlite.py` entrypoint retains manifest stages and source cutover; `_session_sqlite_database.py` handles offline import and semantic verification, and `_session_sqlite_values.py` holds hashing/flush primitives. Converter discovery/verification tests remain in `tests/scripts/converters/test_session_sqlite.py`; source mutation and interrupted cutover coverage lives in `test_session_sqlite_cutover.py`.
 
 ## Terms
 
@@ -46,7 +46,7 @@ reconcile at schema generation 1 without rewriting prior Session rows (`schema.p
 
 ## Storage Contract
 
-Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation and forking allocate inside the SQLite write transaction, checking live and archived addresses in the destination scope; caller-chosen ids remain exact opaque values. The public facade returns the committed address (`store.py`, `tests/core/sessions/test_sessions.py`).
+Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation and forking allocate inside the SQLite write transaction, checking live and archived addresses in the destination scope; caller-chosen ids remain exact opaque values. The public facade returns the committed address (`store.py`, `tests/core/sessions/test_sessions_concurrency.py`).
 
 - `sessions` stores one row per generation. A partial unique index permits exactly one live row per public address while retaining any number of archived generations. `messages` and the normalized Continuation tables reference the immutable surrogate key, so Agent renames and Session moves update one row rather than every record.
 - Missing live-address reads raise the typed `SessionNotFoundError` (a `ChatSessionError` subtype), allowing disposable consumers to distinguish a concurrent delete/archive race from storage failure.

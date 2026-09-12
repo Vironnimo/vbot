@@ -20,7 +20,7 @@ The shared `/ws` socket is server-push only. Clients send commands through RPC. 
 
 The client may reconnect with `epoch` and `after_sequence`. A matching epoch plus positive sequence resumes after the client's value. A missing/stale epoch or zero sequence starts live-only at the hello's `last_sequence`; the active-Run snapshot is authoritative for initial state. The server reads the high-water mark before awaiting the hello send, then subscribes from the chosen floor, so events published during the send remain in the retained deque and replay without a gap.
 
-The shared socket explicitly closes its bus subscription on every exit, including send failure and cancellation after an event was consumed; cleanup never depends on async-generator finalization (`tests/server/test_websocket.py`).
+The shared socket explicitly closes its bus subscription on every exit, including send failure and cancellation after an event was consumed; cleanup never depends on async-generator finalization (`tests/server/test_websocket_handshake.py`).
 
 ## Window presence
 
@@ -70,7 +70,7 @@ The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/
 ## Source and tests
 
 - Bus and allowlists: `server/events.py`; `tests/server/test_events.py`.
-- Shared WebSocket/SSE routes and handshake: `server/app.py`; delivery/replay/presence helpers: `server/_streams.py`; `tests/server/test_websocket.py` and `test_sse.py`.
+- Shared WebSocket/SSE routes and handshake: `server/app.py`; delivery/replay/presence helpers: `server/_streams.py`; `tests/server/test_websocket_handshake.py`, `test_websocket_replay_bus.py`, and `test_sse.py`.
 - Terminal operator RPC and dedicated stream: `server/rpc/terminal_methods.py`, `server/app.py`; `tests/server/rpc/test_terminal_methods.py` and `tests/server/test_websocket.py`.
 - Run/resource bridge: `server/rpc/event_bridge.py`; core callback registration/cleanup: `server/_app_lifecycle.py`; `tests/server/rpc/test_event_bridge.py` and `test_rpc_payload_events.py`.
 - Presence: `server/clients.py`; `tests/server/test_clients.py` and `tests/server/rpc/test_client_methods.py`.

@@ -55,4 +55,4 @@ OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cl
 - Durable schema, validation, retention, and deletion: `core/providers/usage_history.py`
 - RPC validation/projection: `server/rpc/provider_usage_methods.py`
 - WebUI polling/presentation: `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`
-- Focused coverage: `tests/core/providers/test_usage.py`, `tests/core/providers/test_usage_history.py`, `tests/core/runtime/test_runtime_provider_usage.py`, `tests/server/rpc/test_provider_usage_methods.py`, and Statistics WebUI tests
+- Focused coverage: `tests/core/providers/test_usage.py` (service), `test_usage_parsing.py`, `test_usage_durable_history.py` (sampling), `test_usage_history.py` (storage), `tests/core/runtime/test_runtime_provider_usage.py`, `tests/server/rpc/test_provider_usage_methods.py`, and Statistics WebUI tests

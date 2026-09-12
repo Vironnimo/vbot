@@ -60,7 +60,7 @@ OpenAI subscription image execution is selected by provider `openai` plus connec
 
 ## Generated Files
 
-`generate_artifacts()` persists each returned image directly into its explicit `output_dir`. An `output_format` of `svg` maps to `image/svg+xml` and a `.svg` filename when response entries omit MIME metadata; explicit response MIME still takes precedence (`test_image_providers.py`):
+`generate_artifacts()` persists each returned image directly into its explicit `output_dir`. An `output_format` of `svg` maps to `image/svg+xml` and a `.svg` filename when response entries omit MIME metadata; explicit response MIME still takes precedence (`test_image_openai_provider.py`):
 
 ```text
 <caller-owned-root>/image-gen/
@@ -83,4 +83,4 @@ Artifact ids use `img_` plus 12 lowercase base32 characters, and exclusive file 
 - `ImageError` derives from the shared `TaskError` base in `core/utils/errors.py`; the image Tools map expected execution failures into their stable Tool-result error codes.
 - `generate_artifacts()` uses exclusive direct file creation without a rollback transaction. A process death during the write can leave a partial image in the caller-owned directory; there is no sidecar or central registry to repair or discover it.
 
-Image understanding accepts the additional BMP/TIFF/AVIF originals recognized by Attachments and uses `ImageConverter` before constructing its ordered native content. Unsupported conversions become non-retryable ImageUnsupportedMediaTypeError; original files remain unchanged. The per-image and cumulative byte ceilings also apply to converted bytes. Generation, video, and music source loading retain the pre-existing JPEG/PNG/GIF/WebP admission set because their separate upload contracts do not use the Chat Adapter MIME declaration. Regressions: `tests/core/model_tasks/test_image.py`.
+Image understanding accepts the additional BMP/TIFF/AVIF originals recognized by Attachments and uses `ImageConverter` before constructing its ordered native content. Unsupported conversions become non-retryable ImageUnsupportedMediaTypeError; original files remain unchanged. The per-image and cumulative byte ceilings also apply to converted bytes. Generation, video, and music source loading retain the pre-existing JPEG/PNG/GIF/WebP admission set because their separate upload contracts do not use the Chat Adapter MIME declaration. Regressions: `tests/core/model_tasks/test_image_analysis.py`.

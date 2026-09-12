@@ -83,6 +83,10 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
 
+Provider test suites under `tests/core/providers/` separate configuration/catalog, request construction, completed responses, streaming, and authentication/lifecycle behavior. Shared fixtures and captured wire payloads remain in the existing `*_test_support.py` and focused `*_helpers.py` modules.
+
+The Tool-contract probe keeps its CLI in `scripts/probe_provider_tool_call.py`; scenarios, workflows and measurement helpers live under `scripts/provider_probe/`. The exact Reasoning probe CLI keeps orchestration in `scripts/probe_reasoning_replay_exact.py`, with connection preparation in `_reasoning_probe_connection.py` and wire/evidence helpers in `_reasoning_probe_wire.py`.
+
 ## References
 
 Read these only when your task matches - not by default.

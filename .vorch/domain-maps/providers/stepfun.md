@@ -27,5 +27,5 @@ Read `providers.md` first. This reference owns vBot's explicit StepFun Direct AP
 ## Verification
 
 - Request, sampling, reasoning, media, response, cache-usage, SSE, and error policy: `tests/core/providers/test_stepfun.py`
-- Connection-scoped discovery, raw audit, exact allowlist, and shared-membership merge: `tests/core/models/test_discovery_provider_refresh.py`
-- Bundled Connection config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py`
+- Connection-scoped discovery, raw audit, exact allowlist, and shared-membership merge: `tests/core/models/test_discovery_projection.py`
+- Bundled Connection config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py` and `test_runtime_adapter_wiring.py`

@@ -16,5 +16,5 @@ Video creation is non-idempotent and uses the shared outcome-unknown retry polic
 
 ## Tests
 
-Discovery/filter coverage lives in `tests/core/providers/test_openrouter.py`; wire payload, polling, same-origin download, and content decoding live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.
+Discovery/filter coverage lives in `tests/core/providers/test_openrouter_task_catalog.py`; wire payload, polling, same-origin download, and content decoding live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.
 

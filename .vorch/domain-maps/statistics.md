@@ -39,7 +39,7 @@ unrelated earlier history in a reused Session is excluded. Explicit owner scope
 reconciliation does not prune normal Statistics scopes. The bounded worker facade
 returns the existing usage, Tools, Compaction and Run projections without costs,
 account data or separate counters. Generation checks and fork-prefix exclusion
-remain in force (`statistics.py`, `index.py`; `test_statistics.py`,
+remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
 `tests/core/sessions/test_run_ownership.py`).
 
 ## Conventions

@@ -55,7 +55,7 @@ and Model-specific Tool routing. It returns combined text, rendered block detail
 and Tool definitions without creating a Session or Run. `catalog()` includes
 public System Prompt block metadata. The bundled Swarm uses these capabilities
 for explicit prompt composition; see `extensions/swarm.md` and
-`tests/core/runtime/test_runtime_extensions.py`.
+`tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Ownership and source routing
 
