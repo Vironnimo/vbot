@@ -641,8 +641,7 @@
 }
 
 /* ── Add dialog: source-format choice + CLAUDE.md suggestion ─────────────────
-   The format pick renders as modal pick-list cards (DESIGN.md → Modal pick
-   lists) with a persistent selected state, since the choice stays visible
+   The format pick currently renders as modal pick-list cards with a persistent selected state, since the choice stays visible
    until submit rather than advancing a step. */
 .projects-format-choice {
   display: flex;
