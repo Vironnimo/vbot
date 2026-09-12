@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.projects import format_agent_address, parse_agent_address
 from core.tools.arguments import optional_string, required_string
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -128,6 +129,33 @@ CRON_TOOL_PARAMETERS: JsonObject = {
     "required": ["action"],
 }
 
+_CRON_RUNTIME_CONTRACT = compile_tool_contract(
+    name="cron",
+    input_schema={
+        **CRON_TOOL_PARAMETERS,
+        "properties": {
+            **CRON_TOOL_PARAMETERS["properties"],
+            "agent_id": _CRON_TARGET_PARAMETER,
+        },
+    },
+    require_closed_input=False,
+)
+
+
+def _normalize_cron_arguments(arguments: JsonObject) -> JsonObject:
+    arguments = _CRON_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    if "agent_id" in arguments:
+        target = arguments.pop("agent_id")
+        if "target" in arguments and parse_agent_address(
+            arguments["target"]
+        ) != parse_agent_address(target):
+            raise ToolContractError(
+                "target and agent_id identify different Agents; provide one intended target."
+            )
+        arguments["target"] = target
+    return arguments
+
+
 _LOGGER = get_logger("tools.cron")
 
 
@@ -156,6 +184,10 @@ def _handle_cron_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
+    try:
+        arguments = _normalize_cron_arguments(arguments)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
     raw_action = arguments.get("action")
     if not isinstance(raw_action, str) or raw_action not in CRON_ACTIONS:
         options = ", ".join(sorted(CRON_ACTIONS))

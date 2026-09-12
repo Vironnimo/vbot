@@ -216,7 +216,7 @@ async def test_registered_multi_edit_validates_each_item_without_rejecting_batch
 
 
 @pytest.mark.asyncio
-async def test_registered_edit_rejects_retired_flat_shape(tmp_path: Path) -> None:
+async def test_registered_edit_executes_recognizable_flat_shape(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -229,8 +229,8 @@ async def test_registered_edit_rejects_retired_flat_shape(tmp_path: Path) -> Non
         {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
     )
 
-    assert_failure_envelope(result, "invalid_arguments")
-    assert target.read_text(encoding="utf-8") == "alpha\n"
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8") == "ALPHA\n"
 
 
 def test_multi_edit_continues_after_directory_path(tmp_path: Path) -> None:
@@ -486,3 +486,29 @@ def test_multi_edit_display_hides_bodies_and_summarizes_batch(tmp_path: Path) ->
         {"kind": "count", "value": 2, "unit": "files", "at_least": False},
         {"kind": "count", "value": 1, "unit": "failures", "at_least": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_conflicting_alias_failure_local_to_edit(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("alpha beta", encoding="utf-8")
+    registry = ToolRegistry()
+    register_edit_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(
+        make_context(tmp_path),
+        {
+            "request": {
+                "path": "notes.txt",
+                "edits": [
+                    {"old_string": "alpha", "new_string": "A", "new-string": "B"},
+                    {"old-string": "beta", "new-string": "BETA", "replace-all": "no"},
+                ],
+            }
+        },
+        ["edit"],
+    )
+    assert result["ok"] is True
+    assert result["data"]["status"] == "partial"
+    assert result["data"]["failed"] == 1
+    assert "Conflicting" in result["data"]["results"][0]["error"]["message"]
+    assert target.read_text(encoding="utf-8") == "alpha BETA"

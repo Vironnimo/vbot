@@ -175,7 +175,6 @@ async def test_call_service_invalid_domain(domain: str) -> None:
         ".living_room",
         "light/../sensor",
         "light..living_room",
-        "Light.Living_Room",
     ],
 )
 async def test_call_service_invalid_entity_id(entity_id: str) -> None:
@@ -196,7 +195,7 @@ async def test_call_service_invalid_entity_id(entity_id: str) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_call_service_rejects_entity_id_in_data() -> None:
+async def test_call_service_rejects_invalid_nested_entity_id() -> None:
     route = respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(200, json=[])
     )
@@ -212,7 +211,7 @@ async def test_call_service_rejects_entity_id_in_data() -> None:
         },
     )
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
     assert route.called is False
 
 

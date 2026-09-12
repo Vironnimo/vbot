@@ -67,7 +67,7 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
     channel_service.list_channels.assert_called_once_with()
 
 
-def test_channel_send_rejects_retired_envelope_shapes(tmp_path: Path) -> None:
+def test_channel_send_delivers_recognizable_envelope_shapes(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
@@ -105,12 +105,17 @@ def test_channel_send_rejects_retired_envelope_shapes(tmp_path: Path) -> None:
                 retired_arguments,
             )
         )
-        assert result["ok"] is False
-        error = result["error"]
-        assert isinstance(error, dict)
-        assert error["code"] == "invalid_arguments"
+        assert result["ok"] is True
+        channel_service.send.assert_awaited_with(
+            "tg-assistant",
+            "Task finished",
+            "12345",
+            files=None,
+            thread_id=None,
+            buttons=None,
+        )
 
-    channel_service.send.assert_not_awaited()
+    assert channel_service.send.await_count == len(retired_shapes)
 
 
 def test_channel_send_accepts_flat_arguments(tmp_path: Path) -> None:

@@ -17,24 +17,27 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 ### `ha_list_entities`
 
 - `GET /api/states`. Model-facing schema: open flat object with optional non-empty string `domain` and optional non-empty string `area`; omission includes every domain or area, and the handler rejects unknown fields and invalid values.
+- Runtime repair normalizes domain capitalization and surrounding whitespace before validation.
 - `domain` filters by `entity_id` prefix; `area` filters by `friendly_name` substring (case-insensitive).
 - Returns `{ count, entities: [{ entity_id, state, friendly_name }] }`.
 
 ### `ha_get_state`
 
 - `GET /api/states/{entity_id}`. Model-facing schema: open flat object with required `entity_id` (validated `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$`); the handler rejects unknown fields and invalid values.
+- Runtime repair normalizes entity identifier capitalization and surrounding whitespace before target validation.
 - Returns `{ entity_id, state, attributes, last_changed, last_updated }`. Display summary field: `entity_id`.
 
 ### `ha_list_services`
 
 - `GET /api/services`. Model-facing schema: open flat object with optional non-empty string `domain`; omission includes every domain, and the handler rejects unknown fields and invalid values.
+- Runtime repair normalizes domain capitalization and surrounding whitespace before validation.
 - Returns `{ count, domains: [{ domain, services: { name: { description, fields } } }] }`.
 
 ### `ha_call_service`
 
 - `POST /api/services/{domain}/{service}`. Model-facing schema: open flat object with required non-empty strings `domain` and `service`, optional non-empty string `entity_id`, and optional open `data` object; the handler rejects unknown top-level fields and invalid values.
 - `domain`/`service` validated `^[a-z][a-z0-9_]*$`; `entity_id` validated with the entity regex when provided. Display summary fields: `domain`, `service`, `entity_id`.
-- `data` must not include `entity_id`; callers use the top-level `entity_id` field so entity targeting always passes the strict validator.
+- The preferred target is top-level `entity_id`. Runtime repair lifts `data.entity_id` to that field before the same target validation, accepts matching duplicates, and rejects contradictory targets before HTTP. Domain/service/entity identifiers accept surrounding whitespace and capitalization; a qualified service such as `light.turn_on` supplies its domain unless an explicit domain contradicts it.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.
 
 ## Settings Schema & live reads
@@ -66,7 +69,8 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 | Condition | Code |
 |---|---|
-| Invalid input (unknown arguments, wrong types, entity_id/domain/service, non-object `data`, or `data.entity_id`) | `validation_error` |
+| Unrepairable schema mismatch or contradictory target/service fields | `invalid_arguments` |
+| Handler validation (unknown arguments or other invalid intended input) | `validation_error` |
 | Blocked domain | `blocked_domain` |
 | HA HTTP error or unreachable | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("HASS_TOKEN is not configured") |

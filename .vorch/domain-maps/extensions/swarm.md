@@ -3,6 +3,8 @@
 Read for changes to the bundled Swarm Extension. The generic Extension contracts
 remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swarm/`.
 
+Private Session Tools use shared argument repair before scoped execution, including encoded counts, omitted null selections, and recognizable wrappers. Inbox `action: receive` and State `action: status` are accepted redundant labels. Recognizable wrappers and explicit identities matching the bound Session are accepted; unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments and compares interpreted intent, then verifies canonical receipts.
+
 ## Owners
 
 - `extension.py` owns registration, management operations, the three Tool handlers,

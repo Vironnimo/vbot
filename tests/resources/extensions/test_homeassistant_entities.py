@@ -182,7 +182,6 @@ async def test_get_state_missing_entity_id() -> None:
         ".living_room",
         "light/../sensor",
         "light..living_room",
-        "Light.Living_Room",
     ],
 )
 async def test_get_state_invalid_entity_id(entity_id: str) -> None:

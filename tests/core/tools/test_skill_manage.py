@@ -536,3 +536,38 @@ def test_create_shadows_foreign_name_unblocked_by_scope_check(tmp_path: Path) ->
     result = harness.create(name="bundle-me")
 
     assert result["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {
+            "operation": " WRITE-FILE ",
+            "name": "demo",
+            "filePath": "assets/empty.txt",
+            "content": "",
+        },
+        {
+            "request": {
+                "action": "write_file",
+                "name": "demo",
+                "file_pth": "assets/empty.txt",
+                "content": "",
+            }
+        },
+        {"write_file": {"name": "demo", "file_path": "assets/empty.txt", "content": ""}},
+        {
+            "action": "write_file",
+            "name": " demo ",
+            "file_path": '"assets\\empty.txt"',
+            "content": "",
+        },
+    ],
+)
+def test_recognizable_mistakes_write_real_empty_file(
+    tmp_path: Path, arguments: dict[str, object]
+) -> None:
+    harness = _Harness(tmp_path)
+    assert harness.create()["ok"] is True
+    assert harness.run(arguments)["ok"] is True
+    assert (harness.home("main") / "demo/assets/empty.txt").read_bytes() == b""

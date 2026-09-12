@@ -300,7 +300,7 @@ def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None
         None,
     )
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "coder"}))
+    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "other"}))
 
     assert result["ok"] is False
     error = cast(dict[str, str], result["error"])
@@ -334,7 +334,7 @@ def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
         {"action": "current"},
     ),
 )
-def test_status_tool_rejects_retired_operation_shapes(
+def test_status_tool_accepts_recognizable_operation_shapes(
     tmp_path: Path,
     arguments: dict[str, object],
 ) -> None:
@@ -350,9 +350,8 @@ def test_status_tool_rejects_retired_operation_shapes(
 
     result = asyncio.run(_dispatch(registry, tmp_path, arguments))
 
-    assert result["ok"] is False
-    error = cast(dict[str, str], result["error"])
-    assert error["code"] == "invalid_arguments"
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["session_id"] == "session-one"
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ Creates or replaces a complete UTF-8 text file.
 
 - Use `write` for full-file replacement or new files.
 - Use `edit` for partial edits or append-like changes.
+- Matching enclosing path quotes and equivalent separators are repaired by the shared Tool Context; existing literal names take precedence.
 - Relative paths resolve from `ToolContext.effective_cwd` (the working directory); absolute paths are allowed.
 
 ## Constraints & Gotchas
