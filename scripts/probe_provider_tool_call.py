@@ -335,6 +335,7 @@ def _parser() -> argparse.ArgumentParser:
             "web_fetch",
             "ha_call_service",
             "ha_get_state",
+            "ha_list_entities",
         ),
         default="skill_manage",
     )

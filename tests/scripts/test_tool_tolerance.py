@@ -219,7 +219,7 @@ def test_ha_probe_checks_actual_service_target_and_payload() -> None:
             return raw
 
     args = PROBE._parser().parse_args([])
-    for name in ("ha_call_service", "ha_get_state"):
+    for name in ("ha_call_service", "ha_get_state", "ha_list_entities"):
         args.tolerance_tool = name
         for case in ha_tolerance_cases(name):
             row = asyncio.run(ha_case(Adapter(), args, case))

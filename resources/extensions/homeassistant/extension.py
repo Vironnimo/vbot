@@ -741,6 +741,9 @@ def register(api: Any) -> None:
         HA_LIST_ENTITIES_DESCRIPTION,
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
+        argument_normalizer=_identifier_normalizer(
+            HA_LIST_ENTITIES_NAME, HA_LIST_ENTITIES_PARAMETERS
+        ),
         result_schema={"type": "object", "required": ["count", "entities"]},
         parallel_safe=True,
         open_input_schema=True,
