@@ -1440,7 +1440,7 @@ async def _shutdown_runtime(runtime: Any) -> None:
 
 async def _shutdown_model_list_refreshes(runtime: Any) -> None:
     """Drain refresh tasks spawned by timed-out model.list requests."""
-    from server.rpc.connection_methods import shutdown_background_refresh_tasks
+    from server.rpc.model_methods import shutdown_background_refresh_tasks
 
     await shutdown_background_refresh_tasks(runtime)
 

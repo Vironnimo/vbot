@@ -16,7 +16,7 @@ from core.models.database import (
 )
 from core.models.discovery import ModelDiscoveryError
 from server.rpc import (
-    connection_methods,
+    model_methods,
 )
 from server.rpc.methods import dispatch_rpc
 from server.rpc.payloads import _model_response
@@ -544,7 +544,7 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -576,7 +576,7 @@ async def test_normal_model_refresh_copies_complete_system_db_to_runtime_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
     system_models_dir = state.runtime.resources_dir / "models"
@@ -611,7 +611,7 @@ async def test_explicit_system_refresh_writes_only_serving_checkout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
 
@@ -664,7 +664,7 @@ async def test_model_refresh_db_provider_publishes_models_resource_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -690,7 +690,7 @@ async def test_model_refresh_db_global_publishes_models_resource_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -718,7 +718,7 @@ async def test_model_refresh_db_updates_registry_in_place_for_captured_holders(
     """
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -750,7 +750,7 @@ async def test_model_refresh_db_without_params_refreshes_only_eligible_providers
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -829,7 +829,7 @@ async def test_model_refresh_db_empty_params_reloads_runtime_registry_after_glob
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -853,7 +853,7 @@ async def test_model_refresh_db_passes_first_usable_connection_to_discovery(
 ) -> None:
     monkeypatch.delenv("OPENROUTER_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
     state = make_state(tmp_path, StubAdapter())
@@ -885,7 +885,7 @@ async def test_model_refresh_db_iterates_every_refreshable_connection(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -959,7 +959,7 @@ async def test_global_refresh_counts_multi_connection_provider_once(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -1019,7 +1019,7 @@ async def test_model_refresh_db_skips_connections_without_effective_endpoint(
     """
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -1065,7 +1065,7 @@ async def test_model_refresh_db_maps_discovery_failures_to_rpc_error(
         raise ModelDiscoveryError("Model discovery failed for provider 'openrouter': bad JSON")
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", failing_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", failing_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
 
@@ -1107,7 +1107,7 @@ async def test_model_refresh_db_global_continues_when_one_provider_fails(
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", selective_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -1182,7 +1182,7 @@ async def test_model_refresh_db_single_provider_reports_failed_connection(
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
-    monkeypatch.setattr(connection_methods, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", selective_refresh_models)
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
@@ -1276,7 +1276,7 @@ async def test_model_refresh_db_fetches_public_catalog_without_inference_credent
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
-    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
     state = make_state(tmp_path, StubAdapter())

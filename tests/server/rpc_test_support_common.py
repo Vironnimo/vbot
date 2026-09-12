@@ -30,7 +30,7 @@ from core.projects.resolver import AgentResolutionError, ConfigAgent
 from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
 from server.rpc import (
-    connection_methods,
+    model_methods,
 )
 
 JsonObject = dict[str, Any]
@@ -55,7 +55,7 @@ def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _none_catalog() -> None:
         return None
 
-    monkeypatch.setattr(connection_methods, "fetch_catalog", _none_catalog)
+    monkeypatch.setattr(model_methods, "fetch_catalog", _none_catalog)
 
 
 @dataclass(frozen=True)

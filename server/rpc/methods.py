@@ -17,13 +17,16 @@ from server.rpc import (
     extensions_methods,
     live_methods,
     memory_methods,
+    model_methods,
     operations_methods,
     project_methods,
     provider_usage_methods,
+    session_methods,
     session_store_methods,
     settings_methods,
     skill_methods,
     statistics_methods,
+    task_model_methods,
     terminal_methods,
 )
 from server.rpc.dispatcher import RpcMethodHandler
@@ -38,8 +41,10 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
     handlers: dict[str, RpcMethodHandler] = {}
     for registry in (
         connection_methods,
+        model_methods,
         catalog_methods,
         agent_methods,
+        session_methods,
         memory_methods,
         chat_methods,
         channel_methods,
@@ -47,6 +52,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         calendar_methods,
         project_methods,
         settings_methods,
+        task_model_methods,
         session_store_methods,
         extensions_methods,
         live_methods,

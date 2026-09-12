@@ -24,23 +24,28 @@ from core.chat import ChatSessionError
 from core.projects.resolver import AgentResolver
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, RunAdmissionBlockedError
-from core.sessions import FORK_SOURCE_META_KEY, SessionAddress
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
+    SessionAddress,
+)
 from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
-    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
-    SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
+    _get_agent,
+)
+from server.rpc.errors import RpcError
+from server.rpc.session_methods import (
     _create_session,
     _delete_session,
     _fork_session,
-    _get_agent,
     _list_session_activity,
     _list_sessions,
     _mark_session_read,
     _rename_session,
     _set_session_compaction_policy,
 )
-from server.rpc.errors import RpcError
 
 
 class _FakeResolver:
