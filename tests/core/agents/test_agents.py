@@ -19,6 +19,7 @@ from core.agents import (
     InvalidAgentIdError,
 )
 from core.agents import agents as agents_module
+from core.agents._config import _apply_defaults
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
@@ -994,7 +995,7 @@ def test_temperature_and_thinking_effort_none_round_trip_as_json_null(
 def test_apply_defaults_fills_empty_model(store: AgentStore) -> None:
     agent = store.create("coder_model", "Coder Agent", model="")
 
-    resolved = store._apply_defaults(agent, AgentDefaults.from_dict({"model": "openai/gpt-5.2"}))
+    resolved = _apply_defaults(agent, AgentDefaults.from_dict({"model": "openai/gpt-5.2"}))
 
     assert resolved.model == "openai/gpt-5.2"
 
@@ -1002,7 +1003,7 @@ def test_apply_defaults_fills_empty_model(store: AgentStore) -> None:
 def test_apply_defaults_fills_none_temperature(store: AgentStore) -> None:
     agent = store.create("coder_temperature", "Coder Agent", temperature=None)
 
-    resolved = store._apply_defaults(agent, AgentDefaults.from_dict({"temperature": 0.7}))
+    resolved = _apply_defaults(agent, AgentDefaults.from_dict({"temperature": 0.7}))
 
     assert resolved.temperature == 0.7
 
@@ -1017,7 +1018,7 @@ def test_apply_defaults_leaves_explicit_values_unchanged(store: AgentStore) -> N
         thinking_effort="high",
     )
 
-    resolved = store._apply_defaults(
+    resolved = _apply_defaults(
         agent,
         AgentDefaults.from_dict(
             {
