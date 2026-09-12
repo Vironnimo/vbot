@@ -1,9 +1,5 @@
 """Tests for storage."""
 
-
-
-
-
 from pathlib import Path
 from typing import Any
 

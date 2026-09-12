@@ -1,11 +1,5 @@
 """Shared fixtures and fakes for runtime behavior tests."""
 
-
-
-
-
-
-
 from pathlib import Path
 
 import pytest

@@ -1,8 +1,5 @@
 """Shared fixtures and fakes for models behavior tests."""
 
-
-
-
 from pathlib import Path
 
 import pytest

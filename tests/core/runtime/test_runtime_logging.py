@@ -1,6 +1,5 @@
 """Tests for runtime logging."""
 
-
 import json
 import logging
 import re

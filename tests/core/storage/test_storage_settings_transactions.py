@@ -1,9 +1,5 @@
 """Tests for storage settings transactions."""
 
-
-
-
-
 from pathlib import Path
 from typing import Any
 
