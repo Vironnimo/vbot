@@ -63,6 +63,7 @@ class CommandResult:
     log_path: Path | None = None
     process_id: int | None = None
     forced: bool = False
+    attention: tuple[str, ...] = ()
 
 
 def resolve_instance(

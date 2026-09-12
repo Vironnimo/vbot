@@ -358,7 +358,7 @@ def _resolve_single_connection_id(
                 message=(
                     f"Provider '{provider_id}' has no OAuth Connection. "
                     f"Inspect authentication with: vbot provider status {provider_id}; "
-                    "API-key Connections use vbot provider set-key <provider-id> --stdin. "
+                    "API-key Connections use vbot provider key set <provider-id> --stdin. "
                     "Keep the same target options."
                 ),
                 instance=instance,
@@ -409,7 +409,9 @@ def provider_connect(
     expires_in = payload.data.get("expires_in")
     expires_text = str(expires_in) if isinstance(expires_in, int) else "?"
     resolved_account = _string_or_default(payload.data.get("account"), "default")
-    follow_up_command = f"vbot provider connect-status {provider_id} --connection {connection_id}"
+    follow_up_command = (
+        f"vbot provider connection status {provider_id} --connection {connection_id}"
+    )
     if resolved_account != "default":
         follow_up_command = f"{follow_up_command} --account {resolved_account}"
     return CommandResult(
@@ -425,6 +427,7 @@ def provider_connect(
             ]
         ),
         instance=instance,
+        attention=("Login started; browser authorization is still required",),
     )
 
 
@@ -484,6 +487,9 @@ def provider_connect_status(
             f"connected={connected} flow_active={flow_active}"
         ),
         instance=instance,
+        attention=()
+        if payload.data.get("connected")
+        else ("Account is not connected; inspect the device-flow state",),
     )
 
 
@@ -601,7 +607,7 @@ def _format_connection_rows(connections: Sequence[object], *, details: bool = Tr
             "Details: vbot provider status <provider-id>",
             "All details: vbot provider list --details",
             "Subscription login: vbot provider connect <provider-id>",
-            "API key: vbot provider set-key <provider-id> --stdin",
+            "API key: vbot provider key set <provider-id> --stdin",
             "Keep the same --host/--port options on follow-up commands.",
         ]
     )

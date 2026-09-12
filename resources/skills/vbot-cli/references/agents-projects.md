@@ -58,10 +58,10 @@ vbot project add <path> [--name <display-name>] [--format opencode|claude] [--de
 vbot project list
 vbot project show <project-id>
 vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add flags] [--clear-default-agent] [--clear-default-model] [--clear-default-temperature] [--clear-default-thinking-effort]
-vbot project set-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access <value>
-vbot project clear-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access
+vbot project override set <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access <value>
+vbot project override clear <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access
 vbot project detect [<path>]
-vbot project rm <project-id> [--copy-rooted-agent-files]
+vbot project remove <project-id> [--copy-rooted-agent-files]
 ```
 
 - Paths refer to the server machine; prefer absolute paths when it differs from the CLI machine. `detect` without a path inspects the server working directory.
@@ -72,9 +72,9 @@ vbot project rm <project-id> [--copy-rooted-agent-files]
 - `--auto-load` lists repo files folded into project agent prompts; on `set`, the flag with no values clears the list.
 - `--default-agent`/`--default-model`/`--default-temperature`/`--default-thinking-effort` are Project defaults for its Agents; the matching `--clear-*` flags remove that Project tier so resolution falls through.
 - Capability flags on `add`/`set` are `--allowed-tools`, `--enabled-bundled-skills`, `--enabled-global-skills`, and `--disabled-project-skills`; each replaces its complete list, and an empty flag value clears it.
-- `set-override` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` and `tool_access` take a JSON object as one shell argument. A Tool override replaces the repository Tool policy but remains inside the Project's `--allowed-tools` ceiling; for example, `'{"mode":"selected","allowed":["read"]}'` selects only `read` when the Project permits it. `clear-override` removes that one field and resumes the normal Agent → Project → global chain.
-- `add`, `set`, `set-override`, and `clear-override` print the saved Project plus a fresh Team/scan report, including effective Tools, repository Tool denials, overrides, and configuration-source provenance.
-- `rm` archives the project's runtime anchor (never the repo) and prints the archive path. It unroots Identity Agents that selected the Project; an Agent with a custom Workspace is moved back to its default Workspace. Use `--copy-rooted-agent-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` before that reset. The result lists affected Agents plus copied/backed-up files. Removal is blocked while a Project Agent has an active or queued Run (`project_busy`) or a Cron job targets a Project Agent (`project_in_use`) — clear those first.
+- `override set` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` and `tool_access` take a JSON object as one shell argument. A Tool override replaces the repository Tool policy but remains inside the Project's `--allowed-tools` ceiling; for example, `'{"mode":"selected","allowed":["read"]}'` selects only `read` when the Project permits it. `override clear` removes that one field and resumes the normal Agent → Project → global chain.
+- `add`, `set`, `override set`, and `override clear` print the saved Project plus a fresh Team/scan report, including effective Tools, repository Tool denials, overrides, and configuration-source provenance.
+- `remove` archives the project's runtime anchor (never the repo) and prints the archive path. It unroots Identity Agents that selected the Project; an Agent with a custom Workspace is moved back to its default Workspace. Use `--copy-rooted-agent-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` before that reset. The result lists affected Agents plus copied/backed-up files. Removal is blocked while a Project Agent has an active or queued Run (`project_busy`) or a Cron job targets a Project Agent (`project_in_use`) — clear those first.
 
 ## Sessions
 
@@ -83,14 +83,14 @@ vbot session list <agent>
 vbot session create <agent> [--id <session-id>] [--make-current]
 vbot session fork <agent> <session-id> [--target-agent <agent>]
 vbot session rename <agent> <session-id> (--title <text> | --clear-title)
-vbot session set-compaction-policy <agent> <session-id> (--policy <json-object> | --clear)
+vbot session policy set <agent> <session-id> (--policy <json-object> | --clear)
 vbot session delete <agent> <session-id> --yes
-vbot session link-channel <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
+vbot session channel link <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
 ```
 
 - `list` returns at most 100 Sessions by default. Use `--limit <count>` and the returned `--cursor <json-object>` for the next page, or `--all` for every page. Keep the same Agent and server target. It shows Session ids, titles, created/last-active timestamps, the linked source Channel, and own/effective Session Policy when present.
 - `create` without `--id` lets the server generate the id; `--make-current` switches the agent's active session.
 - `fork` copies the complete Session into a fresh id. `--target-agent` may re-home it to another Identity or Project Agent; the result prints the new id and fork provenance.
-- `rename --clear-title` restores automatic display. `set-compaction-policy --clear` resumes live Agent/global inheritance. Setting requires the complete `enabled`, `trigger`, and `strategy` object; read and preserve the relevant Policy from `list` before editing. The result prints override, effective Policy, and source.
+- `rename --clear-title` restores automatic display. `policy set --clear` resumes live Agent/global inheritance. Setting requires the complete `enabled`, `trigger`, and `strategy` object; read and preserve the relevant Policy from `list` before editing. The result prints override, effective Policy, and source.
 - `delete` requires `--yes`; the session is archived (recoverable), not erased.
-- `link-channel` routes the session's outbound replies to a platform conversation (e.g. a Telegram chat id).
+- `channel link` routes the session's outbound replies to a platform conversation (e.g. a Telegram chat id).

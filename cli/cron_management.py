@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -157,18 +158,21 @@ def _format_job_row(job: object) -> str:
     next_fire_at = _string_or_default(job.get("next_fire_at"), "-")
     last_outcome = _string_or_default(job.get("last_outcome"), "-")
     prompt = _prompt_preview(job.get("prompt"))
-    return (
-        f"- name={name}"
-        f" id={job_id}"
-        f" agent={agent_id}"
-        f" status={status}"
-        f" schedule={schedule}"
-        f" remaining_runs={remaining_runs}"
-        f" next_fire_at={next_fire_at}"
-        f" session={job.get('session_id') or 'new'}"
-        f" last_outcome={last_outcome}"
-        f" last_error={job.get('last_error') or '-'}"
-        f" prompt={prompt}"
+    return record_fields(
+        [
+            f"- name={name}",
+            f" id={job_id}",
+            f" agent={agent_id}",
+            f" status={status}",
+            f" schedule={schedule}",
+            f" remaining_runs={remaining_runs}",
+            f" next_fire_at={next_fire_at}",
+            f" session={job.get('session_id') or 'new'}",
+            f" last_outcome={last_outcome}",
+            f" last_error={job.get('last_error') or '-'}",
+            f" prompt={prompt}",
+        ],
+        separator="",
     )
 
 

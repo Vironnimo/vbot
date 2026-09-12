@@ -8,6 +8,7 @@ from typing import Any
 
 from cli.config_management import coerce_config_value
 from cli.formatting import bool_text as _bool_text
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -212,7 +213,7 @@ def _format_binding_row(task_type: str, binding: object) -> str:
         if isinstance(options, dict) and options
         else "{}"
     )
-    return f"- {task_type}: target={target} options={options_text}"
+    return record_fields([f"- {task_type}:", f"target={target}", f"options={options_text}"])
 
 
 def _format_target_rows(task_type: str, targets: Sequence[object]) -> str:
@@ -233,4 +234,6 @@ def _format_target_row(target: object) -> str:
     kind = _string_or_default(target.get("kind"), "?")
     label = _string_or_default(target.get("label"), "?")
     usable = "yes" if target.get("usable") else "no"
-    return f"- id={target_id} kind={kind} label={label} usable={usable}"
+    return record_fields(
+        [f"- id={target_id}", f"kind={kind}", f"label={label}", f"usable={usable}"]
+    )

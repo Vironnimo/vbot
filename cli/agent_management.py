@@ -9,6 +9,7 @@ from typing import Any
 
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
 from cli.rpc_client import httpx as httpx
@@ -61,7 +62,12 @@ def agent_show(instance: ServerInstance, agent_id: str) -> CommandResult:
     payload = _rpc_call(instance, "agent.get", {"id": agent_id})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=_format_agent_detail(payload.data), instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_agent_detail(payload.data),
+        instance=instance,
+        attention=_agent_attention(payload.data),
+    )
 
 
 def agent_create(
@@ -80,6 +86,7 @@ def agent_create(
         ok=True,
         message=_format_agent_operation("created", payload.data, agent_id),
         instance=instance,
+        attention=_agent_attention(payload.data),
     )
 
 
@@ -110,6 +117,7 @@ def agent_update(
         ok=True,
         message=_format_agent_operation("updated", payload.data, agent_id),
         instance=instance,
+        attention=_agent_attention(payload.data),
     )
 
 
@@ -239,15 +247,18 @@ def _format_agent_row(agent: object) -> str:
     thinking_effort = _value_text(agent.get("thinking_effort"))
     current_session_id = _string_or_default(agent.get("current_session_id"), "-")
     context_window = _value_text(agent.get("context_window"))
-    return (
-        f"- id={agent_id}"
-        f" name={name}"
-        f" model={model}"
-        f" fallback_models={fallback_models}"
-        f" temperature={temperature}"
-        f" thinking_effort={thinking_effort}"
-        f" current_session_id={current_session_id}"
-        f" context_window={context_window}"
+    return record_fields(
+        [
+            f"- id={agent_id}",
+            f" name={name}",
+            f" model={model}",
+            f" fallback_models={fallback_models}",
+            f" temperature={temperature}",
+            f" thinking_effort={thinking_effort}",
+            f" current_session_id={current_session_id}",
+            f" context_window={context_window}",
+        ],
+        separator="",
     )
 
 
@@ -351,3 +362,9 @@ def _effective_source_text(value: object) -> str:
     if not sources:
         return "-"
     return _json_text(sources)
+
+
+def _agent_attention(agent: Mapping[str, Any]) -> tuple[str, ...]:
+    if set(agent) <= {"id"} or agent.get("model"):
+        return ()
+    return ("No effective Model is configured; this Agent cannot run",)

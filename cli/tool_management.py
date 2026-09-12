@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -37,4 +38,4 @@ def _format_tool_row(tool: object) -> str:
         return "- invalid tool entry"
     name = _string_or_default(tool.get("name"), "?")
     description = _string_or_default(tool.get("description"), "?")
-    return f"- {name}  {description}"
+    return record_fields([f"- {name}", description], separator="  ")

@@ -147,7 +147,14 @@ def config_patch(instance: ServerInstance, operations: list[dict[str, Any]]) -> 
         lines.append(f"  application: {item.get('application', 'unknown')}")
     restart_required = payload.data.get("restart_required") is True
     lines.append(f"restart_required: {'yes' if restart_required else 'no'}")
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=True,
+        message="\n".join(lines),
+        instance=instance,
+        attention=("Settings saved; restart required for pending values",)
+        if restart_required
+        else (),
+    )
 
 
 def coerce_config_value(raw: str) -> Any:
