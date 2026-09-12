@@ -1,0 +1,390 @@
+.s-skill-directory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.s-skill-directory-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.s-skill-directory-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.s-skill-directory-add {
+  display: flex;
+  gap: 10px;
+}
+
+.s-directory-remove {
+  flex-shrink: 0;
+}
+
+.s-debug-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--r-md);
+  background: rgba(245, 158, 11, 0.06);
+  color: var(--text-med);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.s-debug-warning-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--amber);
+}
+
+.s-debug-warning-text {
+  margin: 0;
+  min-width: 0;
+}
+
+.s-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0 0;
+}
+
+.s-save-button {
+  min-width: 84px;
+}
+
+.s-channel-form {
+  margin: 14px 0 20px;
+  padding: 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.s-channel-form-error {
+  margin-bottom: 12px;
+}
+
+.s-channel-form-header {
+  margin-bottom: 12px;
+}
+
+.s-channel-form-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.s-channel-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.s-task-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.s-task-model-row {
+  gap: 12px;
+}
+
+.s-task-model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.s-task-model-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.s-channel-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.s-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.s-channel-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.s-channel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.s-channel-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: fit-content;
+}
+
+.s-channel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.s-row-actions--channel {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.s-channel-access {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.s-channel-access-heading,
+.s-channel-access-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s-channel-access-group {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.s-channel-access-group-title,
+.s-channel-access-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.s-channel-access-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.s-channel-access-participant {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.s-channel-access-name {
+  overflow-wrap: anywhere;
+}
+
+.s-row-actions--channel-access {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.s-channel-denied {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.s-channel-denied-title {
+  font-size: 12px;
+  color: var(--text-lo);
+}
+
+.s-channel-denied-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.s-channel-denied-info {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* --- Extensions panel --- */
+
+/* The "Waiting for: …" tail of the waiting hint gets its own visual beat so
+   the two sentences don't run together in one grey line. */
+.s-ext-waiting-for {
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.s-ext-waiting-for::before {
+  content: '· ';
+  color: var(--text-lo);
+}
+
+.s-ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.s-ext-card {
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.s-ext-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.s-ext-head .s-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s-ext-head .s-row-desc {
+  margin-top: 0;
+}
+
+.s-ext-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.s-ext-name {
+  font-family: var(--font-mono);
+}
+
+.s-ext-capabilities {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.s-ext-error-text {
+  color: var(--red);
+}
+
+.s-ext-warning {
+  color: var(--amber);
+}
+
+.s-ext-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: fit-content;
+}
+
+.s-ext-card .s-disclosure-sub {
+  gap: var(--space-md);
+  margin: var(--space-md) 0 0 6px;
+  padding: 2px 0 2px var(--space-lg);
+}
+
+.s-ext-schema {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  width: 100%;
+}
+
+.s-ext-secret {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.s-ext-secret .chip {
+  align-self: flex-start;
+}
+
+.s-ext-secret-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.s-ext-config-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.s-clients-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.s-client-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.s-client-row--own {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.s-client-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

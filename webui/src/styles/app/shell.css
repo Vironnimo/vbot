@@ -1,0 +1,574 @@
+.app-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app-shell__sidebar,
+.sidebar {
+  display: flex;
+  min-height: 0;
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  transition:
+    width 160ms ease,
+    min-width 160ms ease;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__sidebar {
+  width: var(--sidebar-collapsed-width);
+  min-width: var(--sidebar-collapsed-width);
+}
+
+.app-shell__sidebar-header {
+  position: relative;
+  z-index: var(--z-sticky);
+}
+
+.app-shell__brand,
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 18px var(--space-lg);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-shell__brand-mark {
+  display: block;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__brand {
+  justify-content: center;
+  padding-inline: var(--space-sm);
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__brand > div,
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group-label,
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-label,
+.app-shell[data-sidebar-collapsed='true'] .footer-text,
+.app-shell[data-sidebar-collapsed='true'] .sidebar-footer__label {
+  display: none;
+}
+
+.app-shell__eyebrow,
+.placeholder-view__status {
+  margin: 0 0 3px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.app-shell h1,
+.logo-text {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.app-shell__navigation,
+.nav {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: calc(var(--space-lg) + var(--space-md) - var(--space-xs)) 10px 10px;
+}
+
+.app-shell__navigation {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.app-shell__footer {
+  flex-shrink: 0;
+}
+
+/* Grouped navigation: expanded sections use their mono-xs labels for
+   separation. The compact rail has no labels, so its short, low-contrast
+   divider restores the same cadence hierarchy without competing with icons. */
+.app-shell__nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.app-shell__nav-group + .app-shell__nav-group {
+  margin-top: 16px;
+}
+
+.app-shell__nav-group-label {
+  margin: 0 0 4px;
+  padding: 0 10px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.app-shell__nav-item,
+.nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.app-shell__nav-item:hover,
+.app-shell__nav-item:focus-visible,
+.nav-item:hover,
+.nav-item:focus-visible {
+  color: var(--text-med);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.app-shell__nav-item:focus-visible,
+.nav-item:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px var(--accent-40),
+    var(--focus-ring);
+}
+
+.app-shell__nav-item--active,
+.nav-item.active {
+  color: var(--accent);
+  background: var(--accent-pale);
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
+  align-items: center;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group {
+  width: 100%;
+}
+
+.app-shell[data-sidebar-collapsed='true']
+  .app-shell__nav-group
+  + .app-shell__nav-group {
+  position: relative;
+  margin-top: var(--sidebar-nav-group-gap);
+}
+
+.app-shell[data-sidebar-collapsed='true']
+  .app-shell__nav-group
+  + .app-shell__nav-group::before {
+  position: absolute;
+  top: calc(var(--sidebar-nav-group-gap) * -0.5);
+  left: 50%;
+  width: var(--sidebar-nav-group-separator-width);
+  height: 1px;
+  content: '';
+  background: var(--border);
+  opacity: var(--sidebar-nav-group-separator-opacity);
+  transform: translateX(-50%);
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-item {
+  width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  margin-inline: auto;
+  padding: 0;
+}
+
+.app-shell__nav-sigil,
+.tab-indicator {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-lo);
+}
+
+.app-shell__nav-item--active .app-shell__nav-sigil {
+  background: var(--green);
+}
+
+.tab-indicator--running {
+  background: var(--amber);
+  animation: agent-activity-pulse 1.4s ease-in-out infinite;
+}
+
+.tab-indicator--unread {
+  background: var(--blue);
+  box-shadow: 0 0 0 2px var(--blue-dim);
+}
+
+@keyframes agent-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.86);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-indicator--running {
+    animation: none;
+  }
+}
+
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+}
+
+.btn-tertiary.btn-icon.app-shell__sidebar-toggle {
+  position: absolute;
+  top: 100%;
+  right: var(--sidebar-toggle-inset);
+  z-index: 1;
+  width: var(--sidebar-toggle-size);
+  height: var(--sidebar-toggle-height);
+  min-height: 0;
+  transform: translateY(-50%);
+  border-color: var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-lo);
+  background: var(--surface);
+}
+
+.btn-tertiary.btn-icon.app-shell__sidebar-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.app-shell__sidebar-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: miter;
+  stroke-width: 1.5;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .sidebar-footer__row {
+  justify-content: center;
+  min-height: 30px;
+  padding: var(--space-xs);
+}
+
+.conn-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.conn-icon--connected {
+  color: var(--green);
+}
+
+.conn-icon--placeholder {
+  color: var(--amber);
+}
+
+.conn-icon--disconnected {
+  color: var(--red);
+}
+
+.footer-text {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.app-shell__content,
+.main {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* A server outage is one application-level condition, not one error per
+   mounted surface. The global notice owns that condition; dependent inline
+   errors stay in state but are visually and semantically quiet until the
+   active view is remounted after reconnection. */
+.app-shell[data-server-unavailable='true']
+  .app-shell__content
+  :is(
+    [role='alert'],
+    .banner--error,
+    .chat-view__project-team-error,
+    .session-drawer__state--error
+  ),
+.app-shell[data-server-unavailable='true'] .toast.error {
+  display: none;
+}
+
+.server-availability-notice {
+  position: fixed;
+  top: 24vh;
+  left: 50%;
+  z-index: var(--z-notice);
+  display: grid;
+  width: min(520px, calc(100vw - 40px));
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-md);
+  padding: 18px 18px 17px;
+  border: 1px solid var(--red);
+  border-left-width: 4px;
+  border-radius: var(--r-lg);
+  background: var(--surface-3);
+  box-shadow: var(--dropdown-elevation-strong);
+  transform: translateX(-50%);
+  animation: server-notice-in 180ms ease-out;
+}
+
+.server-availability-notice--restored {
+  border-color: var(--green);
+}
+
+.server-availability-notice__signal {
+  position: relative;
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.server-availability-notice__signal::before,
+.server-availability-notice__signal span {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--red);
+  content: '';
+}
+
+.server-availability-notice__signal::before {
+  animation: server-notice-pulse 1.8s ease-out infinite;
+}
+
+.server-availability-notice--restored
+  .server-availability-notice__signal::before,
+.server-availability-notice--restored .server-availability-notice__signal span {
+  background: var(--green);
+}
+
+.server-availability-notice--restored
+  .server-availability-notice__signal::before {
+  animation: none;
+}
+
+.server-availability-notice__content {
+  min-width: 0;
+}
+
+.server-availability-notice__eyebrow {
+  margin: 0 0 var(--space-xs);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.server-availability-notice--restored .server-availability-notice__eyebrow {
+  color: var(--green);
+}
+
+.server-availability-notice h2 {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.server-availability-notice__message {
+  margin: 5px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.server-availability-notice__details {
+  margin-top: var(--space-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.server-availability-notice__details summary {
+  width: fit-content;
+  color: var(--text-med);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.server-availability-notice__details p {
+  margin: var(--space-xs) 0 0;
+  line-height: 1.45;
+}
+
+.server-availability-notice__actions {
+  display: flex;
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.server-availability-notice__actions .btn-primary,
+.server-availability-notice__actions .btn-secondary {
+  justify-content: center;
+  white-space: nowrap;
+}
+
+@keyframes server-notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes server-notice-pulse {
+  0% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .server-availability-notice,
+  .server-availability-notice__signal::before {
+    animation: none;
+  }
+}
+
+/* Desktop replaces pywebview's production-disabled browser menu with one
+   small host-aware action surface. It intentionally reads like native app
+   chrome: compact rows, technical restraint, and no decorative accent. */
+.desktop-context-menu {
+  position: fixed;
+  z-index: var(--z-floating);
+  min-width: 224px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+}
+
+.desktop-context-menu__item.btn-tertiary {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.desktop-context-menu__item.btn-tertiary:hover,
+.desktop-context-menu__item.btn-tertiary:focus-visible {
+  color: var(--text-hi);
+  background: var(--surface-3);
+  box-shadow: none;
+}
+
+.desktop-context-menu__item svg {
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+
+.desktop-context-menu__separator {
+  height: 1px;
+  margin: 4px;
+  background: var(--border);
+}
+
+.view {
+  display: none;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.view.active {
+  display: flex;
+}
