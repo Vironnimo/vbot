@@ -13,6 +13,8 @@ import pytest
 import respx
 
 import cli.update_management as update_management
+from cli import _update_assets
+from cli._update_assets import _extract_within
 from cli.install_state import (
     INSTALL_STATE_SCHEMA_VERSION,
     InstallState,
@@ -28,7 +30,6 @@ from cli.update_management import (
     CommandRun,
     ReleaseInfo,
     _default_runner,
-    _extract_within,
     _running_process_id,
     read_checkout_version,
     run_update,
@@ -145,7 +146,7 @@ def test_release_download_installs_bundled_pages_without_overwriting_sources(
         )
     )
 
-    result = update_management._download_webui(asset_url, tmp_path)
+    result = _update_assets._download_webui(asset_url, tmp_path)
 
     assert result.ok
     assert (tmp_path / "webui" / "dist" / "index.html").read_bytes() == b"new app"
@@ -179,7 +180,7 @@ def test_asset_swap_failure_restores_app_and_every_previous_extension(
 
     monkeypatch.setattr(Path, "rename", fail_last_asset)
     with pytest.raises(OSError, match="injected asset swap failure"):
-        update_management._unpack_webui_archive(
+        _update_assets._unpack_webui_archive(
             _webui_tar_bytes(dict.fromkeys(originals, b"replacement")),
             webui,
         )
@@ -195,7 +196,7 @@ def test_legacy_asset_archive_keeps_existing_extension_assets(tmp_path: Path) ->
     page.parent.mkdir(parents=True)
     page.write_bytes(b"retained page")
 
-    update_management._unpack_webui_archive(_webui_tar_bytes(), tmp_path / "webui")
+    _update_assets._unpack_webui_archive(_webui_tar_bytes(), tmp_path / "webui")
 
     assert page.read_bytes() == b"retained page"
     assert (tmp_path / "webui" / "dist" / "index.html").is_file()
@@ -206,7 +207,7 @@ def test_incomplete_new_asset_archive_keeps_all_installed_assets(tmp_path: Path)
     index.parent.mkdir(parents=True)
     index.write_bytes(b"retained app")
     with pytest.raises(ValueError, match="dist/index.html"):
-        update_management._unpack_webui_archive(
+        _update_assets._unpack_webui_archive(
             _webui_tar_bytes(
                 {
                     "webui/dist/assets/bundle.js": b"no entry",
@@ -600,11 +601,11 @@ def test_dev_webui_detects_build_inputs_with_git(
         builds.append(command)
         return _ok()
 
-    result = update_management._refresh_dev_webui(runner, tmp_path, before, after)
+    result = _update_assets._refresh_dev_webui(runner, tmp_path, before, after)
 
     assert result.ok
     assert builds == (
-        [update_management._npm_command(["ci"]), update_management._npm_command(["run", "build"])]
+        [_update_assets._npm_command(["ci"]), _update_assets._npm_command(["run", "build"])]
         if rebuild
         else []
     )
@@ -628,7 +629,7 @@ def test_dev_webui_build_failure_preserves_revision_for_retry(tmp_path: Path) ->
         if command[:3] == ["git", "diff", "--quiet"]:
             assert command[3:5] == ["old", "new"]
             return _err()
-        if command == update_management._npm_command(["run", "build"]):
+        if command == _update_assets._npm_command(["run", "build"]):
             return next(build_results)
         return _ok()
 
