@@ -1,36 +1,37 @@
 <script>
-  import { tick, untrack } from 'svelte';
-
-  import { asText as asSharedText } from '$lib/values.js';
-  import Badge from './ui/Badge.svelte';
+  import { t } from '$lib/i18n.js';
+  import { portal } from '$lib/dropdownPanel.js';
+  import Toggle from './ui/Toggle.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
-  import Modal from './ui/Modal.svelte';
-  import Toggle from './ui/Toggle.svelte';
-  import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import {
-    deleteSession,
-    listSessions,
-    renameSession,
-    setSessionCompactionPolicy,
-  } from '$lib/api.js';
-  import { normalizeCompactionPolicy } from '$lib/compactionPolicy.js';
-  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
-  import { activeLocaleTag, t } from '$lib/i18n.js';
-  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
+    asText,
+    autofocusRename,
+    sessionHoverDetails,
+    resolvePlatformLabel,
+    reflectionBadgeKinds,
+  } from './sessions/presentation.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
+    sessionDisplayName,
     applySessionList,
     appendSessionList,
     createSessionListFilters,
     createSessionListState,
     overlayLiveSessionActivity,
     selectSession,
-    sessionDisplayName,
     visibleSessionsForSelection,
   } from '$lib/sessionListView.js';
+  import Badge from './ui/Badge.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import Modal from './ui/Modal.svelte';
+  import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
+  import { untrack } from 'svelte';
+  import { listSessions } from '$lib/api.js';
+  import { createSessionActions } from './sessions/actions.svelte.js';
+  import { createSessionMenus } from './sessions/menus.svelte.js';
+  import './sessions/sessions.css';
 
   const SESSION_INITIAL_DISPLAY_LIMIT = 35;
   const SESSION_DISPLAY_INCREMENT = 20;
@@ -64,6 +65,21 @@
     // session (#2).
     onSessionDeleted = () => {},
   } = $props();
+  const menus = createSessionMenus();
+  const actions = createSessionActions({
+    get agentId() {
+      return agentId;
+    },
+    get closeMenu() {
+      return menus.closeMenu;
+    },
+    get loadSessions() {
+      return loadSessions;
+    },
+    get onSessionDeleted() {
+      return onSessionDeleted;
+    },
+  });
 
   let sessionState = $state(createSessionListState());
   let filters = $state(
@@ -109,42 +125,6 @@
     return roster;
   });
 
-  // Row-action state: which row's "…" menu is open, which row is being renamed
-  // inline, the draft title, and any rename error. Only ever one of each at a
-  // time — opening a menu or starting an edit on another row supersedes.
-  let openMenuSessionId = $state(null);
-  let menuTriggerElement = $state(null);
-  let menuElement = $state(null);
-  let menuStyle = $state('visibility: hidden;');
-  let menuPlacement = $state('bottom');
-  let editingSessionId = $state(null);
-  let editingAgentAddress = $state('');
-  let editValue = $state('');
-  let renameError = $state(null);
-  let renameSaving = $state(false);
-  // Filter-dropdown state: the header button's portaled panel, positioned like
-  // the row action menu.
-  let filterMenuOpen = $state(false);
-  let filterMenuTriggerElement = $state(null);
-  let filterMenuElement = $state(null);
-  let filterMenuStyle = $state('visibility: hidden;');
-  let filterMenuPlacement = $state('bottom');
-  // Row-delete state: a transient error surfaced when a delete is refused (for
-  // example a busy session, #4) and an in-flight guard against double-clicks.
-  let actionError = $state(null);
-  let deleting = $state(false);
-  // The session awaiting delete confirmation (null = dialog closed). The delete
-  // only runs once the confirm dialog resolves.
-  let deleteConfirmSession = $state(null);
-  let policySession = $state(null);
-  let policyUsesOverride = $state(false);
-  let policyDraft = $state(null);
-  let policySaving = $state(false);
-  let policyError = $state(null);
-
-  const SESSION_TITLE_MAX_LENGTH = 200;
-  const SESSION_ACTION_MENU_FALLBACK_WIDTH = 160;
-  const SESSION_FILTER_MENU_WIDTH = 230;
   const SESSION_FILTER_ROWS = [
     {
       key: 'allAgents',
@@ -393,263 +373,9 @@
     );
   };
 
-  // -- filter dropdown -------------------------------------------------------
-
-  const toggleFilterMenu = async (triggerElement) => {
-    if (filterMenuOpen) {
-      closeFilterMenu();
-      return;
-    }
-
-    closeMenu();
-    filterMenuOpen = true;
-    filterMenuTriggerElement = triggerElement;
-    filterMenuStyle = 'visibility: hidden;';
-    await tick();
-    updateFilterMenuPosition();
-  };
-
-  const closeFilterMenu = () => {
-    filterMenuOpen = false;
-    filterMenuTriggerElement = null;
-    filterMenuElement = null;
-    filterMenuStyle = 'visibility: hidden;';
-    filterMenuPlacement = 'bottom';
-  };
-
-  const updateFilterMenuPosition = () => {
-    if (!filterMenuOpen || !filterMenuTriggerElement || !filterMenuElement) {
-      return;
-    }
-
-    const panelRect = filterMenuElement.getBoundingClientRect();
-    const { placement, left, width, verticalRule, optionsMaxHeight } =
-      computePanelPosition(filterMenuTriggerElement, {
-        contentHeight: filterMenuElement.scrollHeight || panelRect.height,
-        panelWidth: panelRect.width || SESSION_FILTER_MENU_WIDTH,
-        horizontalAlign: 'end',
-      });
-
-    filterMenuPlacement = placement;
-    filterMenuStyle = [
-      `left: ${left}px`,
-      verticalRule,
-      `width: ${width}px`,
-      `max-height: ${optionsMaxHeight}px`,
-    ].join('; ');
-  };
-
   const setFilter = (key, checked) => {
     filters = { ...filters, [key]: checked };
     onFiltersChange(filters);
-  };
-
-  const toggleMenu = async (sessionKey, triggerElement) => {
-    if (openMenuSessionId === sessionKey) {
-      closeMenu();
-      return;
-    }
-
-    openMenuSessionId = sessionKey;
-    menuTriggerElement = triggerElement;
-    menuStyle = 'visibility: hidden;';
-    await tick();
-    updateMenuPosition();
-  };
-
-  const closeMenu = () => {
-    openMenuSessionId = null;
-    menuTriggerElement = null;
-    menuElement = null;
-    menuStyle = 'visibility: hidden;';
-    menuPlacement = 'bottom';
-  };
-
-  const updateMenuPosition = () => {
-    if (openMenuSessionId === null || !menuTriggerElement || !menuElement) {
-      return;
-    }
-
-    const menuRect = menuElement.getBoundingClientRect();
-    const { placement, left, width, verticalRule, optionsMaxHeight } =
-      computePanelPosition(menuTriggerElement, {
-        contentHeight: menuElement.scrollHeight || menuRect.height,
-        panelWidth: menuRect.width || SESSION_ACTION_MENU_FALLBACK_WIDTH,
-        horizontalAlign: 'end',
-      });
-
-    menuPlacement = placement;
-    menuStyle = [
-      `left: ${left}px`,
-      verticalRule,
-      `width: ${width}px`,
-      `max-height: ${optionsMaxHeight}px`,
-    ].join('; ');
-  };
-
-  // Enter inline-rename for a row. Seeds the field with the existing custom
-  // title (empty when the row currently shows an automatic label, so the user
-  // names it fresh).
-  const startRename = (session) => {
-    closeMenu();
-    editingSessionId = session.id;
-    editingAgentAddress = session.agent_address || asText(agentId);
-    editValue = session.title ?? '';
-    renameError = null;
-  };
-
-  const cancelRename = () => {
-    editingSessionId = null;
-    editingAgentAddress = '';
-    editValue = '';
-    renameError = null;
-  };
-
-  const submitRename = async () => {
-    const sessionId = editingSessionId;
-    const targetAgentId = editingAgentAddress || asText(agentId);
-    if (!sessionId || !targetAgentId || renameSaving) {
-      return;
-    }
-
-    renameSaving = true;
-    renameError = null;
-    try {
-      await renameSession(targetAgentId, sessionId, editValue);
-      editingSessionId = null;
-      editingAgentAddress = '';
-      editValue = '';
-      // Re-fetch so the row reflects the server-normalized title (and the
-      // fallback label when the name was cleared).
-      await loadSessions(targetAgentId);
-    } catch (error) {
-      renameError =
-        error.message ||
-        t('sessions.rename_error', 'The session could not be renamed.');
-    } finally {
-      renameSaving = false;
-    }
-  };
-
-  // Delete (archive) a session from the row menu. The shared ConfirmDialog
-  // guards the click (#3); for a channel-bound session the body also notes it
-  // will resume empty on the next inbound message (#5a). The server returns
-  // where to land, which ChatView uses to navigate if it was viewing the
-  // removed session.
-  const requestDelete = (session) => {
-    closeMenu();
-    const targetAgentId = asText(agentId);
-    if (!targetAgentId || deleting) {
-      return;
-    }
-    deleteConfirmSession = session;
-  };
-
-  const startPolicyEdit = (session) => {
-    closeMenu();
-    policySession = session;
-    policyUsesOverride = Boolean(session.compaction_policy_override);
-    policyDraft = normalizeCompactionPolicy(
-      session.compaction_policy_override ?? session.compaction_policy_effective,
-    );
-    policyError = null;
-  };
-
-  const closePolicyEdit = () => {
-    if (policySaving) return;
-    policySession = null;
-    policyDraft = null;
-    policyError = null;
-  };
-
-  const savePolicy = async () => {
-    const targetAgentId = policySession?.agent_address || asText(agentId);
-    if (!targetAgentId || !policySession || policySaving) return;
-    policySaving = true;
-    policyError = null;
-    try {
-      await setSessionCompactionPolicy(
-        targetAgentId,
-        policySession.id,
-        policyUsesOverride ? normalizeCompactionPolicy(policyDraft) : null,
-      );
-      policySession = null;
-      policyDraft = null;
-      await loadSessions(targetAgentId);
-    } catch (error) {
-      policyError =
-        error.message ||
-        t(
-          'sessions.compactionSaveError',
-          'The Compaction Policy could not be saved.',
-        );
-    } finally {
-      policySaving = false;
-    }
-  };
-
-  // The confirm body reflects whether the pending session is channel-bound.
-  let deleteConfirmMessage = $derived.by(() => {
-    const session = deleteConfirmSession;
-    if (!session) {
-      return '';
-    }
-    const name = session.display_name || sessionDisplayName(session);
-    return session.is_channel_session
-      ? t(
-          'sessions.delete_confirm_channel',
-          'Delete session "{name}"? It is archived and can be restored. The channel ' +
-            'conversation will start fresh on the next incoming message.',
-          { name },
-        )
-      : t(
-          'sessions.delete_confirm',
-          'Delete session "{name}"? It is archived and can be restored.',
-          { name },
-        );
-  });
-
-  const cancelDelete = () => {
-    deleteConfirmSession = null;
-  };
-
-  const confirmDelete = async () => {
-    const session = deleteConfirmSession;
-    deleteConfirmSession = null;
-    const targetAgentId = session?.agent_address || asText(agentId);
-    if (!session || !targetAgentId || deleting) {
-      return;
-    }
-
-    deleting = true;
-    actionError = null;
-    try {
-      const result = await deleteSession(targetAgentId, session.id);
-      onSessionDeleted?.({
-        deletedSessionId: session.id,
-        nextSessionId: asText(result?.next_session_id),
-        agentAddress: targetAgentId,
-      });
-      // Re-fetch so the deleted row disappears immediately, without waiting for
-      // the resource_changed round-trip.
-      await loadSessions(targetAgentId);
-    } catch (error) {
-      actionError =
-        error.message ||
-        t('sessions.delete_error', 'The session could not be deleted.');
-    } finally {
-      deleting = false;
-    }
-  };
-
-  const handleRenameKeydown = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      submitRename();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      cancelRename();
-    }
   };
 
   // Close an open row menu or the filter dropdown on an outside click or
@@ -659,40 +385,40 @@
   const handleDocumentMouseDown = (event) => {
     if (
       event.target instanceof Element &&
-      ((filterMenuOpen &&
+      ((menus.filterMenuOpen &&
         (event.target.closest('.session-drawer__filter') ||
-          filterMenuElement?.contains(event.target))) ||
-        (openMenuSessionId !== null &&
+          menus.filterMenuElement?.contains(event.target))) ||
+        (menus.openMenuSessionId !== null &&
           (event.target.closest('.session-row__actions') ||
-            menuElement?.contains(event.target))))
+            menus.menuElement?.contains(event.target))))
     ) {
       return;
     }
-    closeMenu();
-    closeFilterMenu();
+    menus.closeMenu();
+    menus.closeFilterMenu();
   };
 
   const handleDocumentKeyDown = (event) => {
     if (event.key === 'Escape') {
-      closeMenu();
-      closeFilterMenu();
+      menus.closeMenu();
+      menus.closeFilterMenu();
     }
   };
 
   const handleWindowScroll = (event) => {
     if (
       event.target instanceof Node &&
-      (filterMenuElement?.contains(event.target) ||
-        menuElement?.contains(event.target))
+      (menus.filterMenuElement?.contains(event.target) ||
+        menus.menuElement?.contains(event.target))
     ) {
       return;
     }
-    closeMenu();
-    closeFilterMenu();
+    menus.closeMenu();
+    menus.closeFilterMenu();
   };
 
   $effect(() => {
-    if (openMenuSessionId === null && !filterMenuOpen) {
+    if (menus.openMenuSessionId === null && !menus.filterMenuOpen) {
       return undefined;
     }
 
@@ -714,85 +440,6 @@
 
   const sessionRowKey = (session) =>
     `${session.agent_address || asText(agentId)}::${session.id}`;
-
-  const autofocusRename = (node) => {
-    node.focus();
-    node.select();
-  };
-
-  const formatTimestamp = (value) => {
-    const normalizedValue = asText(value);
-    if (!normalizedValue) {
-      return t('common.unknown', 'Unknown');
-    }
-
-    const parsedValue = Date.parse(normalizedValue);
-    if (Number.isNaN(parsedValue)) {
-      return normalizedValue;
-    }
-
-    return formatDateTimeInApplicationZone(
-      new Date(parsedValue),
-      activeLocaleTag(),
-      { dateStyle: 'medium', timeStyle: 'short' },
-    );
-  };
-
-  const sessionHoverDetails = (session) => {
-    const lines = [session.display_name || sessionDisplayName(session)];
-
-    if (session.agent_name) {
-      lines.push(`${t('sessions.agent', 'Agent')}: ${session.agent_name}`);
-    }
-
-    lines.push(
-      `${t('sessions.last_active', 'Last active')}: ${formatTimestamp(session.last_active_at ?? session.created_at)}`,
-    );
-
-    if (session.source_channel_id) {
-      lines.push(
-        `${t('sessions.source_channel', 'Source channel')}: ${session.source_channel_id}`,
-      );
-    }
-
-    if (session.subagent_parent) {
-      lines.push(
-        `${t('sessions.subagent_parent', 'Parent')}: ${session.subagent_parent.agent_id}/${session.subagent_parent.session_id}`,
-      );
-    }
-
-    return lines.join('\n');
-  };
-
-  const resolvePlatformLabel = (platform) => {
-    if (platform === 'telegram') {
-      return t('sessions.platform_telegram', 'Telegram');
-    }
-    if (platform === 'discord') {
-      return t('sessions.platform_discord', 'Discord');
-    }
-    const normalizedPlatform = asText(platform);
-    if (!normalizedPlatform) {
-      return t('sessions.platform_channel', 'Channel');
-    }
-    return `${normalizedPlatform.slice(0, 1).toUpperCase()}${normalizedPlatform.slice(1)}`;
-  };
-
-  const REFLECTION_BADGE_RUN_KINDS = [
-    'memory_reflection',
-    'skill_reflection',
-    'reflection',
-  ];
-
-  function reflectionBadgeKinds(session) {
-    return REFLECTION_BADGE_RUN_KINDS.filter((runKind) =>
-      session.run_kinds.includes(runKind),
-    );
-  }
-
-  function asText(value) {
-    return asSharedText(value).trim();
-  }
 </script>
 
 <svelte:document
@@ -800,7 +447,7 @@
   onkeydown={handleDocumentKeyDown}
 />
 
-<svelte:window onresize={closeMenu} />
+<svelte:window onresize={menus.closeMenu} />
 
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
@@ -810,11 +457,11 @@
         type="button"
         class="session-drawer__filter-trigger"
         class:session-drawer__filter-trigger--active={activeFilterCount > 0}
-        class:session-drawer__filter-trigger--open={filterMenuOpen}
+        class:session-drawer__filter-trigger--open={menus.filterMenuOpen}
         aria-label={t('sessions.filtersAria', 'Session list filters')}
         aria-haspopup="menu"
-        aria-expanded={filterMenuOpen}
-        onclick={(event) => toggleFilterMenu(event.currentTarget)}
+        aria-expanded={menus.filterMenuOpen}
+        onclick={(event) => menus.toggleFilterMenu(event.currentTarget)}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path
@@ -836,15 +483,15 @@
           </span>
         {/if}
       </button>
-      {#if filterMenuOpen}
+      {#if menus.filterMenuOpen}
         <div
-          bind:this={filterMenuElement}
+          bind:this={menus.filterMenuElement}
           use:portal
           class="session-drawer__filter-menu"
           role="menu"
-          data-placement={filterMenuPlacement}
+          data-placement={menus.filterMenuPlacement}
           data-positioning="fixed"
-          style={filterMenuStyle}
+          style={menus.filterMenuStyle}
         >
           {#each SESSION_FILTER_ROWS as filterRow (filterRow.key)}
             <div
@@ -866,9 +513,9 @@
     </div>
   </div>
 
-  {#if actionError}
+  {#if actions.actionError}
     <p class="session-drawer__state session-drawer__state--error" role="alert">
-      {actionError}
+      {actions.actionError}
     </p>
   {/if}
 
@@ -911,26 +558,28 @@
       {#each displayedSessions as session (sessionRowKey(session))}
         <li
           class="session-row"
-          class:session-row--editing={editingSessionId === session.id &&
-            editingAgentAddress === (session.agent_address || asText(agentId))}
+          class:session-row--editing={actions.editingSessionId === session.id &&
+            actions.editingAgentAddress ===
+              (session.agent_address || asText(agentId))}
         >
-          {#if editingSessionId === session.id && editingAgentAddress === (session.agent_address || asText(agentId))}
+          {#if actions.editingSessionId === session.id && actions.editingAgentAddress === (session.agent_address || asText(agentId))}
             <div class="session-row__edit">
               <input
                 class="session-row__edit-input"
                 type="text"
-                value={editValue}
-                maxlength={SESSION_TITLE_MAX_LENGTH}
+                value={actions.editValue}
+                maxlength={actions.SESSION_TITLE_MAX_LENGTH}
                 placeholder={t('sessions.rename_placeholder', 'Session name')}
                 aria-label={t('sessions.rename_label', 'Rename session')}
-                disabled={renameSaving}
-                oninput={(event) => (editValue = event.currentTarget.value)}
-                onkeydown={handleRenameKeydown}
+                disabled={actions.renameSaving}
+                oninput={(event) =>
+                  (actions.editValue = event.currentTarget.value)}
+                onkeydown={actions.handleRenameKeydown}
                 use:autofocusRename
               />
-              {#if renameError}
+              {#if actions.renameError}
                 <p class="session-row__edit-error" role="alert">
-                  {renameError}
+                  {actions.renameError}
                 </p>
               {/if}
             </div>
@@ -1200,13 +849,14 @@
               <button
                 type="button"
                 class="session-row__menu-trigger"
-                class:session-row__menu-trigger--open={openMenuSessionId ===
+                class:session-row__menu-trigger--open={menus.openMenuSessionId ===
                   sessionRowKey(session)}
                 aria-label={t('sessions.actions', 'Session actions')}
                 aria-haspopup="menu"
-                aria-expanded={openMenuSessionId === sessionRowKey(session)}
+                aria-expanded={menus.openMenuSessionId ===
+                  sessionRowKey(session)}
                 onclick={(event) =>
-                  toggleMenu(sessionRowKey(session), event.currentTarget)}
+                  menus.toggleMenu(sessionRowKey(session), event.currentTarget)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
                   <circle cx="8" cy="3" r="1.4" />
@@ -1214,21 +864,21 @@
                   <circle cx="8" cy="13" r="1.4" />
                 </svg>
               </button>
-              {#if openMenuSessionId === sessionRowKey(session)}
+              {#if menus.openMenuSessionId === sessionRowKey(session)}
                 <div
-                  bind:this={menuElement}
+                  bind:this={menus.menuElement}
                   use:portal
                   class="session-row__menu"
                   role="menu"
-                  data-placement={menuPlacement}
+                  data-placement={menus.menuPlacement}
                   data-positioning="fixed"
-                  style={menuStyle}
+                  style={menus.menuStyle}
                 >
                   <button
                     type="button"
                     class="session-row__menu-item"
                     role="menuitem"
-                    onclick={() => startRename(session)}
+                    onclick={() => actions.startRename(session)}
                   >
                     {t('sessions.rename', 'Rename')}
                   </button>
@@ -1236,7 +886,7 @@
                     type="button"
                     class="session-row__menu-item"
                     role="menuitem"
-                    onclick={() => startPolicyEdit(session)}
+                    onclick={() => actions.startPolicyEdit(session)}
                   >
                     {t('sessions.compactionPolicy', 'Compaction Policy')}
                   </button>
@@ -1244,7 +894,7 @@
                     type="button"
                     class="session-row__menu-item session-row__menu-item--danger"
                     role="menuitem"
-                    onclick={() => requestDelete(session)}
+                    onclick={() => actions.requestDelete(session)}
                   >
                     {t('sessions.delete', 'Delete')}
                   </button>
@@ -1265,22 +915,22 @@
   {/if}
 </aside>
 
-{#if deleteConfirmSession}
+{#if actions.deleteConfirmSession}
   <ConfirmDialog
     title={t('sessions.delete_confirm_title', 'Delete session')}
-    body={deleteConfirmMessage}
+    body={actions.deleteConfirmMessage}
     confirmLabel={t('common.delete', 'Delete')}
-    onConfirm={confirmDelete}
-    onCancel={cancelDelete}
+    onConfirm={actions.confirmDelete}
+    onCancel={actions.cancelDelete}
   />
 {/if}
 
-{#if policySession}
+{#if actions.policySession}
   <Modal
     title={t('sessions.compactionPolicy', 'Compaction Policy')}
     labelledById="session-compaction-policy-title"
-    closeDisabled={policySaving}
-    onClose={closePolicyEdit}
+    closeDisabled={actions.policySaving}
+    onClose={actions.closePolicyEdit}
   >
     {#snippet body()}
       <div class="modal-body session-policy-modal__body">
@@ -1297,513 +947,38 @@
             </p>
           </div>
           <Toggle
-            checked={policyUsesOverride}
-            disabled={policySaving}
+            checked={actions.policyUsesOverride}
+            disabled={actions.policySaving}
             ariaLabel={t('sessions.compactionOverride', 'Session override')}
-            onChange={(enabled) => (policyUsesOverride = enabled)}
+            onChange={(enabled) => (actions.policyUsesOverride = enabled)}
           />
         </div>
         <CompactionPolicyEditor
-          value={policyDraft}
-          disabled={!policyUsesOverride || policySaving}
+          value={actions.policyDraft}
+          disabled={!actions.policyUsesOverride || actions.policySaving}
           idPrefix="session-compaction-policy"
-          onChange={(next) => (policyDraft = next)}
+          onChange={(next) => (actions.policyDraft = next)}
         />
-        {#if policyError}
-          <p class="session-policy-modal__error" role="alert">{policyError}</p>
+        {#if actions.policyError}
+          <p class="session-policy-modal__error" role="alert">
+            {actions.policyError}
+          </p>
         {/if}
       </div>
     {/snippet}
     {#snippet footer()}
       <Button
         variant="secondary"
-        disabled={policySaving}
-        onClick={closePolicyEdit}
+        disabled={actions.policySaving}
+        onClick={actions.closePolicyEdit}
       >
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button disabled={policySaving} onClick={savePolicy}>
-        {policySaving
+      <Button disabled={actions.policySaving} onClick={actions.savePolicy}>
+        {actions.policySaving
           ? t('common.saving', 'Saving…')
           : t('common.save', 'Save')}
       </Button>
     {/snippet}
   </Modal>
 {/if}
-
-<style>
-  .session-drawer {
-    position: absolute;
-    top: 56px;
-    left: 12px;
-    /* Above the floating composer overlay (z-index 3): the expanded drawer
-       reaches into that region and must never be covered by its scrim. */
-    z-index: 4;
-    display: flex;
-    width: 320px;
-    max-height: calc(100% - 68px);
-    flex-direction: column;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    box-shadow: var(--floating-elevation);
-    overflow: hidden;
-  }
-
-  :global(.session-policy-modal__body) {
-    display: grid;
-    gap: 18px;
-    min-width: min(620px, 78vw);
-  }
-
-  .session-policy-modal__inheritance {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-  }
-
-  .session-policy-modal__label {
-    color: var(--text-hi);
-    font: 500 13px var(--font-ui);
-  }
-
-  .session-policy-modal__inheritance p,
-  .session-policy-modal__error {
-    margin: 3px 0 0;
-    color: var(--text-med);
-    font: 12px/1.45 var(--font-ui);
-  }
-
-  .session-policy-modal__error {
-    color: var(--danger);
-  }
-
-  .session-drawer__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-
-  .session-drawer__title {
-    margin: 0;
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .session-drawer__filter {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-    white-space: nowrap;
-  }
-
-  .session-drawer__filter-trigger {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--text-med);
-    cursor: pointer;
-    transition:
-      background 150ms ease,
-      color 150ms ease;
-  }
-
-  .session-drawer__filter-trigger:hover,
-  .session-drawer__filter-trigger:focus-visible,
-  .session-drawer__filter-trigger--open {
-    outline: none;
-    background: var(--accent-12);
-    color: var(--text-hi);
-  }
-
-  .session-drawer__filter-trigger--active {
-    color: var(--accent);
-  }
-
-  .session-drawer__filter-trigger svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .session-drawer__filter-count {
-    position: absolute;
-    top: -5px;
-    right: -5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 13px;
-    height: 13px;
-    padding: 0 3px;
-    border-radius: 7px;
-    background: var(--accent);
-    color: var(--surface);
-    font-family: var(--font-ui);
-    font-size: 9px;
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .session-drawer__filter-menu {
-    position: fixed;
-    z-index: var(--z-floating);
-    width: max-content;
-    min-width: 230px;
-    max-width: calc(100vw - 16px);
-    overflow-y: auto;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-3);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  }
-
-  .session-drawer__filter-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 7px 9px;
-    border-radius: var(--r-sm);
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-  }
-
-  .session-drawer__filter-row:hover {
-    background: var(--accent-08);
-  }
-
-  .session-row__agent {
-    margin-top: 2px;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-sm);
-    line-height: 1.25;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-drawer__list {
-    margin: 0;
-    padding: 8px 10px 10px;
-    list-style: none;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .session-drawer__more-hint {
-    margin: 0;
-    padding: 6px 14px 8px;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-sm);
-    text-align: center;
-  }
-
-  /* Flat master-list rows in the shared Agents/Projects list language: no
-     per-row card chrome, a quiet hover/focus tint, and the selected row
-     marked only by the 2px accent rail with an accent-dim fill. */
-  .session-row {
-    position: relative;
-    flex: 0 0 auto;
-    border-left: 2px solid transparent;
-    border-radius: 0 var(--r-md) var(--r-md) 0;
-    background: transparent;
-    transition:
-      background 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease;
-  }
-
-  .session-row:hover,
-  .session-row:focus-within {
-    background: var(--surface-2);
-  }
-
-  .session-row:has(.session-row__select:focus-visible) {
-    box-shadow: inset 0 0 0 1px var(--accent-40);
-  }
-
-  .session-row:has(.session-row__select--active) {
-    border-left-color: var(--accent);
-    background: var(--accent-dim);
-  }
-
-  .session-row__select {
-    width: 100%;
-    border: 0;
-    border-radius: inherit;
-    padding: 6px 30px 6px 10px;
-    text-align: left;
-    background: transparent;
-    color: var(--text-hi);
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: flex-start;
-    line-height: 1.35;
-  }
-
-  .session-row__select:focus-visible {
-    outline: none;
-  }
-
-  .session-row__actions {
-    position: absolute;
-    top: 50%;
-    right: 6px;
-    transform: translateY(-50%);
-  }
-
-  .session-row__menu-trigger {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--text-med);
-    /* Reserved in every row's layout, revealed only on interaction. */
-    opacity: 0;
-    cursor: pointer;
-    transition:
-      background 150ms ease,
-      color 150ms ease,
-      opacity 150ms ease;
-  }
-
-  .session-row:hover .session-row__menu-trigger,
-  .session-row:focus-within .session-row__menu-trigger,
-  .session-row__menu-trigger--open {
-    opacity: 1;
-  }
-
-  /* Pointer-coarse devices have no hover, so the row action stays visible. */
-  @media (hover: none) {
-    .session-row__menu-trigger {
-      opacity: 1;
-    }
-  }
-
-  .session-row__menu-trigger:hover,
-  .session-row__menu-trigger--open {
-    background: var(--surface-3);
-    color: var(--text-hi);
-  }
-
-  .session-row__menu-trigger:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: 1px;
-  }
-
-  .session-row__menu-trigger svg {
-    width: 15px;
-    height: 15px;
-    fill: currentColor;
-  }
-
-  .session-row__menu {
-    position: fixed;
-    z-index: var(--z-floating);
-    width: max-content;
-    min-width: 132px;
-    max-width: calc(100vw - 16px);
-    overflow-y: auto;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-3);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  }
-
-  .session-row__menu-item {
-    display: block;
-    width: 100%;
-    padding: 7px 9px;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-    text-align: left;
-    cursor: pointer;
-    transition: background 150ms ease;
-  }
-
-  .session-row__menu-item:hover,
-  .session-row__menu-item:focus-visible {
-    outline: none;
-    background: var(--accent-12);
-  }
-
-  .session-row__menu-item--danger {
-    color: var(--red);
-  }
-
-  .session-row__menu-item--danger:hover,
-  .session-row__menu-item--danger:focus-visible {
-    background: rgba(252, 129, 129, 0.14);
-  }
-
-  .session-row__edit {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 8px 10px;
-  }
-
-  .session-row__edit-input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 7px 9px;
-    border: 1px solid var(--accent);
-    border-radius: var(--r-sm);
-    background: var(--surface);
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-  }
-
-  .session-row__edit-input:focus-visible {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .session-row__edit-error {
-    margin: 0;
-    color: var(--red);
-    font-size: 11.5px;
-    line-height: 1.35;
-  }
-
-  .session-row__heading {
-    display: flex;
-    width: 100%;
-    min-width: 0;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-  }
-
-  .session-row__name {
-    flex: 1 1 110px;
-    min-width: 0;
-    margin: 0;
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-    font-weight: 400;
-    line-height: 1.25;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  :global(.session-row__badge) {
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-
-  .session-row__markers,
-  .session-row__marker-anchor {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-  }
-
-  .session-row__markers {
-    gap: 4px;
-  }
-
-  :global(.badge.session-row__badge--icon) {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-    border-radius: var(--r-sm);
-  }
-
-  :global(.badge.session-row__badge--icon > svg) {
-    flex-shrink: 0;
-  }
-
-  .session-row__unread {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    color: var(--blue);
-  }
-
-  .session-row__unread-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  .session-row__active-dot {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    padding-top: 1px;
-  }
-
-  .session-drawer__state {
-    margin: 0;
-    padding: 10px 12px;
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-  }
-
-  .session-drawer__state--error {
-    color: var(--red);
-  }
-
-  :global(.session-drawer__load-error) {
-    margin: 10px 12px;
-  }
-
-  :global(.session-drawer__empty-layout) {
-    margin: 12px;
-  }
-
-  @media (max-width: 640px) {
-    .session-drawer {
-      left: 8px;
-      right: 8px;
-      width: auto;
-      max-height: 60%;
-    }
-  }
-</style>

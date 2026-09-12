@@ -1,72 +1,32 @@
 // @vitest-environment jsdom
-
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
-
-import { init } from '../../lib/i18n.js';
-import { reactiveProps } from './_reactiveProps.svelte.js';
-import { rpcBackedApiMock } from './apiMock.js';
-
-const rpcMock = vi.fn();
-const listProjectsMock = vi.fn();
-const showProjectMock = vi.fn();
-
-vi.mock('svelte', async () => {
-  return import('../../../node_modules/svelte/src/index-client.js');
-});
-
-vi.mock('$lib/api.js', () =>
-  rpcBackedApiMock(rpcMock, {
-    listProjects: (...args) => listProjectsMock(...args),
-    showProject: (...args) => showProjectMock(...args),
-  }),
-);
-
-const { default: SystemPromptView } =
-  await import('../SystemPromptView.svelte');
-
-const COMPONENT_SOURCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../SystemPromptView.svelte',
-);
-
-function componentSource() {
-  return readFileSync(COMPONENT_SOURCE_PATH, 'utf-8');
-}
+import { describe, expect, it, vi } from 'vitest';
+import {
+  flushSync,
+  mount,
+  rpcMock,
+  SystemPromptView,
+  baseBlocks,
+  createRpcMock,
+  blockIds,
+  blockElement,
+  blockHandle,
+  clickToolbarButton,
+  confirmDialog,
+  lastCall,
+  pressKey,
+  createDataTransfer,
+  dragEvent,
+  waitForCondition,
+  setupSystemPromptViewSuite,
+} from './SystemPromptView.support.js';
 
 describe('SystemPromptView', () => {
-  let mountedComponent;
-
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    init('en');
-    rpcMock.mockReset();
-    listProjectsMock.mockReset();
-    showProjectMock.mockReset();
-    listProjectsMock.mockResolvedValue({ projects: [] });
-    showProjectMock.mockResolvedValue({ project: {}, scan: { team: [] } });
-    mountedComponent = null;
-    window.prompt = vi.fn(() => null);
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-
-    if (mountedComponent) {
-      await unmount(mountedComponent);
-      mountedComponent = null;
-    }
-
-    document.body.innerHTML = '';
-  });
+  const suite = setupSystemPromptViewSuite();
 
   it('renders blocks in layout order with the shared view chrome', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -102,7 +62,7 @@ describe('SystemPromptView', () => {
   it('renders an editable textarea for text blocks but not for data blocks', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -126,7 +86,7 @@ describe('SystemPromptView', () => {
   it('reveals the collapsed data block preview on demand', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -148,7 +108,7 @@ describe('SystemPromptView', () => {
   it('toggling a block persists immediately via prompt.set_layout', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -181,7 +141,7 @@ describe('SystemPromptView', () => {
   it('editing an editable block autosaves via prompt.update after the debounce', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -226,7 +186,7 @@ describe('SystemPromptView', () => {
   it('autosave keys by block id, not array index, after a reorder', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -274,7 +234,7 @@ describe('SystemPromptView', () => {
       }),
     );
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -310,7 +270,7 @@ describe('SystemPromptView', () => {
   it('reorders via native drag-and-drop and persists the new order', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -354,7 +314,7 @@ describe('SystemPromptView', () => {
   it('reorders via the keyboard, persists, and announces the new position', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -392,7 +352,7 @@ describe('SystemPromptView', () => {
     window.prompt = vi.fn(() => 'my-note');
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -419,7 +379,7 @@ describe('SystemPromptView', () => {
     window.prompt = vi.fn(() => '1 bad slug!');
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, {
+    suite.mountedComponent = mount(SystemPromptView, {
       target: document.body,
       props: { onToast: toastMock },
     });
@@ -450,7 +410,7 @@ describe('SystemPromptView', () => {
       }),
     );
 
-    mountedComponent = mount(SystemPromptView, {
+    suite.mountedComponent = mount(SystemPromptView, {
       target: document.body,
       props: { onToast: toastMock },
     });
@@ -494,7 +454,7 @@ describe('SystemPromptView', () => {
       }),
     );
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(() => blockIds().includes('user:my-note'), 100);
@@ -525,7 +485,7 @@ describe('SystemPromptView', () => {
   it('resets the layout through prompt.reset_layout', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    suite.mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
 
     await waitForCondition(
@@ -546,967 +506,4 @@ describe('SystemPromptView', () => {
       100,
     );
   });
-
-  it('shows the inherited badge in an agent scope and edits with the scope', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        agentBlocks: baseBlocks().map((block) =>
-          block.id === 'core:intro'
-            ? {
-                ...block,
-                is_modified: false,
-                inheritance: 'owner_default',
-              }
-            : { ...block, inheritance: 'owner_default' },
-        ),
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    selectPromptScope('Alpha');
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          (call) => call[0] === 'prompt.list' && call[1]?.scope,
-        ),
-      100,
-    );
-
-    const scopedListCall = rpcMock.mock.calls.find(
-      (call) => call[0] === 'prompt.list' && call[1]?.scope,
-    );
-    expect(scopedListCall[1]).toEqual({
-      scope: { type: 'agent', agent_id: 'agent-1' },
-    });
-
-    await waitForCondition(() => inheritedBadges().length > 0, 100);
-    expect(inheritedBadges().length).toBe(3);
-
-    // Editing an inherited block autosaves the override with the agent scope.
-    vi.useFakeTimers();
-    const textarea = blockElement('core:intro').querySelector('textarea');
-    textarea.value = 'agent override';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-
-    await vi.advanceTimersByTimeAsync(800);
-    await Promise.resolve();
-    await Promise.resolve();
-    flushSync();
-
-    expect(lastCall('prompt.update')[1]).toMatchObject({
-      id: 'core:intro',
-      content: 'agent override',
-      scope: { type: 'agent', agent_id: 'agent-1' },
-    });
-  });
-
-  it('keeps the newest scope when an older prompt list settles late', async () => {
-    const staleAgentResponse = deferred();
-    const baseRpc = createRpcMock();
-    rpcMock.mockImplementation((method, params) => {
-      if (method === 'prompt.list' && params?.scope?.agent_id === 'agent-1') {
-        return staleAgentResponse.promise;
-      }
-      return baseRpc(method, params);
-    });
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    selectPromptScope('Alpha');
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          ([method, params]) =>
-            method === 'prompt.list' && params?.scope?.agent_id === 'agent-1',
-        ),
-      100,
-    );
-    selectPromptScope('Default');
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default') && !isLoading(),
-      100,
-    );
-
-    staleAgentResponse.resolve({
-      blocks: [
-        {
-          id: 'user:stale',
-          owner: 'always',
-          kind: 'text',
-          source: 'user',
-          editable: true,
-          enabled: true,
-          text: 'stale',
-        },
-      ],
-      scopes: [
-        { type: 'default', label: 'Default' },
-        { type: 'agent', agent_id: 'agent-1', label: 'Alpha' },
-      ],
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    flushSync();
-
-    expect(scopeTrigger().textContent).toContain('Default');
-    expect(blockIds()).toEqual(baseBlocks().map((block) => block.id));
-  });
-
-  it('renders only default and enabled agent prompt scopes', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    expect(scopeOptionLabels()).toEqual(['Default', 'Alpha']);
-  });
-
-  it('selects the target agent scope when a scope deep-link request arrives', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    const props = reactiveProps({
-      targetScopeAgentId: '',
-      targetScopeRequestId: 0,
-    });
-    mountedComponent = mount(SystemPromptView, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    // A deep-link request bumps the request id with a valid agent scope target.
-    props.targetScopeAgentId = 'agent-1';
-    props.targetScopeRequestId = 1;
-    flushSync();
-
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          (call) =>
-            call[0] === 'prompt.list' && call[1]?.scope?.agent_id === 'agent-1',
-        ),
-      100,
-    );
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Alpha'),
-      100,
-    );
-    expect(scopeTrigger().textContent).toContain('Alpha');
-  });
-
-  it('falls back to the default scope when the deep-link target scope is absent', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    const props = reactiveProps({
-      targetScopeAgentId: '',
-      targetScopeRequestId: 0,
-    });
-    mountedComponent = mount(SystemPromptView, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    // A request for an agent with no prompt scope leaves the default selected
-    // and never issues a scoped prompt.list for the missing agent.
-    props.targetScopeAgentId = 'ghost';
-    props.targetScopeRequestId = 1;
-    flushSync();
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-
-    expect(scopeTrigger().textContent).toContain('Default');
-    expect(
-      rpcMock.mock.calls.some(
-        (call) =>
-          call[0] === 'prompt.list' && call[1]?.scope?.agent_id === 'ghost',
-      ),
-    ).toBe(false);
-  });
-
-  it('loads prompt.preview automatically and renders the token breakdown', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: {
-          text: 'You are an agent named Alpha...',
-          tokens: 1234,
-          tool_tokens: 456,
-          tool_count: 12,
-          estimated: true,
-        },
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => document.body.textContent.includes('Preview for'),
-      100,
-    );
-
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
-      100,
-    );
-
-    expect(lastCall('prompt.preview')[1]).toMatchObject({
-      agent_id: 'agent-1',
-    });
-    await waitForCondition(
-      () => document.body.textContent.includes('1234'),
-      50,
-    );
-    expect(document.body.textContent).toContain(
-      '~1234 prompt + ~456 tools = ~1690 tokens',
-    );
-    expect(document.body.textContent).toContain('You are an agent named Alpha');
-    expect(buttonByText('Refresh')).toBeTruthy();
-  });
-
-  it('falls back to the plain token count when the agent has no tools', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: {
-          text: 'Toolless preview',
-          tokens: 200,
-          tool_tokens: 0,
-          tool_count: 0,
-          estimated: true,
-        },
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => document.body.textContent.includes('Preview for'),
-      100,
-    );
-
-    await waitForCondition(
-      () => document.body.textContent.includes('~200 tokens'),
-      100,
-    );
-    expect(document.body.textContent).not.toContain('= ~');
-  });
-
-  it('keeps the Agent picker available when previewing a custom scope', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: { text: 'Agent scoped preview', tokens: 77 },
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => scopeTrigger()?.textContent.includes('Default'),
-      100,
-    );
-
-    selectPromptScope('Alpha');
-    await waitForCondition(
-      () => agentTrigger()?.textContent.includes('Alpha'),
-      100,
-    );
-
-    expect(document.body.querySelector('#sp-agent-select')).toBeTruthy();
-
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
-      100,
-    );
-
-    expect(lastCall('prompt.preview')[1]).toMatchObject({
-      agent_id: 'agent-1',
-      scope: { type: 'agent', agent_id: 'agent-1' },
-    });
-    expect(document.body.textContent).toContain('Agent scoped preview');
-  });
-
-  it('offers project agents in the preview picker and previews by address', async () => {
-    listProjectsMock.mockResolvedValue({ projects: [{ project_id: 'vbot' }] });
-    showProjectMock.mockResolvedValue({
-      project: { display_name: 'vBot' },
-      scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
-    });
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: { text: 'Project agent preview', tokens: 88 },
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(() => agentTrigger(), 100);
-    await waitForCondition(
-      () => agentOptionLabels().some((label) => label.includes('builder@vbot')),
-      100,
-    );
-
-    openDropdown(agentTrigger());
-    expect(document.body.textContent).toContain('Project agents');
-    const projectOption = dropdownOptionButtons().find((button) =>
-      button.textContent.includes('builder@vbot'),
-    );
-    projectOption.click();
-    flushSync();
-
-    // Selecting the project agent auto-loads its preview — no Refresh click.
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          (call) =>
-            call[0] === 'prompt.preview' &&
-            call[1]?.agent_id === 'builder@vbot',
-        ),
-      100,
-    );
-
-    expect(lastCall('prompt.preview')[1]).toMatchObject({
-      agent_id: 'builder@vbot',
-    });
-    expect(document.body.textContent).toContain('Project agent preview');
-  });
-
-  it('loads the preview automatically on mount without pressing Refresh', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: { text: 'Auto-loaded preview', tokens: 321 },
-      }),
-    );
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    // No Refresh click — the preview fetches for the first selected agent.
-    await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
-      100,
-    );
-
-    expect(lastCall('prompt.preview')[1]).toMatchObject({
-      agent_id: 'agent-1',
-    });
-    await waitForCondition(
-      () => document.body.textContent.includes('Auto-loaded preview'),
-      50,
-    );
-  });
-
-  it('reloads the preview when the preview agent changes', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    flushSync();
-
-    // The initial auto-load previews the first agent (agent-1).
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          (call) =>
-            call[0] === 'prompt.preview' && call[1]?.agent_id === 'agent-1',
-        ),
-      100,
-    );
-
-    // Switching the preview agent re-fetches for the newly selected agent with
-    // no Refresh click.
-    openDropdown(agentTrigger());
-    const betaOption = dropdownOptionButtons().find((button) =>
-      button.textContent.includes('Beta'),
-    );
-    expect(betaOption, 'Beta option not found').toBeTruthy();
-    betaOption.click();
-    flushSync();
-
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.some(
-          (call) =>
-            call[0] === 'prompt.preview' && call[1]?.agent_id === 'agent-2',
-        ),
-      100,
-    );
-  });
-
-  it('opens in document view and copies the exact original prompt', async () => {
-    const text =
-      '# Inspection fixture\n\nKeep **all** words.\n<external>literal</external>';
-    const writeText = vi.fn().mockResolvedValue();
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    });
-    rpcMock.mockImplementation(
-      createRpcMock({ promptPreview: { text, tokens: 25, tools: [] } }),
-    );
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    await waitForCondition(
-      () => document.querySelector('.sp-document h1'),
-      100,
-    );
-    expect(document.querySelector('.sp-editor').hidden).toBe(true);
-    expect(document.querySelector('external')).toBeNull();
-    clickTab('Original text');
-    expect(document.querySelector('.sp-preview-pre').textContent).toBe(text);
-    document.querySelector('.sp-document-toolbar button.btn-secondary').click();
-    await waitForCondition(() => writeText.mock.calls.length > 0, 100);
-    expect(writeText).toHaveBeenCalledWith(text);
-  });
-
-  it('shows searchable complete Tool definitions separately from the prompt', async () => {
-    const definition = {
-      name: 'mcp_fixture',
-      description: 'TEST-MCP-DESCRIPTION <script>inert</script>',
-      parameters: {
-        type: 'object',
-        properties: { action: { enum: ['search', 'describe'] } },
-      },
-    };
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptPreview: {
-          text: 'PROMPT-ONLY',
-          tokens: 10,
-          tools: [
-            { definition, tokens: 350 },
-            {
-              definition: {
-                name: 'read',
-                description: 'READ-FIXTURE',
-                parameters: {},
-              },
-              tokens: 100,
-            },
-          ],
-        },
-      }),
-    );
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    await waitForCondition(() => document.querySelector('.sp-document'), 100);
-    expect(document.querySelector('.sp-document').textContent).not.toContain(
-      'TEST-MCP-DESCRIPTION',
-    );
-    expect(lastCall('prompt.preview')[1].include_tools).toBe(true);
-    clickTab('Tools');
-    expect(document.querySelector('.tool-description').textContent).toBe(
-      definition.description,
-    );
-    expect(
-      JSON.parse(document.querySelector('.tool-schema').textContent),
-    ).toEqual(definition.parameters);
-    expect(document.querySelector('.tool-detail script')).toBeNull();
-    const search = document.querySelector('input[type="search"]');
-    search.value = 'READ-FIXTURE';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(document.querySelector('.tool-detail h3').textContent).toBe('read');
-    expect(document.querySelectorAll('.tool-index-item')).toHaveLength(1);
-    search.value = 'not-found';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(document.querySelector('.tool-detail')).toBeNull();
-    expect(document.body.textContent).toContain('No matching Tools');
-  });
-
-  it('opens a block without changing inclusion or losing edits across tabs', async () => {
-    rpcMock.mockImplementation(createRpcMock());
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    await waitForCondition(
-      () => blockIds().length === baseBlocks().length,
-      100,
-    );
-    clickTab('Edit blocks');
-    const block = blockElement('core:intro');
-    const disclosure = block.querySelector('button[aria-expanded]');
-    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
-    disclosure.click();
-    flushSync();
-    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
-    expect(lastCall('prompt.set_layout')).toBeUndefined();
-    const textarea = block.querySelector('textarea');
-    textarea.value = 'PRESERVED-DRAFT';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    clickTab('Tools');
-    clickTab('Edit blocks');
-    expect(block.querySelector('textarea').value).toBe('PRESERVED-DRAFT');
-    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
-  });
-
-  it('shows a failed preview and retries without retaining old content', async () => {
-    const base = createRpcMock();
-    let failing = true;
-    rpcMock.mockImplementation((method, params) =>
-      method === 'prompt.preview' && failing
-        ? Promise.reject(new Error('test outage'))
-        : base(method, params),
-    );
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    await waitForCondition(() => buttonByText('Retry'), 100);
-    expect(document.querySelector('.sp-document')).toBeNull();
-    failing = false;
-    buttonByText('Retry').click();
-    await waitForCondition(() => document.querySelector('.sp-document'), 100);
-    expect(buttonByText('Retry')).toBeNull();
-  });
-
-  it('ignores an old Agent preview that finishes after a new selection', async () => {
-    const old = deferred();
-    const base = createRpcMock();
-    rpcMock.mockImplementation((method, params) => {
-      if (method !== 'prompt.preview') return base(method, params);
-      return params.agent_id === 'agent-1'
-        ? old.promise
-        : Promise.resolve({ text: 'NEW-AGENT', tools: [], tokens: 5 });
-    });
-    mountedComponent = mount(SystemPromptView, { target: document.body });
-    await waitForCondition(() => lastCall('prompt.preview'), 100);
-    openDropdown(agentTrigger());
-    dropdownOptionButtons()
-      .find((button) => button.textContent.includes('Beta'))
-      .click();
-    flushSync();
-    await waitForCondition(
-      () =>
-        document
-          .querySelector('.sp-document')
-          ?.textContent.includes('NEW-AGENT'),
-      100,
-    );
-    old.resolve({
-      text: 'STALE-AGENT',
-      tools: [{ definition: { name: 'stale', parameters: {} }, tokens: 5 }],
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-    expect(document.querySelector('.sp-document').textContent).toContain(
-      'NEW-AGENT',
-    );
-    clickTab('Tools');
-    expect(document.querySelector('.tool-detail')).toBeNull();
-  });
-
-  it('all new i18n keys have t() calls in the component source', () => {
-    const source = componentSource();
-
-    const requiredKeys = [
-      'common.saved',
-      'common.alreadySaved',
-      'common.remove',
-      'systemPrompt.title',
-      'systemPrompt.scope.label',
-      'systemPrompt.scope.default',
-      'systemPrompt.fragmentEditor.save',
-      'systemPrompt.fragmentEditor.reset',
-      'systemPrompt.fragmentEditor.dirtyIndicator',
-      'systemPrompt.fragmentEditor.modifiedIndicator',
-      'systemPrompt.fragmentEditor.modifiedHint',
-      'systemPrompt.fragmentEditor.resetConfirm',
-      'systemPrompt.fragmentEditor.resetAgentConfirm',
-      'systemPrompt.fragmentEditor.resetConfirmTitle',
-      'systemPrompt.blockList.guide.label',
-      'systemPrompt.blockList.guide.title',
-      'systemPrompt.blockList.guide.assemblyLabel',
-      'systemPrompt.blockList.guide.assembly',
-      'systemPrompt.blockList.guide.scopeLabel',
-      'systemPrompt.blockList.guide.scope',
-      'systemPrompt.blockList.newBlock',
-      'systemPrompt.blockList.newBlockPrompt',
-      'systemPrompt.blockList.invalidSlug',
-      'systemPrompt.blockList.createFailed',
-      'systemPrompt.blockList.removeConfirm',
-      'systemPrompt.blockList.removeConfirmTitle',
-      'systemPrompt.blockList.removeFailed',
-      'systemPrompt.blockList.resetLayout',
-      'systemPrompt.blockList.resetLayoutConfirm',
-      'systemPrompt.blockList.resetLayoutConfirmTitle',
-      'systemPrompt.blockList.customBadge',
-      'systemPrompt.blockList.dataBadge',
-      'systemPrompt.blockList.dataHint',
-      'systemPrompt.blockList.inheritedBadge',
-      'systemPrompt.blockList.inheritedHint',
-      'systemPrompt.blockList.dataLabel',
-      'systemPrompt.blockList.dataEmpty',
-      'systemPrompt.blockList.showPreview',
-      'systemPrompt.blockList.hidePreview',
-      'systemPrompt.blockList.empty',
-      'systemPrompt.blockList.toggleAria',
-      'systemPrompt.blockList.reorderHandle',
-      'systemPrompt.blockList.reorderAnnouncement',
-      'systemPrompt.blockList.ownerHint.always',
-      'systemPrompt.blockList.ownerHint.memory',
-      'systemPrompt.blockList.ownerHint.channel',
-      'systemPrompt.blockList.ownerHint.tool',
-      'systemPrompt.blockList.ownerHint.extension',
-      'systemPrompt.preview.heading',
-      'systemPrompt.preview.copy',
-      'systemPrompt.preview.tokenCount',
-      'systemPrompt.preview.tokenBreakdown',
-      'systemPrompt.preview.tokenBreakdownHint',
-      'systemPrompt.preview.agentLabel',
-      'systemPrompt.preview.empty',
-      'systemPrompt.error.loadFailed',
-      'systemPrompt.error.saveFailed',
-      'systemPrompt.error.resetFailed',
-      'systemPrompt.error.previewFailed',
-      'systemPrompt.error.copyFailed',
-      'systemPrompt.error.layoutFailed',
-    ];
-
-    for (const key of requiredKeys) {
-      expect(source, `Missing i18n key: ${key}`).toContain(`'${key}'`);
-    }
-  });
 });
-
-function baseBlocks() {
-  return [
-    {
-      id: 'core:intro',
-      owner: 'always',
-      kind: 'text',
-      source: 'core',
-      editable: true,
-      enabled: true,
-      text: '# Intro',
-      is_modified: false,
-    },
-    {
-      id: 'memory:guidance',
-      owner: 'memory',
-      kind: 'text',
-      source: 'memory',
-      editable: true,
-      enabled: true,
-      text: '# Memory guidance',
-      is_modified: false,
-    },
-    {
-      id: 'tool:bash',
-      owner: 'tool:bash',
-      kind: 'text',
-      source: 'tool',
-      editable: true,
-      enabled: true,
-      text: '# Bash tool',
-      is_modified: false,
-    },
-    {
-      id: 'data:soul',
-      owner: 'always',
-      kind: 'data',
-      source: 'core',
-      editable: false,
-      enabled: true,
-      text: '<file>SOUL</file>',
-    },
-  ];
-}
-
-function baseAgents() {
-  return [
-    { id: 'agent-1', name: 'Alpha', custom_system_prompt_enabled: true },
-    { id: 'agent-2', name: 'Beta', custom_system_prompt_enabled: false },
-  ];
-}
-
-function createRpcMock(options = {}) {
-  const blocks = options.blocks ?? baseBlocks();
-  const agentBlocks = options.agentBlocks ?? blocks;
-  const agents = options.agents ?? baseAgents();
-  const scopes = options.scopes ?? [
-    { type: 'default', label: 'Default' },
-    { type: 'agent', agent_id: 'agent-1', label: 'Alpha' },
-  ];
-  const promptReset = options.promptReset ?? null;
-  const promptPreview = options.promptPreview ?? null;
-  const createBlockError = options.createBlockError ?? null;
-
-  return async (method, params) => {
-    if (method === 'agent.list') {
-      return { agents };
-    }
-
-    if (method === 'prompt.list') {
-      return {
-        blocks: params?.scope?.type === 'agent' ? agentBlocks : blocks,
-        scopes,
-      };
-    }
-
-    if (method === 'prompt.update') {
-      return {
-        id: params.id,
-        text: params.content,
-        is_modified: true,
-        ...(params?.scope?.type === 'agent'
-          ? { inheritance: 'agent_override' }
-          : {}),
-      };
-    }
-
-    if (method === 'prompt.reset') {
-      if (promptReset) {
-        return promptReset;
-      }
-      return { id: params.id, text: '', is_modified: false };
-    }
-
-    if (method === 'prompt.set_layout') {
-      return { layout: params.layout };
-    }
-
-    if (method === 'prompt.create_block') {
-      if (createBlockError) {
-        throw createBlockError;
-      }
-      return {
-        id: `user:${params.slug}`,
-        owner: 'always',
-        kind: 'text',
-        source: 'user',
-        editable: true,
-        enabled: true,
-        rank: 0,
-      };
-    }
-
-    if (method === 'prompt.remove_block') {
-      return { layout: [] };
-    }
-
-    if (method === 'prompt.reset_layout') {
-      return { layout: [] };
-    }
-
-    if (method === 'prompt.preview') {
-      if (promptPreview) {
-        return promptPreview;
-      }
-      return { text: 'Preview text', tokens: 500, estimated: true };
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
-}
-
-// -- DOM helpers ------------------------------------------------------------
-
-function blockElements() {
-  return Array.from(document.body.querySelectorAll('li.sp-block'));
-}
-
-// The "inherited" marker is now the shared Badge primitive, identified by its
-// translated label rather than a bespoke per-variant class.
-function inheritedBadges() {
-  return Array.from(document.body.querySelectorAll('.badge')).filter(
-    (element) => element.textContent.trim() === 'inherited',
-  );
-}
-
-function blockIds() {
-  return blockElements().map(
-    (element) =>
-      element.querySelector('.sp-block-id')?.textContent.trim() ?? '',
-  );
-}
-
-function blockElement(blockId) {
-  const element = blockElements().find(
-    (item) =>
-      item.querySelector('.sp-block-id')?.textContent.trim() === blockId,
-  );
-  expect(element, `block not found: ${blockId}`).toBeTruthy();
-  return element;
-}
-
-function blockHandle(blockId) {
-  return blockElement(blockId).querySelector('[data-block-handle]');
-}
-
-function clickToolbarButton(label) {
-  const button = Array.from(
-    document.body.querySelectorAll('.sp-blocklist-toolbar-actions button'),
-  ).find((item) => item.textContent.trim() === label);
-  expect(button, `toolbar button not found: ${label}`).toBeTruthy();
-  button.click();
-}
-
-function buttonByText(label) {
-  return (
-    Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent.trim() === label,
-    ) ?? null
-  );
-}
-
-// Clicks the confirm button in the open ConfirmDialog, identified by its label.
-// The dialog renders inside a `.modal-footer` (Modal shell) with a cancel and a
-// confirm Button; the confirm button carries the action verb.
-function confirmDialog(label) {
-  const footer = document.body.querySelector('.modal-footer');
-  expect(footer, 'confirm dialog not open').toBeTruthy();
-  const button = Array.from(footer.querySelectorAll('button')).find(
-    (item) => item.textContent.trim() === label,
-  );
-  expect(button, `confirm button not found: ${label}`).toBeTruthy();
-  button.click();
-}
-
-function lastCall(method) {
-  const calls = rpcMock.mock.calls.filter((call) => call[0] === method);
-  return calls[calls.length - 1];
-}
-
-function pressKey(element, key) {
-  const event = new KeyboardEvent('keydown', {
-    key,
-    bubbles: true,
-    cancelable: true,
-  });
-  element.dispatchEvent(event);
-  return event;
-}
-
-// jsdom has no real DataTransfer; a minimal stub backs the drag payload.
-function createDataTransfer() {
-  const store = new Map();
-  return {
-    effectAllowed: 'none',
-    dropEffect: 'none',
-    setData(type, value) {
-      store.set(type, String(value));
-    },
-    getData(type) {
-      return store.get(type) ?? '';
-    },
-  };
-}
-
-function dragEvent(type, dataTransfer) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'dataTransfer', {
-    configurable: true,
-    value: dataTransfer,
-  });
-  return event;
-}
-
-// The scope and preview-agent pickers are the shared Dropdown primitive: a
-// <button> trigger plus a portaled list of <button role="option"> rows that
-// only exist in the DOM while the dropdown is open.
-function scopeTrigger() {
-  return document.body.querySelector('#sp-scope-select');
-}
-
-function agentTrigger() {
-  return document.body.querySelector('#sp-agent-select');
-}
-
-function dropdownOptionButtons() {
-  return Array.from(document.body.querySelectorAll('.dropdown-option'));
-}
-
-function openDropdown(trigger) {
-  expect(trigger).toBeTruthy();
-  trigger.click();
-  flushSync();
-}
-
-function readOpenOptionLabels(trigger) {
-  openDropdown(trigger);
-  const labels = dropdownOptionButtons().map((button) =>
-    button.textContent.trim(),
-  );
-  trigger.click();
-  flushSync();
-  return labels;
-}
-
-function scopeOptionLabels() {
-  return readOpenOptionLabels(scopeTrigger());
-}
-
-function agentOptionLabels() {
-  return readOpenOptionLabels(agentTrigger());
-}
-
-function selectPromptScope(label) {
-  openDropdown(scopeTrigger());
-  const option = dropdownOptionButtons().find(
-    (button) => button.textContent.trim() === label,
-  );
-  expect(option, `scope option not found: ${label}`).toBeTruthy();
-  option.click();
-  flushSync();
-}
-
-function isLoading() {
-  return document.body.querySelector('.sp-blocklist-guide') === null;
-}
-
-async function waitForCondition(check, attempts = 20) {
-  for (let index = 0; index < attempts; index += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-
-    if (check()) {
-      return;
-    }
-  }
-
-  throw new Error('Timed out waiting for condition.');
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-function clickTab(name) {
-  const tab = [...document.querySelectorAll('[role="tab"]')].find(
-    (item) => item.textContent.trim() === name,
-  );
-  expect(tab, `Tab ${name}`).toBeTruthy();
-  tab.click();
-  flushSync();
-}

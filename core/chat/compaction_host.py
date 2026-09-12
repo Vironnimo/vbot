@@ -6,19 +6,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from core.chat.chat import (
+from core.chat._request_builder import (
     SEEN_SKILLS_META_KEY,
-    ChatLoop,
+    RequestBuilder,
+    _finalize_compaction_checkpoint,
+    _resolve_reasoning_replay_policy,
+    _resolve_wire_media_support,
+    _resolved_model_reference,
+)
+from core.chat._request_history import _restore_in_run_tool_result_content
+from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
     RequestState,
     _CompactionPromptRefresh,
-    _finalize_compaction_checkpoint,
-    _resolve_agent_connection,
-    _resolve_reasoning_replay_policy,
-    _resolve_wire_media_support,
-    _resolved_model_reference,
-    _restore_in_run_tool_result_content,
 )
 from core.chat.continuation import (
     fold_continuation_records,
@@ -29,6 +30,7 @@ from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
     _model_input_modalities_for_target,
+    _resolve_agent_connection,
     _split_agent_model,
     resolve_request_temperature,
 )
@@ -54,7 +56,7 @@ from core.sessions import ChatSession, SessionAddress
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from core.compaction.compaction import CompactionSettings
+    from core.compaction.compaction import CompactionService, CompactionSettings
     from core.runs import Run
 
 
@@ -84,13 +86,19 @@ class ChatCompactionHost:
     the coordinator never needs to import or reconstruct those details.
     """
 
-    def __init__(self, loop: ChatLoop) -> None:
-        self._loop = loop
-        self._dependencies: ChatLoopDependencies = loop._dependencies
+    def __init__(
+        self,
+        dependencies: ChatLoopDependencies,
+        requests: RequestBuilder,
+        compaction_service: CompactionService | None,
+    ) -> None:
+        self._requests = requests
+        self._dependencies = dependencies
+        self._compaction_service = compaction_service
 
     @property
     def compaction_service(self) -> Any:
-        return self._loop.compaction_service
+        return self._compaction_service
 
     @property
     def sessions(self) -> Any:
@@ -110,7 +118,9 @@ class ChatCompactionHost:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        from core.chat.chat import _CHAT_TRANSFORM_WORKERS
+        from core.chat._workers import (
+            _CHAT_TRANSFORM_WORKERS,
+        )
 
         return await _CHAT_TRANSFORM_WORKERS.run(function, *args, **kwargs)
 
@@ -134,7 +144,7 @@ class ChatCompactionHost:
         *,
         active_provider_id: str,
     ) -> tuple[Any, str, str]:
-        return self._loop.resolve_summary_adapter(
+        return self._requests.resolve_summary_adapter(
             agent,
             adapter,
             model_id,
@@ -143,7 +153,7 @@ class ChatCompactionHost:
         )
 
     def resolve_context_window(self, agent: Any, target: Any | None = None) -> int | None:
-        return self._loop.resolve_context_window(agent, target)
+        return self._requests.resolve_context_window(agent, target)
 
     def resolve_temperature(self, provider_id: str, model_id: str) -> float | None:
         return resolve_request_temperature(None, self.models, provider_id, model_id)
@@ -157,7 +167,7 @@ class ChatCompactionHost:
         settings: CompactionSettings,
     ) -> ManualCompactionRequest:
         """Build the exact manual Compaction request and acquire its adapters."""
-        project_cwd = self._loop.resolve_project_cwd(run.working_project_id)
+        project_cwd = self._requests.resolve_project_cwd(run.working_project_id)
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         adapter = self._dependencies.get_adapter(ConnectionRef(provider_id, connection_id))
         _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -252,7 +262,7 @@ class ChatCompactionHost:
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
             )
-            state = await self._loop.build_request_state(agent, session, inputs=inputs)
+            state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(
                 project_cwd=project_cwd,
                 activation_skill_project_id=skill_project_id,
@@ -408,7 +418,7 @@ class ChatCompactionHost:
             )
             read_paths.extend(identity_read_paths)
 
-        available_skill_names = self._loop.available_skill_names(agent, prompt_skill_registry)
+        available_skill_names = self._requests.available_skill_names(agent, prompt_skill_registry)
         return _CompactionPromptRefresh(
             agent_body=runtime_agent_body(refreshed_agent),
             project_prompt_context=project_prompt_context,
@@ -496,7 +506,7 @@ class ChatCompactionHost:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
-        projected_state = await self._loop.build_request_state(
+        projected_state = await self._requests.build_request_state(
             agent,
             session,
             inputs=inputs.with_session_messages([*session_messages, checkpoint]),
@@ -586,7 +596,7 @@ class ChatCompactionHost:
         live_request_messages: list[JsonObject],
     ) -> RequestState:
         await context.session_snapshot.refresh(context.session)
-        refreshed_state = await self._loop.build_request_state(
+        refreshed_state = await self._requests.build_request_state(
             context.agent,
             context.session,
             inputs=RequestBuildInputs.from_context(context, target).with_session_messages(

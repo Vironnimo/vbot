@@ -66,7 +66,7 @@ async def test_multipart_reply_retries_only_failed_chunk(
 async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_path):
     import threading
 
-    from core.channels.channels import ChannelStorage
+    from core.channels import ChannelStorage
 
     storage = ChannelStorage(tmp_path)
     higher_saved = threading.Event()
@@ -195,7 +195,7 @@ async def test_redelivered_update_is_skipped_via_persisted_watermark(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Telegram redelivers unconfirmed updates after a restart; only new ids run."""
-    from core.channels.channels import ChannelStorage
+    from core.channels import ChannelStorage
 
     storage = ChannelStorage(tmp_path)
     storage.save_update_offset("tg-assistant", 7)
@@ -261,7 +261,7 @@ async def test_duplicate_update_inside_one_session_is_claimed_once(
 def test_polling_state_survives_storage_reload_and_degrades_on_corruption(
     tmp_path: Path,
 ) -> None:
-    from core.channels.channels import ChannelStorage
+    from core.channels import ChannelStorage
 
     storage = ChannelStorage(tmp_path)
     storage.save_update_offset("tg-assistant", 42)

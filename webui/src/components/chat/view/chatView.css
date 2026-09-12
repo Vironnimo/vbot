@@ -1,0 +1,349 @@
+.chat-view {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.chat-view[hidden] {
+  display: none;
+}
+
+.chat-view__surface {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.chat-view__content-shell {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Combined floating "Sessions | +" control at the top-left of the chat
+     surface. Stays fixed while the timeline scrolls underneath. The session
+     panel opens downward from this control as a floating overlay (not a
+     sidebar), so the chat surface always fills the full width. */
+.chat-view__session-bar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+  overflow: hidden;
+}
+
+.chat-view__session-bar-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-2);
+}
+
+.btn-secondary.chat-view__session-toggle {
+  border: 0;
+  border-radius: 0;
+  padding: 7px 14px;
+  background: transparent;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+}
+
+.btn-secondary.chat-view__session-toggle:hover:not(:disabled) {
+  background: var(--accent-08);
+  color: var(--accent);
+}
+
+.chat-view__session-toggle--active {
+  background: var(--accent-12);
+  color: var(--accent);
+}
+
+.btn-secondary.btn-icon.chat-view__new-session-fab,
+.btn-secondary.btn-icon.chat-view__workspace-action {
+  border: 0;
+  border-radius: 0;
+  width: 36px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-med);
+}
+
+.btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled),
+.btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled) {
+  background: var(--accent-08);
+  color: var(--accent);
+}
+
+.chat-view__new-session-fab svg {
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-view__timeline-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* The composer stack floats over the full-height timeline: content scrolls
+    out from behind it instead of the viewport shrinking with every composer
+    autosize. The stack itself is click-transparent (its gradient scrim lets
+    wheel and pointer input reach the timeline beneath); only the actual
+    banners, queue editor, and composer catch input. */
+.chat-view__footer-stack {
+  position: absolute;
+  /* Ends before the timeline's scrollbar column so the scrollbar stays
+      visible over its full height instead of disappearing behind us. */
+  right: var(--chat-scrollbar-width, 0px);
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 26px;
+  background: linear-gradient(to top, var(--bg) 72%, transparent);
+  pointer-events: none;
+}
+
+.chat-view__footer-stack > * {
+  pointer-events: auto;
+}
+
+.chat-view__state-banner {
+  align-self: center;
+  width: min(calc(100% - 40px), 560px);
+  margin-block: auto;
+}
+
+.chat-view__notice-stack {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chat-view__project-team {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* Left-aligned (no measure cap) so the team bar starts at the same left edge
+     as the identity agent tabs above. */
+.chat-view__project-team-inner {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* Bold project-name label before the team tabs, marking the agents as that
+     project's team. The trailing divider separates it from the first tab. */
+.chat-view__project-team-name {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-right: 6px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-md);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-view__project-team-error {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--red);
+  font-size: 12px;
+}
+
+/* The project team tabs mirror the identity bar's agent tabs (which are
+     scoped to ChatHeader), so the visual styling is restated locally. */
+.chat-view__project-team .agent-tab {
+  display: flex;
+  height: 38px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-lo);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.chat-view__project-team .agent-tab:hover,
+.chat-view__project-team .agent-tab:focus-visible {
+  color: var(--text-med);
+  outline: none;
+}
+
+.chat-view__project-team .agent-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-view__project-team .tab-indicator {
+  width: 5px;
+  height: 5px;
+}
+
+.chat-view__project-team-empty {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--text-lo);
+  font-size: 12px;
+}
+
+/* Center inner content on the same axis as the capped message column. Bars
+     (notice stack, composer) stay full-width; their content is capped to
+     `--chat-measure` and centered. `full` disables the cap (measure: none). */
+.chat-view__measure {
+  width: 100%;
+  max-width: var(--chat-measure);
+  margin-inline: auto;
+}
+
+.chat-view__notice-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Chat-local bottom toast: floats just above the composer (same anchoring as
+     the composer's own attachment-error toast), centered on the chat measure. */
+.chat-view__composer-shell {
+  position: relative;
+}
+
+.chat-view__command-toast {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  width: 100%;
+  max-width: var(--chat-measure);
+  margin-inline: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.chat-view__command-toast-message {
+  margin: 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.chat-view__footer-banner {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: var(--chat-measure);
+  margin: 0 auto 10px;
+  padding: 9px 20px 9px 12px;
+}
+
+.chat-view__footer-banner-copy {
+  min-width: 0;
+}
+
+.chat-view__footer-banner-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.chat-view__footer-banner-title,
+.chat-view__footer-banner-hint {
+  margin: 0;
+}
+
+.chat-view__footer-banner-title {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.chat-view__footer-banner-hint {
+  margin-top: 4px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+
+.chat-view__subagent-session-return {
+  flex-shrink: 0;
+}
+
+.chat-view__no-model-action {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .chat-view__notice-stack {
+    padding: 10px 14px;
+  }
+
+  .chat-view__content-shell {
+    flex-direction: column;
+  }
+
+  .chat-view__footer-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chat-view__footer-banner-actions {
+    width: 100%;
+  }
+
+  .chat-view__subagent-session-return {
+    margin-right: 0;
+  }
+}

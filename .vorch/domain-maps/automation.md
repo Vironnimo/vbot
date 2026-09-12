@@ -15,6 +15,7 @@ Programmatic Run triggering, time- and startup-based scheduling, and background 
 - `has_active_run(...)` is a synchronous predicate delegate letting producers refuse conflicting actions without depending on the run manager directly.
 - Manual Compaction runs through `start_compaction_run` as an observable Run (same lifecycle events as automatic); `compact_session` remains the synchronous compatibility wrapper mapping outcomes to legacy reply strings.
 - `CronService`/`BootstrapService`: lazy job loading returned as clones, atomic persistence, one invalid entry logged/skipped/preserved while valid siblings schedule; malformed whole-file storage disables scheduling/activation without failing Runtime startup and blocks mutations so unreadable state cannot be overwritten.
+- Cron's internal `_cron_jobs.py` owns records, JSON diagnostics and field normalization; `_cron_schedule.py` owns pure parsing, schedule normalization and projections with explicit timezone/time inputs. `_cron_claims.py` owns durable once-job claim files and `_cron_timing.py` owns interruptible wall-clock waits and retry timing. `CronService` retains the job catalog, reference/capacity checks, tasks and Run admission; its public schedule methods supply the current application timezone and clock.
 - Cron lifecycle: idempotent start/stop; start reconciles all jobs before any task; an escaping scheduler-task exception flows through the failure-health path; completion from a stale replaced task never restarts its replacement.
 - Every Runtime start has a UUID `startup_id`; creating/updating/enabling arms a job with it so it cannot fire in the arming process. `once` completes/fails only after an admitted Run terminates (an `interrupted` Run counts as unsuccessful -> retry policy); `always` stays active at most once per startup. Activation groups fixed-Session jobs per owner for sequential execution within four global slots; session-less jobs create fresh Sessions; crash reconciliation asks Sessions for the claimed Run's exact persisted terminal summary instead of loading its complete transcript before deciding whether to retry.
 
@@ -37,7 +38,7 @@ They join only a matching owned Run's request boundary or use the injected owned
 continuation starter. Admission failure never falls back to an arbitrary Session
 write for these notices. Group closure retires only matching notices and rejects
 late submissions; unrelated notices retain normal delivery behavior
-(`automation.py`, `tests/core/automation/test_automation.py`).
+(`automation.py`, `tests/core/automation/test_automation_completion.py`).
 
 ## Reflection (background self-improvement reviews)
 

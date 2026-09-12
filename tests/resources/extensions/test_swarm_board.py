@@ -456,7 +456,9 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
 
 @pytest.mark.asyncio
 async def test_board_validation_identifies_the_field_before_any_effect(board):
-    from resources.extensions.swarm.extension import _validate_board
+    from resources.extensions.swarm._extension_values import (
+        _validate_board,
+    )
     from resources.extensions.swarm.store import SwarmStoreError
 
     for arguments, field in [
@@ -674,7 +676,7 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
     assert board.sessions.exists(ordinary) and board.sessions.exists(foreign.address)
     assert await board.store.get_profile(profile["id"]) == profile
     assert [row["id"] for row in (await board.store.list_swarms()).entries] == [other["swarm_id"]]
-    connection = board.store._connection
+    connection = board.store._database._connection
     for table in (
         "posts",
         "recipients",

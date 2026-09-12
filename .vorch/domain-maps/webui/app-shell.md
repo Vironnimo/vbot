@@ -6,7 +6,7 @@ Before changing editor-replacing navigation or pending-save handling, read `webu
 
 ## Ownership
 
-`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
+`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. Its private `components/shell/menu.svelte.js` owns menu selection snapshots, editing/native actions, positioning and keyboard/focus handling; the shell keeps navigation and mounting. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
@@ -65,3 +65,5 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 - Connection and replay state: `webui/src/lib/connectionState.js`, `webui/src/lib/api.js`
 - Navigation, autosave coordination, and invalidation: `webui/src/lib/navigationHistory.js`, `webui/src/lib/autosave.js`, `webui/src/lib/resourceInvalidation.js`
 - Focused coverage: `webui/src/lib/__tests__/api.test.js`, `appController.test.js`, `connectionState.test.js`, `navigationHistory.test.js`, `resourceInvalidation.test.js`, plus `webui/src/__tests__/App*.test.js`
+
+Private App view implementations live in `webui/src/app/`: `selection.svelte.js` owns persisted Agent/Project selection and roster loading, `setup.svelte.js` owns Settings-backed operational state and onboarding, `desktop.svelte.js` owns Desktop capability/Voice feedback and toast lifetimes, and `extensions.svelte.js` owns Extension-page descriptors, route state, and theme synchronization. `App.svelte` retains application-controller construction, autosave transitions, navigation, and composition; the public `NAVIGATION_ITEMS` export remains unchanged.

@@ -281,7 +281,7 @@ class LocalSpeechSetup:
         )
 
     async def _command(self, arguments: Sequence[str], *, progress: bool = False) -> int:
-        from core.tools.process_manager import kill_process_tree_async, subprocess_creation_flags
+        from core.utils.processes import kill_process_tree_async, subprocess_creation_flags
 
         process = await asyncio.create_subprocess_exec(
             *arguments,

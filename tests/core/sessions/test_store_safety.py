@@ -16,6 +16,7 @@ from core.chat.errors import ChatSessionError
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions import snapshots as snapshots_module
 from core.sessions.errors import SessionStoreCorruptError, SessionStoreUnavailableError
+from core.sessions.recovery import quarantine_database
 from core.sessions.snapshots import (
     SNAPSHOT_DATABASE_NAME,
     SNAPSHOT_KEEP_COUNT,
@@ -25,7 +26,7 @@ from core.sessions.snapshots import (
     read_snapshot_health,
     snapshot_root,
 )
-from core.sessions.store import SessionStore, quarantine_database
+from core.sessions.store import SessionStore
 
 
 def test_write_error_classification_preserves_owner_errors_and_rolls_back(tmp_path: Path) -> None:

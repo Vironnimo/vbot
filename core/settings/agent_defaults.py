@@ -60,7 +60,7 @@ def _parse_model_binding(value: Any, label: str) -> str:
     return value
 
 
-def _fallback_chain_entries(items: Any) -> list[str]:
+def validate_fallback_chain(items: Any) -> list[str]:
     """Return the cleaned ordered fallback chain or raise ``ValueError``.
 
     The one implementation of the chain rules — plain strings, non-empty after
@@ -86,7 +86,7 @@ def _parse_fallback_models(value: Any, label: str) -> list[str]:
     from core.settings.settings import SettingsValidationError
 
     try:
-        return _fallback_chain_entries(value)
+        return validate_fallback_chain(value)
     except ValueError as error:
         raise SettingsValidationError(f"{label} {error}") from error
 
@@ -139,7 +139,7 @@ def _normalize_model_binding(value: Any) -> str:
 
 def _normalize_fallback_models(value: Any) -> list[str]:
     try:
-        return _fallback_chain_entries(value)
+        return validate_fallback_chain(value)
     except ValueError as error:
         raise StorageError(f"Agent default fallback_models {error}") from error
 

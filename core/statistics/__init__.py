@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from core.statistics.skills import (
-    SkillByAgentCount,
-    SkillInventorySource,
-    SkillsSection,
-    SkillUsageStat,
-)
-from core.statistics.statistics import (
-    AgentActivity,
+from core.statistics._sources import (
     AgentDirectory,
+    ProjectDirectory,
+    SessionSource,
+)
+from core.statistics.report import (
+    AgentActivity,
     AgentRunCount,
     CacheBreakIncident,
     CacheSection,
@@ -27,7 +25,6 @@ from core.statistics.statistics import (
     LongestRun,
     ModelUsage,
     OverviewSection,
-    ProjectDirectory,
     ProviderUsage,
     RunActivity,
     RunActivityReport,
@@ -35,9 +32,7 @@ from core.statistics.statistics import (
     RunStatusCounts,
     SessionCacheUsage,
     SessionRunCount,
-    SessionSource,
     StatisticsReport,
-    StatisticsService,
     SuspectedCacheBreaks,
     ToolSessionCount,
     ToolsSection,
@@ -46,6 +41,15 @@ from core.statistics.statistics import (
     UsageSection,
     UsageTotals,
     WindowInfo,
+)
+from core.statistics.skills import (
+    SkillByAgentCount,
+    SkillInventorySource,
+    SkillsSection,
+    SkillUsageStat,
+)
+from core.statistics.statistics import (
+    StatisticsService,
 )
 
 __all__ = [

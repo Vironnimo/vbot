@@ -1,0 +1,221 @@
+.input-area .context-ring-trigger {
+  display: flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.input-area .context-hover-card {
+  position: fixed;
+  z-index: var(--z-floating);
+  max-width: min(520px, calc(100vw - 24px));
+  max-height: 60vh;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-hi);
+  box-shadow: var(--dropdown-elevation);
+  font: 12px var(--font-ui);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.input-area .context-hover-card[data-floating-open='true'] {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.input-area .context-hover-details {
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+}
+
+.input-area {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Center the composer on the same axis as the capped message column. The
+     unbordered `.input-area` stays full-width on the chat background; only the
+     input box and attachment tray are capped to `--chat-measure` and centered.
+     With the area's symmetric 20px padding this lines the input's left edge up
+     with the message column exactly. `full` disables the cap. */
+.input-area .input-wrap,
+.input-area .attachment-tray {
+  width: 100%;
+  max-width: var(--chat-measure);
+  margin-inline: auto;
+}
+
+.input-area .msg-input {
+  height: 22px;
+}
+
+/* Context-window fill ring: sits at the bottom-right of the input box,
+     between the textarea and the action buttons, aligned to the button row.
+     The track is faint; the fill arc shows how much of the context window is
+     consumed. Same tooltip as the old header badge. */
+.input-area .context-ring {
+  display: flex;
+  flex-shrink: 0;
+  align-self: flex-end;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 1px;
+  color: var(--text-lo);
+  cursor: default;
+}
+
+.input-area .context-ring__track {
+  opacity: 0.3;
+}
+
+.input-area .context-ring__fill {
+  color: var(--text-med);
+  transition: stroke-dashoffset 300ms ease;
+}
+
+/* Extra breathing room around the stop button: cancelling by accident is the
+     only costly misclick in this row, so it gets double the row gap on both
+     sides (mic/attach and Send are harmless neighbors). */
+.input-area .composer-stop {
+  margin-inline: 4px;
+}
+
+.input-area.drag-over .input-wrap {
+  border-color: var(--accent-40);
+  box-shadow: var(--focus-ring);
+}
+
+.input-area .attachment-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}
+
+.input-area .composer-voice-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: var(--text-med);
+  font-size: 12px;
+}
+
+.input-area .voice-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: voice-spin 1s linear infinite;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input-area .voice-spinner {
+    animation: none;
+  }
+}
+
+.input-area .composer-toast {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  min-width: 220px;
+  max-width: min(340px, 92vw);
+  padding: 10px 12px;
+  border: 1px solid rgba(252, 129, 129, 0.35);
+  border-left: 2px solid var(--red);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.input-area .composer-toast-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.input-area .composer-toast-message {
+  margin: 2px 0 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.input-area .attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 2px 0;
+}
+
+/* The attachment card chrome (.attachment-item, .attachment-thumb,
+     .attachment-hover-preview, .attachment-meta, .attachment-name, …) is shared
+     with the chat timeline and lives in styles/chat-timeline.css. Only the
+     composer-specific controls below (tray, remove button) stay scoped here. */
+
+.input-area .attachment-remove {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  background: transparent;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.input-area .attachment-remove:hover,
+.input-area .attachment-remove:focus-visible {
+  border-color: rgba(252, 129, 129, 0.4);
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.08);
+  outline: none;
+}
+
+.input-area .attachment-remove svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+@media (max-width: 640px) {
+  .input-area {
+    padding: 12px 14px;
+  }
+}

@@ -105,14 +105,12 @@ def _recall_extension_source(backend_name: str) -> str:
         "class ExtBackend:\n"
         "    def __init__(self, context):\n"
         "        self.context = context\n"
-        "    def browse(self, request):\n"
-        "        return {'kind': 'browse'}\n"
-        "    def overview(self, request):\n"
-        "        return {'kind': 'overview'}\n"
-        "    def search(self, request):\n"
-        "        return {'kind': 'search'}\n"
-        "    def scroll(self, request):\n"
-        "        return {'kind': 'scroll'}\n"
+        "    def search_capabilities(self):\n"
+        "        from core.recall import RecallSearchCapabilities\n"
+        "        return RecallSearchCapabilities('message', 'Extension search.')\n"
+        "    async def search_page(self, request):\n"
+        "        from core.recall import RecallSearchPage\n"
+        "        return RecallSearchPage((), 'message', 'extension', 'snapshot', False, 0)\n"
         "def register(api):\n"
         f"    api.register_recall_backend({backend_name!r}, ExtBackend)\n"
     )
@@ -288,7 +286,14 @@ def test_extension_tool_can_declare_an_open_model_facing_schema(tmp_path: Path) 
 
 
 def test_word_count_example_uses_an_open_schema_and_handler_validation(tmp_path: Path) -> None:
-    examples_root = Path(__file__).resolve().parents[3] / "examples" / "extensions"
+    examples_root = (
+        Path(__file__).resolve().parents[3]
+        / "resources"
+        / "skills"
+        / "vbot-cli"
+        / "assets"
+        / "extensions"
+    )
     registry = ExtensionRegistry.load(examples_root)
     tool_registry = ToolRegistry()
     registry.apply_tools(tool_registry)
@@ -525,7 +530,7 @@ def test_extension_recall_backend_becomes_selectable(tmp_path: Path) -> None:
 
     assert "my_backend" in recall_registry.names()
     backend = recall_registry.create("my_backend", _recall_context(tmp_path))
-    assert backend.search(cast(Any, object())) == {"kind": "search"}
+    assert asyncio.run(backend.search_page(cast(Any, object()))).ranking == "extension"
     assert _record(registry, "recall_ext").capability_errors == []
 
 
@@ -659,3 +664,25 @@ def test_invalid_opt_in_registration_fails_before_publication(options):
             "test", "test-owned", {"type": "object"}, lambda c, a: tool_success({}), **options
         )
     assert tools.list_tools() == []
+
+
+@pytest.mark.parametrize("invalid_capabilities", [False, True])
+def test_recall_registry_rejects_retired_or_invalid_backend(
+    tmp_path: Path, invalid_capabilities: bool
+) -> None:
+    class InvalidBackend:
+        def search(self, request: Any) -> dict[str, Any]:
+            return {}
+
+    class InvalidCapabilities:
+        def search_capabilities(self) -> object:
+            return object()
+
+        async def search_page(self, request: Any) -> object:
+            return object()
+
+    registry = RecallBackendRegistry()
+    implementation = InvalidCapabilities if invalid_capabilities else InvalidBackend
+    registry.register("obsolete", cast(Any, lambda _context: implementation()))
+    with pytest.raises(ValueError, match="search capabilities|search_capabilities"):
+        registry.create("obsolete", _recall_context(tmp_path))

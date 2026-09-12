@@ -1,7 +1,6 @@
 import {
   buildAgentTargetOptions,
-  projectIdsFromList,
-  projectTeamEntry,
+  createAgentTargetCatalogLoader,
 } from './agentTargetOptions.js';
 import {
   extensionOperation,
@@ -107,6 +106,11 @@ export function createMcpSettings({
     job: null,
     inspector: null,
   };
+  const targetCatalog = createAgentTargetCatalogLoader({
+    listAgents: agents,
+    listProjects: projects,
+    showProject: project,
+  });
   let disposed = false;
   let timer;
   let generation = 0;
@@ -204,31 +208,20 @@ export function createMcpSettings({
       publish({ inspector: null });
     },
     async loadTargets() {
-      try {
-        const [identities, catalog] = await Promise.all([agents(), projects()]);
-        const results = await Promise.allSettled(
-          projectIdsFromList(catalog).map(async (id) =>
-            projectTeamEntry(id, await project(id)),
-          ),
-        );
-        const failed = results.filter((result) => result.status === 'rejected');
-        publish({
-          targets: buildAgentTargetOptions(
-            identities.agents,
-            results
-              .filter((result) => result.status === 'fulfilled')
-              .map((result) => result.value),
-          ),
-          targetError: failed.length
+      const catalog = await targetCatalog.load();
+      if (!catalog) return;
+      const failure = catalog.agentError ?? catalog.projectError;
+      publish({
+        targets: buildAgentTargetOptions(catalog.agents, catalog.projectTeams),
+        targetError: failure
+          ? failure.message
+          : catalog.failedProjects.length
             ? t(
                 'mcp.targetsPartial',
                 'Some Project Agents could not be loaded. Existing grants are preserved.',
               )
             : '',
-        });
-      } catch (error) {
-        publish({ targetError: error.message });
-      }
+      });
     },
     save(draft, original) {
       return act(async () => {
@@ -289,6 +282,7 @@ export function createMcpSettings({
       });
     },
     dispose() {
+      targetCatalog.dispose();
       disposed = true;
       ++generation;
       ++inspectionGeneration;

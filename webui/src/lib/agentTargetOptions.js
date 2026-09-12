@@ -145,3 +145,61 @@ export function projectIdsFromList(listResponse) {
     .map((project) => asText(project?.project_id))
     .filter((projectId) => projectId.length > 0);
 }
+
+// Own the catalog read as one request generation. Failed Project reads retain
+// successful siblings and Identity Agents; callers decide how to present errors.
+// A retired request returns null and never publishes into a newer selection.
+export function createAgentTargetCatalogLoader({
+  listProjects,
+  showProject,
+  listAgents = null,
+}) {
+  let generation = 0;
+  let disposed = false;
+  return {
+    async load() {
+      if (disposed) return null;
+      const request = ++generation;
+      const current = () => !disposed && request === generation;
+      const [projectResult, agentResult] = await Promise.allSettled([
+        listProjects(),
+        listAgents ? listAgents() : Promise.resolve({ agents: [] }),
+      ]);
+      if (!current()) return null;
+      const projects =
+        projectResult.status === 'fulfilled' &&
+        Array.isArray(projectResult.value?.projects)
+          ? projectResult.value.projects
+          : [];
+      const ids = [...new Set(projectIdsFromList({ projects }))];
+      const results = await Promise.allSettled(
+        ids.map(async (id) => projectTeamEntry(id, await showProject(id))),
+      );
+      if (!current()) return null;
+      return {
+        projects,
+        agents:
+          agentResult.status === 'fulfilled' &&
+          Array.isArray(agentResult.value?.agents)
+            ? agentResult.value.agents
+            : [],
+        projectTeams: results
+          .filter((entry) => entry.status === 'fulfilled')
+          .map((entry) => entry.value),
+        failedProjects: results.flatMap((entry, index) =>
+          entry.status === 'rejected'
+            ? [{ projectId: ids[index], error: entry.reason }]
+            : [],
+        ),
+        projectError:
+          projectResult.status === 'rejected' ? projectResult.reason : null,
+        agentError:
+          agentResult.status === 'rejected' ? agentResult.reason : null,
+      };
+    },
+    dispose() {
+      disposed = true;
+      generation += 1;
+    },
+  };
+}

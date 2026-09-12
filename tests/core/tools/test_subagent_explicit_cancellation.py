@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import core.subagents._constants as subagent_constants
+
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
     FakeRunManager,
@@ -68,10 +70,10 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
         "artifacts": [],
     }
     assert child_run.status.value == "cancelled"
-    assert child_run.cancel_reason == subagent_module.PARENT_AGENT_CANCEL_REASON
+    assert child_run.cancel_reason == subagent_constants.PARENT_AGENT_CANCEL_REASON
     assert emitted_events == [
         (
-            subagent_module.SUBAGENT_STATUS_CHANGED_EVENT,
+            subagent_constants.SUBAGENT_STATUS_CHANGED_EVENT,
             {
                 "tool_call": {
                     "id": "tool-call-one",
@@ -158,7 +160,7 @@ async def test_parent_can_remove_its_exact_queued_child(
         "status": "cancelled",
     }
     assert manager.list_queued("parent", target_session_id, project_id=None) == []
-    assert emitted_events[-1][0] == subagent_module.SUBAGENT_STATUS_CHANGED_EVENT
+    assert emitted_events[-1][0] == subagent_constants.SUBAGENT_STATUS_CHANGED_EVENT
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 

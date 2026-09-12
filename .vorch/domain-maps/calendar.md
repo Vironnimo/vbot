@@ -31,9 +31,10 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 ## Data Model
 
 - Storage: `<data_dir>/calendar/events.json`, a JSON array written atomically. Invalid entries are preserved and skipped on load; if the file is unreadable the service degrades (reads return empty, mutations raise) rather than destroying data.
+- Free-slot lookup loads persisted events on its own first read, including immediately after a service restart; it does not depend on an earlier event listing or mutation.
 - `CalendarService.actions` (`core/calendar/actions.py`) owns action definitions and execution claims in `<data_dir>/calendar/actions.json`. Malformed action storage disables action scheduling and mutation, exposes `action_error` to readers, and leaves event CRUD available. Event deletion withdraws pending admission; reconciliation removes orphan definitions. Runs already admitted keep their Session history.
 - `CalendarEvent` carries exactly one start shape, enforced by validation: `start_utc` for single timed events (absolute instant), `start_local` + `tz_name` for recurring timed events (wall-clock anchor; `tz_name` is always the server zone), `start_date` for all-day events. `exdates` exist only on recurring events.
-- Caps (module constants in `service.py`): 2000 events, 62-day window span, 500 occurrences per event per query, 1000 exdates per event, title 200 / notes 5000 chars.
+- Internal `_events.py` owns event records, input validation, persisted JSON decoding and caps (also exported by `service.py`): 2000 events, 62-day window span, 500 occurrences per event per query, 1000 exdates per event, title 200 / notes 5000 chars. `_time.py` owns timezone/instant parsing and interval arithmetic; `CalendarService` keeps catalog mutations, persistence coordination and recurrence orchestration.
 
 ## Interfaces
 

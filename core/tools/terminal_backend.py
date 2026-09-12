@@ -10,7 +10,6 @@ import os
 import re
 import select
 import shutil
-import signal
 import socket
 import subprocess
 from collections import deque
@@ -22,9 +21,8 @@ from typing import Any, Protocol
 
 import pyte
 
-from core.tools.process_manager import guarded_process_launch, subprocess_creation_flags
+from core.utils.processes import guarded_process_launch, kill_process_tree
 
-_HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
@@ -638,33 +636,14 @@ def _make_file_descriptors_inheritable(file_descriptors: Sequence[int]) -> None:
         os.set_inheritable(file_descriptor, True)
 
 
-def terminate_process_tree(adapter: TerminalAdapter) -> None:
-    if not adapter.is_alive():
+def terminate_process_tree(adapter: TerminalAdapter, *, targets: list[Any] | None = None) -> None:
+    """Terminate the captured tree, retaining surviving identities for a retry."""
+    if not adapter.is_alive() and not targets:
         return
-    if os.name == "nt":
-        try:
-            result = subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(adapter.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-                check=False,
-                creationflags=subprocess_creation_flags(),
-            )
-            if result.returncode == 0:
-                return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    else:
-        kill_process_group = getattr(os, "killpg", None)
-        try:
-            if kill_process_group is not None:
-                kill_process_group(adapter.pid, _HARD_KILL_SIGNAL)
-                return
-        except (ProcessLookupError, OSError):
-            pass
-    with contextlib.suppress(ProcessLookupError, OSError):
-        adapter.terminate()
+    try:
+        kill_process_tree(adapter, targets=targets)
+    except ProcessLookupError:
+        return
 
 
 def _windows_spawn_argv(argv: Sequence[str], env: Mapping[str, str]) -> list[str]:

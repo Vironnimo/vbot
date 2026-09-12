@@ -10,7 +10,8 @@ from core.channels.adapter import (
     ReplyPlanFacts,
     RouteFacts,
 )
-from core.channels.channels import (
+from core.channels.channels import ChannelService
+from core.channels.config import (
     ALLOWED_CHANNEL_DM_SCOPES,
     ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
@@ -19,13 +20,12 @@ from core.channels.channels import (
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
-    ChannelService,
-    ChannelStorage,
     load_validated_channel_json,
     managed_channel_token_env_var,
     validate_channel_data,
     validate_channel_file,
 )
+from core.channels.storage import ChannelStorage
 
 __all__ = [
     "ALLOWED_CHANNEL_DM_SCOPES",

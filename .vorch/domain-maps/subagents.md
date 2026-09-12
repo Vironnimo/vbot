@@ -4,7 +4,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 
 ## Overview
 
-`core/subagents/` owns the runtime behavior behind the single public `subagent` Tool. The Tool module is only the registration/schema boundary; `SubAgentCoordinator` (`subagents.py`) performs run/status/cancel orchestration and owns the process-local `SubAgentBatchTracker` (`tracker.py`) - batch state-machine logic belongs there, lifecycle orchestration in `subagents.py`.
+`core/subagents/` owns the runtime behavior behind the single public `subagent` Tool. The Tool module is only the registration/schema boundary; `SubAgentCoordinator` (`subagents.py`) performs run/status/cancel orchestration and owns the process-local `SubAgentBatchTracker` (`tracker.py`) - batch state-machine logic belongs there. `subagents.py` keeps admission, target resolution and child Run construction; `_completion.py` keeps completion watchers, persisted-result lookup and Parent cancellation linkage; `_status.py` owns public status/cancel/inspection projections. These are internal parts of the same coordinator; `_constants.py` centralizes their unchanged policy defaults, event names and Agent-facing result wording.
 
 ## Data Model & Tracking
 

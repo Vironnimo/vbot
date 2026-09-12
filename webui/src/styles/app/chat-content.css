@@ -1,0 +1,775 @@
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  overflow-anchor: none;
+  padding: 28px 0;
+}
+
+.date-sep {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 28px 28px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.date-sep::before,
+.date-sep::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+  content: '';
+}
+
+/* A session takeover is a deliberate human action (the /agent move), so its
+   divider carries the accent the design reserves for human decisions — set
+   apart from the muted compaction separator while sharing the same divider
+   geometry from `.date-sep`. */
+.takeover-sep {
+  color: var(--accent);
+}
+
+.run-compaction-sep {
+  margin: 14px 0;
+  padding: 0;
+}
+
+.compaction-sep--running {
+  color: var(--amber);
+}
+
+.compaction-disclosure > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.compaction-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compaction-disclosure > summary:hover,
+.compaction-disclosure > summary:focus-visible {
+  color: var(--text-med);
+}
+
+.compaction-disclosure > summary:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+.compaction-sep__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+
+.compaction-sep__chevron {
+  flex: 0 0 auto;
+  fill: none;
+  opacity: 0.55;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.compaction-disclosure[open] .compaction-sep__chevron {
+  transform: rotate(180deg);
+}
+
+.compaction-disclosure > summary:hover .compaction-sep__chevron,
+.compaction-disclosure > summary:focus-visible .compaction-sep__chevron {
+  opacity: 1;
+}
+
+.compaction-detail {
+  margin: calc(-1 * var(--space-md)) var(--space-xl) var(--space-xl);
+  border-left: 2px solid var(--border-2);
+  padding-left: var(--space-md);
+}
+
+.compaction-disclosure--in-run .compaction-detail {
+  margin: 0 0 var(--space-md);
+}
+
+.compaction-detail__header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.compaction-detail__text {
+  max-height: min(52vh, 560px);
+  overflow: auto;
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  white-space: pre-wrap;
+}
+
+.compaction-detail:hover .compaction-copy,
+.compaction-detail:focus-within .compaction-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.btn-tertiary.btn-icon.compaction-copy {
+  width: 24px;
+  height: 24px;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 28px;
+}
+
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.msg-avatar {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.msg.user .msg-avatar {
+  color: var(--accent);
+  background: var(--accent-pale);
+}
+
+.msg.assistant .msg-avatar {
+  color: var(--text-med);
+  background: var(--surface-3);
+}
+
+.msg.error .msg-avatar {
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.1);
+}
+
+.msg-author {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.msg.user .msg-author {
+  color: var(--accent);
+}
+
+.msg.assistant .msg-author {
+  color: var(--text-med);
+}
+
+.msg.error .msg-author {
+  color: var(--red);
+}
+
+.msg.assistant-run {
+  gap: 8px;
+}
+
+.assistant-run-content {
+  gap: 8px;
+}
+
+.msg-timestamp,
+.msg-meta-extra {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+}
+
+.msg-timestamp {
+  font-size: 10.5px;
+}
+
+.msg-meta-extra {
+  font-size: 11px;
+}
+
+.msg-content {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-left: 34px;
+}
+
+.msg.user {
+  align-items: flex-end;
+}
+
+.msg.user .msg-header {
+  flex-direction: row-reverse;
+}
+
+.msg.user .msg-content {
+  width: 100%;
+  align-items: flex-end;
+  padding-right: 34px;
+  padding-left: 0;
+}
+
+.msg.user .msg-body-text,
+.message-block.user {
+  max-width: 75%;
+  padding: 10px 16px;
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  color: var(--text-hi);
+  background: var(--surface-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.msg.assistant .msg-body-text,
+.message-block.assistant {
+  padding: 2px 0;
+  color: var(--text-hi);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.msg-markdown {
+  padding: 2px 0;
+  color: var(--text-hi);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.msg-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.msg-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.msg-markdown p {
+  margin: 0 0 0.6em;
+}
+
+.msg-markdown h1,
+.msg-markdown h2,
+.msg-markdown h3,
+.msg-markdown h4,
+.msg-markdown h5,
+.msg-markdown h6 {
+  margin: 0.8em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.msg-markdown h1 {
+  font-size: 1.5em;
+}
+
+.msg-markdown h2 {
+  font-size: 1.35em;
+}
+
+.msg-markdown h3 {
+  font-size: 1.2em;
+}
+
+.msg-markdown h4 {
+  font-size: 1.1em;
+}
+
+.msg-markdown h5,
+.msg-markdown h6 {
+  font-size: 1em;
+}
+
+.msg-markdown ul,
+.msg-markdown ol {
+  margin: 0.4em 0 0.4em 1.4em;
+  padding: 0;
+}
+
+.msg-markdown li {
+  margin-bottom: 0.2em;
+}
+
+.msg-markdown blockquote {
+  margin: 0.5em 0;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--border-2);
+  color: var(--text-med);
+}
+
+.msg-markdown pre {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  background: var(--surface-2);
+}
+
+.msg-markdown pre code {
+  border: none;
+  padding: 0;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Fenced Markdown code is a bounded technical artifact, so it gets the
+   language/copy header defined by the Chat design rather than the plain
+   indented-code treatment above. */
+.msg-code {
+  margin: 0.5em 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.msg-code__header {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px 3px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.msg-code__language {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-code__copy-slot {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.btn-tertiary.btn-icon.msg-code__copy {
+  width: 24px;
+  height: 24px;
+}
+
+.msg-markdown .msg-code pre,
+.reasoning-body .msg-code pre {
+  margin: 0;
+  overflow-x: auto;
+  border: none;
+  border-radius: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+
+.msg-markdown .msg-code pre code,
+.reasoning-body .msg-code pre code {
+  border: none;
+  padding: 0;
+  color: var(--text-med);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.65;
+  white-space: pre;
+}
+
+.msg-markdown code {
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.msg-markdown a,
+.msg-body-text a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.msg-markdown a:hover,
+.msg-body-text a:hover {
+  opacity: 0.8;
+}
+
+.msg-markdown table {
+  margin: 0.5em 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.msg-markdown th,
+.msg-markdown td {
+  border: 1px solid var(--border-2);
+  padding: 4px 10px;
+}
+
+.msg-markdown th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.msg-markdown strong {
+  font-weight: 600;
+}
+
+.msg-markdown hr {
+  margin: 0.8em 0;
+  border: none;
+  border-top: 1px solid var(--border-2);
+}
+
+.msg-markdown img {
+  max-width: 100%;
+  max-height: 320px;
+  margin: 0.4em 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  object-fit: contain;
+  cursor: zoom-in;
+  vertical-align: middle;
+}
+
+.msg.error .msg-body-text {
+  max-width: min(720px, 100%);
+  padding: 10px 14px;
+  border: 1px solid rgba(252, 129, 129, 0.24);
+  border-left: 3px solid var(--red);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  color: var(--text-hi);
+  background: rgba(252, 129, 129, 0.07);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.error-details {
+  max-width: min(720px, 100%);
+  margin-top: 6px;
+}
+
+.error-details-summary {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-lo);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.error-details-summary:hover {
+  color: var(--text-med);
+}
+
+.error-details-body {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.reasoning-block {
+  align-self: flex-start;
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  user-select: none;
+}
+
+.reasoning-header:hover {
+  color: var(--text-hi);
+}
+
+.r-chevron {
+  margin-left: 4px;
+  opacity: 0.4;
+  transition: transform 200ms ease;
+}
+
+.reasoning-block.open .r-chevron {
+  transform: rotate(180deg);
+}
+
+.reasoning-body {
+  display: none;
+  margin-top: 4px;
+  padding: 6px 0 2px 16px;
+  border-left: 2px solid var(--border-2);
+  color: var(--text-med);
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+.reasoning-block[open] .reasoning-body {
+  display: block;
+}
+
+.tool-event {
+  display: flex;
+  align-self: flex-start;
+  flex-direction: column;
+}
+
+.tool-event-line {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.te-dot {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.te-dot.done {
+  color: var(--green);
+}
+
+.te-dot.running {
+  animation: blink 1.2s ease-in-out infinite;
+  color: var(--amber);
+}
+
+/* Streamed but not yet dispatched: a hollow amber ring, no blink — the call is
+   being written, not executing, so it must not read like a long-running one. */
+.te-dot.preparing {
+  color: transparent;
+  -webkit-text-stroke: 1.5px var(--amber);
+}
+
+.te-dot.error {
+  color: var(--red);
+}
+
+.te-dot.partial,
+.te-time.partial {
+  color: var(--amber);
+}
+
+.te-dot.cancelled {
+  color: var(--text-lo);
+}
+
+.te-time.cancelled {
+  color: var(--text-lo);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.te-fn,
+.te-arg,
+.te-time,
+.teb-label,
+.teb-code {
+  font-family: var(--font-mono);
+}
+
+.te-fn {
+  flex-shrink: 0;
+  color: var(--text-med);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.te-arg {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(30rem, max(12rem, calc(100vw - 560px)));
+  overflow: hidden;
+  color: var(--text-lo);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.te-primary {
+  flex: 1 1 auto;
+  max-width: min(42rem, max(8rem, calc(100vw - 430px)));
+}
+
+.te-primary-values {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  gap: 5px;
+}
+
+.te-primary-value {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.te-primary-value:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid var(--accent-40);
+  outline-offset: 2px;
+}
+
+.te-primary-value--start {
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+.te-primary-value--middle {
+  text-overflow: clip;
+}
+
+.te-primary-separator {
+  flex-shrink: 0;
+}
+
+.te-fact {
+  flex-shrink: 0;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.te-fact--added {
+  color: var(--green);
+}
+
+.te-fact--removed {
+  color: var(--red);
+}
+
+.te-arg.subagent-preview {
+  display: inline-block;
+}
+
+.te-arg-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.te-time {
+  flex-shrink: 0;
+  margin-left: 6px;
+  color: var(--text-lo);
+  font-size: 10.5px;
+}
+
+.te-time.error,
+.teb-code.error {
+  color: var(--red);
+}
+
+.tool-event-body {
+  display: none;
+  margin-top: 4px;
+  padding: 6px 0 3px 18px;
+  border-left: 1px solid var(--border-2);
+}
+
+.tool-event[open] .tool-event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.teb-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.teb-label {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.teb-code {
+  color: var(--text-med);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.run-tool-event .tool-event-line {
+  max-width: 100%;
+}
+
+.run-tool-event .te-time {
+  flex-shrink: 0;
+}

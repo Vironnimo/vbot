@@ -6,7 +6,7 @@ import subprocess
 import sys
 from textwrap import dedent
 
-import core.runs.runs as runs_module
+import core.runs.run as runs_module
 from core.sessions import SessionAddress
 
 from .runs_test_support import (

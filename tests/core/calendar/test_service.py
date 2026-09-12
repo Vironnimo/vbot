@@ -236,6 +236,14 @@ class TestOccurrencesInWindow:
 
 
 class TestFindFreeSlots:
+    def test_first_read_after_restart_uses_persisted_events(self, tmp_path: Path) -> None:
+        original = CalendarService(tmp_path, tz="Europe/Berlin")
+        original.create_event(title="All day", start="2026-09-03", duration_days=1)
+        restarted = CalendarService(tmp_path, tz="Europe/Berlin")
+        start, end = restarted.parse_window("2026-09-03", "2026-09-03")
+
+        assert restarted.find_free_slots(start, end, 60, now_utc=start) == []
+
     def test_finds_gaps_around_events(self, service: CalendarService) -> None:
         service.create_event(title="Block", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-04")

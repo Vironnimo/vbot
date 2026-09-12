@@ -18,23 +18,16 @@ from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     compact_text,
     first_match_span,
-    message_index_by_id,
-    message_match_payload,
-    message_matches_request,
     message_matches_search_request,
     message_search_text,
     parse_persisted_timestamp,
     query_terms,
-    render_message_matches,
-    request_payload,
-    text_matches_query,
     text_matches_search_request,
 )
 from core.recall.passages import build_session_passages
 from core.recall.recall import (
     JsonObject,
     RecallBackendContext,
-    RecallRequest,
     RecallSearchCapabilities,
     RecallSearchError,
     RecallSearchHit,
@@ -104,73 +97,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             search_scan_limit=CANONICAL_FALLBACK_SCAN_LIMIT,
         )
         self._index_lock = asyncio.Lock()
-
-    async def search(self, request: RecallRequest) -> JsonObject:
-        summaries = await asyncio.to_thread(self.candidate_session_summaries, request)
-        if request.query is None:
-            return self.session_summary_result(request, summaries)
-        if not summaries:
-            return self._message_result(request, [], searched_sessions=0, total_candidates=0)
-        expression = _fts_expression(request)
-        if expression is None:
-            return await self._fallback.search(request)
-        # Integrated FTS is the only lexical index; fallback is canonical scan.
-        if self.sessions.is_fts_available():
-            try:
-                return await asyncio.to_thread(self._search_with_canonical_fts, request, summaries)
-            except Exception as error:  # pragma: no cover - fallback
-                self._warning("Canonical FTS search failed; falling back: %s", error)
-        return await self._fallback.search(request)
-
-    def _search_with_canonical_fts(
-        self, request: RecallRequest, summaries: list[JsonObject]
-    ) -> JsonObject:
-        # Use integrated FTS; combine with canonical scan fallback for gap if needed.
-        # For now, canonical FTS is synchronous so no gap.
-        rows = self.sessions.fts_search(
-            request.query or "",
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-            session_id=request.session_id,
-            match_mode=request.match_mode,
-            limit=max(256, (request.limit + 1) * 8),
-            roles=request.roles,
-            since=None if request.since is None else request.since.isoformat(),
-            until=None if request.until is None else request.until.isoformat(),
-        )
-        # Rows carry one reconstructed payload from the normalized canonical tables.
-        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
-        messages_by_session: dict[str, list[Any]] = {}
-        matches: list[JsonObject] = []
-        for address, message_id, _ts, _mj, _rank in rows:
-            session_id = address.session_id
-            if session_id not in summaries_by_id:
-                continue
-            if session_id not in messages_by_session:
-                messages_by_session[session_id] = self.sessions.get(address).load_active()
-            messages = messages_by_session[session_id]
-            idx = message_index_by_id(messages, message_id)
-            if idx is None:
-                continue
-            message = messages[idx]
-            if not message_matches_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_query(text, request):
-                continue
-            matches.append(
-                message_match_payload(request, summaries_by_id[session_id], messages, idx, text)
-            )
-            if len(matches) >= request.limit + 1:
-                break
-        truncated = len(matches) > request.limit
-        return self._message_result(
-            request,
-            matches[: request.limit],
-            searched_sessions=len(summaries),
-            total_candidates=len(summaries),
-            truncated=truncated,
-        )
 
     def _search_page_with_canonical_fts(
         self, request: RecallSearchRequest, summaries: list[JsonObject], snapshot_id: str
@@ -490,7 +416,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     def _cleanup_missing_sessions(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest | RecallSearchRequest,
+        request: RecallSearchRequest,
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
@@ -514,7 +440,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     def _ensure_indexed(
         self,
         connection: sqlite3.Connection,
-        request: RecallRequest | RecallSearchRequest,
+        request: RecallSearchRequest,
         summaries: list[JsonObject],
     ) -> None:
         agent_id = request.agent_id
@@ -720,24 +646,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         """
         return list(connection.execute(sql, parameters))
 
-    @staticmethod
-    def _message_result(
-        request: RecallRequest,
-        matches: list[JsonObject],
-        *,
-        searched_sessions: int,
-        total_candidates: int,
-        truncated: bool = False,
-    ) -> JsonObject:
-        return {
-            "content": render_message_matches(request, matches, truncated=truncated),
-            "matches": matches,
-            "truncated": truncated,
-            "searched_sessions": searched_sessions,
-            "total_candidate_sessions": total_candidates,
-            "request": request_payload(request),
-        }
-
     def _delete_index_file(self) -> None:
         for path in self._index_files():
             path.unlink(missing_ok=True)
@@ -797,24 +705,6 @@ def _passage_in_time_range(
     if request.since is not None and (end is None or end < request.since):
         return False
     return not (request.until is not None and (start is None or start > request.until))
-
-
-def _fts_expression(request: RecallRequest) -> str | None:
-    # Trigram MATCH does substring lookup, mirroring the canonical scanner's `term in haystack`.
-    # Terms are split like the canonical backend so both agree on what a term is.
-    if request.query is None:
-        return None
-    if request.match_mode == "phrase":
-        phrase = compact_text(request.query).casefold()
-        if len(phrase) < _TRIGRAM_MIN_CHARS:
-            return None
-        return _quote_fts_value(phrase)
-
-    terms = query_terms(request.query)
-    if not terms or any(len(term) < _TRIGRAM_MIN_CHARS for term in terms):
-        return None
-    operator = " OR " if request.match_mode == "any_term" else " AND "
-    return operator.join(_quote_fts_value(term) for term in terms)
 
 
 def _fts_expression_search(request: RecallSearchRequest) -> str | None:

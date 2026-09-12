@@ -8,13 +8,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from core.chat.chat import (
-    _CHAT_TRANSFORM_WORKERS,
-    OUTPUT_INTEGRITY_RECOVERY_NOTE,
+from core.chat._run_state import (
     ChatLoopDependencies,
     _AssistantStep,
+)
+from core.chat._step_outcomes import (
+    OUTPUT_INTEGRITY_RECOVERY_NOTE,
     _with_assistant_output_files,
 )
+from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.continuation import normalize_interruption_cause
 from core.chat.events import _emit_assistant_events, _emit_streaming_assistant_events
 from core.chat.messages import JsonObject

@@ -13,6 +13,10 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._chat_completions_wire import (
+    _to_openai_assistant_message,
+    _to_openai_user_content_part,
+)
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.errors import (
     NetworkError,
@@ -23,8 +27,6 @@ from core.providers.errors import (
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _to_openai_assistant_message,
-    _to_openai_user_content_part,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS

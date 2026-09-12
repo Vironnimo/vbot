@@ -8,6 +8,12 @@ from typing import Any
 import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._chat_completions_catalog import (
+    _read_mapping,
+    _read_non_empty_string,
+    _read_optional_mapping,
+    _read_string,
+)
 from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
@@ -42,10 +48,6 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _read_mapping,
-    _read_non_empty_string,
-    _read_optional_mapping,
-    _read_string,
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
 from core.providers.token_getter import OAuthRequestRecovery

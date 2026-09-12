@@ -12,7 +12,6 @@ from core.sessions import ChatSessionManager
 
 JsonObject = dict[str, Any]
 RecallMatchMode = Literal["all_terms", "any_term", "phrase"]
-RecallSortMode = Literal["newest", "oldest"]
 RecallOrder = Literal["relevance", "newest", "oldest"]
 RecallResultType = Literal["message", "passage", "backend_defined"]
 
@@ -32,7 +31,7 @@ FIRST_PARTY_RECALL_BACKENDS = frozenset(
 
 
 class RecallSearchError(RuntimeError):
-    """Expected first-party search failure with a stable machine code."""
+    """Expected search failure with a stable machine code."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -40,30 +39,8 @@ class RecallSearchError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class RecallRequest:
-    agent_id: str
-    session_id: str | None
-    around_message_id: str | None
-    query: str | None
-    since: datetime | None
-    until: datetime | None
-    roles: tuple[str, ...]
-    match_mode: RecallMatchMode
-    limit: int
-    context_messages: int
-    bookend_messages: int
-    sort: RecallSortMode
-    # Project the recall is scoped to, or ``None`` for the identity/global scope.
-    # A recall run searches and indexes the Sessions of *its* scope: ``None``
-    # reaches the Identity Agent's canonical Sessions; a Project id reaches that
-    # Project's Sessions. Additive
-    # with a ``None`` default so every existing caller keeps today's behavior.
-    project_id: str | None = None
-
-
-@dataclass(frozen=True)
 class RecallSearchCapabilities:
-    """Model-facing search behavior implemented by one first-party backend."""
+    """Model-facing search behavior implemented by one Recall backend."""
 
     result_type: RecallResultType
     guidance: str
@@ -78,7 +55,7 @@ class RecallSearchCapabilities:
 
 @dataclass(frozen=True)
 class RecallSearchRequest:
-    """Normalized query-only request for the first-party Recall contract."""
+    """Normalized query-only request for the Recall backend contract."""
 
     agent_id: str
     project_id: str | None
@@ -141,23 +118,9 @@ class RecallBackendContext:
     model_registry: Any | None = None
 
 
-class RecallBackend(Protocol):
-    async def browse(self, request: RecallRequest) -> JsonObject:
-        """Return session summaries for a recall request."""
-
-    async def overview(self, request: RecallRequest) -> JsonObject:
-        """Return one session's overview: start/end messages and a total count."""
-
-    async def search(self, request: RecallRequest) -> JsonObject:
-        """Return query matches for a recall request."""
-
-    async def scroll(self, request: RecallRequest) -> JsonObject:
-        """Return an anchored context view for a recall request."""
-
-
 @runtime_checkable
-class SupportsRecallSearch(Protocol):
-    """Typed query contract used by first-party and upgraded extension backends."""
+class RecallBackend(Protocol):
+    """Query contract implemented by every Recall backend."""
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         """Describe the search controls and result unit this backend implements."""
@@ -225,7 +188,18 @@ class RecallBackendRegistry:
             factory = self._factories[name]
         except KeyError as error:
             raise KeyError(f"unknown recall backend: {name}") from error
-        return factory(context)
+        backend = factory(context)
+        if (
+            not isinstance(backend, RecallBackend)
+            or not callable(backend.search_capabilities)
+            or not callable(backend.search_page)
+        ):
+            raise ValueError(
+                f"Recall backend {name!r} must implement search_capabilities and search_page"
+            )
+        if not isinstance(backend.search_capabilities(), RecallSearchCapabilities):
+            raise ValueError(f"Recall backend {name!r} returned invalid search capabilities")
+        return backend
 
     def names(self) -> list[str]:
         return sorted(self._factories)

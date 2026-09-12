@@ -88,7 +88,7 @@ from Session Tool grants: child Runs can retain cancellation/usage ownership wit
 receiving the parent's Session Tools. `core/agents/temporary.py` closes group admission
 before cancelling exact owned Runs, Queue items and injected resource owners.
 Unrelated work in a reused target Session remains outside that group
-(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents.py`).
+(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents_completion.py`).
 
 ## Constraints & Gotchas
 
@@ -105,3 +105,7 @@ Unrelated work in a reused target Session remains outside that group
 - Cancelling immediately after `start(...)` returns must still move the Run to `cancelled`, resolve `Run.wait()`, remove the active-session entry, and drain queued work. Do not cancel a newly created manager task before its execution wrapper has entered the lifecycle `try/finally`; Python otherwise skips that coroutine body entirely and strands the Session in `running`.
 - After cancellation suppression starts, only terminal events and an explicit `allow_after_cancel` emit (the preserved-partial finalization - see `Run.emit`) pass. Terminal payloads include `timing` with `{ started_at, completed_at, duration_ms }` and the Run-owned `iteration_count`; duration uses a monotonic clock and timestamps are UTC ISO strings for display/persistence. `run_completed` may also include `usage`, kept separate from `timing`. `run_cancelled` also includes the optional `reason` field when one was supplied to `Run.request_cancel(...)`; `run_interrupted` includes the normalized `cause`. Executors may fill the `Run.terminal_payload_extras` dict before returning/raising; the manager merges it into the terminal payload of every outcome alongside `timing`, while the manager itself supplies `iteration_count`. The chat loop supplies `session_usage` on every outcome. Continuation checkpoint contents remain internal Chat state even though the normalized interruption cause is projected in the terminal event.
 - WebSocket bridge code filters out SSE-only deltas and de-duplicates recently bridged Runs. Fix transport mapping in `server/rpc/event_bridge.py`, not in `core/runs/`.
+
+## Internal source routing
+
+`runs.py` owns `ChatRunManager`, admission guards and Queue lifecycle. `run.py` owns one Run's events, cancellation and terminal state plus the shared execution records. Public imports remain available through `core.runs`; the manager alone coordinates the private lifecycle of its Run instances.

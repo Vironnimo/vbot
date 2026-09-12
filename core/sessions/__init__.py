@@ -1,18 +1,7 @@
 """Session domain public API."""
 
 from core.chat.errors import ChatSessionError
-from core.sessions.errors import (
-    FtsHealth,
-    SessionNotFoundError,
-    SessionPageCursorError,
-    SessionRecoveryConflictError,
-    SessionStorageError,
-    SessionStorageFormatError,
-    SessionStoreCorruptError,
-    SessionStoreSchemaMismatchError,
-    SessionStoreUnavailableError,
-)
-from core.sessions.sessions import (
+from core.sessions._types import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
@@ -23,8 +12,6 @@ from core.sessions.sessions import (
     SESSION_MOVE_STRIP_META_KEYS,
     SESSION_RUN_KINDS_META_KEY,
     SKILL_AVAILABLE_NOTE_PREFIX,
-    ChatSession,
-    ChatSessionManager,
     DeliveryReceipt,
     OwnedRunRecord,
     RunStartBoundary,
@@ -45,6 +32,19 @@ from core.sessions.sessions import (
     SessionRunResult,
     SessionStatusSnapshot,
     TemporarySessionBinding,
+)
+from core.sessions.errors import (
+    FtsHealth,
+    SessionNotFoundError,
+    SessionPageCursorError,
+    SessionRecoveryConflictError,
+    SessionStorageError,
+    SessionStorageFormatError,
+    SessionStoreCorruptError,
+    SessionStoreSchemaMismatchError,
+    SessionStoreUnavailableError,
+)
+from core.sessions.history import (
     active_session_messages,
     current_skill_activation_contents,
     editable_session_message_ids,
@@ -61,6 +61,8 @@ from core.sessions.sessions import (
     skill_tool_activation,
     skill_tool_activation_name,
 )
+from core.sessions.session import ChatSession
+from core.sessions.sessions import ChatSessionManager
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",

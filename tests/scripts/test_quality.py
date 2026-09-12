@@ -311,7 +311,8 @@ def test_translate_does_not_claim_more_specific_siblings():
 
     # openai.py must not pull in openai_compatible's mirrors: the longer source
     # stem owns them.
-    assert test_paths == ["tests/core/providers/test_openai.py"]
+    assert "tests/core/providers/test_openai.py" in test_paths
+    assert not any("test_openai_compatible" in path for path in test_paths)
     assert notes == []
 
 

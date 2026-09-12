@@ -5,26 +5,71 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
 from core.models.models import (
-    MODEL_TASK_ORDER,
     Capabilities,
     Model,
     ReasoningCapabilities,
-    derive_model_task_types,
+)
+from core.providers._chat_completions_catalog import (
+    _parse_optional_int,
+    _read_mapping,
+    _read_string,
+    _read_string_list,
 )
 from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
     wrap_network_error,
+)
+from core.providers._openrouter_catalog import (
+    _image_catalog_model,
+    _normalize_image_parameters,
+    _normalize_video_options,
+    _openrouter_runtime_metadata,
+    _openrouter_task_types,
+    _passthrough_from_detail,
+    _read_optional_string_list,
+    _video_catalog_model,
+)
+from core.providers._openrouter_constants import (
+    _IMAGE_DETAIL_CONCURRENCY,
+    _LOGGER,
+    _OPENROUTER_SHARED_POLICY_STATUSES,
+    IMAGE_MODELS_ENDPOINT,
+    MAX_REASONING_PARAGRAPH_NEWLINES,
+    OPENROUTER_ALL_TURNS_RESPONSES_MODELS,
+    OPENROUTER_CACHE_BREAKPOINT_LIMIT,
+    OPENROUTER_CACHE_CONTROL_EPHEMERAL,
+    OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS,
+    OPENROUTER_NONE_EFFORT,
+    OPENROUTER_REASONING_EFFORTS,
+    OPENROUTER_REASONING_OFF,
+    OPENROUTER_RESPONSES_ENDPOINT,
+    OPENROUTER_RESPONSES_REQUEST_PARAMETERS,
+    REASONING_NEWLINE_RUN_PATTERN,
+    SUPPLEMENTARY_OUTPUT_MODALITIES,
+    VIDEO_MODELS_ENDPOINT,
+)
+from core.providers._openrouter_policy import (
+    OpenRouterResponsesPolicy,
+    _apply_openrouter_prompt_caching,
+    _collapse_reasoning_delta_texts,
+    _collapse_reasoning_newline_runs,
+    _describe_openrouter_intent,
+    _is_claude_family,
+    _openrouter_http_error_detail,
+    _openrouter_provider_preferences,
+    _openrouter_routing_options,
+    _openrouter_status_error_payload,
+    _render_openrouter_reasoning,
 )
 from core.providers.adapter import ModelLookup
 from core.providers.errors import (
@@ -41,111 +86,37 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _parse_optional_int,
-    _read_mapping,
-    _read_string,
-    _read_string_list,
 )
 from core.providers.providers import ProviderConfig
 from core.providers.reasoning import (
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
     ReasoningIntent,
-    closest_supported_effort,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
-    normalize_thinking_effort,
     resolve_reasoning_intent,
 )
 from core.settings.settings import parse_openrouter_routing
-from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
-OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
-# OpenRouter's documented off-shape for a native thinking toggle (``on_off``
-# models). An effort-spelled-off wire (``levels``/unknown control with a ``none``
-# rung) keeps the byte-identical ``{"effort": "none"}`` instead — see the render.
-OPENROUTER_REASONING_OFF = {"enabled": False}
-OPENROUTER_NONE_EFFORT = "none"
-OPENROUTER_RESPONSES_ENDPOINT = "/responses"
-OPENROUTER_ALL_TURNS_RESPONSES_MODELS = frozenset(
-    {
-        "openai/gpt-5.6-luna",
-        "openai/gpt-5.6-luna-pro",
-        "openai/gpt-5.6-sol",
-        "openai/gpt-5.6-sol-pro",
-        "openai/gpt-5.6-terra",
-        "openai/gpt-5.6-terra-pro",
-    }
-)
-OPENROUTER_RESPONSES_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_tokens", "top_p"})
-
-# Statuses whose handling the shared HTTP policy already gets right (auth,
-# rate limit with Retry-After, transient 5xx). Only other error statuses go
-# through OpenRouter's structured-body refinement in _classify_http_status.
-_OPENROUTER_SHARED_POLICY_STATUSES = frozenset({401, 403, 429, 502, 503, 504})
-
-# Some OpenRouter upstreams serialize visible reasoning summaries with runs of
-# bare newlines between word chunks (observed 2026-08-24 on stealth/ox-alpha:
-# nine "\n" separators per word gap). The visible reasoning text is display
-# material — replay round-trips the opaque ``reasoning_details`` meta untouched,
-# never this text — so vBot collapses any run longer than a paragraph break at
-# accumulation time. Runs spanning delta boundaries are handled statefully via
-# _REASONING_TRAILING_NEWLINES_STATE_KEY.
-MAX_REASONING_PARAGRAPH_NEWLINES = 2
-REASONING_NEWLINE_RUN_PATTERN = re.compile(r"\n{3,}")
-_REASONING_TRAILING_NEWLINES_STATE_KEY = "openrouter_reasoning_trailing_newlines"
-
-# Prompt caching for Claude-family models routed through OpenRouter. Anthropic
-# caches nothing unless a content block carries ``cache_control`` (verified live:
-# a stable 13k-token prefix returned 0 cache reads across 6 turns without it).
-# OpenRouter forwards Anthropic's own semantics but on the OpenAI ``/chat/
-# completions`` wire, so the marker rides **inside a content part** ("envelope
-# layout"), not as a native top-level ``system`` block the way the Anthropic
-# adapter places it. Same strategy as the native path otherwise: one marker on
-# the system message (caches tools + system, which Anthropic renders first) and
-# up to three rolling markers on the most recent non-system messages, never more
-# than Anthropic's four-breakpoint limit. Non-Claude models are left untouched —
-# OpenAI/Gemini cache implicitly and a stray ``cache_control`` key risks tripping
-# a strict upstream. The ``{"type": "ephemeral"}`` marker is the 5-minute TTL.
-OPENROUTER_CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
-OPENROUTER_CACHE_BREAKPOINT_LIMIT = 4
-OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS = 3
-
-# OpenRouter uses the ``output_modalities`` query parameter to filter models
-# by their output capability.  The default ``/models`` call returns only
-# text-output models, so every non-text-output catalog family needs its own
-# supplementary fetch: ``transcription`` (STT), ``speech`` (TTS), ``image``
-# (image generation), ``audio`` (generic audio generation), ``video`` (video
-# generation), and ``embeddings`` (text embedding).  Without these filters
-# the corresponding task types (``video_generation``, ``text_embedding``,
-# etc.) stay empty even though OpenRouter publishes those models.
-SUPPLEMENTARY_OUTPUT_MODALITIES = (
-    "transcription",
-    "speech",
-    "image",
-    "audio",
-    "video",
-    "embeddings",
-)
-
-# OpenRouter's dedicated image API publishes a typed parameter schema per
-# model (enum values, numeric ranges, boolean support flags) plus per-endpoint
-# provider passthrough keys — facts the ``/models`` catalog omits entirely.
-# New image models are added exclusively to this API.
-IMAGE_MODELS_ENDPOINT = "/images/models"
-VIDEO_MODELS_ENDPOINT = "/videos/models"
-
-# Per-model endpoint-detail fetches run concurrently but bounded, so a large
-# image catalog does not open dozens of simultaneous connections during an
-# explicit refresh.
-_IMAGE_DETAIL_CONCURRENCY = 8
-
-_LOGGER = get_logger("providers.openrouter")
+__all__ = [
+    "IMAGE_MODELS_ENDPOINT",
+    "MAX_REASONING_PARAGRAPH_NEWLINES",
+    "OPENROUTER_ALL_TURNS_RESPONSES_MODELS",
+    "OPENROUTER_CACHE_BREAKPOINT_LIMIT",
+    "OPENROUTER_CACHE_CONTROL_EPHEMERAL",
+    "OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS",
+    "OPENROUTER_NONE_EFFORT",
+    "OPENROUTER_REASONING_EFFORTS",
+    "OPENROUTER_REASONING_OFF",
+    "OPENROUTER_RESPONSES_ENDPOINT",
+    "OPENROUTER_RESPONSES_REQUEST_PARAMETERS",
+    "OpenRouterAdapter",
+    "OpenRouterResponsesPolicy",
+    "REASONING_NEWLINE_RUN_PATTERN",
+    "SUPPLEMENTARY_OUTPUT_MODALITIES",
+    "VIDEO_MODELS_ENDPOINT",
+]
 
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
@@ -742,556 +713,3 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             max_tokens=None,
         )
         return _describe_openrouter_intent(intent)
-
-
-@dataclass(frozen=True)
-class OpenRouterResponsesPolicy:
-    """Request-shaping facts for an exact OpenRouter Responses-routed Model."""
-
-    allowed_reasoning_efforts: frozenset[str]
-    supports_tools: bool
-    supports_parallel_tool_calls: bool
-    supports_structured_outputs: bool
-
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return bool(self.allowed_reasoning_efforts)
-
-    @property
-    def supports_explicit_none_effort(self) -> bool:
-        # No Responses-routed OpenRouter Model has been live-proven to need an
-        # explicit off rung yet; preserve omission until its wire is audited.
-        return False
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered = {key: value for key, value in kwargs.items() if value is not None}
-        if not self.supports_tools:
-            for name in ("tools", "tool_choice", "parallel_tool_calls"):
-                filtered.pop(name, None)
-        elif not self.supports_parallel_tool_calls:
-            filtered.pop("parallel_tool_calls", None)
-
-        if not self.supports_structured_outputs:
-            for name in ("response_format", "structured_outputs", "json_mode", "text"):
-                filtered.pop(name, None)
-
-        if not self.allows_any_reasoning_controls:
-            for name in ("thinking_effort", "reasoning_effort", "reasoning", "include_reasoning"):
-                filtered.pop(name, None)
-        else:
-            self._normalize_effort(filtered, "thinking_effort")
-            self._normalize_effort(filtered, "reasoning_effort")
-
-        for name in ("max_tokens", "max_output_tokens", "temperature", "top_p", "top_k"):
-            if name in filtered and name not in OPENROUTER_RESPONSES_REQUEST_PARAMETERS:
-                filtered.pop(name, None)
-        return filtered
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized = normalize_thinking_effort(effort)
-        if not normalized:
-            return None
-        if normalized == OPENROUTER_NONE_EFFORT:
-            return (
-                OPENROUTER_NONE_EFFORT
-                if OPENROUTER_NONE_EFFORT in self.allowed_reasoning_efforts
-                else None
-            )
-        return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
-
-    def supports_request_parameter(self, parameter_name: str) -> bool:
-        return parameter_name in OPENROUTER_RESPONSES_REQUEST_PARAMETERS
-
-    def _normalize_effort(
-        self,
-        filtered: dict[str, Any],
-        parameter_name: str,
-    ) -> None:
-        if parameter_name not in filtered:
-            return
-        safe_effort = self.closest_reasoning_effort(filtered[parameter_name])
-        if safe_effort is None:
-            filtered.pop(parameter_name, None)
-        else:
-            filtered[parameter_name] = safe_effort
-
-
-def _openrouter_provider_preferences(
-    routing: Mapping[str, Any],
-    model_id: str,
-) -> dict[str, Any]:
-    """Render vBot's routing policy to OpenRouter's request ``provider`` object."""
-
-    default_policy = routing["default"]
-    model_policy = routing["models"].get(model_id)
-    policy = model_policy or default_policy
-
-    blocked: list[str] = list(default_policy["blocked"])
-    if model_policy is not None:
-        blocked.extend(slug for slug in model_policy["blocked"] if slug not in blocked)
-
-    preferences: dict[str, Any] = {}
-    mode = policy["mode"]
-    if mode == "allowed":
-        preferences["only"] = list(policy["providers"])
-    elif mode == "ordered":
-        preferences["order"] = list(policy["providers"])
-    if blocked:
-        preferences["ignore"] = blocked
-    if policy["allow_fallbacks"] is False:
-        preferences["allow_fallbacks"] = False
-    return preferences
-
-
-def _openrouter_http_error_detail(
-    response: httpx.Response,
-    body: str | None = None,
-) -> str:
-    reason = response.text if body is None else body
-    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
-
-
-def _openrouter_status_error_payload(detail: str) -> dict[str, Any] | None:
-    """Extract the structured ``error`` object from an HTTP error detail.
-
-    The compatible base renders establishment failures as ``"<status> <body>"``
-    and OpenRouter bodies are JSON with a documented ``error`` object. Returns
-    ``None`` when the detail carries no parseable OpenRouter-shaped error, so
-    the shared status policy applies unchanged.
-    """
-
-    start = detail.find("{")
-    if start < 0:
-        return None
-    try:
-        parsed = json.loads(detail[start:])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    error = parsed.get("error")
-    return error if isinstance(error, dict) else None
-
-
-def _openrouter_routing_options(
-    payload: Mapping[str, Any],
-    *,
-    model_specific: bool,
-) -> list[dict[str, str]]:
-    """Normalize OpenRouter provider and endpoint catalogs for the Settings UI."""
-
-    raw_data = payload.get("data")
-    if model_specific:
-        entries = raw_data.get("endpoints") if isinstance(raw_data, Mapping) else None
-    else:
-        entries = raw_data
-    if not isinstance(entries, list):
-        return []
-
-    options: dict[str, str] = {}
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            continue
-        raw_slug = entry.get("tag") if model_specific else entry.get("slug")
-        raw_name = entry.get("provider_name") if model_specific else entry.get("name")
-        if not isinstance(raw_slug, str) or not raw_slug.strip():
-            continue
-        slug = raw_slug.strip().lower()
-        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else slug
-        options.setdefault(slug, name)
-    return [
-        {"slug": slug, "name": name}
-        for slug, name in sorted(
-            options.items(),
-            key=lambda item: (item[1].casefold(), item[0]),
-        )
-    ]
-
-
-def _collapse_reasoning_newline_runs(text: str, state: dict[str, Any] | None) -> str:
-    """Collapse newline-run noise in reasoning text, across delta boundaries.
-
-    Interior runs of three or more newlines collapse to one paragraph break.
-    A run split across consecutive deltas is bounded through the per-stream
-    ``state`` mapping: it tracks how many newlines the emitted stream ends
-    with so the next fragment's leading run cannot push the joined total past
-    a paragraph break. Without ``state`` each fragment collapses in isolation.
-    An empty result means this fragment was pure separator noise; the caller
-    drops it and the trailing-run tracking keeps its previous value.
-    """
-
-    trailing = 0
-    if state is not None:
-        stored = state.get(_REASONING_TRAILING_NEWLINES_STATE_KEY, 0)
-        trailing = stored if isinstance(stored, int) else 0
-    leading = len(text) - len(text.lstrip("\n"))
-    if trailing + leading > MAX_REASONING_PARAGRAPH_NEWLINES:
-        excess = trailing + leading - MAX_REASONING_PARAGRAPH_NEWLINES
-        text = text[excess:]
-    collapsed = REASONING_NEWLINE_RUN_PATTERN.sub(
-        "\n" * MAX_REASONING_PARAGRAPH_NEWLINES,
-        text,
-    )
-    if not collapsed:
-        return ""
-    if state is not None:
-        state[_REASONING_TRAILING_NEWLINES_STATE_KEY] = min(
-            MAX_REASONING_PARAGRAPH_NEWLINES,
-            len(collapsed) - len(collapsed.rstrip("\n")),
-        )
-    return collapsed
-
-
-def _collapse_reasoning_delta_texts(
-    deltas: Iterable[dict[str, Any]],
-    state: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    """Rewrite ``reasoning_delta`` texts with newline runs collapsed.
-
-    Fragments that collapse to nothing are dropped entirely — Chat ignores
-    empty reasoning text anyway, and dropping keeps the visible delta stream
-    free of no-op events. Non-reasoning deltas pass through untouched.
-    """
-
-    result: list[dict[str, Any]] = []
-    for delta in deltas:
-        if delta.get("type") != "reasoning_delta":
-            result.append(delta)
-            continue
-        collapsed = _collapse_reasoning_newline_runs(str(delta.get("text", "")), state)
-        if collapsed:
-            result.append({"type": "reasoning_delta", "text": collapsed})
-    return result
-
-
-def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningIntent) -> None:
-    """Render a reasoning intent onto an OpenRouter payload.
-
-    OpenRouter speaks ``reasoning: {effort}`` / ``{enabled}``. An ``effort``
-    intent maps straight through; ``budget`` also renders as an effort (OpenRouter
-    maps effort→budget internally, so no token budget is sent); ``on`` toggles
-    ``enabled: true``. ``off`` keeps the byte-identical ``{"effort": "none"}`` for
-    an effort-spelled-off wire (``effort_level == "none"``) and falls back to the
-    documented ``{"enabled": false}`` toggle otherwise; ``default`` omits the
-    field entirely.
-    """
-
-    if intent.kind == REASONING_INTENT_ON:
-        payload["reasoning"] = {"enabled": True}
-        payload["include_reasoning"] = True
-    elif intent.kind in (REASONING_INTENT_EFFORT, REASONING_INTENT_BUDGET):
-        if intent.effort_level is not None:
-            payload["reasoning"] = {"effort": intent.effort_level}
-            payload["include_reasoning"] = True
-    elif intent.kind == REASONING_INTENT_OFF:
-        if intent.effort_level == OPENROUTER_NONE_EFFORT:
-            payload["reasoning"] = {"effort": OPENROUTER_NONE_EFFORT}
-        else:
-            payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
-        # Some upstreams honor the output toggle even when they ignore the
-        # requested effort. Never ask one to return reasoning for an off intent.
-        payload.pop("include_reasoning", None)
-
-
-def _describe_openrouter_intent(intent: ReasoningIntent) -> ReasoningIntent:
-    """Map a resolved intent onto OpenRouter's render (``/status`` description).
-
-    Mirrors :func:`_render_openrouter_reasoning`: an ``on`` intent toggles
-    ``enabled`` rather than sending an effort, and a ``budget`` intent renders
-    as the effort OpenRouter maps internally.
-    """
-
-    if intent.kind == REASONING_INTENT_BUDGET and intent.effort_level is not None:
-        return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
-    return intent
-
-
-def _is_claude_family(model_id: str) -> bool:
-    """True for Anthropic Claude models on OpenRouter (``anthropic/claude-*``).
-
-    Matching on the ``claude`` substring covers the vendor-prefixed slug, the
-    tilde auto-router form (``~anthropic/claude-haiku-latest``), and any dated
-    variant, while never matching a non-Claude model. Only these need explicit
-    ``cache_control`` — every other family caches implicitly upstream.
-    """
-
-    return "claude" in model_id.lower()
-
-
-def _apply_openrouter_prompt_caching(payload: dict[str, Any]) -> None:
-    """Place ``cache_control`` breakpoints on the OpenAI-wire message array.
-
-    Envelope layout (marker inside a content part): one marker on the last
-    system message (caches tools + system) and up to
-    :data:`OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS` rolling markers on the most
-    recent non-system messages, capped at :data:`OPENROUTER_CACHE_BREAKPOINT_LIMIT`.
-    A message whose content cannot carry a marker (empty string, or a pure
-    tool-call assistant turn with ``None`` content) is skipped so a breakpoint is
-    never wasted on a part OpenRouter would ignore.
-    """
-
-    messages = payload.get("messages")
-    if not isinstance(messages, list) or not messages:
-        return
-
-    remaining = OPENROUTER_CACHE_BREAKPOINT_LIMIT
-    last_system = _last_index(messages, role="system")
-    if last_system is not None and _mark_openrouter_message(messages[last_system]):
-        remaining -= 1
-
-    history_budget = min(remaining, OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS)
-    marked = 0
-    for index in range(len(messages) - 1, -1, -1):
-        if marked >= history_budget:
-            break
-        message = messages[index]
-        if not isinstance(message, dict) or message.get("role") == "system":
-            continue
-        if _mark_openrouter_message(message):
-            marked += 1
-
-
-def _last_index(messages: list[Any], *, role: str) -> int | None:
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if isinstance(message, dict) and message.get("role") == role:
-            return index
-    return None
-
-
-def _mark_openrouter_message(message: dict[str, Any]) -> bool:
-    """Add ``cache_control`` to a message's last content part; return whether it did.
-
-    A string content is wrapped into a single ``text`` part to carry the marker;
-    a list content takes the marker on its last dict part. Empty/`None` content
-    carries nothing (``False``), so the caller moves the breakpoint to an older
-    message.
-    """
-
-    content = message.get("content")
-    if isinstance(content, str):
-        if not content.strip():
-            return False
-        message["content"] = [
-            {
-                "type": "text",
-                "text": content,
-                "cache_control": dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL),
-            }
-        ]
-        return True
-    if isinstance(content, list):
-        for index in range(len(content) - 1, -1, -1):
-            part = content[index]
-            if isinstance(part, dict):
-                part["cache_control"] = dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL)
-                return True
-    return False
-
-
-def _normalize_image_parameters(raw_parameters: Any) -> dict[str, Any]:
-    """Project the image API's typed parameter schema to plain JSON data.
-
-    Known spec shapes are validated strictly (an ``enum`` needs a string list,
-    a ``range`` numeric bounds); an unknown spec ``type`` is kept verbatim so
-    a feed extension survives the projection and only the render layer needs
-    to learn it. Shapeless entries are dropped.
-    """
-
-    if not isinstance(raw_parameters, Mapping):
-        return {}
-    parameters: dict[str, Any] = {}
-    for name, spec in raw_parameters.items():
-        if not isinstance(name, str) or not name or not isinstance(spec, Mapping):
-            continue
-        spec_type = spec.get("type")
-        if not isinstance(spec_type, str) or not spec_type:
-            continue
-        if spec_type == "enum":
-            values = spec.get("values")
-            if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
-                continue
-            parameters[name] = {"type": "enum", "values": list(values)}
-        elif spec_type == "range":
-            minimum = spec.get("min")
-            maximum = spec.get("max")
-            if not isinstance(minimum, int | float) or not isinstance(maximum, int | float):
-                continue
-            parameters[name] = {"type": "range", "min": minimum, "max": maximum}
-        elif spec_type == "boolean":
-            parameters[name] = {"type": "boolean"}
-        else:
-            parameters[name] = {str(key): value for key, value in spec.items()}
-    return parameters
-
-
-def _passthrough_from_detail(detail: Any) -> dict[str, list[str]]:
-    """Collect per-provider passthrough keys from an endpoint-detail response.
-
-    Multiple endpoints of the same upstream provider merge their key lists
-    (union, sorted) so the projection is deterministic regardless of endpoint
-    ordering.
-    """
-
-    if not isinstance(detail, Mapping):
-        return {}
-    endpoints = detail.get("endpoints")
-    if not isinstance(endpoints, list):
-        return {}
-    passthrough: dict[str, set[str]] = {}
-    for endpoint in endpoints:
-        if not isinstance(endpoint, Mapping):
-            continue
-        slug = endpoint.get("provider_slug")
-        keys = endpoint.get("allowed_passthrough_parameters")
-        if not isinstance(slug, str) or not slug or not isinstance(keys, list):
-            continue
-        valid_keys = {key for key in keys if isinstance(key, str) and key}
-        if valid_keys:
-            passthrough.setdefault(slug, set()).update(valid_keys)
-    return {slug: sorted(keys) for slug, keys in sorted(passthrough.items())}
-
-
-def _openrouter_task_types(
-    raw: Mapping[str, Any],
-    input_modalities: list[str],
-    output_modalities: list[str],
-) -> tuple[str, ...]:
-    """Derive OpenRouter tasks, conservatively separating music from audio.
-
-    OpenRouter currently exposes Music and conversational Audio models through
-    the same ``output_modalities=audio`` filter and publishes no explicit Music
-    task tag. Its Music models have a distinct capability signature: text plus
-    optional image input, audio output, and no audio input. Keeping this rule in
-    the provider normalizer avoids misclassifying GPT Audio as Music while the
-    provider feed lacks a first-class semantic tag.
-    """
-
-    tasks = set(derive_model_task_types(input_modalities, output_modalities))
-    inputs = set(input_modalities)
-    outputs = set(output_modalities)
-    architecture = raw.get("architecture")
-    modality = architecture.get("modality") if isinstance(architecture, Mapping) else None
-    if (
-        modality == "text+image->text+audio"
-        and inputs == {"text", "image"}
-        and {"text", "audio"}.issubset(outputs)
-    ):
-        tasks.add("music_generation")
-    return tuple(task for task in MODEL_TASK_ORDER if task in tasks)
-
-
-def _normalize_video_options(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Project OpenRouter's dedicated video catalog to typed task options."""
-
-    parameters: dict[str, Any] = {}
-    enum_fields = (
-        ("resolution", "supported_resolutions"),
-        ("aspect_ratio", "supported_aspect_ratios"),
-        ("size", "supported_sizes"),
-    )
-    for name, source_name in enum_fields:
-        values = _read_optional_string_list(entry, source_name)
-        if values:
-            parameters[name] = {"type": "enum", "values": values}
-
-    durations = entry.get("supported_durations")
-    if isinstance(durations, list):
-        values = [str(value) for value in durations if isinstance(value, int) and value > 0]
-        if values:
-            parameters["duration"] = {"type": "enum", "values": values}
-    if entry.get("generate_audio") is True:
-        parameters["generate_audio"] = {"type": "boolean"}
-    if entry.get("seed") is True:
-        parameters["seed"] = {"type": "boolean"}
-
-    options: dict[str, Any] = {}
-    if parameters:
-        options["parameters"] = parameters
-    frame_images = _read_optional_string_list(entry, "supported_frame_images")
-    supported_frames = [
-        frame_type for frame_type in frame_images if frame_type in {"first_frame", "last_frame"}
-    ]
-    if supported_frames:
-        options["frame_images"] = supported_frames
-    passthrough = _read_optional_string_list(entry, "allowed_passthrough_parameters")
-    if passthrough:
-        options["passthrough_parameters"] = passthrough
-    return options
-
-
-def _image_catalog_model(entry: Mapping[str, Any], image_options: dict[str, Any]) -> Model:
-    """Build a minimal ``Model`` for an image-API-only catalog entry.
-
-    The image API publishes no context window, no chat parameters, and no
-    reasoning facts — the entry exists so the model appears as an
-    image-generation target with its typed option schema; chat-facing
-    capabilities honestly stay off/unknown.
-    """
-
-    raw_architecture = entry.get("architecture")
-    architecture = raw_architecture if isinstance(raw_architecture, Mapping) else {}
-    input_modalities = _read_optional_string_list(architecture, "input_modalities") or ["text"]
-    output_modalities = _read_optional_string_list(architecture, "output_modalities") or ["image"]
-    name = entry.get("name")
-    task_options = {"image_generation": image_options} if image_options else {}
-    return Model(
-        model_id=str(entry["id"]),
-        name=name if isinstance(name, str) and name else str(entry["id"]),
-        capabilities=Capabilities(
-            vision="image" in input_modalities,
-            tools=False,
-            json_mode=False,
-            reasoning=ReasoningCapabilities(supported=False),
-            input_modalities=tuple(input_modalities),
-            output_modalities=tuple(output_modalities),
-            task_options=task_options,
-        ),
-        context_window=None,
-        max_output_tokens=None,
-    )
-
-
-def _video_catalog_model(entry: Mapping[str, Any], video_options: dict[str, Any]) -> Model:
-    """Build a minimal ``Model`` for a video-API-only catalog entry."""
-
-    name = entry.get("name")
-    task_options = {"video_generation": video_options} if video_options else {}
-    return Model(
-        model_id=str(entry["id"]),
-        name=name if isinstance(name, str) and name else str(entry["id"]),
-        capabilities=Capabilities(
-            vision=False,
-            tools=False,
-            json_mode=False,
-            reasoning=ReasoningCapabilities(supported=False),
-            input_modalities=("text",),
-            output_modalities=("video",),
-            task_options=task_options,
-        ),
-        context_window=None,
-        max_output_tokens=None,
-    )
-
-
-def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:
-    modality = architecture.get("modality")
-    if isinstance(modality, str) and modality:
-        return {"openrouter": {"modality": modality}}
-    return {}
-
-
-def _read_optional_string_list(data: Mapping[str, Any], key: str) -> list[str]:
-    """Read an optional list-of-strings field, returning ``[]`` when absent or malformed.
-
-    Used for OpenRouter fields that are present-but-empty on most models (such as
-    ``supported_voices`` on non-TTS models) where a missing or wrong-shaped value
-    is a normal "not applicable" signal rather than a hard schema error.
-    """
-
-    value = data.get(key)
-    if value is None:
-        return []
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return []
-    return value

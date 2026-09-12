@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-import core.extensions.extensions as extensions_module
+import core.extensions._loading as extension_loading
 from core.extensions import API_VERSION, ExtensionRegistry, HookContext
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 
@@ -325,7 +325,7 @@ def test_async_register_timeout_without_running_loop_is_isolated(
 ) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "marker.txt"
-    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
     _write_single_file(
         root,
         "hanging",
@@ -366,7 +366,7 @@ async def test_async_register_timeout_within_running_loop_ignores_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "extensions"
-    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
     _write_single_file(
         root,
         "hanging",
@@ -444,7 +444,7 @@ async def test_aload_register_timeout_fails_only_that_extension(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "extensions"
-    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
     _write_single_file(
         root,
         "hanging",

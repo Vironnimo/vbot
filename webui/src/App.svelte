@@ -76,34 +76,32 @@
 </script>
 
 <script>
-  import { onMount, tick } from 'svelte';
-  import { SvelteMap } from 'svelte/reactivity';
-  import ExtensionRequests from './components/ExtensionRequests.svelte';
-  import ExtensionPage from './components/ExtensionPage.svelte';
   import AppShell from './components/AppShell.svelte';
-  import AgentsView from './components/AgentsView.svelte';
-  import ChatWorkspace from './components/ChatWorkspace.svelte';
-  import CronView from './components/CronView.svelte';
-  import CalendarView from './components/CalendarView.svelte';
-  import DebugView from './components/DebugView.svelte';
-  import LogsView from './components/LogsView.svelte';
-  import ProjectsView from './components/ProjectsView.svelte';
-  import SettingsView from './components/SettingsView.svelte';
-  import {
-    dateTimePrefs,
-    setApplicationTimeZone,
-  } from '$lib/dateTimePrefs.svelte.js';
-  import SkillsView from './components/skills/SkillsView.svelte';
-  import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
-  import StatisticsView from './components/StatisticsView.svelte';
-  import SystemPromptView from './components/SystemPromptView.svelte';
-  import TerminalsView from './components/TerminalsView.svelte';
+  import Banner from './components/ui/Banner.svelte';
+  import { t } from '$lib/i18n.js';
+  import Button from './components/ui/Button.svelte';
+  import ExtensionRequests from './components/ExtensionRequests.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
   import OnboardingView from './components/OnboardingView.svelte';
+  import ChatWorkspace from './components/ChatWorkspace.svelte';
+  import { appearancePrefs } from '$lib/appearancePrefs.svelte.js';
+  import ExtensionPage from './components/ExtensionPage.svelte';
+  import { dateTimePrefs } from '$lib/dateTimePrefs.svelte.js';
+  import AgentsView from './components/AgentsView.svelte';
+  import TerminalsView from './components/TerminalsView.svelte';
+  import ProjectsView from './components/ProjectsView.svelte';
+  import CalendarView from './components/CalendarView.svelte';
+  import CronView from './components/CronView.svelte';
+  import SkillsView from './components/skills/SkillsView.svelte';
+  import SystemPromptView from './components/SystemPromptView.svelte';
+  import SettingsView from './components/SettingsView.svelte';
+  import LogsView from './components/LogsView.svelte';
+  import StatisticsView from './components/StatisticsView.svelte';
+  import DebugView from './components/DebugView.svelte';
   import ToastStack from './components/ToastStack.svelte';
-  import Banner from './components/ui/Banner.svelte';
-  import Button from './components/ui/Button.svelte';
   import Modal from './components/ui/Modal.svelte';
+  import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
+  import { onMount, tick } from 'svelte';
   import {
     CONNECTION_STATUS_DISCONNECTED,
     handleVisibilityChange,
@@ -115,202 +113,65 @@
   import {
     debugStatus,
     acknowledgeSessionStoreIncident,
-    getSettings,
     getSessionStoreStatus,
-    listExtensionPages,
-    listAgents,
-    listProjects,
     showProject,
   } from '$lib/api.js';
-  import { init, t } from '$lib/i18n.js';
-  import {
-    appearancePrefs,
-    setChatWidth,
-    setChatWorkingMode,
-  } from '$lib/appearancePrefs.svelte.js';
   import {
     createAutosaveCoordinator,
     provideAutosaveContext,
   } from '$lib/autosave.js';
   import { viewIdFromLocationHash } from '$lib/navigationHistory.js';
-  import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
-  import { isOperational } from '$lib/onboarding.js';
-  import {
-    isDesktopAccessor,
-    getDesktopCapabilities,
-    onWakewordStatusChange,
-    playWakewordCue,
-    stopWakewordRecording,
-    waitForDesktopBridge,
-  } from '$lib/desktopBridge.js';
+  import { createAppSelection } from './app/selection.svelte.js';
+  import { createAppSetup } from './app/setup.svelte.js';
+  import { createAppDesktop } from './app/desktop.svelte.js';
+  import { createAppExtensions } from './app/extensions.svelte.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
-  const EXTENSION_THEME_TOKENS = Object.freeze({
-    background: '--bg',
-    surface: '--surface',
-    elevatedSurface: '--surface-2',
-    border: '--border',
-    text: '--text-hi',
-    mutedText: '--text-med',
-    accent: '--accent',
+  const selection = createAppSelection({
+    get promptScopeTarget() {
+      return promptScopeTarget;
+    },
+    set promptScopeTarget(value) {
+      promptScopeTarget = value;
+    },
+    get promptScopeTargetRequestId() {
+      return promptScopeTargetRequestId;
+    },
+    set promptScopeTargetRequestId(value) {
+      promptScopeTargetRequestId = value;
+    },
   });
-  let extensionPages = $state([]);
-  let extensionPagesLoadInFlight = null;
-  let extensionPagesRefreshQueued = false;
-  let extensionPageInvalidationRevision = $state(0);
-  let extensionPageRoute = $state('');
-  let extensionPageRouteView = $state('');
-  let extensionPageTheme = $state({});
-
-  const refreshExtensionPageTheme = () => {
-    const styles = getComputedStyle(document.documentElement);
-    Object.assign(extensionPageTheme, {
-      mode: styles.colorScheme === 'light' ? 'light' : 'dark',
-      ...Object.fromEntries(
-        Object.entries(EXTENSION_THEME_TOKENS).map(([name, token]) => [
-          name,
-          styles.getPropertyValue(token).trim(),
-        ]),
-      ),
-    });
-  };
-  const allNavigationItems = $derived([
-    ...navigationItems,
-    ...extensionPages.map((page) => ({
-      id: page.route,
-      labelKey: '',
-      labelFallback: page.title,
-      section: 'work',
-    })),
-  ]);
-
-  // Page descriptors may change after an Extension reload or reconnect. At
-  // most one request runs at once, with one follow-up request coalescing any
-  // burst. This fetches descriptors only; it never repeats page mutations.
-  const loadExtensionPages = async () => {
-    if (extensionPagesLoadInFlight) {
-      extensionPagesRefreshQueued = true;
-      return extensionPagesLoadInFlight;
-    }
-    const load = async () => {
-      let updated = false;
-      do {
-        extensionPagesRefreshQueued = false;
-        try {
-          const result = await listExtensionPages();
-          extensionPages = Array.isArray(result?.pages) ? result.pages : [];
-          extensionPageInvalidationRevision += 1;
-          updated = true;
-        } catch {
-          // Keep the last valid descriptors while a transient RPC error clears.
-        }
-      } while (extensionPagesRefreshQueued);
-      return updated;
-    };
-    extensionPagesLoadInFlight = load().finally(() => {
-      extensionPagesLoadInFlight = null;
-    });
-    return extensionPagesLoadInFlight;
-  };
+  const setup = createAppSetup({
+    get modelsRefreshToken() {
+      return modelsRefreshToken;
+    },
+    get selectView() {
+      return selectView;
+    },
+  });
+  const desktop = createAppDesktop({
+    get connectionState() {
+      return connectionState;
+    },
+  });
+  const extensions = createAppExtensions({
+    get navigationItems() {
+      return navigationItems;
+    },
+    get selectView() {
+      return selectView;
+    },
+  });
 
   const visibleNavigationItems = $derived(
     debugEnabled
-      ? allNavigationItems
-      : allNavigationItems.filter((item) => item.id !== 'debug'),
+      ? extensions.allNavigationItems
+      : extensions.allNavigationItems.filter((item) => item.id !== 'debug'),
   );
-  const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
-  const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
-  const SELECTED_PROJECT_AGENT_KEY = 'vbot.selectedProjectAgentId';
-  const MANAGED_PROJECT_KEY = 'vbot.managedProjectId';
-  // Accessor-local UI state only: whether the user set the first-run wizard
-  // aside this browser. The real trigger stays the live operational state — a
-  // credential removal clears this flag and brings the wizard back on its own.
-  const ONBOARDING_DISMISSED_KEY = 'vbot.onboardingDismissed';
-  const TOAST_AUTO_DISMISS_MS = 3200;
-  const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
-  const DESKTOP_CAPABILITY_RETRY_MS = 1000;
 
-  const readStoredSelectedAgentId = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return '';
-      }
-      return localStorage.getItem(SELECTED_AGENT_KEY) || '';
-    } catch {
-      return '';
-    }
-  };
-
-  // The persisted project selection follows the same localStorage pattern as
-  // the selected agent (own key). Empty = "No project" / Personal.
-  const readStoredSelectedProjectId = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return '';
-      }
-      return localStorage.getItem(SELECTED_PROJECT_KEY) || '';
-    } catch {
-      return '';
-    }
-  };
-
-  const readStoredManagedProjectId = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return '';
-      }
-      return localStorage.getItem(MANAGED_PROJECT_KEY) || '';
-    } catch {
-      return '';
-    }
-  };
-
-  // The remembered active agent inside the selected project, restored on reload
-  // so the chat returns to the same agent instead of the project default (the
-  // default jump is only for a genuine project switch). Three states, so it is
-  // read as a tri-state (never collapsed to ''):
-  //   - null  → nothing remembered yet → the initial load picks the default
-  //   - ''    → an identity agent was active alongside the project → restore it
-  //   - 'id'  → restore that team member
-  const readStoredSelectedProjectAgentId = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return null;
-      }
-      return localStorage.getItem(SELECTED_PROJECT_AGENT_KEY);
-    } catch {
-      return null;
-    }
-  };
-
-  const readOnboardingDismissed = () => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return false;
-      }
-      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
-    } catch {
-      return false;
-    }
-  };
-
-  const writeOnboardingDismissed = (dismissed) => {
-    try {
-      if (typeof localStorage === 'undefined') {
-        return;
-      }
-      if (dismissed) {
-        localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
-      } else {
-        localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  };
-
-  const knownViewIds = () => allNavigationItems.map((item) => item.id);
+  const knownViewIds = () =>
+    extensions.allNavigationItems.map((item) => item.id);
 
   const initialViewId = () => {
     try {
@@ -327,46 +188,23 @@
   const autosaveCoordinator = createAutosaveCoordinator();
   let appController;
   let activeViewId = $derived(appControllerState.activeViewId);
-  $effect.pre(() => {
-    const nextView = activeViewId.startsWith('extension:') ? activeViewId : '';
-    if (nextView !== extensionPageRouteView) {
-      extensionPageRoute = '';
-    }
-    extensionPageRouteView = nextView;
-  });
+  $effect.pre(() => extensions.syncRoute(activeViewId));
+
   let autosaveTransitionSaving = $state(false);
   let autosaveFailureOpen = $state(false);
   let pendingAutosaveTransition = null;
   let debugEnabled = $state(false);
-  let agents = $state([]);
-  let selectedAgentId = $state(readStoredSelectedAgentId());
-  const initialSelectedProjectId = readStoredSelectedProjectId();
-  // Project context for the two-bar chat. `projects` feeds the chat dropdown;
-  // `selectedProjectId` is the chosen project (empty = Personal/identity path).
-  let projects = $state([]);
+
   let liveVoiceView;
   let terminalsView = $state();
   let voiceChatSelection = null;
-  let projectsLoadRequestId = 0;
-  let selectedProjectId = $state(initialSelectedProjectId);
-  // Projects-tab selection is remembered independently so browsing project
-  // settings does not silently change the Chat context. A selected Chat
-  // project seeds and updates this mirror; otherwise the Projects view keeps
-  // the user's last management selection.
-  let managedProjectId = $state(
-    initialSelectedProjectId || readStoredManagedProjectId(),
-  );
+
   // Settings is unmounted when another main view opens. Keep its reading
   // anchor in the long-lived App shell so a normal tab return resumes exactly
   // where the user left the document.
   let settingsScrollPosition = $state(null);
   let settingsView = $state(null);
-  // The remembered active agent inside the selected project (tri-state: null =
-  // nothing remembered, '' = identity agent active alongside the project, or a
-  // bare team-member id). Persisted like the selected agent/project; ChatView
-  // reports changes back through `onProjectAgentSelected`.
-  let selectedProjectAgentId = $state(readStoredSelectedProjectAgentId());
-  let agentsRefreshToken = $state(0);
+
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
@@ -393,15 +231,7 @@
   let serverUnavailable = $derived(
     connectionState.status === CONNECTION_STATUS_DISCONNECTED,
   );
-  let toastState = $state(createToastState());
-  // Application settings, fetched on mount and re-fetched on a provider/model
-  // change. Drives the first-run onboarding decision. Null until first loaded.
-  let settings = $state(null);
-  let onboardingDismissed = $state(readOnboardingDismissed());
-  // Sticky once shown: the wizard stays until completed/dismissed, so the
-  // connect flip (operational → true) never yanks it before the model step.
-  let onboardingActive = $state(false);
-  let lastSettingsModelsToken = null;
+
   let pendingSessionNavigation = $derived(
     appControllerState.pendingSessionNavigation,
   );
@@ -411,9 +241,9 @@
     appControllerState.backgroundBashStatusEvents,
   );
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
-  let desktopCapabilities = $state(null);
+
   let serverSwitcherOpen = $state(false);
-  let wakewordStatus = $state({ enabled: false, state: 'off' });
+
   let settingsPanelTarget = $derived(appControllerState.settingsPanelTarget);
   let settingsPanelTargetRequestId = $derived(
     appControllerState.settingsPanelTargetRequestId,
@@ -422,9 +252,6 @@
   let promptScopeTargetRequestId = $derived(
     appControllerState.promptScopeTargetRequestId,
   );
-  let cleanupWakewordPoll = null;
-  let lastWakewordEventSequence = null;
-  const toastDismissTimers = new SvelteMap();
 
   $effect(() => {
     if (!serverUnavailable) {
@@ -432,173 +259,12 @@
     }
   });
 
-  $effect(() => {
-    try {
-      if (selectedAgentId) {
-        localStorage.setItem(SELECTED_AGENT_KEY, selectedAgentId);
-      } else {
-        localStorage.removeItem(SELECTED_AGENT_KEY);
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  });
-
-  $effect(() => {
-    try {
-      if (managedProjectId) {
-        localStorage.setItem(MANAGED_PROJECT_KEY, managedProjectId);
-      } else {
-        localStorage.removeItem(MANAGED_PROJECT_KEY);
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  });
-
-  $effect(() => {
-    try {
-      if (selectedProjectId) {
-        localStorage.setItem(SELECTED_PROJECT_KEY, selectedProjectId);
-      } else {
-        localStorage.removeItem(SELECTED_PROJECT_KEY);
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  });
-
-  $effect(() => {
-    try {
-      // Tri-state: null clears the key; '' (identity active) and a team-member
-      // id are both stored verbatim so the restore can tell them apart.
-      if (selectedProjectAgentId === null) {
-        localStorage.removeItem(SELECTED_PROJECT_AGENT_KEY);
-      } else {
-        localStorage.setItem(
-          SELECTED_PROJECT_AGENT_KEY,
-          selectedProjectAgentId,
-        );
-      }
-    } catch {
-      // localStorage unavailable (private browsing, storage quota)
-    }
-  });
-
-  let operational = $derived(isOperational(settings));
-  // Slim re-entry banner: shown only once the wizard was set aside while the
-  // system is still not operational. It disappears the instant a provider is
-  // connected (operational flips true).
-  let showFinishSetup = $derived(
-    settings !== null &&
-      !operational &&
-      onboardingDismissed &&
-      !onboardingActive,
-  );
-
-  // Fetch application settings and seed the app-wide appearance from them. Also
-  // the source of the operational state that drives onboarding.
-  const loadAppSettings = async () => {
-    try {
-      const result = await getSettings();
-      settings = result;
-      setApplicationTimeZone(result?.general?.timezone);
-      setChatWidth(result?.appearance?.chat_width);
-      setChatWorkingMode(result?.appearance?.chat_working_mode);
-      const language = result?.appearance?.language;
-      if (typeof language === 'string' && language.length > 0) {
-        init(language);
-      }
-      maybeStartOnboarding();
-    } catch {
-      // settings RPC unavailable — keep the comfortable defaults and leave the
-      // onboarding decision untriggered (settings stays null).
-    }
-  };
-
-  // The guided setup shows once, on the first successful settings load, when
-  // vBot is not operational and the user has neither dismissed it nor already
-  // navigated elsewhere. It is a one-shot decision (not a reactive latch), so a
-  // late settings response never pops the wizard over a view the user opened in
-  // the meantime; re-entry afterwards is explicit (the "Finish setup" banner).
-  let onboardingEvaluated = false;
-  function maybeStartOnboarding() {
-    if (onboardingEvaluated || settings === null) {
-      return;
-    }
-    onboardingEvaluated = true;
-    if (!operational && !onboardingDismissed) {
-      onboardingActive = true;
-    }
-  }
-
-  // A live operational state clears a stale dismiss, so removing credentials
-  // later re-triggers the wizard on its own.
-  $effect(() => {
-    if (operational && onboardingDismissed) {
-      onboardingDismissed = false;
-      writeOnboardingDismissed(false);
-    }
-  });
-
-  // Re-fetch settings on a provider/model change (the same signal that bumps
-  // `modelsRefreshToken`) so the operational state stays live.
-  $effect(() => {
-    if (lastSettingsModelsToken === null) {
-      lastSettingsModelsToken = modelsRefreshToken;
-      return;
-    }
-    if (modelsRefreshToken !== lastSettingsModelsToken) {
-      lastSettingsModelsToken = modelsRefreshToken;
-      void loadAppSettings();
-    }
-  });
-
-  const completeOnboarding = () => {
-    onboardingActive = false;
-    onboardingDismissed = false;
-    writeOnboardingDismissed(false);
-    selectView('chat');
-    void loadAppSettings();
-  };
-
-  const dismissOnboarding = () => {
-    onboardingActive = false;
-    onboardingDismissed = true;
-    writeOnboardingDismissed(true);
-  };
-
-  const reopenOnboarding = () => {
-    onboardingActive = true;
-  };
-
   const navigateToAgentModel = () => {
     selectView('agents');
   };
 
   const navigateToProviders = () => {
     navigateToSettingsPanel('providers');
-  };
-
-  // ChatView reflects the project dropdown choice back here so the persisted
-  // mirror stays current.
-  const selectProject = (projectId) => {
-    selectedProjectId = typeof projectId === 'string' ? projectId : '';
-    if (selectedProjectId) {
-      managedProjectId = selectedProjectId;
-    }
-  };
-
-  const selectManagedProject = (projectId) => {
-    managedProjectId = typeof projectId === 'string' ? projectId : '';
-  };
-
-  // ChatView reports the active project agent (a team-member id, or '' for an
-  // identity agent active alongside the project) so the persisted mirror can
-  // restore it on reload. ChatView always reports a string; null stays internal
-  // to App (a removed project, see loadProjects).
-  const selectProjectAgent = (agentId) => {
-    selectedProjectAgentId = typeof agentId === 'string' ? agentId : null;
   };
 
   const navigateToProjects = () => {
@@ -613,49 +279,6 @@
     pendingCronJobTarget = typeof jobId === 'string' ? jobId : '';
     selectView('cron');
   };
-
-  const loadProjects = async () => {
-    const requestId = projectsLoadRequestId + 1;
-    projectsLoadRequestId = requestId;
-    try {
-      const result = await listProjects();
-      if (requestId !== projectsLoadRequestId) {
-        return false;
-      }
-      projects = Array.isArray(result?.projects) ? result.projects : [];
-      // Drop a stale persisted selection if its project no longer exists. The
-      // remembered project agent goes with it — it only means anything within a
-      // live project.
-      if (
-        selectedProjectId &&
-        !projects.some((project) => project.project_id === selectedProjectId)
-      ) {
-        selectedProjectId = '';
-        selectedProjectAgentId = null;
-      }
-      if (
-        managedProjectId &&
-        !projects.some((project) => project.project_id === managedProjectId)
-      ) {
-        managedProjectId = '';
-      }
-      return true;
-    } catch {
-      // Keep the last valid catalog during a transient RPC failure. A newer
-      // request also owns any visible state change, so stale failures are inert.
-      return false;
-    }
-  };
-
-  // The selection half of a history entry: which identity agent and which
-  // project context were active when the entry was created. Restored together
-  // with the session override so Back/Forward re-establish the whole chat
-  // context (chips, project bar, and displayed session agree again).
-  const currentNavigationSelection = () => ({
-    agentId: selectedAgentId,
-    projectId: selectedProjectId,
-    projectAgentId: selectedProjectAgentId,
-  });
 
   const runAutosaveTransition = async (action) => {
     pendingAutosaveTransition = action;
@@ -727,15 +350,18 @@
   };
 
   const liveContext = async () => {
-    const projectId = selectedProjectId;
+    const projectId = selection.selectedProjectId;
     const context = {
       view: activeViewId,
-      selected_agent_id: selectedAgentId,
-      selected_project_id: selectedProjectId,
-      selected_project_agent_id: selectedProjectAgentId,
+      selected_agent_id: selection.selectedAgentId,
+      selected_project_id: selection.selectedProjectId,
+      selected_project_agent_id: selection.selectedProjectAgentId,
       chat_selection: voiceChatSelection,
-      agents: agents.map((agent) => ({ agent_id: agent.id, name: agent.name })),
-      projects: projects.map((project) => ({
+      agents: selection.agents.map((agent) => ({
+        agent_id: agent.id,
+        name: agent.name,
+      })),
+      projects: selection.projects.map((project) => ({
         project_id: project.project_id,
         name: project.display_name,
         cwd: project.cwd,
@@ -776,58 +402,10 @@
     return terminalsView.applyVoiceAction(action, args);
   };
 
-  const syncAgents = (nextAgents = []) => {
-    agents = Array.isArray(nextAgents) ? nextAgents : [];
-    if (
-      selectedAgentId &&
-      !agents.some((agent) => agent.id === selectedAgentId)
-    ) {
-      selectedAgentId = agents[0]?.id ?? '';
-      return;
-    }
-    if (!selectedAgentId && agents.length > 0) {
-      selectedAgentId = agents[0].id;
-    }
-  };
-
-  const selectAgent = (agentOrId) => {
-    selectedAgentId =
-      typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
-  };
-
-  const remapIdentityAgentId = (oldAgentId, newAgentId) => {
-    if (selectedAgentId === oldAgentId) {
-      selectedAgentId = newAgentId;
-    }
-    if (promptScopeTarget === oldAgentId) {
-      promptScopeTarget = newAgentId;
-      promptScopeTargetRequestId += 1;
-    }
-  };
-
   const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
     requestAutosaveTransition(() =>
       appController.navigateToSubAgent(targetOrAgentId, maybeSessionId),
     );
-
-  const refreshAgents = (nextAgents = []) => {
-    syncAgents(nextAgents);
-    agentsRefreshToken += 1;
-  };
-
-  // Re-fetch the agent roster after a `resource_changed(kind:"agents")` signal
-  // (the migrated agent-CRUD reload — the channel carries no agent data, so we
-  // re-fetch agent.list). `refreshAgents` bumps `agentsRefreshToken`, so the
-  // Agents and Chat surfaces reload exactly as they did for the old agent.*
-  // events.
-  const reloadAgentsFromServer = async () => {
-    try {
-      const result = await listAgents();
-      refreshAgents(result.agents);
-    } catch (error) {
-      console.warn('Agent list refresh failed:', error);
-    }
-  };
 
   const loadSessionStoreStatus = async () => {
     try {
@@ -849,7 +427,7 @@
       appControllerState.sessionStoreHealth = result ?? null;
       appControllerState.sessionStoreIncident = result?.incident ?? null;
     } catch (error) {
-      showToast({
+      desktop.showToast({
         title: t(
           'sessionStore.acknowledgeFailedTitle',
           'Recovery notice still needs attention',
@@ -863,61 +441,6 @@
         variant: 'error',
       });
     }
-  };
-
-  const clearToastDismissTimer = (id) => {
-    const timer = toastDismissTimers.get(id);
-    if (!timer) {
-      return;
-    }
-
-    clearTimeout(timer);
-    toastDismissTimers.delete(id);
-  };
-
-  const clearToastDismissTimers = () => {
-    for (const timer of toastDismissTimers.values()) {
-      clearTimeout(timer);
-    }
-    toastDismissTimers.clear();
-  };
-
-  const dismissAppToast = (id) => {
-    clearToastDismissTimer(id);
-    dismissToast(toastState, id);
-  };
-
-  const showToast = ({
-    title,
-    message = '',
-    variant = 'info',
-    autoDismiss,
-  }) => {
-    // A disconnected server is already represented by the global availability
-    // notice. Suppress dependent action/load errors so one transport failure
-    // cannot flood the active view with duplicate symptoms.
-    if (
-      variant === 'error' &&
-      connectionState.status === CONNECTION_STATUS_DISCONNECTED
-    ) {
-      return;
-    }
-
-    const id = addToast(toastState, { title, message, variant });
-    // Error toasts stay until the user dismisses them (a transport/server
-    // failure the user must acknowledge); success/info/warn auto-dismiss. An
-    // explicit `autoDismiss` from the caller always wins over this default.
-    const effectiveAutoDismiss =
-      autoDismiss === undefined ? variant !== 'error' : autoDismiss;
-    if (!effectiveAutoDismiss) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      dismissToast(toastState, id);
-      toastDismissTimers.delete(id);
-    }, TOAST_AUTO_DISMISS_MS);
-    toastDismissTimers.set(id, timer);
   };
 
   const connectServerEvents = () => appController.connectServerEvents();
@@ -950,132 +473,6 @@
     navigateToSettingsPanel('voice');
   };
 
-  const handleStopWakewordRecording = () => {
-    // Fire-and-forget: the status poll reconciles the indicator, and a failed
-    // bridge call leaves the recording running rather than losing it.
-    void stopWakewordRecording().catch(() => {});
-  };
-
-  const wakewordFailureMessage = (errorCode) => {
-    if (errorCode === 'speech_to_text_unconfigured') {
-      return t(
-        'settings.voice.error.speechToTextUnconfigured',
-        'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
-      );
-    }
-    if (errorCode === 'speech_to_text_unavailable') {
-      return t(
-        'settings.voice.error.speechToTextUnavailable',
-        'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
-      );
-    }
-    if (errorCode === 'server_unreachable') {
-      return t(
-        'settings.voice.error.serverUnreachable',
-        'Voice could not reach the active server. Check the Desktop connection and try again.',
-      );
-    }
-    return t(
-      'voice.toast.errorMessage',
-      'Open Voice settings for details. The failure was written to the Desktop log.',
-    );
-  };
-
-  const showWakewordEventToast = (event) => {
-    if (event?.state === 'sent') {
-      showToast({
-        title: t('voice.toast.sentTitle', 'Voice command sent'),
-        variant: 'success',
-      });
-      return;
-    }
-    if (event?.state === 'no_speech') {
-      showToast({
-        title: t('voice.toast.noSpeechTitle', 'No speech heard'),
-        message: t(
-          'voice.toast.noSpeechMessage',
-          'No command followed the wakeword. Try again and speak after the cue.',
-        ),
-        variant: 'warn',
-      });
-      return;
-    }
-    if (event?.state === 'transcription_failed') {
-      showToast({
-        title: t(
-          'voice.toast.transcriptionFailedTitle',
-          'Voice command could not be transcribed',
-        ),
-        message: t(
-          'voice.toast.transcriptionFailedMessage',
-          'Check the Speech-to-text Model and the Desktop log, then try again.',
-        ),
-        variant: 'error',
-      });
-      return;
-    }
-    if (event?.state === 'microphone_disconnected') {
-      showToast({
-        title: t(
-          'voice.toast.microphoneDisconnectedTitle',
-          'Microphone disconnected',
-        ),
-        message: t(
-          'voice.toast.microphoneDisconnectedMessage',
-          'Wakeword listening is paused. Reconnect the microphone and retry when you are ready.',
-        ),
-        variant: 'warn',
-      });
-      return;
-    }
-    if (event?.state === 'error') {
-      showToast({
-        title: t('settings.voice.errorTitle', 'Voice needs attention'),
-        message: wakewordFailureMessage(event.error_code),
-        variant: 'error',
-      });
-    }
-  };
-
-  const applyDesktopWakewordStatus = (status) => {
-    wakewordStatus = status;
-    const events = Array.isArray(status?.events) ? status.events : [];
-    const latestSequence = events.reduce(
-      (latest, event) =>
-        Number.isFinite(event?.sequence)
-          ? Math.max(latest, event.sequence)
-          : latest,
-      0,
-    );
-    if (lastWakewordEventSequence === null) {
-      // Do not replay sounds that happened before this WebUI mounted.
-      lastWakewordEventSequence = latestSequence;
-      // A fatal startup failure is still current, not historical feedback.
-      // Surface it even when the worker failed before the WebUI finished
-      // mounting (for example an enabled Desktop starting without STT).
-      if (status?.state === 'error') {
-        showWakewordEventToast({
-          state: 'error',
-          error_code: status.error_code,
-        });
-      }
-      return;
-    }
-    for (const event of events) {
-      if (
-        Number.isFinite(event?.sequence) &&
-        event.sequence > lastWakewordEventSequence
-      ) {
-        void playWakewordCue(event.state);
-        showWakewordEventToast(event);
-      }
-    }
-    lastWakewordEventSequence = Math.max(
-      lastWakewordEventSequence,
-      latestSequence,
-    );
-  };
-
   // Deep-link to the System Prompt view with a given agent's scope preselected.
   // Mirrors the settings-panel mechanism: a target agent id + a fresh request id
   // SystemPromptView reacts to once scopes have loaded, falling back to the
@@ -1098,26 +495,22 @@
     state: appControllerState,
     knownViewIds,
     defaultViewId: navigationItems[0].id,
-    currentNavigationSelection,
+    currentNavigationSelection: selection.currentNavigationSelection,
     isDebugEnabled: () => debugEnabled,
-    isOperational: () => operational,
+    isOperational: () => setup.operational,
     onAppError: (message) => {
-      showToast({
+      desktop.showToast({
         title: t('errors.appError', 'Error'),
         message,
         variant: 'error',
       });
     },
-    onLoadProjects: loadProjects,
-    onAgentIdChanged: remapIdentityAgentId,
-    onReloadAgents: reloadAgentsFromServer,
-    onReloadExtensionPages: loadExtensionPages,
+    onLoadProjects: selection.loadProjects,
+    onAgentIdChanged: selection.remapIdentityAgentId,
+    onReloadAgents: selection.reloadAgentsFromServer,
+    onReloadExtensionPages: extensions.loadExtensionPages,
     onLoadSessionStoreStatus: loadSessionStoreStatus,
-    onSetOnboardingAside: () => {
-      onboardingActive = false;
-      onboardingDismissed = true;
-      writeOnboardingDismissed(true);
-    },
+    onSetOnboardingAside: setup.dismissOnboarding,
   });
 
   // Exposed for tests so the routing in `handleServerEvent` can be verified
@@ -1135,7 +528,7 @@
   }
 
   export function getProjects() {
-    return projects;
+    return selection.projects;
   }
 
   export function getSessionsRefreshToken() {
@@ -1159,30 +552,7 @@
   }
 
   onMount(() => {
-    refreshExtensionPageTheme();
-    const themeObserver = new MutationObserver(refreshExtensionPageTheme);
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    });
-    void loadExtensionPages();
-    const onExtensionPage = (event) => {
-      const target = event.detail;
-      if (
-        target?.kind === 'open_extension_page' &&
-        extensionPages.some(
-          (page) =>
-            page.extension === target.extension &&
-            page.page === target.page &&
-            page.route === target.route,
-        )
-      ) {
-        selectView(target.route);
-      }
-    };
-    window.addEventListener('vbot-extension-page', onExtensionPage);
     let cancelled = false;
-    let desktopCapabilityRetryTimer = null;
 
     appController.initializeNavigationHistory();
     connectServerEvents();
@@ -1194,54 +564,11 @@
 
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
-    loadProjects();
+    selection.loadProjects();
     // Voice routing and other non-Chat views also consume the shared Agent
     // roster, so seed it at app mount instead of relying on ChatView having
     // mounted first.
-    void reloadAgentsFromServer();
-
-    const scheduleDesktopCapabilityRetry = () => {
-      if (cancelled || desktopCapabilityRetryTimer !== null) return;
-      desktopCapabilityRetryTimer = setTimeout(() => {
-        desktopCapabilityRetryTimer = null;
-        void initializeDesktopCapabilities();
-      }, DESKTOP_CAPABILITY_RETRY_MS);
-    };
-
-    const initializeDesktopCapabilities = async () => {
-      try {
-        const ready = await waitForDesktopBridge(
-          DESKTOP_BRIDGE_PROBE_TIMEOUT_MS,
-        );
-        if (cancelled) return;
-        if (!ready) {
-          scheduleDesktopCapabilityRetry();
-          return;
-        }
-        const caps = await getDesktopCapabilities();
-        if (cancelled) return;
-        desktopCapabilities = caps;
-        if (caps?.wakeword && !cleanupWakewordPoll) {
-          cleanupWakewordPoll = onWakewordStatusChange((status) => {
-            applyDesktopWakewordStatus(status);
-          });
-        }
-      } catch {
-        scheduleDesktopCapabilityRetry();
-      }
-    };
-
-    // Detect desktop capabilities and keep probing while the asynchronously
-    // injected bridge is absent or temporarily rejects a capability call.
-    if (isDesktopAccessor()) {
-      void initializeDesktopCapabilities();
-    } else {
-      desktopCapabilities = {
-        wakeword: false,
-        serverSelection: false,
-        contextMenu: false,
-      };
-    }
+    void selection.reloadAgentsFromServer();
 
     debugStatus()
       .then((result) => {
@@ -1258,24 +585,13 @@
     // Seed app-wide appearance preferences and the operational state that
     // drives first-run onboarding. Chat appearance preferences are passed to
     // ChatView; the language seed closes the startup-language gap.
-    void loadAppSettings();
+    void setup.loadAppSettings();
 
     return () => {
       cancelled = true;
-      projectsLoadRequestId += 1;
+      selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
-      clearToastDismissTimers();
-      if (desktopCapabilityRetryTimer !== null) {
-        clearTimeout(desktopCapabilityRetryTimer);
-        desktopCapabilityRetryTimer = null;
-      }
-      if (cleanupWakewordPoll) {
-        cleanupWakewordPoll();
-        cleanupWakewordPoll = null;
-      }
-      themeObserver.disconnect();
-      window.removeEventListener('vbot-extension-page', onExtensionPage);
     };
   });
   function protectPendingEdits(event) {
@@ -1296,16 +612,16 @@
   {serverNoticeState}
   showServerNotice={!serverSwitcherOpen}
   onRetryConnection={connectServerEvents}
-  canSwitchServer={Boolean(desktopCapabilities?.serverSelection)}
+  canSwitchServer={Boolean(desktop.desktopCapabilities?.serverSelection)}
   onSwitchServer={() => (serverSwitcherOpen = true)}
-  desktopContextMenuEnabled={Boolean(desktopCapabilities?.contextMenu)}
-  {wakewordStatus}
-  {desktopCapabilities}
+  desktopContextMenuEnabled={Boolean(desktop.desktopCapabilities?.contextMenu)}
+  wakewordStatus={desktop.wakewordStatus}
+  desktopCapabilities={desktop.desktopCapabilities}
   onNavigateToVoiceSettings={navigateToVoiceSettings}
-  onStopWakewordRecording={handleStopWakewordRecording}
-  onToast={showToast}
+  onStopWakewordRecording={desktop.handleStopWakewordRecording}
+  onToast={desktop.showToast}
 >
-  {#if showFinishSetup}
+  {#if setup.showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
         {t(
@@ -1313,7 +629,7 @@
           'Connect an AI service to start chatting.',
         )}
       </span>
-      <Button variant="secondary" onClick={reopenOnboarding}>
+      <Button variant="secondary" onClick={setup.reopenOnboarding}>
         {t('onboarding.finishSetup', 'Finish setup')}
       </Button>
     </Banner>
@@ -1326,10 +642,10 @@
       navigate={liveNavigate}
       terminalView={liveTerminalAction}
       runEvents={runServerEvents}
-      wakewordEnabled={wakewordStatus.enabled}
+      wakewordEnabled={desktop.wakewordStatus.enabled}
       {serverUnavailable}
-      enabled={settings?.live_voice?.enabled === true}
-      onToast={showToast}
+      enabled={setup.settings?.live_voice?.enabled === true}
+      onToast={desktop.showToast}
     />
   {/snippet}
   {#if sessionStoreIncident}
@@ -1360,32 +676,32 @@
     </Banner>
   {/if}
   {#key serverRecoveryGeneration}
-    {#if onboardingActive}
+    {#if setup.onboardingActive}
       <OnboardingView
         {providerAuthEvent}
         {modelsRefreshToken}
-        targetAgentId={selectedAgentId || 'main'}
-        onComplete={completeOnboarding}
-        onDismiss={dismissOnboarding}
-        onToast={showToast}
+        targetAgentId={selection.selectedAgentId || 'main'}
+        onComplete={setup.completeOnboarding}
+        onDismiss={setup.dismissOnboarding}
+        onToast={desktop.showToast}
       />
     {:else}
       <ChatWorkspace
-        onToast={showToast}
+        onToast={desktop.showToast}
         active={activeViewId === 'chat'}
-        sharedAgents={agents}
-        sharedSelectedAgentId={selectedAgentId}
+        sharedAgents={selection.agents}
+        sharedSelectedAgentId={selection.selectedAgentId}
         chatWidth={appearancePrefs.chatWidth}
         chatWorkingMode={appearancePrefs.chatWorkingMode}
-        {projects}
-        {selectedProjectId}
-        onProjectSelected={selectProject}
-        sharedSelectedProjectAgentId={selectedProjectAgentId}
-        onProjectAgentSelected={selectProjectAgent}
+        projects={selection.projects}
+        selectedProjectId={selection.selectedProjectId}
+        onProjectSelected={selection.selectProject}
+        sharedSelectedProjectAgentId={selection.selectedProjectAgentId}
+        onProjectAgentSelected={selection.selectProjectAgent}
         onNavigateToProjects={navigateToProjects}
-        {agentsRefreshToken}
-        onAgentsChanged={syncAgents}
-        onAgentSelected={selectAgent}
+        agentsRefreshToken={selection.agentsRefreshToken}
+        onAgentsChanged={selection.syncAgents}
+        onAgentSelected={selection.selectAgent}
         {navigateToSubAgent}
         {pendingSessionNavigation}
         onSessionNavigation={handleChatSessionNavigation}
@@ -1395,43 +711,46 @@
         {sessionsRefreshToken}
         {commandsRefreshToken}
         {queueInvalidation}
-        hasConnectedProvider={settings === null ? null : operational}
+        hasConnectedProvider={setup.settings === null
+          ? null
+          : setup.operational}
         onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}
       />
       {#if activeViewId.startsWith('extension:')}
-        {@const page = extensionPages.find(
+        {@const page = extensions.extensionPages.find(
           (item) => item.route === activeViewId,
         )}
         <ExtensionPage
           descriptor={page}
-          route={extensionPageRoute}
-          theme={{ ...extensionPageTheme }}
-          locale={settings?.appearance?.language ?? 'en'}
+          route={extensions.extensionPageRoute}
+          theme={{ ...extensions.extensionPageTheme }}
+          locale={setup.settings?.appearance?.language ?? 'en'}
           timezone={dateTimePrefs.timeZone}
           invalidation={page
             ? {
                 owner: page.extension,
                 page: page.page,
-                revision: extensionPageInvalidationRevision,
+                revision: extensions.extensionPageInvalidationRevision,
               }
             : null}
           onRouteChange={(route) => {
-            extensionPageRoute = route;
+            extensions.extensionPageRoute = route;
           }}
-          onToast={(message, variant) => showToast({ title: message, variant })}
+          onToast={(message, variant) =>
+            desktop.showToast({ title: message, variant })}
         />
       {:else if activeViewId === 'agents'}
         <AgentsView
-          sharedSelectedAgentId={selectedAgentId}
+          sharedSelectedAgentId={selection.selectedAgentId}
           targetDefaultsPanel={pendingAgentDefaultsPanel}
           onDefaultsTargetHandled={() => (pendingAgentDefaultsPanel = '')}
-          onAgentsChanged={refreshAgents}
-          onAgentSelected={selectAgent}
-          onToast={showToast}
+          onAgentsChanged={selection.refreshAgents}
+          onAgentSelected={selection.selectAgent}
+          onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
-          {agentsRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
           {memoriesRefreshToken}
           {modelsRefreshToken}
           {projectsRefreshToken}
@@ -1441,20 +760,20 @@
           bind:this={terminalsView}
           {terminalsRefreshToken}
           {serverUnavailable}
-          onToast={showToast}
+          onToast={desktop.showToast}
         />
       {:else if activeViewId === 'projects'}
         <ProjectsView
-          selectedProjectId={managedProjectId}
-          onProjectSelected={selectManagedProject}
-          onToast={showToast}
+          selectedProjectId={selection.managedProjectId}
+          onProjectSelected={selection.selectManagedProject}
+          onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           {modelsRefreshToken}
           {projectsRefreshToken}
         />
       {:else if activeViewId === 'calendar'}
         <CalendarView
-          onToast={showToast}
+          onToast={desktop.showToast}
           {serverUnavailable}
           {calendarRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
@@ -1465,39 +784,39 @@
         />
       {:else if activeViewId === 'cron'}
         <CronView
-          onToast={showToast}
+          onToast={desktop.showToast}
           {serverUnavailable}
           {cronRefreshToken}
-          {agentsRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
           targetJobId={pendingCronJobTarget}
         />
       {:else if activeViewId === 'skills'}
         <SkillsView
-          onToast={showToast}
-          {settings}
-          onSettingsCommit={(nextSettings) => (settings = nextSettings)}
+          onToast={desktop.showToast}
+          settings={setup.settings}
+          onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
           {skillsRefreshToken}
         />
       {:else if activeViewId === 'system-prompt'}
         <SystemPromptView
-          onToast={showToast}
+          onToast={desktop.showToast}
           targetScopeAgentId={promptScopeTarget}
           targetScopeRequestId={promptScopeTargetRequestId}
         />
       {:else if activeViewId === 'settings'}
         <SettingsView
           bind:this={settingsView}
-          onSettingsCommit={(nextSettings) => (settings = nextSettings)}
+          onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
           onNavigateToAgentDefaults={navigateToAgentDefaults}
           {providerAuthEvent}
-          onToast={showToast}
-          {agents}
-          {desktopCapabilities}
+          onToast={desktop.showToast}
+          agents={selection.agents}
+          desktopCapabilities={desktop.desktopCapabilities}
           targetPanelId={settingsPanelTarget}
           targetPanelRequestId={settingsPanelTargetRequestId}
           onDebugEnabledChange={handleDebugEnabledChange}
-          onOpenSetupGuide={reopenOnboarding}
+          onOpenSetupGuide={setup.reopenOnboarding}
           {modelsRefreshToken}
           {clientsRefreshToken}
           {channelsRefreshToken}
@@ -1513,7 +832,10 @@
       {/if}
     {/if}
   {/key}
-  <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
+  <ToastStack
+    toasts={desktop.toastState.toasts}
+    onDismiss={desktop.dismissAppToast}
+  />
 </AppShell>
 
 {#if autosaveFailureOpen}
@@ -1565,7 +887,7 @@
       <div class="modal-body desktop-server-switch-modal__body">
         <DesktopConnectionSettings
           idPrefix="desktop-outage-server"
-          onToast={showToast}
+          onToast={desktop.showToast}
         />
       </div>
     {/snippet}

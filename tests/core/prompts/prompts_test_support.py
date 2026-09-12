@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from core.agents.agents import Agent
-from core.channels.channels import ChannelConfig
+from core.channels import ChannelConfig
 from core.memory import (
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { readStyleSheet } from '../../__tests__/styles.support.js';
+
 // Guard scan for the shared UI primitives. Each design-system control is owned
 // by exactly one component under `components/ui/`; every other view must go
 // through that component instead of re-applying the global CSS classes by hand.
@@ -11,12 +13,12 @@ import { describe, expect, it } from 'vitest';
 // so a bypassed primitive cannot drift back in. Each phase adds its rule below.
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const APP_CSS = readFileSync(join(SRC_DIR, 'styles', 'app.css'), 'utf8');
+const APP_CSS = readStyleSheet(join(SRC_DIR, 'styles', 'app.css'));
 const INDEX_HTML = readFileSync(join(SRC_DIR, '..', 'index.html'), 'utf8');
-const SYSTEM_PROMPT_SOURCE = readFileSync(
-  join(SRC_DIR, 'components', 'SystemPromptView.svelte'),
-  'utf8',
-);
+const SYSTEM_PROMPT_SOURCE = [
+  readFileSync(join(SRC_DIR, 'components', 'SystemPromptView.svelte'), 'utf8'),
+  readFileSync(join(SRC_DIR, 'components', 'prompt', 'prompt.css'), 'utf8'),
+].join('\n');
 
 function collectSvelteFiles(directory) {
   const files = [];

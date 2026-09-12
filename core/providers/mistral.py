@@ -6,10 +6,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.adapter import MISTRAL_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
-from core.providers.errors import CatalogEntrySkipped
-from core.providers.openai_compatible import (
-    OpenAICompatibleAdapter,
+from core.providers._chat_completions_catalog import (
+    _parse_optional_int,
+    _read_optional_non_empty_string,
+    _read_string,
+)
+from core.providers._chat_completions_stream import (
+    _normalize_openai_tool_call_deltas,
+)
+from core.providers._chat_completions_wire import (
     _extract_openai_reasoning_meta,
     _extract_openai_terminal_outcome,
     _extract_openai_tool_calls,
@@ -17,10 +22,11 @@ from core.providers.openai_compatible import (
     _extract_stream_usage,
     _first_choice_message,
     _normalize_openai_finish_reason,
-    _normalize_openai_tool_call_deltas,
-    _parse_optional_int,
-    _read_optional_non_empty_string,
-    _read_string,
+)
+from core.providers.adapter import MISTRAL_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
+from core.providers.errors import CatalogEntrySkipped
+from core.providers.openai_compatible import (
+    OpenAICompatibleAdapter,
 )
 from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_ONLY,

@@ -14,7 +14,9 @@ from core.automation.cron import CronJobValidationError, CronService
 
 @pytest.fixture()
 def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
-    monkeypatch.setattr("core.automation.cron._utc_now", lambda: datetime(2026, 9, 1, tzinfo=UTC))
+    monkeypatch.setattr(
+        "core.automation._cron_timing._utc_now", lambda: datetime(2026, 9, 1, tzinfo=UTC)
+    )
     return CronService(Mock(), tmp_path, tz="UTC")
 
 
@@ -143,7 +145,7 @@ class TestProjectOccurrences:
     ) -> None:
         window_start = datetime(2026, 9, 10, tzinfo=UTC)
         now = window_start + timedelta(hours=elapsed_hours)
-        monkeypatch.setattr("core.automation.cron._utc_now", lambda: now)
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
         service.create_job(
             agent_id="joel",
             prompt="limited",

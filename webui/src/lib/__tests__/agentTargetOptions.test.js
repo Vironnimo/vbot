@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   AGENT_TARGET_GROUP_IDENTITY,
   AGENT_TARGET_GROUP_PROJECT,
   buildAgentTargetDropdownOptions,
   buildAgentTargetOptions,
+  createAgentTargetCatalogLoader,
   projectIdsFromList,
   projectTeamEntry,
 } from '../agentTargetOptions.js';
@@ -130,5 +131,67 @@ describe('project team gathering helpers', () => {
       displayName: 'empty',
       team: [],
     });
+  });
+});
+
+describe('Agent target catalog loading', () => {
+  it('retains Identity Agents and healthy Teams when one Project cannot load', async () => {
+    const error = new Error('unavailable-project');
+    const loader = createAgentTargetCatalogLoader({
+      listAgents: async () => ({ agents: [{ id: 'main' }] }),
+      listProjects: async () => ({
+        projects: [{ project_id: 'bad' }, { project_id: 'good' }],
+      }),
+      showProject: async (id) => {
+        if (id === 'bad') throw error;
+        return { scan: { team: [{ agent_id: 'coder' }] } };
+      },
+    });
+    const catalog = await loader.load();
+    expect(
+      buildAgentTargetOptions(catalog.agents, catalog.projectTeams).map(
+        (item) => item.value,
+      ),
+    ).toEqual(['main', 'coder@good']);
+    expect(catalog.failedProjects).toEqual([{ projectId: 'bad', error }]);
+  });
+
+  it('retains Identity targets when the Project list fails', async () => {
+    const error = new Error('catalog-unavailable');
+    const showProject = vi.fn();
+    const loader = createAgentTargetCatalogLoader({
+      listAgents: async () => ({ agents: [{ id: 'main' }] }),
+      listProjects: async () => {
+        throw error;
+      },
+      showProject,
+    });
+    expect(await loader.load()).toMatchObject({
+      agents: [{ id: 'main' }],
+      projectError: error,
+    });
+    expect(showProject).not.toHaveBeenCalled();
+  });
+
+  it('rejects a superseded catalog and a catalog completed after disposal', async () => {
+    let resolveOld;
+    const old = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    const loader = createAgentTargetCatalogLoader({
+      listProjects: vi
+        .fn()
+        .mockReturnValueOnce(old)
+        .mockResolvedValue({ projects: [] }),
+      showProject: vi.fn(),
+    });
+    const first = loader.load();
+    expect(await loader.load()).toMatchObject({ projects: [] });
+    resolveOld({ projects: [{ project_id: 'stale' }] });
+    expect(await first).toBeNull();
+    const last = loader.load();
+    loader.dispose();
+    expect(await last).toBeNull();
+    expect(await loader.load()).toBeNull();
   });
 });

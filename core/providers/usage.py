@@ -10,8 +10,7 @@ The probe lives inside the providers domain because it owns provider-domain
 knowledge: endpoints, auth, and wire shapes. It follows the
 ``core.providers.task_client`` precedent — a non-chat provider HTTP client that
 takes a narrow, locally-defined runtime protocol so it never imports
-``core.runtime`` (import-cycle risk) and never caches raw OAuth access tokens.
-"""
+``core.runtime`` (import-cycle risk) and never caches raw OAuth access tokens."""
 
 from __future__ import annotations
 
@@ -19,19 +18,43 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import UTC, datetime
-from math import isfinite
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 
 from core.providers._http_shared import classify_http_status
-from core.providers.accounts import (
-    DEFAULT_ACCOUNT_ID,
-    ConnectionRef,
-    compose_connection_id,
+from core.providers._usage_parsers import (
+    _parse_copilot_usage,
+    _parse_minimax_usage,
+    _parse_ollama_usage,
+    _parse_openai_usage,
+    _parse_openrouter_usage,
+    clamp_percent,
+)
+from core.providers._usage_types import (
+    COPILOT_USAGE_CONNECTION,
+    COPILOT_USAGE_URL,
+    MINIMAX_USAGE_CONNECTION,
+    MINIMAX_USAGE_PATH,
+    OLLAMA_USAGE_CONNECTION,
+    OLLAMA_USAGE_PATH,
+    OPENAI_USAGE_CONNECTION,
+    OPENAI_USAGE_PATH,
+    OPENROUTER_CREDITS_PATH,
+    OPENROUTER_KEY_PATH,
+    OPENROUTER_USAGE_CONNECTION,
+    ProviderUsageSnapshot,
+    UsageCredits,
+    UsageFetchError,
+    UsageProbeRuntime,
+    UsageReport,
+    UsageResponse,
+    UsageTransport,
+    UsageWindow,
+    _SupportedConnection,
 )
 from core.providers.errors import ProviderAuthError
 from core.providers.openai import CODEX_EXTRA_HEADERS
@@ -44,7 +67,6 @@ from core.providers.token_getter import (
     COPILOT_INTEGRATION_ID,
     GITHUB_OAUTH_TOKEN_EXTRA_KEY,
     OAuthRequestRecovery,
-    TokenGetter,
 )
 from core.providers.usage_history import (
     ProviderUsageHistoryStore,
@@ -55,209 +77,44 @@ from core.providers.usage_history import (
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
 
+__all__ = [
+    "COPILOT_USAGE_CONNECTION",
+    "COPILOT_USAGE_URL",
+    "DEFAULT_USAGE_CACHE_TTL_SECONDS",
+    "DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS",
+    "DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS",
+    "DEFAULT_USAGE_TIMEOUT_SECONDS",
+    "HttpxUsageTransport",
+    "MINIMAX_USAGE_CONNECTION",
+    "MINIMAX_USAGE_PATH",
+    "OLLAMA_USAGE_CONNECTION",
+    "OLLAMA_USAGE_PATH",
+    "OPENAI_USAGE_CONNECTION",
+    "OPENAI_USAGE_PATH",
+    "OPENROUTER_CREDITS_PATH",
+    "OPENROUTER_KEY_PATH",
+    "OPENROUTER_USAGE_CONNECTION",
+    "ProviderUsageService",
+    "ProviderUsageSnapshot",
+    "UsageCredits",
+    "UsageFetchError",
+    "UsageProbeRuntime",
+    "UsageReport",
+    "UsageResponse",
+    "UsageTransport",
+    "UsageWindow",
+    "clamp_percent",
+]
+
 _LOGGER = get_logger("providers.usage")
 
 DEFAULT_USAGE_TIMEOUT_SECONDS = 8.0
+
 DEFAULT_USAGE_CACHE_TTL_SECONDS = 10.0
+
 DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS = 60.0
+
 DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
-
-OPENAI_USAGE_CONNECTION = "openai:subscription"
-COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
-OLLAMA_USAGE_CONNECTION = "ollama-cloud:api-key"
-MINIMAX_USAGE_CONNECTION = "minimax:api-key"
-OPENROUTER_USAGE_CONNECTION = "openrouter:api-key"
-
-OPENAI_USAGE_PATH = "/wham/usage"
-# GitHub's own host, not the Copilot API host: the usage endpoint authenticates
-# with the GitHub OAuth token (token-store ``extra``), not the Copilot bearer.
-COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user"
-OLLAMA_USAGE_PATH = "/api/usage"
-MINIMAX_USAGE_PATH = "/token_plan/remains"
-OPENROUTER_CREDITS_PATH = "/credits"
-OPENROUTER_KEY_PATH = "/key"
-
-# Candidate field names for the MiniMax remaining/total counts. The shape is
-# implemented blind from openclaw's verified field names (no live credentials);
-# the candidate lists keep parsing tolerant and the snapshot degrades to an
-# "unsupported" error rather than crashing on a mismatch.
-_MINIMAX_TOTAL_KEYS = ("current_interval_total_count", "total_count", "total")
-_MINIMAX_REMAINING_KEYS = (
-    "current_interval_remain_count",
-    "current_interval_usage",
-    "remain_count",
-    "remaining",
-)
-_MINIMAX_RESET_KEYS = ("current_interval_end", "next_reset_time", "reset_at", "reset_time")
-_MINIMAX_PLAN_KEYS = ("plan", "plan_name", "subscription_type")
-_MINIMAX_CHAT_MODEL_PREFIX = "minimax-m"
-
-_WEEK_SECONDS = 7 * 24 * 3600
-_OLLAMA_SESSION_SECONDS = 5 * 3600
-_DAY_SECONDS = 24 * 3600
-# Epoch values above this are milliseconds, not seconds (year ~33658 in seconds).
-_EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000
-_PRIMARY_FALLBACK_LABEL = "Limit"
-_SECONDARY_FALLBACK_LABEL = "Weekly"
-_RATIO_PERCENT_DECIMAL_PLACES = 10
-
-
-# ---------------------------------------------------------------------------
-# Common normalized shape
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class UsageWindow:
-    """One provider usage window (e.g. the rolling 5h or weekly limit)."""
-
-    label: str
-    used_percent: float
-    reset_at: str | None = None
-    window_seconds: int | None = None
-    used_units: float | None = None
-    remaining_units: float | None = None
-    total_units: float | None = None
-    unit: str | None = None
-    unlimited: bool | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the JSON-serializable form of this window."""
-
-        return {
-            "label": self.label,
-            "used_percent": self.used_percent,
-            "reset_at": self.reset_at,
-            "window_seconds": self.window_seconds,
-            "used_units": self.used_units,
-            "remaining_units": self.remaining_units,
-            "total_units": self.total_units,
-            "unit": self.unit,
-            "unlimited": self.unlimited,
-        }
-
-
-@dataclass(frozen=True)
-class UsageCredits:
-    """Structured subscription-credit state when a Provider exposes it."""
-
-    enabled: bool
-    balance: float | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the JSON-serializable credit projection."""
-
-        return {"enabled": self.enabled, "balance": self.balance}
-
-
-@dataclass(frozen=True)
-class ProviderUsageSnapshot:
-    """Per-connection usage state, or a clean error/unavailable marker."""
-
-    connection: str
-    account: str
-    display_name: str
-    plan: str | None = None
-    windows: list[UsageWindow] = field(default_factory=list)
-    credits: UsageCredits | None = None
-    error: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the JSON-serializable form of this snapshot."""
-
-        return {
-            "connection": self.connection,
-            "account": self.account,
-            "display_name": self.display_name,
-            "plan": self.plan,
-            "windows": [window.to_dict() for window in self.windows],
-            "credits": self.credits.to_dict() if self.credits is not None else None,
-            "error": self.error,
-        }
-
-
-@dataclass(frozen=True)
-class UsageReport:
-    """All per-connection usage snapshots for one on-demand fetch."""
-
-    generated_at: str
-    providers: list[ProviderUsageSnapshot] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the JSON-serializable form of this report."""
-
-        return {
-            "generated_at": self.generated_at,
-            "providers": [snapshot.to_dict() for snapshot in self.providers],
-        }
-
-
-class UsageFetchError(Exception):
-    """A fetcher failure carrying a short, user-safe message (no token data)."""
-
-
-# ---------------------------------------------------------------------------
-# Runtime / transport injection surfaces
-# ---------------------------------------------------------------------------
-
-
-class _ProviderLookupProtocol(Protocol):
-    def get(self, provider_id: str) -> Any: ...
-
-
-class _ProviderCredentialsProtocol(Protocol):
-    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool: ...
-
-    def resolve_account_id(
-        self,
-        provider_id: str,
-        local_connection_id: str,
-        account_id: str | None = None,
-    ) -> str: ...
-
-
-class UsageProbeRuntime(Protocol):
-    """The narrow runtime surface the usage probe needs.
-
-    Defined locally (not imported from ``core.runtime.interfaces``) so this
-    module never imports ``core.runtime`` — a runtime import would pull in the
-    full ``Runtime`` bootstrap and create an import cycle.
-    """
-
-    @property
-    def providers(self) -> _ProviderLookupProtocol: ...
-
-    @property
-    def provider_credentials(self) -> _ProviderCredentialsProtocol: ...
-
-    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter: ...
-
-    def get_connection_token_extra(self, connection: ConnectionRef) -> Mapping[str, str]: ...
-
-
-class UsageResponse(Protocol):
-    """Minimal HTTP response surface used by the fetchers (``httpx.Response``)."""
-
-    @property
-    def status_code(self) -> int: ...
-
-    def json(self) -> Any: ...
-
-    @property
-    def text(self) -> str: ...
-
-
-class UsageTransport(Protocol):
-    """Async HTTP GET surface, injected so tests never touch the network."""
-
-    async def get(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str],
-        timeout: float,
-        params: Mapping[str, str] | None = None,
-    ) -> UsageResponse: ...
 
 
 class HttpxUsageTransport:
@@ -284,35 +141,6 @@ class HttpxUsageTransport:
                 raise UsageFetchError("Network error") from exc
 
 
-@dataclass(frozen=True)
-class _SupportedConnection:
-    """A connection the probe knows how to query."""
-
-    provider_id: str
-    local_connection_id: str
-    account_id: str = DEFAULT_ACCOUNT_ID
-
-    @property
-    def connection_id(self) -> str:
-        return f"{self.provider_id}:{self.local_connection_id}"
-
-    @property
-    def target_id(self) -> str:
-        """Return the exact Connection+Account target used for credentials/cache."""
-
-        return compose_connection_id(
-            self.provider_id,
-            self.local_connection_id,
-            self.account_id,
-        )
-
-    @property
-    def ref(self) -> ConnectionRef:
-        """Return the exact target as a Runtime-seam connection reference."""
-
-        return ConnectionRef(self.provider_id, self.target_id)
-
-
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
     _SupportedConnection("openai", "subscription"),
     _SupportedConnection("github-copilot", "oauth"),
@@ -322,11 +150,6 @@ _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
 )
 
 _Fetcher = Callable[[_SupportedConnection], Awaitable[ProviderUsageSnapshot]]
-
-
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
 
 
 class ProviderUsageService:
@@ -736,448 +559,6 @@ class ProviderUsageService:
             if getattr(exc, "status_code", None) == 401:
                 raise UsageFetchError("HTTP 401") from exc
             raise UsageFetchError("Reconnect required") from exc
-
-
-# ---------------------------------------------------------------------------
-# OpenAI parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_openai_usage(
-    connection_id: str,
-    display_name: str,
-    body: Any,
-    *,
-    account: str = DEFAULT_ACCOUNT_ID,
-) -> ProviderUsageSnapshot:
-    rate_limit = body.get("rate_limit") if isinstance(body, Mapping) else None
-    windows: list[UsageWindow] = []
-    if isinstance(rate_limit, Mapping):
-        primary = _openai_window(rate_limit.get("primary_window"), _primary_window_label)
-        if primary is not None:
-            windows.append(primary)
-        secondary = _openai_window(rate_limit.get("secondary_window"), _secondary_window_label)
-        if secondary is not None:
-            windows.append(secondary)
-    return ProviderUsageSnapshot(
-        connection=connection_id,
-        account=account,
-        display_name=display_name,
-        plan=_first_string(body, ("plan_type",)) if isinstance(body, Mapping) else None,
-        windows=windows,
-        credits=_openai_credits(body),
-    )
-
-
-def _openai_window(raw: Any, label_for: Callable[[Any], str]) -> UsageWindow | None:
-    if not isinstance(raw, Mapping):
-        return None
-    used_percent = _as_number(raw.get("used_percent"))
-    if used_percent is None:
-        return None
-    return UsageWindow(
-        label=label_for(raw.get("limit_window_seconds")),
-        used_percent=clamp_percent(used_percent),
-        reset_at=_epoch_to_iso(raw.get("reset_at")),
-        window_seconds=_positive_int(raw.get("limit_window_seconds")),
-    )
-
-
-def _openai_credits(body: Any) -> UsageCredits | None:
-    """Keep OpenAI credit state structured instead of merging it into plan."""
-
-    if not isinstance(body, Mapping):
-        return None
-    credits = body.get("credits")
-    if not isinstance(credits, Mapping) or not isinstance(credits.get("has_credits"), bool):
-        return None
-    return UsageCredits(
-        enabled=credits["has_credits"],
-        balance=_coerce_number(credits.get("balance")),
-    )
-
-
-def _primary_window_label(seconds: Any) -> str:
-    if not _is_positive_number(seconds):
-        return _PRIMARY_FALLBACK_LABEL
-    return f"{seconds / 3600:g}h"
-
-
-def _secondary_window_label(seconds: Any) -> str:
-    if not _is_positive_number(seconds):
-        return _SECONDARY_FALLBACK_LABEL
-    if seconds >= _WEEK_SECONDS:
-        return "Week"
-    if seconds >= _DAY_SECONDS:
-        return "Day"
-    return f"{round(seconds / 3600)}h"
-
-
-# ---------------------------------------------------------------------------
-# GitHub Copilot parsing (blind, best-effort)
-# ---------------------------------------------------------------------------
-
-
-def _parse_copilot_usage(
-    connection_id: str,
-    display_name: str,
-    body: Any,
-    *,
-    account: str = DEFAULT_ACCOUNT_ID,
-) -> ProviderUsageSnapshot:
-    quota_snapshots = body.get("quota_snapshots") if isinstance(body, Mapping) else None
-    reset_at = _date_to_iso(body.get("quota_reset_date")) if isinstance(body, Mapping) else None
-    windows: list[UsageWindow] = []
-    if isinstance(quota_snapshots, Mapping):
-        for snapshot_key, label in (("premium_interactions", "Premium"), ("chat", "Chat")):
-            window = _copilot_window(quota_snapshots.get(snapshot_key), label, reset_at)
-            if window is not None:
-                windows.append(window)
-    return ProviderUsageSnapshot(
-        connection=connection_id,
-        account=account,
-        display_name=display_name,
-        plan=_copilot_plan(body),
-        windows=windows,
-    )
-
-
-def _copilot_window(raw: Any, label: str, reset_at: str | None) -> UsageWindow | None:
-    if not isinstance(raw, Mapping):
-        return None
-    percent_remaining = _as_number(raw.get("percent_remaining"))
-    if percent_remaining is None:
-        return None
-    remaining = _as_number(raw.get("remaining"))
-    total = _as_number(raw.get("entitlement"))
-    return UsageWindow(
-        label=label,
-        used_percent=clamp_percent(100.0 - percent_remaining),
-        reset_at=reset_at,
-        used_units=(total - remaining) if total is not None and remaining is not None else None,
-        remaining_units=remaining,
-        total_units=total,
-        unit="interactions" if total is not None or remaining is not None else None,
-        unlimited=raw.get("unlimited") if isinstance(raw.get("unlimited"), bool) else None,
-    )
-
-
-def _copilot_plan(body: Any) -> str | None:
-    if not isinstance(body, Mapping):
-        return None
-    plan = body.get("copilot_plan")
-    return plan.strip() if isinstance(plan, str) and plan.strip() else None
-
-
-# ---------------------------------------------------------------------------
-# Ollama Cloud parsing (live-verified, undocumented endpoint)
-# ---------------------------------------------------------------------------
-
-
-def _parse_ollama_usage(
-    connection_id: str,
-    display_name: str,
-    body: Any,
-    *,
-    account: str = DEFAULT_ACCOUNT_ID,
-) -> ProviderUsageSnapshot:
-    limits = body.get("limits") if isinstance(body, Mapping) else None
-    if not isinstance(limits, Mapping):
-        raise UsageFetchError("Unsupported response shape")
-
-    windows: list[UsageWindow] = []
-    for key, label, window_seconds in (
-        ("session", "5h", _OLLAMA_SESSION_SECONDS),
-        ("weekly", "Week", _WEEK_SECONDS),
-    ):
-        raw = limits.get(key)
-        if raw is None:
-            continue
-        window = _ollama_window(raw, label, window_seconds)
-        if window is None:
-            raise UsageFetchError("Unsupported response shape")
-        windows.append(window)
-
-    if not windows:
-        raise UsageFetchError("Unsupported response shape")
-    return ProviderUsageSnapshot(
-        connection=connection_id,
-        account=account,
-        display_name=display_name,
-        windows=windows,
-    )
-
-
-def _ollama_window(raw: Any, label: str, window_seconds: int) -> UsageWindow | None:
-    if not isinstance(raw, Mapping):
-        return None
-    usage_ratio = _as_number(raw.get("usage"))
-    if usage_ratio is None:
-        return None
-    request_count = _ollama_request_count(raw.get("models"))
-    return UsageWindow(
-        label=label,
-        used_percent=clamp_percent(round(usage_ratio * 100.0, _RATIO_PERCENT_DECIMAL_PLACES)),
-        window_seconds=window_seconds,
-        used_units=request_count,
-        unit="requests" if request_count is not None else None,
-    )
-
-
-def _ollama_request_count(models: Any) -> float | None:
-    """Sum complete per-Model counts without treating them as quota units."""
-
-    if not isinstance(models, list):
-        return None
-    total = 0
-    for model in models:
-        if not isinstance(model, Mapping):
-            return None
-        request_count = model.get("request_count")
-        if isinstance(request_count, bool) or not isinstance(request_count, int):
-            return None
-        if request_count < 0:
-            return None
-        total += request_count
-    return float(total)
-
-
-# ---------------------------------------------------------------------------
-# MiniMax parsing (blind, best-effort)
-# ---------------------------------------------------------------------------
-
-
-def _parse_minimax_usage(
-    connection_id: str,
-    display_name: str,
-    body: Any,
-    *,
-    account: str = DEFAULT_ACCOUNT_ID,
-) -> ProviderUsageSnapshot:
-    model_remains = body.get("model_remains") if isinstance(body, Mapping) else None
-    if not isinstance(model_remains, list):
-        raise UsageFetchError("Unsupported response shape")
-    entry = _pick_minimax_model(model_remains)
-    if entry is None:
-        raise UsageFetchError("Unsupported response shape")
-
-    total = _first_number(entry, _MINIMAX_TOTAL_KEYS)
-    remaining = _first_number(entry, _MINIMAX_REMAINING_KEYS)
-    if total is None or total <= 0 or remaining is None:
-        raise UsageFetchError("Unsupported response shape")
-
-    window = UsageWindow(
-        label=_minimax_window_label(entry),
-        used_percent=clamp_percent((total - remaining) / total * 100.0),
-        reset_at=_minimax_reset_at(entry),
-        window_seconds=_minimax_window_seconds(entry),
-        used_units=total - remaining,
-        remaining_units=remaining,
-        total_units=total,
-        unit="requests",
-    )
-    return ProviderUsageSnapshot(
-        connection=connection_id,
-        account=account,
-        display_name=display_name,
-        plan=_first_string(body, _MINIMAX_PLAN_KEYS) if isinstance(body, Mapping) else None,
-        windows=[window],
-    )
-
-
-def _pick_minimax_model(model_remains: list[Any]) -> Mapping[str, Any] | None:
-    """Return the chat-model entry (``MiniMax-M*``) with a non-zero total."""
-
-    for entry in model_remains:
-        if not isinstance(entry, Mapping):
-            continue
-        model_name = entry.get("model_name")
-        if not isinstance(model_name, str):
-            continue
-        if not model_name.lower().startswith(_MINIMAX_CHAT_MODEL_PREFIX):
-            continue
-        total = _first_number(entry, _MINIMAX_TOTAL_KEYS)
-        if total is not None and total > 0:
-            return entry
-    return None
-
-
-def _minimax_window_label(entry: Mapping[str, Any]) -> str:
-    minutes = _as_number(entry.get("current_interval_minutes"))
-    if minutes is not None and minutes > 0:
-        if minutes >= 60:
-            return f"{minutes / 60:g}h"
-        return f"{round(minutes)}m"
-    model_name = entry.get("model_name")
-    return model_name if isinstance(model_name, str) and model_name else "Plan"
-
-
-def _minimax_window_seconds(entry: Mapping[str, Any]) -> int | None:
-    minutes = _as_number(entry.get("current_interval_minutes"))
-    if minutes is None or minutes <= 0:
-        return None
-    return round(minutes * 60)
-
-
-def _minimax_reset_at(entry: Mapping[str, Any]) -> str | None:
-    for key in _MINIMAX_RESET_KEYS:
-        reset_at = _date_to_iso(entry.get(key))
-        if reset_at is not None:
-            return reset_at
-    return None
-
-
-# ---------------------------------------------------------------------------
-# OpenRouter parsing (credits + key spending cap)
-# ---------------------------------------------------------------------------
-
-
-def _parse_openrouter_usage(
-    connection_id: str,
-    display_name: str,
-    credits_body: Any,
-    key_body: Any,
-    *,
-    account: str = DEFAULT_ACCOUNT_ID,
-) -> ProviderUsageSnapshot:
-    credits_data = credits_body.get("data") if isinstance(credits_body, Mapping) else None
-    total_credits = (
-        _as_number(credits_data.get("total_credits")) if isinstance(credits_data, Mapping) else None
-    )
-    total_usage = (
-        _as_number(credits_data.get("total_usage")) if isinstance(credits_data, Mapping) else None
-    )
-    credits = (
-        UsageCredits(enabled=True, balance=total_credits - total_usage)
-        if total_credits is not None and total_usage is not None
-        else None
-    )
-
-    key_data = key_body.get("data") if isinstance(key_body, Mapping) else None
-    windows: list[UsageWindow] = []
-    if isinstance(key_data, Mapping):
-        window = _openrouter_window(key_data)
-        if window is not None:
-            windows.append(window)
-    return ProviderUsageSnapshot(
-        connection=connection_id,
-        account=account,
-        display_name=display_name,
-        windows=windows,
-        credits=credits,
-    )
-
-
-def _openrouter_window(key_data: Mapping[str, Any]) -> UsageWindow | None:
-    limit = _as_number(key_data.get("limit"))
-    remaining = _as_number(key_data.get("limit_remaining"))
-    # remaining > limit means OpenRouter rolled the cap over (credits added
-    # mid-period); the ratio is then no longer a meaningful quota window.
-    if limit is None or limit <= 0 or remaining is None or not 0 <= remaining <= limit:
-        return None
-    return UsageWindow(
-        label="API key spending cap",
-        used_percent=clamp_percent((limit - remaining) / limit * 100.0),
-        reset_at=_date_to_iso(key_data.get("limit_reset")),
-        used_units=limit - remaining,
-        remaining_units=remaining,
-        total_units=limit,
-        unit="USD",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def clamp_percent(value: Any) -> float:
-    """Clamp a raw percentage to the inclusive 0–100 range as a float."""
-
-    number = _as_number(value)
-    if number is None:
-        return 0.0
-    return max(0.0, min(100.0, number))
-
-
-def _epoch_to_iso(value: Any) -> str | None:
-    seconds = _as_number(value)
-    if seconds is None:
-        return None
-    if seconds > _EPOCH_MILLISECONDS_THRESHOLD:
-        seconds /= 1000.0
-    try:
-        return datetime.fromtimestamp(seconds, UTC).isoformat()
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _date_to_iso(value: Any) -> str | None:
-    """Normalize an epoch number or an ISO date/datetime string to ISO-8601 UTC."""
-
-    if _as_number(value) is not None:
-        return _epoch_to_iso(value)
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
-
-
-def _first_number(mapping: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        number = _as_number(mapping.get(key))
-        if number is not None:
-            return number
-    return None
-
-
-def _first_string(mapping: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        value = mapping.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _as_number(value: Any) -> float | None:
-    """Return *value* as a float, or ``None`` when it is not a real number."""
-
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    number = float(value)
-    return number if isfinite(number) else None
-
-
-def _coerce_number(value: Any) -> float | None:
-    """Like :func:`_as_number` but also parse a numeric string (e.g. ``"1234"``)."""
-
-    number = _as_number(value)
-    if number is not None:
-        return number
-    if isinstance(value, str):
-        try:
-            number = float(value.strip())
-        except ValueError:
-            return None
-        return number if isfinite(number) else None
-    return None
-
-
-def _is_positive_number(value: Any) -> bool:
-    number = _as_number(value)
-    return number is not None and number > 0
-
-
-def _positive_int(value: Any) -> int | None:
-    number = _as_number(value)
-    if number is None or number <= 0:
-        return None
-    return round(number)
 
 
 def _is_meaningful(snapshot: ProviderUsageSnapshot) -> bool:

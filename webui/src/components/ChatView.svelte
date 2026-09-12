@@ -1,56 +1,41 @@
 <script>
-  import { onDestroy, onMount, untrack } from 'svelte';
-
-  import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
-  import { getDraft } from '$lib/composerMemory.js';
+  import ChatHeader from './chat/ChatHeader.svelte';
   import {
-    extractMentionTokens,
-    matchMentionCandidates,
-  } from '$lib/fileMentions.js';
-  import { t } from '$lib/i18n.js';
-  import { parseModelSelectionValue } from '$lib/modelSelection.js';
-  import { agentNeedsModel } from '$lib/onboarding.js';
-  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
-  import { tooltip } from '$lib/tooltip.js';
-  import { createChatRunStream } from '../lib/chatRunStream.js';
-  import {
+    isProjectSelected,
+    isRunActive,
     agentActivityStatus,
     createChatController,
     createChatState,
-    currentSessionState,
-    ensureSessionState,
-    isProjectSelected,
-    isRunActive,
     isSessionEmpty,
-    newestUnreadSessionForAgent,
-    pickProjectAgentSessionId,
-    resolveAgentAddressing,
     selectAgent,
-    selectedAgent,
     sessionHasTerminalRun,
     setAgents,
     visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
-  import {
-    projectTeam as normalizeProjectTeam,
-    normalizeScanReport,
-  } from '../lib/projectsView.js';
-  import {
-    sessionDisplayName,
-    sessionParentReference,
-  } from '../lib/sessionListView.js';
-  import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
-  import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
-  import ChatHeader from './chat/ChatHeader.svelte';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
-  import ChatComposer from './ChatComposer.svelte';
-  import ComputerUseControl from './ComputerUseControl.svelte';
+  import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import Banner from './ui/Banner.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
+  import Button from './ui/Button.svelte';
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
-  import Banner from './ui/Banner.svelte';
-  import Button from './ui/Button.svelte';
-  import EmptyState from './ui/EmptyState.svelte';
+  import ChatComposer from './ChatComposer.svelte';
+  import ComputerUseControl from './ComputerUseControl.svelte';
+  import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
+  import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
+  import { onMount, untrack } from 'svelte';
+  import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
+  import { getDraft } from '$lib/composerMemory.js';
+  import { agentNeedsModel } from '$lib/onboarding.js';
+  import { formatAgentAddress } from '$lib/agentAddress.js';
+  import { createChatRunStream } from '../lib/chatRunStream.js';
+  import { createChatViewTarget } from './chat/view/target.svelte.js';
+  import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
+  import { createChatViewActions } from './chat/view/actions.svelte.js';
+  import { createChatViewLayout } from './chat/view/layout.svelte.js';
+  import './chat/view/chatView.css';
 
   let {
     active = true,
@@ -118,184 +103,161 @@
   } = $props();
 
   const chatState = $state(createChatState());
-  let creatingSession = $state(false);
-  let composerFocusRequest = $state(0);
-  // Chat-local bottom toast for transient command replies and lifecycle notices.
-  // Error notices stay in the top stack.
-  let chatToast = $state('');
-  // Non-persisted `output: "transient"` command cards (/status, /help) rendered
-  // in the chat stream. Kept in a dedicated array so incoming run events never
-  // clear them; only a displayed-session change (or reload) empties them. Each
-  // card carries the id of the timeline item it followed at creation, so the
-  // timeline anchors it in place instead of restacking all cards at the bottom.
-  let transientCards = $state([]);
-  let transientCardsSessionKey = '';
-  let displayedSessionGeneration = 0;
-  let generationSessionKey = '';
-  let transientCardSeq = 0;
+  const target = createChatViewTarget({
+    get selectedProjectId() {
+      return selectedProjectId;
+    },
+    get projects() {
+      return projects;
+    },
+    get chatState() {
+      return chatState;
+    },
+    get sharedSelectedProjectAgentId() {
+      return sharedSelectedProjectAgentId;
+    },
+    get onProjectAgentSelected() {
+      return onProjectAgentSelected;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get loadHistoryForSession() {
+      return actions.loadHistoryForSession;
+    },
+    get onProjectSelected() {
+      return onProjectSelected;
+    },
+    get navigation() {
+      return navigation;
+    },
+    get layout() {
+      return layout;
+    },
+    get actions() {
+      return actions;
+    },
+  });
+  const navigation = createChatViewNavigation({
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get pendingSessionNavigation() {
+      return pendingSessionNavigation;
+    },
+    get onProjectAgentSelected() {
+      return onProjectAgentSelected;
+    },
+    get onAgentSelected() {
+      return onAgentSelected;
+    },
+    get chatState() {
+      return chatState;
+    },
+    get loadCurrentHistory() {
+      return actions.loadCurrentHistory;
+    },
+    get loadHistoryForSession() {
+      return actions.loadHistoryForSession;
+    },
+    get onProjectSelected() {
+      return onProjectSelected;
+    },
+    get lastSharedSelectedAgentId() {
+      return lastSharedSelectedAgentId;
+    },
+    set lastSharedSelectedAgentId(value) {
+      lastSharedSelectedAgentId = value;
+    },
+    get onSessionNavigation() {
+      return onSessionNavigation;
+    },
+    get selectedProjectId() {
+      return selectedProjectId;
+    },
+    get composerAvailable() {
+      return composerAvailable;
+    },
+    get displayedSessionIsEmpty() {
+      return displayedSessionIsEmpty;
+    },
+    get onAgentsChanged() {
+      return onAgentsChanged;
+    },
+    get navigateToSubAgent() {
+      return navigateToSubAgent;
+    },
+    get target() {
+      return target;
+    },
+    get layout() {
+      return layout;
+    },
+    get actions() {
+      return actions;
+    },
+  });
+  const actions = createChatViewActions({
+    get chatState() {
+      return chatState;
+    },
+    get onAgentSelected() {
+      return onAgentSelected;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get target() {
+      return target;
+    },
+    get layout() {
+      return layout;
+    },
+    get navigation() {
+      return navigation;
+    },
+  });
+  const layout = createChatViewLayout({
+    get active() {
+      return active;
+    },
+    get interactive() {
+      return interactive;
+    },
+    get chatState() {
+      return chatState;
+    },
+    get target() {
+      return target;
+    },
+  });
+
   let showSessionDrawer = $state(false);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
-  // Live height of the floating composer stack over the timeline. The
-  // surface exposes it as a CSS variable so the timeline reserves matching
-  // bottom space and content scrolls out from behind the composer. Measured
-  // with a guarded ResizeObserver instead of bind:clientHeight, which would
-  // hard-require ResizeObserver even in layout-less environments.
-  let footerOverlayHeight = $state(0);
-  let footerStackElement = $state(null);
-  // Real scrollbar width of the chat scroller; the composer stack ends
-  // before this column so the scrollbar stays visible over its full height.
-  let chatScrollbarWidth = $state(0);
 
-  $effect(() => {
-    const element = footerStackElement;
-    if (!element || typeof ResizeObserver !== 'function') {
-      return undefined;
-    }
-    const observer = new ResizeObserver(() => {
-      footerOverlayHeight = element.clientHeight;
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  });
   let sessionFilters = $state(untrack(() => initialSessionFilters));
-  let viewingSessionId = $state('');
-  let viewingSessionAgentId = $state('');
-  let viewingSubAgentSession = $state(false);
-  let submittedTurnScrollKey = $state(0);
-  let subAgentLinkFollowRequest = $state(null);
-  let subAgentLinkFollowRequestId = 0;
-  let handledSessionNavigationKey = '';
-  // Bottom command toast auto-dismiss. Kept as a single constant so the
-  // dwell time can be tuned in one place.
-  const CHAT_TOAST_TIMEOUT_MS = 5000;
-  const MOBILE_CHAT_MEDIA_QUERY = '(max-width: 640px)';
-  let chatToastTimeoutId = null;
 
-  const requestComposerFocus = ({ includeMobile = false } = {}) => {
-    if (!active || !interactive) return;
-    const mobile =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia(MOBILE_CHAT_MEDIA_QUERY).matches;
-    if (!includeMobile && mobile) {
-      return;
-    }
-    composerFocusRequest += 1;
-  };
-
-  // --- Project (second-bar) state -----------------------------------------
-  //
-  // The second bar is a pure projection of `project.show`'s scan team — no
-  // second source of truth. Selecting a project loads its team and report;
-  // selecting a project agent makes it the active agent. A project (config)
-  // agent has NO server `current_session_id` (RPC-contract trap 1), so its
-  // session is chosen locally and held in `projectAgentSessions`, keyed by the
-  // agent's full address (`agent@projekt`).
-  let projectTeam = $state([]);
-  let projectReport = $state(null);
-  let projectScanError = $state('');
-  let loadingProjectTeam = $state(false);
-  // The active project agent's bare id, '' when chatting an identity agent.
-  let selectedProjectAgentId = $state('');
-  // address (`agent@projekt`) -> locally chosen session id (trap 1).
-  let projectAgentSessions = $state({});
-  // Guards repeated project-show side effects for the same chosen project.
-  let lastLoadedProjectId = '';
-  // Set true after the first project effect run. That first run is the reload
-  // restore — it honors the remembered project agent (`sharedSelectedProjectAgentId`);
-  // every later run is a user-initiated dropdown switch that jumps to the
-  // project default.
-  let initialProjectRestoreDone = false;
   // The address + invalidation token the command/skill suggestions were last
   // loaded for. `undefined` is distinct from every real key, so the first effect
   // always loads; Agent changes and Extension lifecycle events both refresh it.
   let lastCommandsAddress = undefined;
 
-  // Whether the active agent is a project (config) team agent. When false the
-  // chat is on an identity agent and every RPC payload is byte-identical to
-  // today (the hard no-regression rule).
-  let projectAgentActive = $derived(
-    isProjectSelected(selectedProjectId) && selectedProjectAgentId !== '',
-  );
-
-  // The chosen project's display name, used as the bold prefix on the team bar.
-  let selectedProjectName = $derived(
-    projects.find((project) => project.project_id === selectedProjectId)
-      ?.display_name ||
-      selectedProjectId ||
-      '',
-  );
-
-  let activeAgent = $derived(getActiveAgent());
-  let activeSessionState = $derived(getActiveSessionState());
-  // History normally arrives quickly enough that loading feedback would only
-  // flash. Keep the transition calm, while still explaining a real delay.
-  const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
-  let historyLoadingFeedbackVisible = $state(false);
-  let historyLoadingFeedbackSessionKey = $derived(
-    activeSessionState?.key ?? '',
-  );
-  $effect(() => {
-    const sessionKey = historyLoadingFeedbackSessionKey;
-    historyLoadingFeedbackVisible = false;
-    if (!chatState.loadingHistory || !sessionKey) {
-      return undefined;
-    }
-    const timeoutId = setTimeout(() => {
-      if (
-        chatState.loadingHistory &&
-        historyLoadingFeedbackSessionKey === sessionKey
-      ) {
-        historyLoadingFeedbackVisible = true;
-      }
-    }, HISTORY_LOADING_FEEDBACK_DELAY_MS);
-    return () => clearTimeout(timeoutId);
-  });
   let activeTimelineItems = $derived(
-    visibleTimelineItemsForRender(activeSessionState),
+    visibleTimelineItemsForRender(target.activeSessionState),
   );
   let identityAgentStatuses = $derived.by(() =>
     Object.fromEntries(
       chatState.agents.map((agent) => [
         agent.id,
-        agentActivityStatus(chatState, agent.id, displayedSessionKey()),
+        agentActivityStatus(chatState, agent.id, target.displayedSessionKey()),
       ]),
     ),
   );
-  let projectAgentStatuses = $derived.by(() =>
-    Object.fromEntries(
-      projectTeam.map((member) => {
-        const address = formatAgentAddress(member.agent_id, selectedProjectId);
-        return [
-          member.agent_id,
-          agentActivityStatus(chatState, address, displayedSessionKey()),
-        ];
-      }),
-    ),
-  );
-  // Outside address of the displayed agent (bare id for identity, full
-  // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
-  // need (trap 2). The session drawer lists sessions through it.
-  let activeAgentAddress = $derived(activeAddressing().agentAddress);
-  // Roster the session drawer's All-agents filter lists sessions for: every
-  // identity agent plus the selected project's team — the same addresses the
-  // Chat agent bars offer.
-  let sessionDrawerAgents = $derived.by(() => {
-    const roster = chatState.agents.map((agent) => ({
-      address: agent.id,
-      name: agent.name || agent.id,
-    }));
-    if (isProjectSelected(selectedProjectId)) {
-      for (const member of projectTeam) {
-        roster.push({
-          address: formatAgentAddress(member.agent_id, selectedProjectId),
-          name: member.display_name || member.agent_id,
-        });
-      }
-    }
-    return roster;
-  });
+
   let sessionDrawerActivity = $derived.by(() =>
     Object.values(chatState.sessions).map((sessionState) => ({
       agent_address: sessionState.agentId,
@@ -308,178 +270,30 @@
       unread_run_at: sessionState.unreadRunAt || null,
     })),
   );
-  // Agent-bar selection follows the owner of the displayed Session, while the
-  // underlying selected Agent remains the return target for an override. This
-  // keeps nested Sub-Agent navigation truthful without losing the root context.
-  let displayedIdentityAgentId = $derived.by(() => {
-    const addressing = activeAddressing();
-    return addressing.projectId ? '' : addressing.bareAgentId;
-  });
-  let displayedProjectAgentId = $derived.by(() => {
-    const addressing = activeAddressing();
-    return addressing.projectId === selectedProjectId
-      ? addressing.bareAgentId
-      : '';
-  });
-  let subAgentSessionActive = $derived(
-    Boolean(viewingSessionId) && viewingSubAgentSession,
+
+  let composerDisabled = $derived(
+    !target.activeAgent || chatState.loadingHistory,
   );
-  // Every derived Session resolves its immediate parent from the authoritative
-  // Session-list projection: Sub-Agent Sessions use `subagent_parent`, while
-  // Fork and Reflection Sessions use `fork_source`. The navigation target is
-  // available from provenance alone; the Activity panel link waits for the
-  // parent row so it can show the real Session name instead of a raw id.
-  let subAgentParentTarget = $state(null);
-  let sessionParentLink = $state(null);
-  let sessionParentFetchKey = '';
-
-  $effect(() => {
-    const addressing = activeAddressing();
-    const displayKey = displayedSessionKey();
-    const fetchKey = `${displayKey}::${sessionsRefreshToken}`;
-    if (!displayKey || !addressing.agentAddress || !addressing.sessionId) {
-      sessionParentFetchKey = '';
-      subAgentParentTarget = null;
-      sessionParentLink = null;
-      return;
-    }
-    if (fetchKey === sessionParentFetchKey) {
-      return;
-    }
-    sessionParentFetchKey = fetchKey;
-    subAgentParentTarget = null;
-    sessionParentLink = null;
-    loadSessionParent(
-      fetchKey,
-      displayKey,
-      addressing.agentAddress,
-      addressing.sessionId,
-    );
-  });
-
-  const loadSessionParent = async (
-    fetchKey,
-    displayKey,
-    childAddress,
-    childSessionId,
-  ) => {
-    if (!childAddress || !childSessionId) {
-      return;
-    }
-    try {
-      const listed = await chatController.listSessions(childAddress, {
-        limit: 1,
-        requiredSession: {
-          agentId: childAddress,
-          sessionId: childSessionId,
-        },
-      });
-      // A newer navigation or Session invalidation may have superseded this
-      // request mid-flight.
-      if (
-        displayedSessionKey() !== displayKey ||
-        sessionParentFetchKey !== fetchKey
-      ) {
-        return;
-      }
-      const childSession = (listed?.sessions ?? []).find(
-        (session) => String(session?.id ?? '').trim() === childSessionId,
-      );
-      const parent = sessionParentReference(childSession);
-      if (!parent) {
-        return;
-      }
-      const parentAgentId = parent.agent_id;
-      const parentSessionId = parent.session_id;
-      const parentProjectId = parent.project_id ?? '';
-      // A vanished identity parent cannot be opened — keep the
-      // return-to-current fallback (a project parent is not roster-checkable
-      // and surfaces a load error instead of dead-ending).
-      if (!parentProjectId && !agentById(parentAgentId)) {
-        return;
-      }
-      const parentAgentAddress = formatAgentAddress(
-        parentAgentId,
-        parentProjectId,
-      );
-      const target = {
-        agentAddress: parentAgentAddress,
-        sessionId: parentSessionId,
-        isSubAgentSession: false,
-      };
-      if (parent.kind === 'subagent') {
-        subAgentParentTarget = target;
-      }
-
-      // The exact Parent Session may be outside the child's first list page,
-      // including same-Agent forks, so resolve it through requiredSession.
-      let parentSession = null;
-      try {
-        const parentListed = await chatController.listSessions(
-          parentAgentAddress,
-          {
-            limit: 1,
-            requiredSession: {
-              agentId: parentAgentAddress,
-              sessionId: parentSessionId,
-            },
-          },
-        );
-        if (
-          displayedSessionKey() !== displayKey ||
-          sessionParentFetchKey !== fetchKey
-        ) {
-          return;
-        }
-        parentSession = (parentListed?.sessions ?? []).find(
-          (session) => String(session?.id ?? '').trim() === parentSessionId,
-        );
-      } catch {
-        // Provenance still supports the existing Sub-Agent return path, but
-        // Session info must not present an unresolved link.
-        return;
-      }
-      if (!parentSession) {
-        return;
-      }
-      target.isSubAgentSession =
-        parentSession?.is_subagent_session === true ||
-        sessionParentReference(parentSession)?.kind === 'subagent';
-      if (parent.kind === 'subagent') {
-        subAgentParentTarget = target;
-      }
-      sessionParentLink = {
-        displayName: sessionDisplayName(parentSession),
-        target,
-      };
-    } catch {
-      // Best effort — the banner button falls back to return-to-current.
-    }
-  };
-  // Any local override away from the selected agent's current session — also
-  // true for same-agent drawer selections, which must offer a return path too.
-  let sessionOverrideActive = $derived(Boolean(viewingSessionId));
-  let composerDisabled = $derived(!activeAgent || chatState.loadingHistory);
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
   // connection state. A model-less Identity Agent becomes the second step once
   // at least one Provider is connected; Project Agents resolve their Model
   // through Project defaults, and override stand-ins carry no Model field.
   let providerSetupMissing = $derived(
-    Boolean(activeAgent) && hasConnectedProvider === false,
+    Boolean(target.activeAgent) && hasConnectedProvider === false,
   );
   let agentModelMissing = $derived(
-    Boolean(activeAgent) &&
-      !projectAgentActive &&
-      !activeAgent?.__overrideAddress &&
+    Boolean(target.activeAgent) &&
+      !target.projectAgentActive &&
+      !target.activeAgent?.__overrideAddress &&
       hasConnectedProvider === true &&
-      agentNeedsModel(activeAgent),
+      agentNeedsModel(target.activeAgent),
   );
   // The composer's per-session draft is keyed by the full displayed-session key;
   // its per-agent input history is keyed by the agent part alone (bare id for an
   // identity agent, `agent@projekt` for a project agent), so sessions of the
   // same agent share one history.
-  let composerDraftKey = $derived(displayedSessionKey());
+  let composerDraftKey = $derived(target.displayedSessionKey());
   let composerHistoryKey = $derived.by(() => {
     const separator = composerDraftKey.indexOf('::');
     return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
@@ -488,16 +302,16 @@
   // it to the Composer. The Composer snapshots that function before any async
   // @-mention lookup, so navigation cannot redirect an older submit.
   let composerSendMessage = $derived.by(() => {
-    const agent = activeAgent;
-    const sessionState = activeSessionState;
+    const agent = target.activeAgent;
+    const sessionState = target.activeSessionState;
     if (!agent || !sessionState) {
       return null;
     }
     return async (content, options = {}) =>
-      await sendStream(agent, sessionState, content, options);
+      await actions.sendStream(agent, sessionState, content, options);
   });
   let composerListFiles = $derived.by(() => {
-    const agentId = activeSessionState?.agentId ?? '';
+    const agentId = target.activeSessionState?.agentId ?? '';
     if (!agentId) {
       return null;
     }
@@ -518,214 +332,12 @@
     };
   });
   const displayedSessionIsEmpty = () =>
-    isSessionEmpty(activeSessionState) &&
+    isSessionEmpty(target.activeSessionState) &&
     getDraft(composerDraftKey).trim().length === 0 &&
-    transientCards.length === 0;
+    actions.transientCards.length === 0;
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
-
-  // The active project team member (config agent) when a project agent is the
-  // chosen chat target, else null. Looked up by bare id against the projected
-  // team. It is NOT in `chatState.agents` (that holds only identity agents).
-  function activeProjectMember() {
-    if (!projectAgentActive) {
-      return null;
-    }
-    return (
-      projectTeam.find(
-        (member) => member.agent_id === selectedProjectAgentId,
-      ) ?? null
-    );
-  }
-
-  function agentActivityTooltip(activityLabel, modelValue) {
-    const { model } = parseModelSelectionValue(
-      typeof modelValue === 'string' ? modelValue.trim() : '',
-    );
-    return model ? `${activityLabel}\n${model}` : activityLabel;
-  }
-
-  // The outside address of the agent that owns the non-override ("current")
-  // view: the active project team agent when one is chosen, else the selected
-  // identity agent (bare id — identity addressing is unchanged).
-  function activeOwnAgentAddress() {
-    if (projectAgentActive) {
-      return currentProjectAgentAddress();
-    }
-    return chatState.selectedAgentId;
-  }
-
-  // The outside address of the agent that owns the overridden (viewed)
-  // session. `viewingSessionAgentId` stores the explicit owner (a bare
-  // identity id or a full `agent@projekt` address); '' means "the active
-  // agent's own past session".
-  function overrideAgentAddress() {
-    return viewingSessionAgentId || activeOwnAgentAddress();
-  }
-
-  // Resolve the addressing for the active agent (RPC-contract traps 1 & 2).
-  // An active session override wins over both the project branch and the
-  // identity-current branch — a drawer pick or sub-agent link decides what is
-  // displayed regardless of which agent bar is active. Without an override:
-  // - identity agent: `agentAddress === bareAgentId`, `projectId: null`,
-  //   session from the identity `current_session_id` path. Byte-identical
-  //   to today.
-  // - project agent: full `agent@projekt` address for chat/session/history,
-  //   bare id for queue/cancel-tool; session chosen locally (trap 1).
-  function activeAddressing() {
-    if (viewingSessionId) {
-      const agentAddress = overrideAgentAddress();
-      const { agentId, projectId } = parseAgentAddress(agentAddress);
-      return {
-        bareAgentId: agentId,
-        projectId: projectId || null,
-        agentAddress,
-        isProjectAgent: Boolean(projectId),
-        sessionId: viewingSessionId,
-      };
-    }
-    if (projectAgentActive) {
-      const addressing = resolveAgentAddressing(
-        selectedProjectAgentId,
-        selectedProjectId,
-        true,
-      );
-      return {
-        ...addressing,
-        isProjectAgent: true,
-        sessionId: projectAgentSessions[addressing.agentAddress] ?? '',
-      };
-    }
-    const agent = selectedAgent(chatState);
-    const bareAgentId = agent?.id ?? '';
-    return {
-      bareAgentId,
-      projectId: null,
-      agentAddress: bareAgentId,
-      isProjectAgent: false,
-      sessionId: agent?.current_session_id || '',
-    };
-  }
-
-  function getActiveAgent() {
-    if (viewingSessionId) {
-      if (!viewingSessionAgentId) {
-        // The active agent's own past session.
-        return projectAgentActive
-          ? projectAgentAsAgent(activeProjectMember())
-          : selectedAgent(chatState);
-      }
-      return (
-        agentById(viewingSessionAgentId) ??
-        overrideAgentDisplayStandIn(viewingSessionAgentId)
-      );
-    }
-    if (projectAgentActive) {
-      return projectAgentAsAgent(activeProjectMember());
-    }
-    return selectedAgent(chatState);
-  }
-
-  // Minimal agent-like object for an overridden session whose owner is not an
-  // identity-roster agent — a project team agent's session (or a project
-  // child), or an identity agent deleted while its session is still viewed.
-  // Keeps the chat surface (header, banner, return button) alive instead of
-  // dead-ending on "choose an agent". The bare id stays in `id` so queue and
-  // cancel-tool payloads keep the bare spelling (trap 2).
-  function overrideAgentDisplayStandIn(agentAddress) {
-    const { agentId } = parseAgentAddress(agentAddress);
-    return {
-      id: agentId,
-      name: agentId || agentAddress,
-      current_session_id: '',
-      context_window: null,
-      __overrideAddress: agentAddress,
-    };
-  }
-
-  // Shape a projected team member into the minimal agent-like object the chat
-  // surface renders (header name, token badge context window). The local
-  // session id stands in for `current_session_id` so the existing session
-  // machinery reads it without a special case.
-  function projectAgentAsAgent(member) {
-    if (!member) {
-      return null;
-    }
-    const addressing = resolveAgentAddressing(
-      member.agent_id,
-      selectedProjectId,
-      true,
-    );
-    return {
-      id: member.agent_id,
-      name: member.display_name || member.agent_id,
-      current_session_id: projectAgentSessions[addressing.agentAddress] ?? '',
-      context_window: null,
-      __projectAddress: addressing.agentAddress,
-    };
-  }
-
-  function agentById(agentId) {
-    return chatState.agents.find((agent) => agent.id === agentId) ?? null;
-  }
-
-  function getActiveSessionState() {
-    if (viewingSessionId) {
-      const agentAddress = overrideAgentAddress();
-      return agentAddress
-        ? (chatState.sessions[`${agentAddress}::${viewingSessionId}`] ?? null)
-        : null;
-    }
-    if (projectAgentActive) {
-      const { agentAddress, sessionId } = activeAddressing();
-      if (!agentAddress || !sessionId) {
-        return null;
-      }
-      return chatState.sessions[`${agentAddress}::${sessionId}`] ?? null;
-    }
-    return currentSessionState(chatState);
-  }
-
-  function displayedSessionKey() {
-    if (viewingSessionId) {
-      const agentAddress = overrideAgentAddress();
-      return agentAddress ? `${agentAddress}::${viewingSessionId}` : '';
-    }
-    if (projectAgentActive) {
-      const { agentAddress, sessionId } = activeAddressing();
-      return agentAddress && sessionId ? `${agentAddress}::${sessionId}` : '';
-    }
-    const agent = selectedAgent(chatState);
-    const sessionId = agent?.current_session_id;
-    return agent?.id && sessionId ? `${agent.id}::${sessionId}` : '';
-  }
-
-  // The project the displayed session runs under (parsed from its agent
-  // address). Used to qualify bare child-agent ids from persisted spawn
-  // descriptors: a project run's children live under the same project anchor,
-  // so their history/navigation RPCs need the full `child@projekt` address
-  // (trap 2), while the status projection stays keyed by the bare id.
-  function displayedSessionProjectId() {
-    const key = displayedSessionKey();
-    const separator = key.indexOf('::');
-    const agentPart = separator >= 0 ? key.slice(0, separator) : '';
-    const { projectId } = parseAgentAddress(agentPart);
-    return projectId || '';
-  }
-
-  function qualifiedChildAgentAddress(agentId) {
-    const bareId = typeof agentId === 'string' ? agentId.trim() : '';
-    if (!bareId || bareId.includes('@')) {
-      return bareId;
-    }
-    const projectId = displayedSessionProjectId();
-    return projectId ? formatAgentAddress(bareId, projectId) : bareId;
-  }
-
-  function isDisplayedSession(agentId, sessionId) {
-    return displayedSessionKey() === `${agentId}::${sessionId}`;
-  }
 
   $effect(() => {
     if (sharedAgents.length > 0 && sharedAgents !== lastSharedAgents) {
@@ -755,77 +367,10 @@
         selectAgent(chatState, sharedSelectedAgentId);
         return;
       }
-      handleSelectAgent(sharedSelectedAgentId, { focusComposer: false });
+      navigation.handleSelectAgent(sharedSelectedAgentId, {
+        focusComposer: false,
+      });
     }
-  });
-
-  // React to the project dropdown selection. Choosing a project loads its
-  // scan team + report (second bar). Selecting "No project" (Personal) tears the
-  // second bar down and the chat falls back to the identity path — byte-
-  // identical to today. Guarded by `lastLoadedProjectId` so the load runs once
-  // per choice.
-  //
-  // The first run after mount is the reload restore: it honors the remembered
-  // project agent (a team-member id, or '' = an identity agent was active so no
-  // team member is opened, or null = nothing remembered → default). Every later
-  // run is a user-initiated switch, which jumps to the project default —
-  // `restoreAgentId === null` signals that.
-  $effect(() => {
-    const projectId = isProjectSelected(selectedProjectId)
-      ? selectedProjectId
-      : '';
-    if (projectId === lastLoadedProjectId) {
-      return;
-    }
-    const isInitialRestore = !initialProjectRestoreDone;
-    const restoreAgentId = isInitialRestore
-      ? (sharedSelectedProjectAgentId ?? null)
-      : null;
-    initialProjectRestoreDone = true;
-    lastLoadedProjectId = projectId;
-    if (!projectId) {
-      clearProjectContext();
-      if (!isInitialRestore) {
-        requestComposerFocus();
-      }
-      return;
-    }
-    // The initial (reload) restore must not clear a session override that a
-    // mount-adopted history entry has just applied — the override stays the
-    // displayed session, the member session loads invisibly behind it.
-    void loadProjectTeam(projectId, {
-      restoreAgentId,
-      keepOverride: isInitialRestore,
-    }).then(() => {
-      if (
-        !isInitialRestore &&
-        selectedProjectId === projectId &&
-        selectedProjectAgentId
-      ) {
-        requestComposerFocus();
-      }
-    });
-  });
-
-  // App-driven session navigation: sub-agent link clicks routed through
-  // `navigateToSubAgent` and browser-history restores. Both arrive here so
-  // they never echo back through `onSessionNavigation` as a new history push.
-  $effect(() => {
-    const navigation = pendingSessionNavigation;
-    const requestId = navigation?.requestId ?? '';
-    const navigationKey = !navigation
-      ? ''
-      : navigation.returnToCurrent
-        ? `::return::${requestId}`
-        : navigation.agentId && navigation.sessionId
-          ? `${navigation.agentId}::${navigation.sessionId}::${navigation.subAgent === true}::${requestId}`
-          : '';
-    if (!navigationKey || navigationKey === handledSessionNavigationKey) {
-      return;
-    }
-
-    handledSessionNavigationKey = navigationKey;
-    applySessionNavigation(navigation);
   });
 
   // The controller owns reconnect deduplication and reconciliation; the View
@@ -858,7 +403,7 @@
   $effect(() => {
     const addresses = [
       ...chatState.agents.map((agent) => agent.id),
-      ...projectTeam.map((member) =>
+      ...target.projectTeam.map((member) =>
         formatAgentAddress(member.agent_id, selectedProjectId),
       ),
     ];
@@ -874,13 +419,16 @@
   });
 
   $effect(() => {
-    const sessionState = activeSessionState;
+    const sessionState = target.activeSessionState;
     const unreadRunId = sessionState?.unreadRunId ?? '';
     if (
       !active ||
       !unreadRunId ||
       sessionState.markReadFailedRunId === unreadRunId ||
-      !isDisplayedSession(sessionState.agentId, sessionState.sessionId) ||
+      !target.isDisplayedSession(
+        sessionState.agentId,
+        sessionState.sessionId,
+      ) ||
       !sessionHasTerminalRun(sessionState, unreadRunId)
     ) {
       return;
@@ -904,7 +452,7 @@
       if (document.visibilityState !== 'visible') {
         return;
       }
-      const sessionState = activeSessionState;
+      const sessionState = target.activeSessionState;
       if (
         !sessionState?.currentRun?.runId ||
         sessionState.status !== 'running'
@@ -928,7 +476,7 @@
   // Reload command/skill suggestions whenever the active address or live command
   // catalog changes. The token does not disturb the draft or active selection.
   $effect(() => {
-    const { agentAddress } = activeAddressing();
+    const { agentAddress } = target.activeAddressing();
     const commandsKey = `${commandsRefreshToken}:${agentAddress}`;
     if (commandsKey === lastCommandsAddress) {
       return;
@@ -937,936 +485,10 @@
     loadCommands(agentAddress);
   });
 
-  onDestroy(() => {
-    if (chatToastTimeoutId !== null) {
-      clearTimeout(chatToastTimeoutId);
-      chatToastTimeoutId = null;
-    }
-  });
-
-  // Transient cards belong to the displayed session only. Switching sessions
-  // (or the page reloading) drops them; reloading the same session's history
-  // (e.g. after /compact) does not, because the displayed key is unchanged.
-  $effect(() => {
-    const key = displayedSessionKey();
-    if (key !== generationSessionKey) {
-      generationSessionKey = key;
-      displayedSessionGeneration += 1;
-    }
-    if (key !== transientCardsSessionKey) {
-      transientCardsSessionKey = key;
-      transientCards = [];
-    }
-  });
-
-  const showChatToast = (message) => {
-    if (chatToastTimeoutId !== null) {
-      clearTimeout(chatToastTimeoutId);
-      chatToastTimeoutId = null;
-    }
-
-    chatToast = typeof message === 'string' ? message : '';
-
-    if (!chatToast) {
-      return;
-    }
-
-    chatToastTimeoutId = setTimeout(() => {
-      chatToast = '';
-      chatToastTimeoutId = null;
-    }, CHAT_TOAST_TIMEOUT_MS);
-  };
-
-  const clearSessionActionError = (sessionState = activeSessionState) => {
-    chatState.actionError = '';
-    if (sessionState) {
-      sessionState.actionError = '';
-    }
-  };
-
-  const setSessionActionError = (
-    message,
-    sessionState = activeSessionState,
-  ) => {
-    if (sessionState) {
-      sessionState.actionError = message;
-      return;
-    }
-    chatState.actionError = message;
-  };
-
-  const appendTransientCard = (text, sessionState) => {
-    const body = typeof text === 'string' ? text : '';
-    if (!body) {
-      return;
-    }
-    // Anchor the card to the timeline item present when the command ran, so it
-    // stays at that position (like a chat message) instead of being pushed to
-    // the bottom by later messages. `null` anchors a card created on an empty
-    // timeline to the top. `createdAt` is the fallback anchor: when a history
-    // reload replaces the anchor item's live id, the card keeps its
-    // chronological position by creation time instead of sinking to the end.
-    const items = visibleTimelineItemsForRender(sessionState);
-    const anchorId = items.length > 0 ? items[items.length - 1].id : null;
-    transientCardSeq += 1;
-    transientCards = [
-      ...transientCards,
-      {
-        id: `transient-${transientCardSeq}`,
-        text: body,
-        anchorId,
-        createdAt: Date.now(),
-      },
-    ];
-  };
-
   const loadCommands = (agentAddress) =>
     chatController.loadCommands(agentAddress);
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
-
-  const loadCurrentHistory = () => {
-    chatState.actionError = '';
-    return chatController.loadCurrentHistory();
-  };
-
-  // Load a session's history by its outside agent spelling (bare id for an
-  // identity session, `agent@projekt` for a project-agent session) — one path
-  // for both worlds, since `chat.history` parses the address (trap 2).
-  //
-  // Stale-response discipline: the displayed session can change while
-  // `chat.history` is in flight (rapid switching, fast Back/Forward). After
-  // every await, per-session state may always be written (each response lands
-  // in its own session state), but global UI state (`chatState.loadingHistory`,
-  // `chatState.historyError`) and the SSE stream attach belong to the DISPLAYED session
-  // only — a stale response must not re-open a subscription the newer
-  // navigation just closed, unlock the composer early, or banner-error a
-  // healthy session.
-  const loadHistoryForSession = (agentId, sessionId) => {
-    chatState.actionError = '';
-    return chatController.loadHistoryForSession(agentId, sessionId);
-  };
-
-  const loadOlderHistory = () =>
-    chatController.loadOlderHistory(activeSessionState);
-
-  // Tear the second bar down: back to the identity-only chat (Personal).
-  const clearProjectContext = () => {
-    projectTeam = [];
-    projectReport = null;
-    projectScanError = '';
-    selectedProjectAgentId = '';
-    onProjectAgentSelected?.('');
-    loadingProjectTeam = false;
-  };
-
-  // Load a project's scan team (second bar) and report (banner) via
-  // `project.show` (live re-scan), then choose the active agent. An empty team
-  // is valid: the second bar simply renders empty, no error. The report is kept
-  // for the banner, shown only when the scan was not clean.
-  //
-  // `restoreAgentId` decides who becomes active:
-  //   - `null` — a genuine project switch: jump to the default agent (else the
-  //     first team member).
-  //   - `''` — a reload restore where an identity agent was active alongside the
-  //     project: open no team member, the identity bar stays in control.
-  //   - a team-member id — a reload restore: reopen that member if it is still
-  //     on the team, otherwise fall through to the default.
-  const loadProjectTeam = async (
-    projectId,
-    { restoreAgentId = null, keepOverride = false } = {},
-  ) => {
-    loadingProjectTeam = true;
-    projectScanError = '';
-    selectedProjectAgentId = '';
-    try {
-      const result = await chatController.loadProject(projectId);
-      // A newer selection may have superseded this one mid-flight.
-      if (selectedProjectId !== projectId) {
-        return;
-      }
-      projectTeam = normalizeProjectTeam(result?.scan);
-      projectReport = normalizeScanReport(result?.scan?.report);
-      if (restoreAgentId !== null) {
-        if (restoreAgentId === '') {
-          return;
-        }
-        const remembered = projectTeam.find(
-          (member) => member.agent_id === restoreAgentId,
-        );
-        if (remembered) {
-          await openProjectAgent(remembered.agent_id, { keepOverride });
-          return;
-        }
-      }
-      const defaultAgentId = defaultProjectAgentId(result?.project);
-      const target =
-        projectTeam.find((member) => member.agent_id === defaultAgentId) ??
-        projectTeam[0] ??
-        null;
-      if (target) {
-        await openProjectAgent(target.agent_id, { keepOverride });
-      }
-    } catch (error) {
-      if (selectedProjectId !== projectId) {
-        return;
-      }
-      projectTeam = [];
-      projectReport = null;
-      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
-    } finally {
-      if (selectedProjectId === projectId) {
-        loadingProjectTeam = false;
-      }
-    }
-  };
-
-  function defaultProjectAgentId(project) {
-    const value = project?.default_agent;
-    return typeof value === 'string' ? value.trim() : '';
-  }
-
-  // Switch the chat to a project team agent. Clears any identity-side session
-  // override and resolves the project agent's session locally (trap 1): the
-  // most recent from `session.list`, else a fresh `session.create`. The session
-  // is held in `projectAgentSessions` keyed by the agent's full address.
-  const openProjectAgent = async (agentId, { keepOverride = false } = {}) => {
-    const hadOverride = sessionOverrideActive;
-    if (!keepOverride) {
-      clearSessionOverride();
-    }
-    selectedProjectAgentId = agentId;
-    onProjectAgentSelected?.(agentId);
-    if (!keepOverride && hadOverride) {
-      // An override cleared by switching agents is an override change and
-      // becomes a history entry, mirroring the identity chip path.
-      reportSessionNavigation();
-    }
-    const addressing = resolveAgentAddressing(agentId, selectedProjectId, true);
-    await ensureProjectAgentSession(addressing);
-  };
-
-  // Choose (and if needed create) the local session for a project agent, then
-  // load its history. `session.list`/`session.create`/`chat.history` all take
-  // the FULL address (`agent@projekt`) — trap 2.
-  const ensureProjectAgentSession = async (addressing) => {
-    const { agentAddress } = addressing;
-    clearSessionActionError();
-    try {
-      const newestUnreadSession = newestUnreadSessionForAgent(
-        chatState,
-        agentAddress,
-      );
-      let sessionId =
-        newestUnreadSession?.sessionId ??
-        projectAgentSessions[agentAddress] ??
-        '';
-      if (!sessionId) {
-        const listed = await chatController.listSessions(agentAddress, {
-          limit: 1,
-          includeSubagents: false,
-          includeMemoryReflections: false,
-          includeSkillReflections: false,
-          includeCron: false,
-        });
-        // A newer project/agent selection may have superseded this one.
-        if (currentProjectAgentAddress() !== agentAddress) {
-          return;
-        }
-        sessionId = pickProjectAgentSessionId(listed?.sessions);
-        if (!sessionId) {
-          const created = await chatController.createSession({
-            agent_id: agentAddress,
-          });
-          if (currentProjectAgentAddress() !== agentAddress) {
-            return;
-          }
-          sessionId = created?.session_id ?? '';
-        }
-        if (!sessionId) {
-          return;
-        }
-        projectAgentSessions = {
-          ...projectAgentSessions,
-          [agentAddress]: sessionId,
-        };
-      }
-      await loadHistoryForSession(agentAddress, sessionId);
-    } catch (error) {
-      if (currentProjectAgentAddress() !== agentAddress) {
-        return;
-      }
-      setSessionActionError(
-        `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`,
-      );
-    }
-  };
-
-  // The address of the currently active project agent, '' when none. Used to
-  // drop the results of a superseded async session resolution.
-  function currentProjectAgentAddress() {
-    if (!projectAgentActive) {
-      return '';
-    }
-    return resolveAgentAddressing(
-      selectedProjectAgentId,
-      selectedProjectId,
-      true,
-    ).agentAddress;
-  }
-
-  const handleSelectProject = (projectId) => {
-    const next = isProjectSelected(projectId) ? projectId : '';
-    if (
-      next === (isProjectSelected(selectedProjectId) ? selectedProjectId : '')
-    ) {
-      return;
-    }
-    onProjectSelected?.(next);
-  };
-
-  const handleSelectProjectAgent = async (agentId) => {
-    if (!agentId) {
-      return;
-    }
-    const agentAddress = formatAgentAddress(agentId, selectedProjectId);
-    if (
-      agentId === selectedProjectAgentId &&
-      !newestUnreadSessionForAgent(chatState, agentAddress)
-    ) {
-      return;
-    }
-    await openProjectAgent(agentId);
-    requestComposerFocus();
-  };
-
-  const handleSelectAgent = async (agentId, { focusComposer = true } = {}) => {
-    // Choosing an identity agent always returns the chat to the identity bar,
-    // tearing down any active project-agent selection (the upper bar wins for
-    // the identity path; the project stays selected in the dropdown so its
-    // team bar remains, but the active chat is the identity agent).
-    selectedProjectAgentId = '';
-    onProjectAgentSelected?.('');
-    const unreadSession = newestUnreadSessionForAgent(chatState, agentId);
-    if (unreadSession) {
-      clearSessionOverride();
-      selectAgent(chatState, agentId);
-      onAgentSelected?.(agentId);
-      const currentSessionId =
-        selectedAgent(chatState)?.current_session_id ?? '';
-      viewingSessionId =
-        unreadSession.sessionId === currentSessionId
-          ? ''
-          : unreadSession.sessionId;
-      viewingSessionAgentId = '';
-      viewingSubAgentSession = false;
-      reportSessionNavigation();
-      await loadHistoryForSession(agentId, unreadSession.sessionId);
-      if (focusComposer) {
-        requestComposerFocus();
-      }
-      return;
-    }
-    if (agentId === chatState.selectedAgentId) {
-      if (sessionOverrideActive) {
-        clearSessionOverride();
-        reportSessionNavigation();
-        await loadCurrentHistory();
-        if (focusComposer) {
-          requestComposerFocus();
-        }
-      }
-      return;
-    }
-    clearSessionOverride();
-    selectAgent(chatState, agentId);
-    onAgentSelected?.(agentId);
-    reportSessionNavigation();
-    await loadCurrentHistory();
-    if (focusComposer) {
-      requestComposerFocus();
-    }
-  };
-
-  const handleSubAgentNavigation = async (agentId, sessionId) => {
-    if (!agentId || !sessionId) {
-      return;
-    }
-
-    viewingSessionAgentId = agentId;
-    viewingSessionId = sessionId;
-    viewingSubAgentSession = true;
-    await loadHistoryForSession(agentId, sessionId);
-  };
-
-  // Apply an App-driven navigation request: a sub-agent link click or a
-  // browser-history restore. Restores re-enter past overrides (or return to
-  // the current session) without creating new history entries.
-  const applySessionNavigation = async (navigation) => {
-    const selectionChanged = await applyNavigationSelection(
-      navigation.selection,
-    );
-
-    if (navigation.returnToCurrent) {
-      const hadOverride = sessionOverrideActive;
-      clearSessionOverride();
-      if (hadOverride || selectionChanged) {
-        await loadActiveOwnHistory();
-      }
-      return;
-    }
-
-    if (navigation.subAgent === true) {
-      if (navigation.followSession === true) {
-        subAgentLinkFollowRequestId += 1;
-        subAgentLinkFollowRequest = {
-          requestId: subAgentLinkFollowRequestId,
-          sessionKey: `${navigation.agentId}::${navigation.sessionId}`,
-        };
-      }
-      await handleSubAgentNavigation(navigation.agentId, navigation.sessionId);
-      return;
-    }
-
-    viewingSessionAgentId =
-      navigation.agentId === activeOwnAgentAddress() ? '' : navigation.agentId;
-    viewingSubAgentSession = false;
-    viewingSessionId = navigation.sessionId;
-    await loadHistoryForSession(navigation.agentId, navigation.sessionId);
-  };
-
-  // Restore the selection half of a history entry: the selected identity
-  // agent, the chosen project, and the active project agent. Applied here
-  // (not in App) so the restore never routes through the user-action handlers
-  // that report navigation — the mirrors converge through the non-pushing
-  // callbacks, and the watching prop effects are pre-synced
-  // (`lastSharedSelectedAgentId`/`lastLoadedProjectId`) so the round-trip
-  // cannot re-run the restore as a fresh user action. Returns whether the
-  // active chat target changed (the caller then reloads the current view).
-  const applyNavigationSelection = async (selection) => {
-    if (!selection) {
-      return false;
-    }
-    let changed = false;
-
-    const agentId =
-      typeof selection.agentId === 'string' ? selection.agentId : '';
-    if (
-      agentId &&
-      agentId !== chatState.selectedAgentId &&
-      chatState.agents.some((agent) => agent.id === agentId)
-    ) {
-      selectAgent(chatState, agentId);
-      lastSharedSelectedAgentId = agentId;
-      onAgentSelected?.(agentId);
-      changed = true;
-    }
-
-    const projectId = isProjectSelected(selection.projectId)
-      ? selection.projectId
-      : '';
-    const projectAgentId =
-      typeof selection.projectAgentId === 'string'
-        ? selection.projectAgentId
-        : '';
-    if (projectId !== lastLoadedProjectId) {
-      // Same imperative ownership as the /agent move: pre-sync the guard so
-      // the dropdown-watching effect treats the round-tripped prop as
-      // already loaded instead of jumping to the project default.
-      initialProjectRestoreDone = true;
-      lastLoadedProjectId = projectId;
-      onProjectSelected?.(projectId);
-      changed = true;
-      if (!projectId) {
-        clearProjectContext();
-      } else {
-        selectedProjectAgentId = '';
-        await loadProjectTeamForMove(projectId);
-      }
-    }
-    if (projectId && projectAgentId !== selectedProjectAgentId) {
-      selectedProjectAgentId = projectAgentId;
-      onProjectAgentSelected?.(projectAgentId);
-      changed = true;
-    }
-    return changed;
-  };
-
-  const handleSessionSelected = async (
-    sessionId,
-    sessionAgentAddress,
-    isSubAgentSession,
-  ) => {
-    // The drawer may list sessions of other agents (All-agents filter); the
-    // row's owning address wins, otherwise the displayed agent's own address.
-    const agentAddress =
-      String(sessionAgentAddress ?? '').trim() ||
-      activeAddressing().agentAddress;
-    const normalizedSessionId = String(sessionId ?? '').trim();
-    if (!agentAddress || !normalizedSessionId) {
-      return;
-    }
-
-    // The drawer lists the displayed agent's sessions. Picking one of the
-    // active agent's own sessions is a same-agent past-session view (or a
-    // return to its current session); picking while a cross-agent override is
-    // displayed keeps that agent's framing. The address form serves both
-    // worlds — a project agent's sessions go through `agent@projekt`.
-    const isOwnAgent = agentAddress === activeOwnAgentAddress();
-    const ownCurrentSessionId = isOwnAgent
-      ? projectAgentActive
-        ? (projectAgentSessions[agentAddress] ?? '')
-        : (selectedAgent(chatState)?.current_session_id ?? '')
-      : '';
-    viewingSessionAgentId = isOwnAgent ? '' : agentAddress;
-    // The sub-agent notice follows the picked row's real sub-agent flag,
-    // not cross-agent-ness: a foreign agent's ordinary session is a normal
-    // override view, while the banner (and its parent-return button) stay
-    // reserved for actual sub-agent sessions.
-    viewingSubAgentSession = isSubAgentSession === true;
-    viewingSessionId =
-      isOwnAgent && normalizedSessionId === ownCurrentSessionId
-        ? ''
-        : normalizedSessionId;
-    reportSessionNavigation();
-    await loadHistoryForSession(agentAddress, normalizedSessionId);
-    requestComposerFocus();
-  };
-
-  // A session was deleted from the drawer. If this window was viewing it (the
-  // current session, or an explicit override on it), navigate to the landing the
-  // server chose (#2: most-recently-active remaining, else a fresh session);
-  // otherwise stay put and let the list refresh. The server re-aims the identity
-  // current pointer and emits resource_changed(agents), so the current marking
-  // converges across windows and the override below reconciles to it.
-  const handleSessionDeleted = async ({
-    deletedSessionId,
-    nextSessionId,
-    agentAddress,
-  } = {}) => {
-    const removedId = String(deletedSessionId ?? '').trim();
-    const landingId = String(nextSessionId ?? '').trim();
-    if (!removedId) {
-      return;
-    }
-    const agent = activeAgent;
-    const viewedSessionId = viewingSessionId || agent?.current_session_id || '';
-    if (viewedSessionId === removedId && landingId) {
-      await handleSessionSelected(landingId, agentAddress);
-    }
-  };
-
-  // When the active agent's current session catches up to a same-agent override
-  // that now points at it — e.g. the server re-aimed current after we deleted the
-  // session we were viewing (#2) — the override is redundant. Drop it so the view
-  // reads as "on current" with no leftover return banner. Sub-agent session views
-  // (viewingSessionAgentId set) are deliberately excluded.
-  $effect(() => {
-    if (
-      viewingSessionId &&
-      !viewingSessionAgentId &&
-      activeAgent?.current_session_id === viewingSessionId
-    ) {
-      viewingSessionId = '';
-      viewingSessionAgentId = '';
-      viewingSubAgentSession = false;
-    }
-  });
-
-  const clearSessionOverride = () => {
-    viewingSessionId = '';
-    viewingSessionAgentId = '';
-    viewingSubAgentSession = false;
-  };
-
-  // Report the (possibly cleared) session override to App so it becomes a
-  // browser-history entry. Only user-initiated navigation calls this —
-  // App-driven navigation through `pendingSessionNavigation` must not.
-  const reportSessionNavigation = () => {
-    onSessionNavigation?.(
-      viewingSessionId
-        ? {
-            agentId: viewingSessionAgentId || activeOwnAgentAddress(),
-            sessionId: viewingSessionId,
-            subAgent: viewingSubAgentSession,
-          }
-        : null,
-    );
-  };
-
-  // Load the active agent's own current view after an override was cleared:
-  // the project team agent's locally chosen session when one is active, else
-  // the selected identity agent's current session.
-  const loadActiveOwnHistory = async () => {
-    if (projectAgentActive) {
-      await ensureProjectAgentSession(
-        resolveAgentAddressing(selectedProjectAgentId, selectedProjectId, true),
-      );
-      return;
-    }
-    await loadCurrentHistory();
-  };
-
-  const handleReturnToCurrentSession = async () => {
-    if (!subAgentSessionActive || chatState.loadingHistory) {
-      return;
-    }
-
-    // A sub-agent session returns to its PARENT session (from the child's
-    // `subagent_parent` metadata). Without resolvable parent metadata (old
-    // child sessions, deleted parent agent) the button falls back to the
-    // return-to-current behavior below.
-    if (subAgentSessionActive && subAgentParentTarget) {
-      await navigateToParentSession(subAgentParentTarget);
-      requestComposerFocus();
-      return;
-    }
-
-    clearSessionOverride();
-    reportSessionNavigation();
-    await loadActiveOwnHistory();
-    requestComposerFocus();
-  };
-
-  // User-initiated navigation from a child session to its parent session: a
-  // normal session navigation, so it reports up and becomes a history push —
-  // Back returns to the child. A parent that is itself a Sub-Agent Session
-  // keeps the contextual banner so another parent step remains available;
-  // the root parent returns to ordinary Session presentation.
-  const navigateToParentSession = async ({
-    agentAddress,
-    sessionId,
-    isSubAgentSession = false,
-  }) => {
-    const ownAddress = activeOwnAgentAddress();
-    const ownCurrentSessionId = projectAgentActive
-      ? (projectAgentSessions[ownAddress] ?? '')
-      : (selectedAgent(chatState)?.current_session_id ?? '');
-    viewingSubAgentSession = isSubAgentSession;
-    if (agentAddress === ownAddress && sessionId === ownCurrentSessionId) {
-      clearSessionOverride();
-    } else {
-      viewingSessionAgentId = agentAddress === ownAddress ? '' : agentAddress;
-      viewingSessionId = sessionId;
-    }
-    reportSessionNavigation();
-    await loadHistoryForSession(agentAddress, sessionId);
-  };
-
-  const handleNewSession = async () => {
-    if (chatState.loadingHistory || creatingSession) {
-      return;
-    }
-    // "New session" means "make the chat ready for a fresh conversation."
-    // Repeating it on an already blank Session is therefore idempotent, while
-    // a local draft still counts as work that deserves its own Session.
-    requestComposerFocus({ includeMobile: true });
-    if (composerAvailable && displayedSessionIsEmpty()) {
-      return;
-    }
-    if (projectAgentActive) {
-      // Symmetric with the identity path below: a new session always leaves
-      // any override view and becomes the displayed session.
-      clearSessionOverride();
-      reportSessionNavigation();
-      if (await createProjectAgentSession()) {
-        requestComposerFocus({ includeMobile: true });
-      }
-      return;
-    }
-    const agent = selectedAgent(chatState);
-    if (!agent) {
-      return;
-    }
-    const sourceSessionState = activeSessionState;
-    clearSessionOverride();
-    creatingSession = true;
-    clearSessionActionError(sourceSessionState);
-    try {
-      const session = await chatController.createSession({
-        agent_id: agent.id,
-        make_current: true,
-      });
-      await switchToCurrentSession(agent.id, session.session_id);
-      requestComposerFocus({ includeMobile: true });
-    } catch (error) {
-      setSessionActionError(
-        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
-        sourceSessionState,
-      );
-    } finally {
-      creatingSession = false;
-    }
-  };
-
-  // New session for a project agent: `session.create` with the full address and
-  // NO `make_current` (the backend ignores it for project agents anyway — trap
-  // 1), then point the local session store at it and load it.
-  const createProjectAgentSession = async () => {
-    const agentAddress = currentProjectAgentAddress();
-    if (!agentAddress) {
-      return false;
-    }
-    const sourceSessionState = activeSessionState;
-    creatingSession = true;
-    clearSessionActionError(sourceSessionState);
-    try {
-      const created = await chatController.createSession({
-        agent_id: agentAddress,
-      });
-      const sessionId = created?.session_id ?? '';
-      if (!sessionId || currentProjectAgentAddress() !== agentAddress) {
-        return false;
-      }
-      projectAgentSessions = {
-        ...projectAgentSessions,
-        [agentAddress]: sessionId,
-      };
-      await loadHistoryForSession(agentAddress, sessionId);
-      return true;
-    } catch (error) {
-      setSessionActionError(
-        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
-        sourceSessionState,
-      );
-      return false;
-    } finally {
-      creatingSession = false;
-    }
-  };
-
-  const switchToCurrentSession = async (agentId, sessionId) => {
-    const normalizedSessionId = String(sessionId ?? '').trim();
-    if (!agentId || !normalizedSessionId) {
-      return;
-    }
-
-    clearSessionOverride();
-    const updatedAgents = chatState.agents.map((candidate) =>
-      candidate.id === agentId
-        ? { ...candidate, current_session_id: normalizedSessionId }
-        : candidate,
-    );
-    setAgents(chatState, updatedAgents);
-    onAgentsChanged?.(updatedAgents);
-    onAgentSelected?.(agentId);
-    reportSessionNavigation();
-    ensureSessionState(chatState, agentId, normalizedSessionId);
-    await loadHistoryForSession(agentId, normalizedSessionId);
-  };
-
-  // `/agent <addr>` move: relocate the CURRENT session (same session id) to the
-  // target agent's home and open it there. Unlike `/handoff` (which summarizes
-  // into a NEW session), the session id is unchanged — the move happened on the
-  // backend already; the accessor just opens it under the target. The target's
-  // outside address decides the world (the one signal: presence of `@`), so the
-  // same handler crosses every direction (identity↔project, both ways). It
-  // reuses the two-bar machinery: an identity target goes through the bare-id
-  // current-session path, a project target through the project-bar path.
-  const moveSessionToAgent = async (move) => {
-    if (!move?.sessionId || !move?.bareAgentId) {
-      return;
-    }
-    if (move.isProjectTarget) {
-      await moveToProjectAgent(move);
-      return;
-    }
-    moveToIdentityAgent(move);
-    await switchToCurrentSession(move.bareAgentId, move.sessionId);
-  };
-
-  // Identity target: drop any active project-agent bar so the chat returns to
-  // the identity world (the project stays chosen in the dropdown, but the active
-  // chat is the identity agent), then select the target identity agent. The
-  // session switch itself is `switchToCurrentSession` (caller).
-  const moveToIdentityAgent = (move) => {
-    selectedProjectAgentId = '';
-    onProjectAgentSelected?.('');
-    if (move.bareAgentId !== chatState.selectedAgentId) {
-      selectAgent(chatState, move.bareAgentId);
-      onAgentSelected?.(move.bareAgentId);
-    }
-  };
-
-  // Project target: open the SAME session under the project team agent. The
-  // project context is set locally (so the second bar reflects it immediately,
-  // crossing the agent/project boundary) and reported up so App persists it for
-  // the next reload — mirroring `openProjectAgent`, but the session is the moved
-  // one, pre-seeded into `projectAgentSessions` so `ensureProjectAgentSession`
-  // reuses it instead of picking/creating.
-  //
-  // The move owns the transition imperatively rather than waiting on the
-  // dropdown-driven effect: `lastLoadedProjectId` is set to the target up front
-  // so the `selectedProjectId`-watching effect treats it as already-loaded and
-  // never re-runs `loadProjectTeam` with the project default (which would
-  // clobber the moved agent/session). `selectedProjectAgentId` makes
-  // `projectAgentActive`/`activeAddressing` resolve to the target before the
-  // round-tripped `selectedProjectId` prop has flushed, so the chat does not
-  // depend on that flush timing.
-  const moveToProjectAgent = async (move) => {
-    clearSessionOverride();
-    const { projectId, bareAgentId, agentAddress, sessionId } = move;
-    projectAgentSessions = {
-      ...projectAgentSessions,
-      [agentAddress]: sessionId,
-    };
-    initialProjectRestoreDone = true;
-    lastLoadedProjectId = projectId;
-    selectedProjectAgentId = bareAgentId;
-    onProjectSelected?.(projectId);
-    onProjectAgentSelected?.(bareAgentId);
-    await loadProjectTeamForMove(projectId);
-    await ensureProjectAgentSession(
-      resolveAgentAddressing(bareAgentId, projectId, true),
-    );
-  };
-
-  // Load just the team + report for a move target (no agent auto-selection —
-  // the move picks the agent itself). Errors surface as the scan error notice.
-  const loadProjectTeamForMove = async (projectId) => {
-    loadingProjectTeam = true;
-    projectScanError = '';
-    try {
-      const result = await chatController.loadProject(projectId);
-      projectTeam = normalizeProjectTeam(result?.scan);
-      projectReport = normalizeScanReport(result?.scan?.report);
-    } catch (error) {
-      projectTeam = [];
-      projectReport = null;
-      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
-    } finally {
-      loadingProjectTeam = false;
-    }
-  };
-
-  // Spawn-row "view session" links carry the child's BARE agent id from the
-  // persisted descriptor. A project run's child lives under the same project
-  // anchor, so the navigation address must be qualified as `child@projekt`
-  // before it reaches the App-level navigation (identity children pass
-  // through unchanged).
-  const handleNavigateToSubAgentLink = (target) => {
-    if (!target?.agentId || !target?.sessionId) {
-      return;
-    }
-    const agentId = qualifiedChildAgentAddress(target.agentId);
-    navigateToSubAgent({
-      ...target,
-      agentId,
-    });
-  };
-
-  // A reflection review lives in a same-Agent fork; opening it is ordinary
-  // same-agent session navigation, not sub-agent navigation, so no child
-  // banner appears and the fork's live Run streams like any other session.
-  const handleOpenReflection = (row) => {
-    const sessionId = String(row?.sessionId ?? '').trim();
-    if (!sessionId) {
-      return;
-    }
-    void handleSessionSelected(
-      sessionId,
-      activeSessionState?.agentId ?? '',
-      false,
-    );
-  };
-
-  const handleTranscriptionError = (message) => {
-    setSessionActionError(message);
-  };
-
-  const sendStream = async (agent, sessionState, content, options = {}) => {
-    const sourceSessionKey = sessionState?.key ?? '';
-    const sourceUiGeneration = displayedSessionGeneration;
-    const outcome = await chatController.sendMessage(
-      sessionState,
-      content,
-      options,
-    );
-    const presentationIsCurrent =
-      sourceSessionKey &&
-      displayedSessionKey() === sourceSessionKey &&
-      displayedSessionGeneration === sourceUiGeneration;
-    if (!presentationIsCurrent) {
-      return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
-    }
-    if (outcome.kind === 'move') {
-      await moveSessionToAgent(outcome.move);
-      requestComposerFocus({ includeMobile: true });
-    } else if (outcome.kind === 'switch') {
-      const targetAgentId = outcome.sessionSwitch.targetAgentId || agent.id;
-      if (targetAgentId !== chatState.selectedAgentId) {
-        selectAgent(chatState, targetAgentId);
-        onAgentSelected?.(targetAgentId);
-      }
-      await switchToCurrentSession(
-        targetAgentId,
-        outcome.sessionSwitch.sessionId,
-      );
-      requestComposerFocus({ includeMobile: true });
-    } else if (outcome.kind === 'extension_page') {
-      window.dispatchEvent(
-        new CustomEvent('vbot-extension-page', { detail: outcome.navigation }),
-      );
-    } else if (outcome.kind === 'transient') {
-      appendTransientCard(outcome.reply, sessionState);
-    } else if (outcome.kind === 'toast') {
-      showChatToast(outcome.reply);
-    } else if (outcome.kind === 'started') {
-      submittedTurnScrollKey += 1;
-    }
-    return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
-  };
-
-  const handleEditMessage = async (messageId, content) => {
-    const sessionState = activeSessionState;
-    const sourceSessionKey = sessionState?.key ?? '';
-    const sourceUiGeneration = displayedSessionGeneration;
-    const outcome = await chatController.editMessage(
-      sessionState,
-      messageId,
-      content,
-    );
-    const presentationIsCurrent =
-      sourceSessionKey &&
-      displayedSessionKey() === sourceSessionKey &&
-      displayedSessionGeneration === sourceUiGeneration;
-    if (presentationIsCurrent && outcome.kind === 'started') {
-      submittedTurnScrollKey += 1;
-    }
-    return outcome.kind === 'started';
-  };
-
-  const handleCancelRun = async () => {
-    await chatController.cancelActiveRun(activeSessionState);
-  };
-
-  // Per-tool-call cancel: cancel the bash without aborting the owning run.
-  const handleCancelToolCall = async ({ runId, toolCallId } = {}) => {
-    const agent = activeAgent;
-    await chatController.cancelTool({
-      sessionState: activeSessionState,
-      agentId: agent?.id ?? '',
-      runId,
-      toolCallId,
-    });
-  };
-
-  const handleCancelSubAgent = async ({ tool } = {}) => {
-    await chatController.cancelSubAgent({
-      tool,
-      sessionState: activeSessionState,
-      projectId: displayedSessionProjectId(),
-    });
-  };
-
-  const handleCancelBackgroundProcess = async ({ processId } = {}) => {
-    await chatController.cancelBackgroundProcess({
-      sessionState: activeSessionState,
-      agentId: activeSessionState?.agentId ?? activeAgent?.id ?? '',
-      processId,
-      projectId: displayedSessionProjectId(),
-    });
-  };
 
   // Exposed for focused controller-boundary tests. Normal rows are reconciled
   // in one batch from the displayed Timeline below.
@@ -1881,58 +503,15 @@
       sessionId,
       runId,
       queueItemId,
-      projectId: displayedSessionProjectId(),
+      projectId: target.displayedSessionProjectId(),
     });
   }
 
   // Exposed for tests (mirrors `verifySubAgentStatus`): drives the per-row
   // sub-agent cancel exactly as the timeline button's callback does.
   export async function cancelSubAgent(tool) {
-    await handleCancelSubAgent({ tool });
+    await actions.handleCancelSubAgent({ tool });
   }
-
-  const handleRemoveQueuedMessage = async (queuedMessageId) => {
-    const sessionState = activeSessionState;
-    await chatController.removeQueued(sessionState, queuedMessageId);
-  };
-
-  const handleEditQueuedMessage = async (queuedMessageId, newContent) => {
-    const sessionState = activeSessionState;
-    if (!sessionState) {
-      return false;
-    }
-    const fileMentions = await collectQueueEditFileMentions(
-      newContent,
-      sessionState.agentId,
-    );
-    return await chatController.updateQueued(
-      sessionState,
-      queuedMessageId,
-      newContent,
-      fileMentions,
-    );
-  };
-
-  const collectQueueEditFileMentions = async (text, agentAddress) => {
-    const tokens = extractMentionTokens(typeof text === 'string' ? text : '');
-    if (tokens.length === 0) {
-      return [];
-    }
-    try {
-      if (!agentAddress) {
-        return [];
-      }
-      const result = await chatController.listFiles(agentAddress);
-      return matchMentionCandidates(
-        tokens,
-        Array.isArray(result?.files) ? result.files : [],
-      );
-    } catch {
-      // Without a file list nothing can be verified as a mention; the edit
-      // still goes through as plain text.
-      return [];
-    }
-  };
 
   let chatController;
   const runStream = createChatRunStream({
@@ -1942,7 +521,7 @@
       chatController.syncSessionQueue(sessionState),
     reconcileRunSession: (sessionState, expectedRunId) =>
       chatController.reconcileRunSession(sessionState, expectedRunId),
-    isDisplayedSession,
+    isDisplayedSession: target.isDisplayedSession,
     updateSubAgentRunStatuses: (updates, options) =>
       chatController.applySubAgentStatusUpdates(updates, options),
   });
@@ -1951,12 +530,13 @@
     preserveSessionSelection: untrack(() => preserveSessionSelection),
     runStream,
     translate: t,
-    isDisplayedSession,
-    shouldLoadCurrentHistory: () => !viewingSessionId && !projectAgentActive,
+    isDisplayedSession: target.isDisplayedSession,
+    shouldLoadCurrentHistory: () =>
+      !navigation.viewingSessionId && !target.projectAgentActive,
     onAgentsChanged: (agents) => onAgentsChanged?.(agents),
     onAgentSelected: (agentId) => onAgentSelected?.(agentId),
     onRestartQueueDiscarded: (count) => {
-      showChatToast(
+      actions.showChatToast(
         count === 1
           ? t(
               'queue.restartDiscardedOne',
@@ -1973,15 +553,15 @@
 
   $effect(() => {
     chatController.reconcileSubAgentRows(activeTimelineItems, {
-      projectId: displayedSessionProjectId(),
+      projectId: target.displayedSessionProjectId(),
     });
   });
 
   $effect(() => {
-    const session = activeSessionState;
-    const agent = activeAgent;
+    const session = target.activeSessionState;
+    const agent = target.activeAgent;
     const selection = {
-      agentId: session?.agentId || activeAgentAddress,
+      agentId: session?.agentId || target.activeAgentAddress,
       sessionId: session?.sessionId || agent?.current_session_id || '',
     };
     untrack(() => onDisplayedSession(selection));
@@ -1998,16 +578,16 @@
     titleId={chatTitleId}
     agents={chatState.agents}
     agentStatuses={identityAgentStatuses}
-    selectedAgentId={displayedIdentityAgentId}
+    selectedAgentId={target.displayedIdentityAgentId}
     loadingAgents={chatState.loadingAgents}
     {projects}
     {selectedProjectId}
-    onSelectProject={handleSelectProject}
-    onSelectAgent={handleSelectAgent}
+    onSelectProject={target.handleSelectProject}
+    onSelectAgent={navigation.handleSelectAgent}
   />
 
   {#if isProjectSelected(selectedProjectId)}
-    <ProjectScanBanner report={projectReport} {onNavigateToProjects} />
+    <ProjectScanBanner report={target.projectReport} {onNavigateToProjects} />
     <!-- Second bar: the project's scanned team, shown only while a project is
          chosen in the header picker. Left-aligned like the identity agent bar
          above and prefixed with the project name so the team's ownership is
@@ -2023,23 +603,25 @@
           use:tooltip={t(
             'chat.project.teamBarHint',
             'Agents discovered in this project’s repository.',
-          )}>{selectedProjectName}</span
+          )}>{target.selectedProjectName}</span
         >
-        {#if loadingProjectTeam}
+        {#if target.loadingProjectTeam}
           <span class="chat-view__project-team-empty">
             {t('loading.agents', 'Loading agents…')}
           </span>
-        {:else if projectScanError}
-          <span class="chat-view__project-team-error">{projectScanError}</span>
-        {:else if projectTeam.length === 0}
+        {:else if target.projectScanError}
+          <span class="chat-view__project-team-error"
+            >{target.projectScanError}</span
+          >
+        {:else if target.projectTeam.length === 0}
           <span class="chat-view__project-team-empty">
             {t('chat.project.teamEmpty', 'This project has no agents yet.')}
           </span>
         {:else}
-          {#each projectTeam as member (member.agent_id)}
+          {#each target.projectTeam as member (member.agent_id)}
             {@const memberName = member.display_name || member.agent_id}
             {@const memberStatus =
-              projectAgentStatuses[member.agent_id] ?? 'idle'}
+              target.projectAgentStatuses[member.agent_id] ?? 'idle'}
             {@const memberActivityLabel =
               memberStatus === 'running'
                 ? t('chat.agentActivity.running', '{name}: Running', {
@@ -2052,17 +634,17 @@
                   : t('chat.agentActivity.idle', '{name}: Idle', {
                       name: memberName,
                     })}
-            {@const memberActivityTooltip = agentActivityTooltip(
+            {@const memberActivityTooltip = target.agentActivityTooltip(
               memberActivityLabel,
               member.effective?.model?.value,
             )}
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
-              class:active={member.agent_id === displayedProjectAgentId}
+              class:active={member.agent_id === target.displayedProjectAgentId}
               aria-label={memberActivityLabel}
               use:tooltip={memberActivityTooltip}
-              onclick={() => handleSelectProjectAgent(member.agent_id)}
+              onclick={() => target.handleSelectProjectAgent(member.agent_id)}
             >
               <span
                 class="tab-indicator tab-indicator--{memberStatus}"
@@ -2086,7 +668,7 @@
       title={t('chat.noAgents', 'No agents are available yet.')}
       description={chatState.agentsError}
     />
-  {:else if !activeAgent}
+  {:else if !target.activeAgent}
     <EmptyState
       fill
       title={t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
@@ -2095,7 +677,7 @@
     <div class="chat-view__content-shell">
       <div
         class="chat-view__surface"
-        style={`--chat-overlay-height: ${footerOverlayHeight}px; --chat-scrollbar-width: ${chatScrollbarWidth}px`}
+        style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
         <div class="chat-view__session-bar">
           <Button
@@ -2103,7 +685,7 @@
             class={`chat-view__session-toggle${
               showSessionDrawer ? ' chat-view__session-toggle--active' : ''
             }`}
-            disabled={!activeAgent}
+            disabled={!target.activeAgent}
             onClick={() => {
               showSessionDrawer = !showSessionDrawer;
             }}
@@ -2119,8 +701,8 @@
             ariaLabel={t('chat.newSession', 'New session')}
             tooltip={t('chat.newSession', 'New session')}
             disabled={chatState.loadingHistory}
-            loading={creatingSession}
-            onClick={handleNewSession}
+            loading={navigation.creatingSession}
+            onClick={navigation.handleNewSession}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
@@ -2134,22 +716,22 @@
         </div>
         {#if showSessionDrawer}
           <SessionListDrawer
-            agentId={activeAgentAddress}
-            currentSessionId={viewingSessionId ||
-              activeAgent.current_session_id}
+            agentId={target.activeAgentAddress}
+            currentSessionId={navigation.viewingSessionId ||
+              target.activeAgent.current_session_id}
             reloadToken={sessionsRefreshToken}
-            agents={sessionDrawerAgents}
+            agents={target.sessionDrawerAgents}
             liveActivity={sessionDrawerActivity}
             initialFilters={sessionFilters}
             onFiltersChange={(next) => {
               sessionFilters = next;
               onSessionFiltersChange(next);
             }}
-            onSessionSelected={handleSessionSelected}
-            onSessionDeleted={handleSessionDeleted}
+            onSessionSelected={navigation.handleSessionSelected}
+            onSessionDeleted={navigation.handleSessionDeleted}
           />
         {/if}
-        {#if chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
+        {#if chatState.historyError || chatState.actionError || chatState.commandsError || target.activeSessionState?.actionError || target.activeSessionState?.streamError || target.activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
               {#if chatState.historyError}
@@ -2167,17 +749,20 @@
               {#if chatState.commandsError}
                 <Banner variant="error">{chatState.commandsError}</Banner>
               {/if}
-              {#if activeSessionState?.actionError}
-                <Banner variant="error">{activeSessionState.actionError}</Banner
+              {#if target.activeSessionState?.actionError}
+                <Banner variant="error"
+                  >{target.activeSessionState.actionError}</Banner
                 >
               {/if}
-              {#if activeSessionState?.streamError}
-                <Banner variant="warn">{activeSessionState.streamError}</Banner>
+              {#if target.activeSessionState?.streamError}
+                <Banner variant="warn"
+                  >{target.activeSessionState.streamError}</Banner
+                >
               {/if}
-              {#if activeSessionState?.error}
+              {#if target.activeSessionState?.error}
                 <Banner variant="error">
                   {t('chat.runError', 'Run failed.')}
-                  {activeSessionState.error}
+                  {target.activeSessionState.error}
                 </Banner>
               {/if}
             </div>
@@ -2185,42 +770,47 @@
         {/if}
         <div class="chat-view__timeline-shell">
           <ChatTimeline
-            sessionState={activeSessionState}
-            agentName={activeAgent.name}
+            sessionState={target.activeSessionState}
+            agentName={target.activeAgent.name}
             {chatWorkingMode}
-            loadingHistory={historyLoadingFeedbackVisible}
-            {transientCards}
-            {submittedTurnScrollKey}
-            bottomOverlayHeight={footerOverlayHeight}
+            loadingHistory={layout.historyLoadingFeedbackVisible}
+            transientCards={actions.transientCards}
+            submittedTurnScrollKey={actions.submittedTurnScrollKey}
+            bottomOverlayHeight={layout.footerOverlayHeight}
             onScrollbarWidthChange={(width) => {
-              chatScrollbarWidth = width;
+              layout.chatScrollbarWidth = width;
             }}
-            followSessionRequest={subAgentLinkFollowRequest}
-            hasOlderHistory={activeSessionState?.hasOlderHistory === true}
-            loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
+            followSessionRequest={navigation.subAgentLinkFollowRequest}
+            hasOlderHistory={target.activeSessionState?.hasOlderHistory ===
               true}
+            loadingOlderHistory={target.activeSessionState
+              ?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
             subAgentResults={chatState.subAgentResults}
-            backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
+            backgroundBashStatuses={target.activeSessionState
+              ?.backgroundBashStatuses}
             backgroundBashProcesses={chatState.backgroundBashProcesses}
-            onLoadOlder={loadOlderHistory}
-            onNavigateToSubAgent={handleNavigateToSubAgentLink}
-            onCancelToolCall={handleCancelToolCall}
+            onLoadOlder={actions.loadOlderHistory}
+            onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+            onCancelToolCall={actions.handleCancelToolCall}
             onBackgroundToolCall={(target) =>
               chatController.controlRun(
-                activeSessionState,
+                target.activeSessionState,
                 'background_tool',
                 target,
               )}
-            onCancelSubAgent={handleCancelSubAgent}
+            onCancelSubAgent={actions.handleCancelSubAgent}
             messageEditingDisabled={chatState.loadingHistory ||
-              isRunActive(activeSessionState) ||
-              (activeSessionState?.queue?.length ?? 0) > 0}
-            onEditMessage={handleEditMessage}
+              isRunActive(target.activeSessionState) ||
+              (target.activeSessionState?.queue?.length ?? 0) > 0}
+            onEditMessage={actions.handleEditMessage}
           />
         </div>
-        <div class="chat-view__footer-stack" bind:this={footerStackElement}>
-          {#if subAgentSessionActive}
+        <div
+          class="chat-view__footer-stack"
+          bind:this={layout.footerStackElement}
+        >
+          {#if navigation.subAgentSessionActive}
             <Banner
               variant="info"
               class="chat-view__footer-banner"
@@ -2234,7 +824,7 @@
                   )}
                 </p>
                 <p class="chat-view__footer-banner-hint">
-                  {subAgentParentTarget
+                  {navigation.subAgentParentTarget
                     ? t(
                         'chat.subagentSessionParentHint',
                         'Messages here continue this sub-agent session. Return to the parent session when you are done.',
@@ -2249,9 +839,9 @@
                 variant="secondary"
                 class="chat-view__subagent-session-return"
                 disabled={chatState.loadingHistory}
-                onClick={handleReturnToCurrentSession}
+                onClick={navigation.handleReturnToCurrentSession}
               >
-                {subAgentParentTarget
+                {navigation.subAgentParentTarget
                   ? t('chat.returnToParentSession', 'Return to parent session')
                   : t(
                       'chat.returnToCurrentSession',
@@ -2313,52 +903,57 @@
           {/if}
           <div class="chat-view__measure">
             <QueuedMessages
-              queuedMessages={activeSessionState?.queue ?? []}
-              onRemoveQueuedMessage={handleRemoveQueuedMessage}
-              onEditQueuedMessage={handleEditQueuedMessage}
+              queuedMessages={target.activeSessionState?.queue ?? []}
+              onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
+              onEditQueuedMessage={actions.handleEditQueuedMessage}
             />
           </div>
           <div class="chat-view__composer-shell">
-            {#if chatToast}
+            {#if actions.chatToast}
               <div
                 class="chat-view__command-toast"
                 role="status"
                 aria-live="polite"
               >
-                <p class="chat-view__command-toast-message">{chatToast}</p>
+                <p class="chat-view__command-toast-message">
+                  {actions.chatToast}
+                </p>
               </div>
             {/if}
             {#if composerAvailable}
               <ChatComposer
                 disabled={composerDisabled}
-                isRunning={isRunActive(activeSessionState)}
+                isRunning={isRunActive(target.activeSessionState)}
                 cancelling={chatState.cancellingRun}
                 draftKey={composerDraftKey}
                 historyKey={composerHistoryKey}
-                focusRequest={composerFocusRequest}
+                focusRequest={layout.composerFocusRequest}
                 availableSkills={chatState.availableSkills}
-                contextUsage={activeSessionState?.contextUsage}
-                compactionState={activeSessionState?.currentRun?.status ===
-                'running'
-                  ? (activeSessionState.currentRun.controls?.compaction ??
-                    'unavailable')
+                contextUsage={target.activeSessionState?.contextUsage}
+                compactionState={target.activeSessionState?.currentRun
+                  ?.status === 'running'
+                  ? (target.activeSessionState.currentRun.controls
+                      ?.compaction ?? 'unavailable')
                   : 'unavailable'}
                 compactionSubmitting={Boolean(
-                  activeSessionState?.pendingRunControls?.compact,
+                  target.activeSessionState?.pendingRunControls?.compact,
                 )}
                 onForceCompaction={() =>
-                  chatController.controlRun(activeSessionState, 'compact')}
-                contextWindow={activeAgent?.context_window}
-                usage={activeSessionState?.usage}
-                sessionUsage={activeSessionState?.sessionUsage}
+                  chatController.controlRun(
+                    target.activeSessionState,
+                    'compact',
+                  )}
+                contextWindow={target.activeAgent?.context_window}
+                usage={target.activeSessionState?.usage}
+                sessionUsage={target.activeSessionState?.sessionUsage}
                 onSendMessage={composerSendMessage}
-                onCancelRun={handleCancelRun}
-                onTranscriptionError={handleTranscriptionError}
+                onCancelRun={actions.handleCancelRun}
+                onTranscriptionError={actions.handleTranscriptionError}
                 onListFiles={composerListFiles}
                 onLoadModelCatalog={composerLoadModelCatalog}
               >
                 {#snippet computerControl()}
-                  <ComputerUseControl onError={showChatToast} />
+                  <ComputerUseControl onError={actions.showChatToast} />
                 {/snippet}
               </ChatComposer>
             {:else}
@@ -2375,372 +970,17 @@
       <ChatActivityPanel
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
-        backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
+        backgroundBashStatuses={target.activeSessionState
+          ?.backgroundBashStatuses}
         backgroundBashProcesses={chatState.backgroundBashProcesses}
-        reflectionTasks={reflectionTaskRows(activeSessionState)}
-        parentSession={sessionParentLink}
-        onNavigateToSubAgent={handleNavigateToSubAgentLink}
-        onNavigateToParentSession={navigateToParentSession}
-        onOpenReflection={handleOpenReflection}
-        onCancelSubAgent={handleCancelSubAgent}
-        onCancelBackgroundProcess={handleCancelBackgroundProcess}
+        reflectionTasks={reflectionTaskRows(target.activeSessionState)}
+        parentSession={navigation.sessionParentLink}
+        onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+        onNavigateToParentSession={navigation.navigateToParentSession}
+        onOpenReflection={navigation.handleOpenReflection}
+        onCancelSubAgent={actions.handleCancelSubAgent}
+        onCancelBackgroundProcess={actions.handleCancelBackgroundProcess}
       />
     </div>
   {/if}
 </section>
-
-<style>
-  .chat-view {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--bg);
-  }
-
-  .chat-view[hidden] {
-    display: none;
-  }
-
-  .chat-view__surface {
-    position: relative;
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--bg);
-  }
-
-  .chat-view__content-shell {
-    position: relative;
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  /* Combined floating "Sessions | +" control at the top-left of the chat
-     surface. Stays fixed while the timeline scrolls underneath. The session
-     panel opens downward from this control as a floating overlay (not a
-     sidebar), so the chat surface always fills the full width. */
-  .chat-view__session-bar {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    z-index: 2;
-    display: flex;
-    align-items: stretch;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-lg);
-    background: var(--surface-2);
-    box-shadow: var(--floating-elevation);
-    overflow: hidden;
-  }
-
-  .chat-view__session-bar-divider {
-    width: 1px;
-    align-self: stretch;
-    background: var(--border-2);
-  }
-
-  :global(.btn-secondary.chat-view__session-toggle) {
-    border: 0;
-    border-radius: 0;
-    padding: 7px 14px;
-    background: transparent;
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
-  }
-
-  :global(.btn-secondary.chat-view__session-toggle:hover:not(:disabled)) {
-    background: var(--accent-08);
-    color: var(--accent);
-  }
-
-  :global(.chat-view__session-toggle--active) {
-    background: var(--accent-12);
-    color: var(--accent);
-  }
-
-  :global(.btn-secondary.btn-icon.chat-view__new-session-fab),
-  :global(.btn-secondary.btn-icon.chat-view__workspace-action) {
-    border: 0;
-    border-radius: 0;
-    width: 36px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-med);
-  }
-
-  :global(
-    .btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled)
-  ),
-  :global(
-    .btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled)
-  ) {
-    background: var(--accent-08);
-    color: var(--accent);
-  }
-
-  :global(.chat-view__new-session-fab svg) {
-    fill: none;
-    stroke: currentcolor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .chat-view__timeline-shell {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  /* The composer stack floats over the full-height timeline: content scrolls
-    out from behind it instead of the viewport shrinking with every composer
-    autosize. The stack itself is click-transparent (its gradient scrim lets
-    wheel and pointer input reach the timeline beneath); only the actual
-    banners, queue editor, and composer catch input. */
-  .chat-view__footer-stack {
-    position: absolute;
-    /* Ends before the timeline's scrollbar column so the scrollbar stays
-      visible over its full height instead of disappearing behind us. */
-    right: var(--chat-scrollbar-width, 0px);
-    bottom: 0;
-    left: 0;
-    z-index: 3;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    padding-top: 26px;
-    background: linear-gradient(to top, var(--bg) 72%, transparent);
-    pointer-events: none;
-  }
-
-  .chat-view__footer-stack > :global(*) {
-    pointer-events: auto;
-  }
-
-  :global(.chat-view__state-banner) {
-    align-self: center;
-    width: min(calc(100% - 40px), 560px);
-    margin-block: auto;
-  }
-
-  .chat-view__notice-stack {
-    flex-shrink: 0;
-    padding: 10px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .chat-view__project-team {
-    display: flex;
-    flex-shrink: 0;
-    min-height: 38px;
-    padding: 0 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-
-  /* Left-aligned (no measure cap) so the team bar starts at the same left edge
-     as the identity agent tabs above. */
-  .chat-view__project-team-inner {
-    display: flex;
-    align-items: stretch;
-    gap: 2px;
-    min-width: 0;
-    overflow-x: auto;
-  }
-
-  /* Bold project-name label before the team tabs, marking the agents as that
-     project's team. The trailing divider separates it from the first tab. */
-  .chat-view__project-team-name {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    margin-right: 6px;
-    padding-right: 12px;
-    border-right: 1px solid var(--border);
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .chat-view__project-team-error {
-    display: flex;
-    align-items: center;
-    padding: 0 4px;
-    color: var(--red);
-    font-size: 12px;
-  }
-
-  /* The project team tabs mirror the identity bar's agent tabs (which are
-     scoped to ChatHeader), so the visual styling is restated locally. */
-  .chat-view__project-team .agent-tab {
-    display: flex;
-    height: 38px;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 7px;
-    padding: 0 14px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    color: var(--text-lo);
-    background: transparent;
-    font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
-    transition:
-      border-color 150ms ease,
-      color 150ms ease;
-  }
-
-  .chat-view__project-team .agent-tab:hover,
-  .chat-view__project-team .agent-tab:focus-visible {
-    color: var(--text-med);
-    outline: none;
-  }
-
-  .chat-view__project-team .agent-tab.active {
-    border-bottom-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .chat-view__project-team .tab-indicator {
-    width: 5px;
-    height: 5px;
-  }
-
-  .chat-view__project-team-empty {
-    display: flex;
-    align-items: center;
-    padding: 0 4px;
-    color: var(--text-lo);
-    font-size: 12px;
-  }
-
-  /* Center inner content on the same axis as the capped message column. Bars
-     (notice stack, composer) stay full-width; their content is capped to
-     `--chat-measure` and centered. `full` disables the cap (measure: none). */
-  .chat-view__measure {
-    width: 100%;
-    max-width: var(--chat-measure);
-    margin-inline: auto;
-  }
-
-  .chat-view__notice-inner {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  /* Chat-local bottom toast: floats just above the composer (same anchoring as
-     the composer's own attachment-error toast), centered on the chat measure. */
-  .chat-view__composer-shell {
-    position: relative;
-  }
-
-  .chat-view__command-toast {
-    position: absolute;
-    bottom: calc(100% + 10px);
-    left: 0;
-    right: 0;
-    z-index: 20;
-    width: 100%;
-    max-width: var(--chat-measure);
-    margin-inline: auto;
-    padding: 10px 12px;
-    border: 1px solid var(--border-2);
-    border-left: 2px solid var(--accent);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  .chat-view__command-toast-message {
-    margin: 0;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: 12.5px;
-    line-height: 1.4;
-    white-space: pre-wrap;
-  }
-
-  :global(.chat-view__footer-banner) {
-    flex-shrink: 0;
-    width: 100%;
-    max-width: var(--chat-measure);
-    margin: 0 auto 10px;
-    padding: 9px 20px 9px 12px;
-  }
-
-  .chat-view__footer-banner-copy {
-    min-width: 0;
-  }
-
-  .chat-view__footer-banner-actions {
-    display: flex;
-    flex-shrink: 0;
-    gap: 8px;
-  }
-
-  .chat-view__footer-banner-title,
-  .chat-view__footer-banner-hint {
-    margin: 0;
-  }
-
-  .chat-view__footer-banner-title {
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 500;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-  }
-
-  .chat-view__footer-banner-hint {
-    margin-top: 4px;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-  }
-
-  :global(.chat-view__subagent-session-return) {
-    flex-shrink: 0;
-  }
-
-  :global(.chat-view__no-model-action) {
-    flex-shrink: 0;
-  }
-
-  @media (max-width: 640px) {
-    .chat-view__notice-stack {
-      padding: 10px 14px;
-    }
-
-    .chat-view__content-shell {
-      flex-direction: column;
-    }
-
-    :global(.chat-view__footer-banner) {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
-    .chat-view__footer-banner-actions {
-      width: 100%;
-    }
-
-    :global(.chat-view__subagent-session-return) {
-      margin-right: 0;
-    }
-  }
-</style>

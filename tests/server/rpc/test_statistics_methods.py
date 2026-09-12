@@ -20,8 +20,8 @@ import pytest
 from core.chat.messages import ChatMessage
 from core.projects import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
 from core.sessions.format import write_bootstrap_marker
-from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.statistics_methods import (

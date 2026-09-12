@@ -366,10 +366,8 @@ class DeviceFlowEngine:
         client: httpx.AsyncClient,
         oauth_config: OAuthConfig,
     ) -> httpx.Response:
-        if self._is_openai_codex_flow(oauth_config):
-            return await self._post_openai_device_authorization(client, oauth_config)
-        if self._is_opencode_flow(oauth_config):
-            return await self._post_opencode_device_authorization(client, oauth_config)
+        if self._is_openai_codex_flow(oauth_config) or self._is_opencode_flow(oauth_config):
+            return await self._post_json_device_authorization(client, oauth_config)
 
         try:
             response = await client.post(
@@ -391,7 +389,7 @@ class DeviceFlowEngine:
         )
         return response
 
-    async def _post_opencode_device_authorization(
+    async def _post_json_device_authorization(
         self,
         client: httpx.AsyncClient,
         oauth_config: OAuthConfig,
@@ -436,28 +434,6 @@ class DeviceFlowEngine:
                     "Content-Type": "application/x-www-form-urlencoded",
                     "x-request-id": str(uuid.uuid4()),
                 },
-            )
-        except httpx.HTTPError as error:
-            raise wrap_network_error(error) from error
-
-        classify_http_status(
-            response.status_code,
-            idempotent=False,
-            detail=response.text,
-            response_headers=response.headers,
-        )
-        return response
-
-    async def _post_openai_device_authorization(
-        self,
-        client: httpx.AsyncClient,
-        oauth_config: OAuthConfig,
-    ) -> httpx.Response:
-        try:
-            response = await client.post(
-                oauth_config.device_auth_url,
-                json={"client_id": oauth_config.client_id},
-                headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error

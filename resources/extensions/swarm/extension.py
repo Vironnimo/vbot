@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from core.agents.temporary import TemporaryAgentConfig, TemporaryRunInput
+from core.agents.temporary import TemporaryRunInput
 from core.chat import CommandFeedback, CommandNavigation, CommandOutcome, ExtensionCommandContext
 from core.extensions import (
     ExtensionAPI,
@@ -19,30 +19,45 @@ from core.extensions import (
 from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission
 from core.sessions import SessionAddress, TemporarySessionBinding
-from core.tools import ToolContext, tool_failure, tool_success
-from core.tools.availability import normalize_tool_access
-from core.tools.tools import run_tool_worker
+from core.tools import ToolContext, tool_success
 from core.utils.ids import new_id
 
+from ._extension_values import (
+    Json,
+    _board_page,
+    _exact,
+    _failure,
+    _integer,
+    _management_page,
+    _page_arguments,
+    _pagination_arguments,
+    _participant_config,
+    _profile_cwd,
+    _reminder,
+    _string,
+    _swarm_command_argument,
+    _swarm_projection,
+    _validate_board,
+    _validate_profile_catalog,
+    _validate_state,
+)
+from ._registration import register as register
+from ._store_values import _validate_profile
 from .agent_text import (
-    BOARD_DESCRIPTION,
     BOARD_PARAMETERS,
     DEFAULT_INSTRUCTIONS,
     DEFAULT_PROMPT_BLOCKS,
     DEFAULT_REMINDERS,
     EMPTY_INBOX,
-    ERRORS,
-    INBOX_DESCRIPTION,
     INBOX_PARAMETERS,
     POST_SAVED,
     REMINDER_TEXTS,
     REPLAYED,
-    STATE_DESCRIPTION,
     STATE_PARAMETERS,
 )
-from .store import Page, SwarmStore, SwarmStoreError, _validate_profile
+from .store import SwarmStore, SwarmStoreError
 
-Json = dict[str, Any]
+__all__ = ["Json", "SwarmExtension", "register"]
 
 
 class SwarmExtension:
@@ -970,484 +985,3 @@ class SwarmExtension:
         if terminal_outcome == "completed":
             self._enqueue_wakes(binding.group_id)
         self._changed(binding.group_id, snapshot["settings_revision"])
-
-
-def _board_page(page: Page, arguments: Json) -> Json:
-    result: Json = {"entries": list(page.entries), "has_more": page.has_more}
-    if page.has_more:
-        result["next_call"] = {
-            "tool": "swarm_board",
-            "arguments": {**arguments, "cursor": page.cursor},
-        }
-    return result
-
-
-def _management_page(page: Page) -> Json:
-    result: Json = {"entries": list(page.entries), "has_more": page.has_more}
-    if page.has_more:
-        result["cursor"] = page.cursor
-    return result
-
-
-def _exact(arguments: Json, allowed: set[str], *, required: set[str] | None = None) -> None:
-    if set(arguments) - allowed or not (required or set()).issubset(arguments):
-        raise SwarmStoreError("invalid_arguments")
-
-
-def _string(arguments: Json, key: str) -> str:
-    value = arguments.get(key)
-    if not isinstance(value, str) or not value:
-        raise SwarmStoreError("invalid_arguments", field=key)
-    return value
-
-
-def _integer(arguments: Json, key: str, *, minimum: int) -> int:
-    value = arguments.get(key)
-    if type(value) is not int or value < minimum:
-        raise SwarmStoreError("invalid_arguments", field=key)
-    return value
-
-
-def _page_arguments(arguments: Json) -> Json:
-    _exact(arguments, {"cursor", "limit"})
-    result: Json = {}
-    if "cursor" in arguments:
-        result["cursor"] = _string(arguments, "cursor")
-    if "limit" in arguments:
-        result["limit"] = _integer(arguments, "limit", minimum=1)
-    return result
-
-
-def _pagination_arguments(arguments: Json) -> Json:
-    return _page_arguments(
-        {key: value for key, value in arguments.items() if key in {"cursor", "limit"}}
-    )
-
-
-async def _profile_cwd(profile: Json, catalog: Json) -> tuple[Path, str | None]:
-    working = profile["working_directory"]
-    if working["kind"] == "directory":
-        path = Path(working["path"])
-        if not path.is_absolute() or not await run_tool_worker(lambda: path.is_dir()):
-            raise SwarmStoreError("invalid_arguments", field="working_directory")
-        return path, None
-    project = next(
-        (item for item in catalog.get("projects", []) if item.get("id") == working["project_id"]),
-        None,
-    )
-    if project is None:
-        raise SwarmStoreError("invalid_arguments", field="working_directory")
-    path = Path(project["cwd"])
-    if not await run_tool_worker(lambda: path.is_dir()):
-        raise SwarmStoreError("invalid_arguments", field="working_directory")
-    return path, working["project_id"]
-
-
-def _swarm_projection(swarm: Json) -> Json:
-    result = dict(swarm)
-    result.pop("execution_epoch", None)
-    return result
-
-
-def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
-    known_models = {item.get("id") for item in catalog.get("models", [])}
-    if any(item["model"] not in known_models for item in profile["participants"]):
-        raise SwarmStoreError("invalid_arguments", field="participants")
-    known_tools = {item.get("name") for item in catalog.get("tools", [])}
-    allowed = profile["tool_access"].get("allowed", [])
-    if any(item not in known_tools for item in allowed):
-        raise SwarmStoreError("invalid_arguments", field="tool_access")
-    project = next(
-        (
-            item
-            for item in catalog.get("projects", [])
-            if item.get("id") == profile["working_directory"].get("project_id")
-        ),
-        None,
-    )
-    known_skills = {item.get("name") for item in catalog.get("skills", [])}
-    known_skills.update((project or {}).get("allowed_skills", []))
-    if any(item != "*" and item not in known_skills for item in profile["allowed_skills"]):
-        raise SwarmStoreError("invalid_arguments", field="allowed_skills")
-
-
-def _participant_config(profile: Json, participant: Json, cwd: Path) -> TemporaryAgentConfig:
-    ordinal = participant["ordinal"]
-    formation = next(
-        item for item in profile["participants"] if (ordinal := ordinal - item["count"]) <= 0
-    )
-    return TemporaryAgentConfig(
-        model=participant["model"],
-        cwd=cwd,
-        tool_access=normalize_tool_access(profile["tool_access"]),
-        allowed_skills=profile["allowed_skills"],
-        tools=profile["tools"],
-        name=participant["display_name"],
-        temperature=formation.get("temperature"),
-        thinking_effort=formation.get("thinking_effort"),
-        fallback_models=formation.get("fallback_models", []),
-        instructions=profile["instructions"],
-        prompt_blocks=["core:agent_body", *profile["prompt_blocks"]],
-    )
-
-
-def _reminder(swarm: Json, event: str) -> str:
-    enabled = swarm["profile_snapshot"]["reminders"][event]
-    return REMINDER_TEXTS[event] if enabled else ""
-
-
-def _swarm_command_argument(argument: str) -> tuple[str, str]:
-    profile_id, separator, remainder = argument.strip().partition(" ")
-    prompt = remainder.strip()
-    if not profile_id or not separator or not prompt:
-        raise SwarmStoreError("invalid_arguments", field="argument")
-    if prompt.startswith('"'):
-        try:
-            value = json.loads(prompt)
-        except json.JSONDecodeError as error:
-            raise SwarmStoreError("invalid_arguments", field="argument") from error
-        if not isinstance(value, str) or not value.strip():
-            raise SwarmStoreError("invalid_arguments", field="argument")
-        prompt = value
-    return profile_id, prompt
-
-
-def _failure(
-    error: SwarmStoreError, arguments: Json | None = None, parameters: Json | None = None
-) -> Json:
-    code = error.code
-    if code in {"stale_epoch", "swarm_not_found"}:
-        code = "swarm_closed"
-    elif code == "participant_not_found":
-        code = "participant_inactive"
-    guidance = ERRORS.get(code, ERRORS["invalid_arguments"])
-    if code == "exact_message_arguments":
-        code = "invalid_arguments"
-    if error.field:
-        field = error.field
-        properties = (parameters or {}).get("properties", {})
-        if code == "inapplicable_field":
-            code = "invalid_arguments"
-            action = (arguments or {}).get("action")
-            guidance = (
-                f"Field '{field}' is not accepted for action '{action}'. "
-                "Omit it. No change was applied."
-            )
-        elif field in properties:
-            specification = properties[field]
-            correction = specification["description"]
-            if "enum" in specification:
-                correction += " Choose one of: " + ", ".join(specification["enum"]) + "."
-            guidance = f"{field}: {correction} No change was applied."
-        elif parameters is not None:
-            action = (arguments or {}).get("action")
-            guidance = (
-                f"Field '{field}' is not accepted"
-                + (f" for action '{action}'" if isinstance(action, str) else "")
-                + ". Omit it. No change was applied."
-            )
-        else:
-            guidance = f"{field}: {ERRORS['invalid_value']}"
-    return tool_failure(code, guidance)
-
-
-def _validate_board(arguments: Json) -> str:
-    fields = {
-        "list": {"cursor", "limit"},
-        "read": {"discussion_id", "message_id", "cursor", "limit"},
-        "post": {"discussion_id", "text", "reply_to", "recipients", "request_id"},
-        "create": {"title", "text", "request_id", "recipients"},
-        "join": {"discussion_id"},
-        "leave": {"discussion_id"},
-    }
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in fields:
-        raise SwarmStoreError("invalid_arguments", field="action")
-    unexpected = sorted(set(arguments) - {"action", *fields[action]})
-    if unexpected:
-        raise SwarmStoreError("inapplicable_field", field=unexpected[0])
-    required = {
-        "post": {"text", "request_id"},
-        "create": {"title", "text", "request_id"},
-        "join": {"discussion_id"},
-        "leave": {"discussion_id"},
-    }
-    for key in required.get(action, set()):
-        if key not in arguments:
-            raise SwarmStoreError("invalid_arguments", field=key)
-    for key, value in arguments.items():
-        if key == "limit":
-            valid = type(value) is int and 1 <= value <= 100
-        elif key == "recipients":
-            valid = isinstance(value, list) and all(
-                isinstance(item, str) and item for item in value
-            )
-        else:
-            maximum = {"text": 16000, "title": 120, "request_id": 128}.get(key)
-            valid = (
-                isinstance(value, str)
-                and bool(value.strip())
-                and (maximum is None or len(value) <= maximum)
-            )
-        if not valid:
-            raise SwarmStoreError("invalid_arguments", field=key)
-    if "message_id" in arguments and {"discussion_id", "cursor", "limit"} & arguments.keys():
-        raise SwarmStoreError("exact_message_arguments")
-    return action
-
-
-def _validate_state(arguments: Json) -> None:
-    unexpected = sorted(set(arguments) - {"cursor", "limit"})
-    if unexpected:
-        raise SwarmStoreError("inapplicable_field", field=unexpected[0])
-    for key, value in arguments.items():
-        valid = (key == "limit" and type(value) is int and 1 <= value <= 100) or (
-            key == "cursor" and isinstance(value, str) and bool(value.strip())
-        )
-        if not valid:
-            raise SwarmStoreError("invalid_arguments", field=key)
-
-
-def register(api: ExtensionAPI) -> None:
-    service = SwarmExtension(api)
-    api.operations.startup.append(service.start)
-    api.on_shutdown(service.close)
-    api.register_session_tool("swarm_board", BOARD_DESCRIPTION, BOARD_PARAMETERS, service.board)
-    api.register_session_tool("swarm_inbox", INBOX_DESCRIPTION, INBOX_PARAMETERS, service.inbox)
-    api.register_session_tool(
-        "swarm_state", STATE_DESCRIPTION, STATE_PARAMETERS, service.state, parallel_safe=False
-    )
-    api.register_session_runtime(
-        before_request=service._before_request,
-        run_finished=service._run_finished,
-        quiesce=service._quiesce,
-        acknowledge_delivery=service._acknowledge_delivery,
-        reconcile_tool_batch=service._reconcile_tool_batch,
-    )
-    api.register_page("swarms", "Swarms", "web/page.html")
-    api.register_command(
-        "swarm",
-        "Start a Swarm from a profile and goal.",
-        service.command,
-        argument="optional",
-        execution_mode="immediate",
-    )
-    descriptions = {
-        "catalog": "Read selectable Models, Tools, Skills, Projects, and prompt defaults.",
-        "profiles.preview": "Preview an unsaved profile's complete prompt without starting a Run.",
-        "profiles.list": "List saved profiles with pagination; use profiles.get for full content.",
-        "profiles.get": "Read one complete saved profile and its revision before editing.",
-        "profiles.save": "Create or replace a profile; updating requires its expected_revision.",
-        "profiles.delete": "Delete a saved profile at its expected_revision.",
-        "swarms.list": "List retained Swarm executions with pagination.",
-        "swarms.get": "Read one Swarm's state, saved profile snapshot, and participants.",
-        "swarms.events": "Read a page of Swarm lifecycle events after the supplied cursor.",
-        "swarms.settings": (
-            "Update delivery settings at expected_revision; preserve request_id on retry."
-        ),
-        "swarms.start": "Start a profile with a goal; reuse request_id only for the same request.",
-        "swarms.stop": "Stop a Swarm's active Runs while retaining its Sessions and Board.",
-        "swarms.delete": "Delete a stopped Swarm and its owned Sessions and Board.",
-        "swarms.resume": (
-            "Resume inactive participants in a retained Swarm, optionally selecting one."
-        ),
-        "swarms.usage": "Read Swarm usage, optionally restricted to one participant.",
-        "board.list": "List a Swarm's discussions with pagination.",
-        "board.read": "Read Board posts or one exact message; follow the returned cursor for more.",
-        "board.post": (
-            "Post to the Board; reuse request_id only for the same content and recipients."
-        ),
-    }
-    for name, schema in _OPERATION_SCHEMAS.items():
-        api.operations.register(
-            name,
-            descriptions[name],
-            schema,
-            _operation_handler(service, name),
-        )
-
-
-def _operation_handler(service: SwarmExtension, name: str) -> Callable[[Json], Awaitable[Json]]:
-    async def handler(arguments: Json) -> Json:
-        return await service.operation(name, arguments)
-
-    return handler
-
-
-_PAGE = {
-    "type": "object",
-    "properties": {
-        "cursor": {"type": "string"},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-    },
-    "additionalProperties": False,
-}
-_PROFILE_INPUT = {
-    "type": "object",
-    "description": (
-        "Complete profile; get the current profile before replacement. Choose Model, Tool, "
-        "Skill, and Project ids from catalog. For creation, replace the example's Model and "
-        "absolute server directory. working_directory can instead be "
-        "{kind: project, project_id: <id>}. Formation rows also accept thinking_effort, "
-        "temperature, and fallback_models. Optional profile fields: slug, tools (per-Tool "
-        "settings), allowed_skills, instructions, prompt_blocks, reminders, and delivery. "
-        "catalog returns prompt_defaults and reminder_texts; use those to compose instructions. "
-        "Save returns the full normalized profile with defaults and revision. Updating "
-        "preserves its id and uses that revision as expected_revision; creation uses null."
-    ),
-    "examples": [
-        {
-            "schema_version": 1,
-            "name": "Review",
-            "participants": [{"model": "<model-id-from-catalog>", "count": 2}],
-            "working_directory": {"kind": "directory", "path": "<absolute-server-directory>"},
-            "tool_access": {"mode": "selected", "allowed": []},
-        }
-    ],
-}
-_OPERATION_SCHEMAS: dict[str, Json] = {
-    "profiles.preview": {
-        "type": "object",
-        "properties": {
-            "profile": _PROFILE_INPUT,
-            "formation_index": {"type": "integer", "minimum": 0},
-        },
-        "required": ["profile"],
-        "additionalProperties": False,
-    },
-    "catalog": {"type": "object", "properties": {}, "additionalProperties": False},
-    "profiles.list": _PAGE,
-    "profiles.get": {
-        "type": "object",
-        "properties": {"profile_id": {"type": "string", "minLength": 1}},
-        "required": ["profile_id"],
-        "additionalProperties": False,
-    },
-    "profiles.save": {
-        "type": "object",
-        "properties": {
-            "profile": _PROFILE_INPUT,
-            "expected_revision": {"type": ["integer", "null"], "minimum": 1},
-        },
-        "required": ["profile", "expected_revision"],
-        "additionalProperties": False,
-    },
-    "profiles.delete": {
-        "type": "object",
-        "properties": {
-            "profile_id": {"type": "string", "minLength": 1},
-            "expected_revision": {"type": "integer", "minimum": 1},
-        },
-        "required": ["profile_id", "expected_revision"],
-        "additionalProperties": False,
-    },
-    "swarms.list": _PAGE,
-    "swarms.get": {
-        "type": "object",
-        "properties": {"swarm_id": {"type": "string", "minLength": 1}},
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "swarms.delete": {
-        "type": "object",
-        "properties": {"swarm_id": {"type": "string", "minLength": 1}},
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "swarms.events": {
-        "type": "object",
-        "properties": {
-            "cursor": {"type": "string"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            "swarm_id": {"type": "string", "minLength": 1},
-        },
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "swarms.settings": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "delivery": {"type": "object"},
-            "expected_revision": {"type": "integer", "minimum": 1},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        },
-        "required": ["swarm_id", "delivery", "expected_revision", "request_id"],
-        "additionalProperties": False,
-    },
-    "swarms.start": {
-        "type": "object",
-        "properties": {
-            "profile_id": {"type": "string", "minLength": 1},
-            "prompt": {"type": "string", "minLength": 1, "maxLength": 16000},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-            "expected_profile_revision": {"type": "integer", "minimum": 1},
-            "working_directory": {"type": "string", "minLength": 1},
-        },
-        "required": ["profile_id", "prompt", "request_id"],
-        "additionalProperties": False,
-    },
-    "swarms.stop": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        },
-        "required": ["swarm_id", "request_id"],
-        "additionalProperties": False,
-    },
-    "swarms.resume": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "participant_id": {"type": "string", "minLength": 1},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        },
-        "required": ["swarm_id", "request_id"],
-        "additionalProperties": False,
-    },
-    "swarms.usage": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "participant_id": {"type": "string", "minLength": 1},
-        },
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "board.list": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "cursor": {"type": "string"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-        },
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "board.read": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "discussion_id": {"type": "string", "minLength": 1},
-            "message_id": {"type": "string", "minLength": 1},
-            "cursor": {"type": "string"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-        },
-        "required": ["swarm_id"],
-        "additionalProperties": False,
-    },
-    "board.post": {
-        "type": "object",
-        "properties": {
-            "swarm_id": {"type": "string", "minLength": 1},
-            "discussion_id": {"type": "string", "minLength": 1},
-            "text": {"type": "string", "minLength": 1, "maxLength": 16000},
-            "reply_to": {"type": "string", "minLength": 1},
-            "recipients": {"type": "array", "items": {"type": "string", "minLength": 1}},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        },
-        "required": ["swarm_id", "text", "request_id"],
-        "additionalProperties": False,
-    },
-}

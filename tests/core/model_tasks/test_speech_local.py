@@ -570,7 +570,7 @@ async def test_setup_command_reaps_cancelled_child_without_exposing_output(
     process.wait = AsyncMock(return_value=0)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
     kill_tree = AsyncMock()
-    monkeypatch.setattr("core.tools.process_manager.kill_process_tree_async", kill_tree)
+    monkeypatch.setattr("core.utils.processes.kill_process_tree_async", kill_tree)
     setup = LocalSpeechSetup()
     task = asyncio.create_task(setup._command(["python", "-m", "pip"], progress=True))
     await asyncio.sleep(0)

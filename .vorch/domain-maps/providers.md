@@ -8,6 +8,8 @@ Providers translate canonical vBot requests and responses at the external-servic
 
 A Provider can expose multiple Connection variants through one Adapter or route Models to different wire implementations inside a Provider-owned Adapter. Runtime selects only the outer Adapter from Provider config; per-Model protocol selection remains Provider policy.
 
+Internal source routing: shared Responses request construction stays in `github_copilot_responses.py`, with event decoding in `_responses_stream.py`, completed-output normalization in `_responses_output.py`, and shared wire values/policy protocol in `_responses_values.py`. OpenAI connection/authentication and HTTP fallback stay in `openai.py`; `_codex_websocket.py` owns the cached socket, route lock and connection-local Continuation using rendered payloads/headers. `_openai_policy.py` holds catalog and request policy. Ollama native transport stays in `ollama.py`, its Cloud Adapter in `_ollama_cloud.py`, and catalog/wire helpers in `_ollama_catalog.py` / `_ollama_wire.py`. OpenRouter keeps its Adapter in `openrouter.py`, with policy and task catalog projections in `_openrouter_policy.py` / `_openrouter_catalog.py`. OpenCode Zen's existing protocol dispatch stays in `opencode_zen.py`; `_opencode_zen_profiles.py` holds exact Model profiles and `_opencode_zen_gemini.py` its native Gemini wire translation. These are internal files of the existing Provider owners, with public Adapter imports preserved.
+
 ## Terms
 
 Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB terms live in `models.md`.
@@ -59,7 +61,8 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Account id grammar and environment-key derivation: `core/providers/accounts.py`
 - Credential, enablement, and usability resolution: `core/providers/credentials.py`
 - OAuth persistence/refresh and device flow: `core/providers/token_store.py`, `token_getter.py`, `auth_flow.py`
-- Adapter contract, canonical terminal outcomes, Tool-call candidate normalization and target-wire identifier profiles, and shared HTTP/error layer: `core/providers/adapter.py`, `_http_shared.py`, `errors.py`
+- Adapter contract, canonical terminal outcomes and request budgeting: `core/providers/adapter.py`; internal `_tool_calls.py` owns candidate normalization, Result projection and target-wire identifier profiles, re-exported through the existing Adapter API. Shared HTTP/error handling stays in `_http_shared.py` and `errors.py`.
+- Compatible Chat Completions transport and overridable policy: `openai_compatible.py`; internal `_chat_completions_wire.py`, `_chat_completions_stream.py`, `_chat_completions_catalog.py` and `_chat_completions_constants.py` hold complete serialization, decoder and catalog functions. Compatible Messages transport and policy: `anthropic_compatible.py`; `_messages_stream.py` holds the complete stateful decoder, `_messages_wire.py` owns message/cache serialization and response projection, and `_messages_constants.py` holds the wire constants. Concrete Adapters still extend the same base classes.
 - Shared reasoning decision policy: `core/providers/reasoning.py`
 - Shared non-strict Tool-schema rendering: `core/providers/tool_schema.py`
 - Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates
@@ -79,6 +82,10 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Kernel-internal note messages (`role: "note"`) never reach adapters: Chat embeds persisted notes into requests as system reminders before wire translation. See `model-communication.md`.
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
+
+Provider test suites under `tests/core/providers/` separate configuration/catalog, request construction, completed responses, streaming, and authentication/lifecycle behavior. Shared fixtures and captured wire payloads remain in the existing `*_test_support.py` and focused `*_helpers.py` modules.
+
+The Tool-contract probe keeps its CLI in `scripts/probe_provider_tool_call.py`; scenarios, workflows and measurement helpers live under `scripts/provider_probe/`. The exact Reasoning probe CLI keeps orchestration in `scripts/probe_reasoning_replay_exact.py`, with connection preparation in `_reasoning_probe_connection.py` and wire/evidence helpers in `_reasoning_probe_wire.py`.
 
 ## References
 

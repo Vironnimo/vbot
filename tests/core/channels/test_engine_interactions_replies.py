@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import core.channels._conversation_content as content_module
+import core.channels._conversation_routing as routing_module
+from core.channels import ChannelStorage
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
-from core.channels.channels import ChannelStorage
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -226,7 +228,7 @@ async def test_direct_reply_does_not_reference_message(tmp_path: Path) -> None:
 
 
 def test_format_interaction_note_lists_tapped_button_and_full_keyboard() -> None:
-    note = engine_module._format_interaction_note(
+    note = content_module._format_interaction_note(
         make_conversation(kind="group", user_id=50, user_display_name="Alice"),
         _interaction_event(),
     )
@@ -240,7 +242,7 @@ def test_format_interaction_note_lists_tapped_button_and_full_keyboard() -> None
 
 
 def test_format_interaction_note_omits_tapper_in_dm() -> None:
-    note = engine_module._format_interaction_note(
+    note = content_module._format_interaction_note(
         make_conversation(kind="direct", user_id=50, user_display_name="Alice"),
         _interaction_event(),
     )
@@ -367,7 +369,7 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
     anchor_metadata = sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
     )
-    assert anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == "origin-session"
+    assert anchor_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY] == "origin-session"
     assert transport.sent_texts == ["synced", "deleted"]
 
     duplicate = await engine.trigger_interaction_reply(conversation, event)
@@ -454,7 +456,7 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
 
     detached_session_id = sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
-    )[engine_module.ACTIVE_SESSION_METADATA_KEY]
+    )[routing_module.ACTIVE_SESSION_METADATA_KEY]
     assert detached_session_id not in {SESSION_ID, "origin-session"}
     assert sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=detached_session_id)
@@ -479,7 +481,7 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     sessions.create("assistant", session_id="origin-session")
     previous_metadata = {
         "existing": "preserved",
-        engine_module.ACTIVE_SESSION_METADATA_KEY: "prior-session",
+        routing_module.ACTIVE_SESSION_METADATA_KEY: "prior-session",
     }
     sessions.set_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),

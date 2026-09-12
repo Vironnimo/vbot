@@ -1,0 +1,348 @@
+.section-label,
+.secondary-pane__title,
+.detail-group-title,
+.tl-section-label {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+/* Shared Secondary bar contract. Settings defines the visual reference; the
+   master lists reuse its width, depth, divider, title hierarchy, and scroll
+   behavior while keeping their feature-specific list content. */
+.secondary-pane {
+  display: flex;
+  min-height: 0;
+  width: var(--secondary-sidebar-width);
+  min-width: var(--secondary-sidebar-width);
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--secondary-surface);
+}
+
+.secondary-pane__header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.secondary-pane__scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Inset master-list rows follow the Settings index geometry: the selection
+   surface stays clear of the pane edges, with a flush accent rail and a soft
+   radius only on the free right edge. Feature styles own the row contents. */
+.secondary-list {
+  padding: 12px;
+  scrollbar-gutter: auto;
+}
+
+.secondary-list__item {
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: transparent;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.secondary-list__item:hover,
+.secondary-list__item:focus-visible {
+  background: var(--surface-2);
+}
+
+.secondary-list__item:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent-40);
+  outline: none;
+}
+
+.secondary-list__item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* View chrome: the shared vertical rhythm above each view's feature content.
+   Views retain their own data layout; these classes own only the frame,
+   identity header, and local navigation/control surface. */
+.view-frame {
+  gap: var(--space-md);
+  padding: 24px 28px 28px;
+}
+
+.view-header {
+  display: flex;
+  min-width: 0;
+  flex-shrink: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.view-header__intro {
+  min-width: 0;
+}
+
+.view-header__eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.view-header__title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-lg);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.view-header__subtitle {
+  max-width: 720px;
+  margin: 6px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.view-header__actions,
+.view-toolbar__actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.view-toolbar {
+  min-width: 0;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.view-toolbar--split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+}
+
+.view-toolbar--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.view-toolbar--tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px 0 4px;
+  overflow: hidden;
+}
+
+.view-toolbar--tabs .view-toolbar__tabs {
+  min-width: 0;
+  flex: 1;
+  border-bottom: 0;
+}
+
+.view-toolbar--tabs .view-toolbar__actions {
+  padding: 7px 2px;
+}
+
+.view-toolbar__label {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.view-toolbar__meta {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.modal-footer {
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-floating);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(2px);
+  cursor: zoom-out;
+  animation: modal-in 140ms ease;
+}
+
+.image-lightbox__image {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--r-sm);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  object-fit: contain;
+  cursor: default;
+}
+
+.image-lightbox__image.zoomable {
+  cursor: zoom-in;
+}
+
+/* Actual-size view: show the image at its natural dimensions and let the
+   overlay scroll. `margin: auto` keeps it centered when it fits and avoids the
+   flex-centering overflow clip when it does not. */
+.image-lightbox--zoomed .image-lightbox__image {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  cursor: zoom-out;
+}
+
+.image-lightbox__close {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  font-size: 24px;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.image-lightbox__close:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.toast-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 600;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  min-width: 240px;
+  max-width: 340px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  animation: toast-in 200ms ease;
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: all;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast.success {
+  border-left: 2px solid var(--green);
+}
+
+.toast.error {
+  border-left: 2px solid var(--red);
+}
+
+.toast.warn {
+  border-left: 2px solid var(--amber);
+}
+
+.toast.info {
+  border-left: 2px solid var(--accent);
+}
+
+.toast-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.toast-title {
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.toast-msg {
+  margin-top: 2px;
+  color: var(--text-med);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  padding: 0 0 0 4px;
+  color: var(--text-lo);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  transition: color 100ms ease;
+}
+
+.toast-close:hover {
+  color: var(--text-med);
+}

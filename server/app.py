@@ -1,19 +1,14 @@
-"""FastAPI application factory for the vBot server layer."""
+"""FastAPI HTTP routes and application factory."""
 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import logging
-import os
-from collections import OrderedDict
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, cast
-from urllib.parse import SplitResult, urlsplit
+from typing import Any, cast
 
 from core.attachments.attachments import (
     AttachmentNotFoundError,
@@ -27,125 +22,93 @@ from core.model_tasks import (
     SpeechUnsupportedTargetError,
 )
 from core.model_tasks.speech_types import SpeechProgress
-from core.runs import RUN_AGENT_ACTIVITY_FIELD, ChatRunManager, RunNotFoundError, RunStatus
-from core.settings import SettingsValidationError, load_runtime_settings_json
+from core.runs import RunNotFoundError
 from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
-from core.utils.log_viewer import LogViewer
 from core.utils.server_control import (
     CONTROL_SHUTDOWN_PATH,
     CONTROL_TOKEN_HEADER,
     is_authorized_control_token,
 )
-from server.clients import ClientRegistry
-from server.events import (
-    RESOURCE_KIND_CALENDAR,
-    RESOURCE_KIND_CLIENTS,
-    RESOURCE_KIND_CRON,
-    RESOURCE_KIND_EXTENSIONS,
-    RESOURCE_KIND_SESSIONS,
-    RESOURCE_KIND_TERMINALS,
-    ServerEventBus,
+from server._app_lifecycle import (
+    _app_chat_runs,
+    _fire_extension_startup,
+    _initialize_app_state,
+    _shutdown_device_flow_engine,
+    _shutdown_local_catalog_refresh,
+    _shutdown_log_viewer,
+    _shutdown_model_list_refreshes,
+    _shutdown_runtime,
+    _shutdown_statistics_warmup,
+    _start_statistics_warmup,
+    _unregister_bash_process_change_bridge,
+    _unregister_calendar_change_bridge,
+    _unregister_cron_change_bridge,
+    _unregister_run_event_bridge,
+    _unregister_session_completion_read_bridge,
+    _unregister_session_title_bridge,
+    _unregister_terminal_change_bridge,
 )
-from server.file_delivery import EXTENSION_ASSET_URL_PREFIX, PREVIEW_URL_PREFIX, FileDelivery
+from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
+from server._http_dependencies import (
+    _FASTAPI_IMPORT_ERROR,
+    FastAPI,
+    FastAPIType,
+    FileResponse,
+    HTTPException,
+    MultiPartException,
+    MultiPartParser,
+    RedirectResponse,
+    Request,
+    Response,
+    StarletteUploadFile,
+    StaticFiles,
+    StreamingResponse,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from server._origins import _BrowserOriginGuardMiddleware, _configured_browser_origins
+from server._streams import (
+    REPLAY_STATUS_RESUMED,
+    _active_runs_snapshot,
+    _bus_epoch,
+    _bus_last_sequence,
+    _close_log_stream,
+    _connection_replay_status,
+    _parse_after_sequence,
+    _parse_query_string,
+    _queues_snapshot,
+    _register_ws_client,
+    _replay_after_sequence,
+    _sse_run_events,
+    _stream_websocket_events,
+    _unregister_ws_client,
+)
+from server.file_delivery import PREVIEW_URL_PREFIX
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
-from server.rpc.event_bridge import (
-    bridge_run_to_event_bus,
-    publish_bash_process_status_changed,
-    publish_resource_changed,
-    reflection_source_session_id,
-)
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
-from server.rpc.payloads import remove_opaque_provider_metadata
-from server.rpc.statistics_methods import statistics_service
 
 JsonObject = dict[str, Any]
 
-
-class ServerBindState(TypedDict):
-    """Resolved bind metadata persisted in FastAPI app state."""
-
-    listen_host: str
-    listen_port: int
-    port_source: str
-
-
-_FASTAPI_IMPORT_ERROR: ModuleNotFoundError | None
-
-try:
-    from fastapi import (  # type: ignore[import-not-found]
-        FastAPI,
-        HTTPException,
-        Request,
-        UploadFile,
-        WebSocket,
-    )
-    from fastapi.responses import (  # type: ignore[import-not-found]
-        FileResponse,
-        RedirectResponse,
-        Response,
-        StreamingResponse,
-    )
-    from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
-    from starlette.datastructures import (  # type: ignore[import-not-found]
-        UploadFile as StarletteUploadFile,
-    )
-    from starlette.formparsers import (  # type: ignore[import-not-found]
-        MultiPartException,
-        MultiPartParser,
-    )
-    from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
-except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server extra is absent.
-    _FASTAPI_IMPORT_ERROR = exc
-    FastAPI = None  # type: ignore[assignment,misc]
-    FileResponse = Any  # type: ignore[misc,assignment]
-    HTTPException = Any  # type: ignore[misc,assignment]
-    Request = Any  # type: ignore[misc,assignment]
-    Response = Any  # type: ignore[misc,assignment]
-    StaticFiles = Any  # type: ignore[misc,assignment]
-    StarletteUploadFile = Any  # type: ignore[misc,assignment]
-    StreamingResponse = Any  # type: ignore[misc,assignment]
-    UploadFile = Any  # type: ignore[misc,assignment]
-    WebSocket = Any  # type: ignore[misc,assignment]
-    WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
-    MultiPartException = Exception  # type: ignore[misc,assignment]
-    MultiPartParser = object  # type: ignore[misc,assignment]
-else:
-    _FASTAPI_IMPORT_ERROR = None
-
-if TYPE_CHECKING:
-    from fastapi import FastAPI as FastAPIType  # type: ignore[import-not-found]
-
-    from core.runtime import Runtime
-else:
-    FastAPIType = Any
-
 WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
+
 WEBUI_DOCUMENT_CACHE_HEADERS = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
     "Expires": "0",
 }
-DEFAULT_SERVER_HOST = "127.0.0.1"
-DEFAULT_SERVER_PORT = 8420
-DEFAULT_SERVER_PORT_SOURCE = "default"
+
 UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
+
 MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES = 65_536
+
 MULTIPART_MAX_FORM_FIELDS = 16
-SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
-WS_HEARTBEAT_INTERVAL_SECONDS = 25.0
-REPLAY_STATUS_FRESH = "fresh"
-REPLAY_STATUS_RESUMED = "resumed"
-REPLAY_STATUS_GAP = "gap"
-REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
-HTTP_ORIGIN_REJECTED_STATUS_CODE = 403
-WEBSOCKET_POLICY_VIOLATION_CODE = 1008
+
 JSON_MEDIA_TYPE = "application/json"
+
 JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
-HTTP_ORIGIN_SCHEMES = frozenset({"http", "https"})
-ORIGIN_HEADER_NAME = b"origin"
-HOST_HEADER_NAME = b"host"
 
 
 class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
@@ -181,152 +144,6 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
                 )
             self._current_file_size_bytes = next_size_bytes
         super().on_part_data(data, start, end)
-
-
-class _BrowserOriginGuardMiddleware:
-    """Reject browser transports whose Origin is not a configured server origin."""
-
-    def __init__(
-        self,
-        app: Any,
-        *,
-        allowed_origins: frozenset[tuple[str, str, int]],
-        same_origin_ip_port: int | None,
-    ) -> None:
-        self._app = app
-        self._allowed_origins = allowed_origins
-        self._same_origin_ip_port = same_origin_ip_port
-
-    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
-        scope_type = scope.get("type")
-        # Sandboxed documents have an opaque Origin. Only read-only preview
-        # asset routes admit it; their handler still validates the capability.
-        if (
-            scope_type == "http"
-            and scope.get("method") in {"GET", "HEAD"}
-            and str(scope.get("path", "")).startswith(
-                (PREVIEW_URL_PREFIX, EXTENSION_ASSET_URL_PREFIX)
-            )
-            and _scope_header_values(scope, ORIGIN_HEADER_NAME) == ["null"]
-        ):
-            await self._app(scope, receive, send)
-            return
-        if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(
-            scope,
-            self._allowed_origins,
-            same_origin_ip_port=self._same_origin_ip_port,
-        ):
-            await self._app(scope, receive, send)
-            return
-        if scope_type == "http":
-            response = Response(status_code=HTTP_ORIGIN_REJECTED_STATUS_CODE)
-            await response(scope, receive, send)
-            return
-        await send(
-            {
-                "type": "websocket.close",
-                "code": WEBSOCKET_POLICY_VIOLATION_CODE,
-                "reason": "Cross-origin WebSocket connections are forbidden",
-            }
-        )
-
-
-def _scope_has_allowed_origin(
-    scope: MutableMapping[str, Any],
-    allowed_origins: frozenset[tuple[str, str, int]],
-    *,
-    same_origin_ip_port: int | None,
-) -> bool:
-    origin_values = _scope_header_values(scope, ORIGIN_HEADER_NAME)
-    if not origin_values:
-        return True
-    if len(origin_values) != 1:
-        return False
-    origin = _parse_origin(origin_values[0])
-    if origin is None:
-        return False
-    if origin in allowed_origins:
-        return True
-    if (
-        same_origin_ip_port is None
-        or origin[2] != same_origin_ip_port
-        or not _is_ip_literal(origin[1])
-    ):
-        return False
-    target_scheme = _http_scheme(scope.get("scheme"))
-    host_values = _scope_header_values(scope, HOST_HEADER_NAME)
-    if target_scheme is None or len(host_values) != 1:
-        return False
-    target = _parse_origin(f"{target_scheme}://{host_values[0]}")
-    return target is not None and origin == target
-
-
-def _scope_header_values(scope: MutableMapping[str, Any], name: bytes) -> list[str]:
-    headers = scope.get("headers")
-    if not isinstance(headers, list):
-        return []
-    return [
-        value.decode("latin-1")
-        for key, value in headers
-        if isinstance(key, bytes) and isinstance(value, bytes) and key.lower() == name
-    ]
-
-
-def _http_scheme(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    return {"http": "http", "https": "https", "ws": "http", "wss": "https"}.get(value.casefold())
-
-
-def _parse_origin(value: str) -> tuple[str, str, int] | None:
-    if value == "null":
-        return None
-    try:
-        parsed = urlsplit(value)
-        port = parsed.port
-    except ValueError:
-        return None
-    if not _is_serialized_origin(parsed):
-        return None
-    scheme = parsed.scheme.casefold()
-    default_port = 443 if scheme == "https" else 80
-    effective_port = default_port if port is None else port
-    return scheme, cast(str, parsed.hostname).casefold(), effective_port
-
-
-def _configured_browser_origins(server_bind: ServerBindState) -> frozenset[tuple[str, str, int]]:
-    """Return browser origins directly bound by this server, never request headers."""
-    host = server_bind["listen_host"]
-    if host in {"0.0.0.0", "::"}:
-        return frozenset()
-    origin = _parse_origin(f"http://{_format_origin_host(host)}:{server_bind['listen_port']}")
-    if origin is None:
-        raise RuntimeError(f"Invalid server bind host for browser origin guard: {host!r}")
-    return frozenset({origin})
-
-
-def _is_ip_literal(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return True
-
-
-def _format_origin_host(host: str) -> str:
-    return f"[{host}]" if ":" in host and not host.startswith("[") else host
-
-
-def _is_serialized_origin(parsed: SplitResult) -> bool:
-    return (
-        parsed.scheme.casefold() in HTTP_ORIGIN_SCHEMES
-        and parsed.hostname is not None
-        and parsed.username is None
-        and parsed.password is None
-        and not parsed.path
-        and not parsed.query
-        and not parsed.fragment
-    )
 
 
 def _require_json_media_type(request: Request) -> None:
@@ -881,202 +698,6 @@ def create_app(
     return app
 
 
-def _initialize_app_state(
-    app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
-) -> None:
-    app.state.runtime = runtime
-    app.state.chat_runs = runtime.chat_run_manager
-    app.state.event_bus = ServerEventBus()
-    set_extension_change_publisher = getattr(runtime, "set_extension_change_publisher", None)
-    if callable(set_extension_change_publisher):
-        set_extension_change_publisher(
-            lambda owner, resource, ids, revision: publish_resource_changed(
-                app.state,
-                RESOURCE_KIND_EXTENSIONS,
-                scope={
-                    "owner": owner,
-                    "resource": resource,
-                    "ids": list(ids),
-                    "revision": revision,
-                },
-            )
-        )
-    app.state.client_registry = ClientRegistry()
-    app.state.file_delivery = FileDelivery()
-    app.state.run_event_bridge_run_ids = OrderedDict()
-    app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
-    app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
-    app.state.session_completion_read_bridge_unsubscribe = _register_session_completion_read_bridge(
-        app.state
-    )
-    app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
-    app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
-    app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
-    app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
-        app.state
-    )
-    app.state.chat_loop = runtime.chat_loop
-    app.state.streaming_chat_loop = runtime.streaming_chat_loop
-    app.state.command_dispatcher = runtime.command_dispatcher
-    app.state.log_viewer = LogViewer(runtime.storage.data_dir)
-    app.state.agent_delete_lock = asyncio.Lock()
-    app.state.server_bind = dict(server_bind)
-
-
-def _register_run_event_bridge(state: Any) -> Any:
-    chat_runs = _app_chat_runs(state)
-    add_callback = getattr(chat_runs, "add_run_started_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda run: bridge_run_to_event_bus(state, run))
-
-
-def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
-    runtime = state.runtime
-    sessions = getattr(runtime, "chat_sessions", None)
-    agents = getattr(runtime, "agents", None)
-    projects = getattr(runtime, "projects", None)
-    if not (
-        sessions is not None
-        and hasattr(sessions, "data_dir")
-        and callable(getattr(sessions, "list_with_metadata", None))
-        and callable(getattr(sessions, "get", None))
-        and callable(getattr(agents, "list", None))
-        and callable(getattr(projects, "list", None))
-        and callable(getattr(projects, "session_owning_agents", None))
-    ):
-        return None
-    service = statistics_service(state)
-    return asyncio.create_task(_warm_statistics_index(service))
-
-
-async def _warm_statistics_index(service: Any) -> None:
-    try:
-        await asyncio.to_thread(service.warm_index)
-    except Exception:
-        logging.getLogger("vbot.server.app").warning(
-            "Statistics index warmup failed",
-            exc_info=True,
-        )
-
-
-def _unregister_run_event_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "run_event_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.run_event_bridge_unsubscribe = None
-
-
-def _register_session_title_bridge(state: Any) -> Any:
-    sessions = getattr(state.runtime, "chat_sessions", None)
-    add_callback = getattr(sessions, "add_title_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
-        lambda address: publish_resource_changed(
-            state,
-            RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": address.agent_id},
-        )
-    )
-
-
-def _unregister_session_title_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "session_title_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.session_title_bridge_unsubscribe = None
-
-
-def _register_session_completion_read_bridge(state: Any) -> Any:
-    sessions = getattr(state.runtime, "chat_sessions", None)
-    add_callback = getattr(sessions, "add_completion_read_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
-        lambda address: publish_resource_changed(
-            state,
-            RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": address.agent_id},
-        )
-    )
-
-
-def _unregister_session_completion_read_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "session_completion_read_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.session_completion_read_bridge_unsubscribe = None
-
-
-def _register_cron_change_bridge(state: Any) -> Any:
-    cron_service = getattr(state.runtime, "cron_service", None)
-    add_callback = getattr(cron_service, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CRON))
-
-
-def _unregister_cron_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "cron_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.cron_change_bridge_unsubscribe = None
-
-
-def _register_calendar_change_bridge(state: Any) -> Any:
-    calendar_service = getattr(state.runtime, "calendar_service", None)
-    add_callback = getattr(calendar_service, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CALENDAR))
-
-
-def _unregister_calendar_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "calendar_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.calendar_change_bridge_unsubscribe = None
-
-
-def _register_terminal_change_bridge(state: Any) -> Any:
-    manager = getattr(state.runtime, "terminal_manager", None)
-    add_callback = getattr(manager, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
-        lambda terminal_id: publish_resource_changed(
-            state,
-            RESOURCE_KIND_TERMINALS,
-            scope={"terminal_id": terminal_id},
-        )
-    )
-
-
-def _unregister_terminal_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "terminal_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.terminal_change_bridge_unsubscribe = None
-
-
-def _register_bash_process_change_bridge(state: Any) -> Any:
-    manager = getattr(state.runtime, "process_manager", None)
-    add_callback = getattr(manager, "add_terminal_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
-        lambda notification: publish_bash_process_status_changed(state, notification)
-    )
-
-
-def _unregister_bash_process_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "bash_process_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
-        unsubscribe()
-    state.bash_process_change_bridge_unsubscribe = None
-
-
 async def _read_upload_file_with_limit(
     file: UploadFile,
     *,
@@ -1217,108 +838,10 @@ def _speech_http_exception(error: SpeechError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
-def _app_chat_runs(state: Any) -> ChatRunManager:
-    run_manager = getattr(state, "chat_runs", None)
-    if isinstance(run_manager, ChatRunManager):
-        return run_manager
-    raise HTTPException(status_code=503, detail="Chat run manager is unavailable")
-
-
 def _build_default_runtime(config: Config | None) -> Any:
     from core.runtime import Runtime
 
     return Runtime(config or Config())
-
-
-def _resolve_server_bind(
-    *, config: Config | None, server_bind: ServerBindState | None
-) -> ServerBindState:
-    if server_bind is not None:
-        return {
-            "listen_host": _coerce_bind_host(server_bind.get("listen_host")),
-            "listen_port": _coerce_bind_port(
-                server_bind.get("listen_port"),
-                source="server_bind.listen_port",
-            ),
-            "port_source": _coerce_bind_port_source(server_bind.get("port_source")),
-        }
-
-    if config is None:
-        return _default_server_bind()
-
-    if environment_port := os.environ.get("VBOT_SERVER_PORT"):
-        return {
-            "listen_host": DEFAULT_SERVER_HOST,
-            "listen_port": _coerce_bind_port(environment_port, source="VBOT_SERVER_PORT"),
-            "port_source": "VBOT_SERVER_PORT",
-        }
-
-    settings_path = config.data_dir / "settings.json"
-    try:
-        data, ignored = load_runtime_settings_json(settings_path)
-    except SettingsValidationError as exc:
-        logging.getLogger("vbot.server.app").warning(
-            "Ignoring invalid settings file %s for server bind and using the default port: %s",
-            settings_path,
-            exc,
-        )
-        return _default_server_bind()
-    if ignored:
-        details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored)
-        logging.getLogger("vbot.server.app").warning(
-            "Ignoring invalid Settings keys in %s for server bind while keeping valid siblings: %s",
-            settings_path,
-            details,
-        )
-    if data:
-        for key in ("server_port", "SERVER_PORT", "port", "PORT"):
-            value = data.get(key)
-            if value is not None:
-                return {
-                    "listen_host": DEFAULT_SERVER_HOST,
-                    "listen_port": _coerce_bind_port(value, source=f"settings.{key}"),
-                    "port_source": f"settings.{key}",
-                }
-
-    return _default_server_bind()
-
-
-def _default_server_bind() -> ServerBindState:
-    return {
-        "listen_host": DEFAULT_SERVER_HOST,
-        "listen_port": DEFAULT_SERVER_PORT,
-        "port_source": DEFAULT_SERVER_PORT_SOURCE,
-    }
-
-
-def _runtime_config(runtime: Any) -> Config | None:
-    """Read the runtime's public config when present — bind resolution runs pre-start."""
-    config = getattr(runtime, "config", None)
-    if isinstance(config, Config):
-        return config
-    return None
-
-
-def _coerce_bind_host(value: Any) -> str:
-    if not isinstance(value, str) or not value:
-        return DEFAULT_SERVER_HOST
-    return value
-
-
-def _coerce_bind_port(value: Any, *, source: str) -> int:
-    try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{source} must be an integer port") from exc
-    if port < 1 or port > 65535:
-        raise ValueError(f"{source} must be between 1 and 65535")
-    return port
-
-
-def _coerce_bind_port_source(value: Any) -> str:
-    if not isinstance(value, str) or not value:
-        return DEFAULT_SERVER_PORT_SOURCE
-    return value
 
 
 def _mount_webui(app: FastAPIType) -> None:
@@ -1345,294 +868,8 @@ def _mount_webui(app: FastAPIType) -> None:
         return FileResponse(webui_index_file, headers=WEBUI_DOCUMENT_CACHE_HEADERS)
 
 
-async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
-    stream_iter = stream.__aiter__()
-    disconnect_task = asyncio.create_task(websocket.receive())
-    # The pending stream read survives across loop iterations: cancelling it to
-    # handle a stray client frame would finalize the async generator and
-    # silently end server-push delivery.
-    event_task: asyncio.Task[Any] | None = None
-    try:
-        while True:
-            if event_task is None:
-                event_task = asyncio.create_task(stream_iter.__anext__())
-            done, _pending = await asyncio.wait(
-                {event_task, disconnect_task},
-                timeout=WS_HEARTBEAT_INTERVAL_SECONDS,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if not done:
-                await websocket.send_json(
-                    {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()}
-                )
-                continue
-
-            if disconnect_task in done:
-                message = disconnect_task.result()
-                if message.get("type") == "websocket.disconnect":
-                    return
-                # Any other inbound frame is ignored; keep listening for the
-                # disconnect without disturbing the pending log read.
-                disconnect_task = asyncio.create_task(websocket.receive())
-
-            if event_task in done:
-                completed_event_task = event_task
-                event_task = None
-                try:
-                    event = completed_event_task.result()
-                except StopAsyncIteration:
-                    return
-                await websocket.send_json(event)
-    finally:
-        disconnect_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await disconnect_task
-        if event_task is not None:
-            event_task.cancel()
-            with suppress(asyncio.CancelledError, StopAsyncIteration):
-                await event_task
-
-
-async def _shutdown_local_catalog_refresh(
-    task: asyncio.Task[Any] | None, logger: logging.Logger
-) -> None:
-    """Cancel the startup catalog-refresh task so shutdown never leaves it orphaned."""
-    if task is None:
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        return
-    except Exception:
-        logger.warning("Local model catalog refresh failed during shutdown", exc_info=True)
-
-
-async def _shutdown_statistics_warmup(task: asyncio.Task[None] | None) -> None:
-    """Cancel the optional derived-index warmup during server shutdown."""
-    if task is None:
-        return
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
-
-
-async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) -> None:
-    try:
-        await asyncio.wait_for(log_viewer.aclose(), timeout=1)
-    except TimeoutError:
-        logger.warning("Timed out while shutting down log viewer")
-
-
-async def _fire_extension_startup(runtime: Any) -> None:
-    fire = getattr(runtime, "fire_extension_startup", None)
-    if callable(fire):
-        await fire()
-
-
-async def _shutdown_runtime(runtime: Any) -> None:
-    aclose = getattr(runtime, "aclose", None)
-    if callable(aclose):
-        await aclose()
-        return
-    runtime.stop()
-
-
-async def _shutdown_model_list_refreshes(runtime: Any) -> None:
-    """Drain refresh tasks spawned by timed-out model.list requests."""
-    from server.rpc.connection_methods import shutdown_background_refresh_tasks
-
-    await shutdown_background_refresh_tasks(runtime)
-
-
-async def _shutdown_device_flow_engine(engine: Any, logger: logging.Logger) -> None:
-    if engine is None:
-        return
-    aclose = getattr(engine, "aclose", None)
-    if not callable(aclose):
-        return
-    try:
-        await asyncio.wait_for(aclose(), timeout=1)
-    except TimeoutError:
-        logger.warning("Timed out while shutting down OAuth device flow engine")
-
-
-async def _close_log_stream(stream: Any) -> None:
-    try:
-        await asyncio.wait_for(stream.aclose(), timeout=1)
-    except TimeoutError:
-        return
-
-
 def _is_reserved_server_path(path: str) -> bool:
     return path == "health" or path == "ws" or path.startswith("ws/") or path.startswith("api/")
-
-
-def _parse_after_sequence(raw: str | None) -> int:
-    """Parse the after_sequence query param, clamping to int ≥ 0 with 0 on failure."""
-    if raw is None:
-        return 0
-    try:
-        value = int(raw)
-    except (ValueError, TypeError):
-        return 0
-    return max(value, 0)
-
-
-def _parse_query_string(raw: str | None) -> str:
-    """Return the query string value as-is, or empty when absent/blank."""
-    if raw is None:
-        return ""
-    return raw.strip()
-
-
-def _register_ws_client(websocket: WebSocket) -> Any:
-    """Register the connecting window in the presence roster, if one is wired.
-
-    Reads the client-minted connection id and accessor type from the query
-    params and the browser/OS from the ``User-Agent`` header, then publishes a
-    ``clients`` reload-on-change signal so other windows refresh the roster.
-    Returns the registry entry (the unregister handle) or ``None`` when no
-    registry exists (CLI-only runtime stub).
-    """
-    registry = getattr(websocket.app.state, "client_registry", None)
-    if registry is None:
-        return None
-    entry = registry.register(
-        connection_id=_parse_query_string(websocket.query_params.get("connection_id")),
-        accessor=_parse_query_string(websocket.query_params.get("accessor")),
-        user_agent=websocket.headers.get("user-agent", ""),
-    )
-    publish_resource_changed(websocket.app.state, RESOURCE_KIND_CLIENTS)
-    return entry
-
-
-def _unregister_ws_client(state: Any, entry: Any) -> None:
-    """Remove a previously registered window and signal the roster change."""
-    if entry is None:
-        return
-    registry = getattr(state, "client_registry", None)
-    if registry is None:
-        return
-    registry.unregister(entry.id)
-    publish_resource_changed(state, RESOURCE_KIND_CLIENTS)
-
-
-def _bus_epoch(event_bus: ServerEventBus) -> str:
-    """Return the event bus generation epoch."""
-    return event_bus.epoch
-
-
-def _bus_last_sequence(event_bus: ServerEventBus) -> int:
-    """Return the bus's last issued sequence number."""
-    return event_bus.last_sequence
-
-
-def _connection_replay_status(
-    event_bus: ServerEventBus,
-    *,
-    client_epoch: str,
-    client_after_sequence: int,
-    last_sequence: int,
-) -> str:
-    """Classify whether a reconnect cursor can be replayed without a gap."""
-    server_epoch = _bus_epoch(event_bus)
-    if client_epoch and client_epoch != server_epoch:
-        return REPLAY_STATUS_EPOCH_CHANGED
-    if not client_epoch or client_after_sequence <= 0:
-        return REPLAY_STATUS_FRESH
-    if client_after_sequence > last_sequence:
-        return REPLAY_STATUS_GAP
-
-    retained_events = event_bus.events
-    if not retained_events or client_after_sequence == last_sequence:
-        return REPLAY_STATUS_RESUMED
-    oldest_retained_sequence = retained_events[0].get("sequence")
-    if not isinstance(oldest_retained_sequence, int):
-        return REPLAY_STATUS_GAP
-    if client_after_sequence < oldest_retained_sequence - 1:
-        return REPLAY_STATUS_GAP
-    return REPLAY_STATUS_RESUMED
-
-
-def _active_runs_snapshot(state: Any) -> list[JsonObject]:
-    """Build the active-runs list for the connection_ready hello frame.
-
-    Returns an empty list when the chat run manager is unavailable so the
-    handshake can still complete — the snapshot is connection-specific and
-    the client treats empty ``active_runs`` as authoritative for that scope.
-    """
-    try:
-        chat_runs = _app_chat_runs(state)
-    except HTTPException:
-        return []
-    snapshot: list[JsonObject] = []
-    active_runs = getattr(chat_runs, "active_runs", None)
-    if not callable(active_runs):
-        return snapshot
-    for run in active_runs():
-        if run.status != RunStatus.RUNNING:
-            continue
-        item: JsonObject = {
-            "run_id": run.id,
-            "agent_id": run.agent_id,
-            # Bare ``agent_id`` plus project so a reconnecting client can
-            # rebuild the address-keyed session and re-attach the run.
-            "project_id": run.project_id,
-            "session_id": run.session_id,
-            "run_kind": run.run_kind.value,
-            "status": RunStatus.RUNNING.value,
-            "started_at": run.created_at,
-            "iteration_count": run.iteration_count,
-            "controls": run.controls(),
-            "controls_sequence": run.events[-1].sequence if run.events else 0,
-            "sse_url": f"/api/runs/{run.id}/events",
-        }
-        if not getattr(run, "contributes_to_agent_activity", True):
-            item[RUN_AGENT_ACTIVITY_FIELD] = False
-        source_session_id = reflection_source_session_id(
-            getattr(getattr(state, "runtime", None), "chat_sessions", None), run
-        )
-        if source_session_id:
-            item["source_session_id"] = source_session_id
-        snapshot.append(item)
-    return snapshot
-
-
-def _queues_snapshot(state: Any) -> list[JsonObject]:
-    """Build the public Queue snapshot for the connection-ready hello frame."""
-    try:
-        chat_runs = _app_chat_runs(state)
-    except HTTPException:
-        return []
-    all_queued = getattr(chat_runs, "all_queued", None)
-    if not callable(all_queued):
-        return []
-
-    grouped: dict[tuple[str | None, str, str], list[JsonObject]] = {}
-    for session_key, item in all_queued():
-        if item.internal:
-            continue
-        grouped.setdefault(session_key, []).append(item.to_dict())
-
-    return [
-        {
-            "project_id": project_id,
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "items": grouped[(project_id, agent_id, session_id)],
-        }
-        for project_id, agent_id, session_id in sorted(
-            grouped,
-            key=lambda key: (key[0] or "", key[1], key[2]),
-        )
-    ]
-
-
-def _replay_after_sequence(request: Request) -> int:
-    if "after_sequence" in request.query_params:
-        return _parse_after_sequence(request.query_params.get("after_sequence"))
-    return _parse_after_sequence(request.headers.get("last-event-id"))
 
 
 def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | None, Any | None]:
@@ -1665,49 +902,3 @@ def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | N
     if resolved_file_path.is_file():
         return resolved_file_path
     return None
-
-
-async def _sse_run_events(
-    run: Any,
-    *,
-    after_sequence: int = 0,
-    heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
-    file_delivery: FileDelivery | None = None,
-) -> AsyncGenerator[str, None]:
-    async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
-        event_iterator = events.__aiter__()
-        event_task: asyncio.Task[Any] | None = None
-        try:
-            while True:
-                if event_task is None:
-                    event_task = asyncio.create_task(anext(event_iterator))
-                done, _pending = await asyncio.wait(
-                    {event_task},
-                    timeout=heartbeat_interval_seconds,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if not done:
-                    # A named transport-only event keeps quiet Tool calls from
-                    # looking like a dead connection. It has no Run sequence and
-                    # never enters timeline or replay state.
-                    yield "event: heartbeat\ndata: {}\n\n"
-                    continue
-                try:
-                    event = event_task.result()
-                except StopAsyncIteration:
-                    break
-                event_task = None
-                data = remove_opaque_provider_metadata(
-                    event.to_dict(),
-                    file_delivery=file_delivery,
-                )
-                yield (
-                    f"id: {event.sequence}\n"
-                    f"event: {event.type}\n"
-                    f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
-                )
-        finally:
-            if event_task is not None and not event_task.done():
-                event_task.cancel()
-                with suppress(asyncio.CancelledError, StopAsyncIteration):
-                    await event_task

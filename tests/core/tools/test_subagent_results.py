@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import core.subagents._completion as subagent_completion
+import core.subagents._constants as subagent_constants
+
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
     SUBAGENT_TOOL_NAME,
@@ -18,7 +21,6 @@ from .subagent_test_support import (
     make_context,
     make_runtime,
     pytest,
-    subagent_module,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -552,7 +554,7 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
         )
         await real_sleep(0)
 
-    monkeypatch.setattr(subagent_module.asyncio, "sleep", append_after_first_poll)
+    monkeypatch.setattr(subagent_completion.asyncio, "sleep", append_after_first_poll)
 
     # Act
     result = await _handle_subagent_result(
@@ -566,7 +568,7 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
     assert result["ok"] is True
     assert result["data"]["status"] == "failed"
     assert result["data"]["result"] == "late answer"
-    assert sleeps == [subagent_module.SESSION_RESULT_RETRY_DELAY_SECONDS]
+    assert sleeps == [subagent_constants.SESSION_RESULT_RETRY_DELAY_SECONDS]
 
 
 async def test_subagent_result_does_not_complete_from_intermediate_assistant_output(
@@ -700,7 +702,7 @@ async def test_subagent_result_reports_failed_after_bounded_jsonl_poll(
     async def record_sleep(delay_seconds: float) -> None:
         sleeps.append(delay_seconds)
 
-    monkeypatch.setattr(subagent_module.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(subagent_completion.asyncio, "sleep", record_sleep)
 
     # Act
     result = await _handle_subagent_result(
@@ -715,6 +717,6 @@ async def test_subagent_result_reports_failed_after_bounded_jsonl_poll(
     assert result["data"]["status"] == "failed"
     assert result["data"]["result"] is None
     assert sleeps == [
-        subagent_module.SESSION_RESULT_RETRY_DELAY_SECONDS,
-        subagent_module.SESSION_RESULT_RETRY_DELAY_SECONDS,
+        subagent_constants.SESSION_RESULT_RETRY_DELAY_SECONDS,
+        subagent_constants.SESSION_RESULT_RETRY_DELAY_SECONDS,
     ]

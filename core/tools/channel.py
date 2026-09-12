@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.attachments.attachments import _sniff_mime
-from core.channels.adapter import FileData, RouteFacts
-from core.channels.channels import (
+from core.channels import (
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
     ChannelNotFoundError,
 )
+from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.tools.arguments import optional_string, required_string
@@ -34,7 +34,7 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.channels.channels import ChannelService
+    from core.channels import ChannelService
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("tools.channel")

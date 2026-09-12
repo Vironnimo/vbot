@@ -1,414 +1,97 @@
 """Wakeword worker thread — detection → recording → transcription → sending.
 
 Runs in a daemon thread and publishes state transitions through the bridge
-so the WebUI can show live status via poll-based `getWakewordStatus()`.
-"""
+so the WebUI can show live status via poll-based `getWakewordStatus()`."""
 
 from __future__ import annotations
 
-import io
-import logging
-import os
-import random
-import re
 import threading
-import time
-import wave
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
-import numpy as np
 
-from desktop.wakeword.engine import MockWakewordEngine
+from desktop.wakeword._audio_capture import (
+    CapturedAudioFrame,
+    CaptureFormat,
+    MicrophoneCaptureError,
+    MicrophoneUnavailableError,
+    ResamplingInputStream,
+    _detection_audio_bytes,
+    _encode_captured_audio,
+    _end_aligned_vad_frames,
+    _read_capture_frame,
+)
+from desktop.wakeword._microphones import (
+    _select_capture_format,
+    list_microphones,
+    refresh_microphone_devices,
+)
+from desktop.wakeword._speech_detection import (
+    SpeechDetector,
+    _chunk_contains_speech,
+    _create_detection_vad,
+    _create_recording_fallback_vad,
+    _frame_is_speech,
+)
+from desktop.wakeword._worker_constants import (
+    _AUDIO_BACKEND_LOCK,
+    _CHANNELS,
+    _DETECTION_PRE_ROLL_CHUNKS,
+    _FRAME_SIZE_SAMPLES,
+    _HTTP_TIMEOUT,
+    _MAX_CONSECUTIVE_MIC_READ_ERRORS,
+    _MAX_RETRIES,
+    _MICROPHONE_RECONNECT_INTERVAL_SECONDS,
+    _NO_SPEECH_DETECTOR_YET,
+    _OUTCOME_CANCELLED,
+    _OUTCOME_NO_SPEECH,
+    _OUTCOME_SENT,
+    _OUTCOME_TRANSCRIPTION_FAILED,
+    _POST_DETECTION_LISTENING_HOLD_SECONDS,
+    _PRE_SPEECH_FRAME_COUNT,
+    _RETRYABLE_RPC_METHODS,
+    _RETRYABLE_STATUS_CODES,
+    _RPC_TIMEOUT,
+    _SAMPLE_RATE,
+    _SILENCE_FRAME_COUNT,
+    _SPEECH_START_FRAME_COUNT,
+    _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
+    _UPLOAD_BUDGET_FALLBACK_BYTES,
+    _UPLOAD_BUDGET_SETTING_PATH,
+    _VAD_FRAME_SIZE,
+    _WAV_HEADER_BYTES,
+    logger,
+)
+from desktop.wakeword._worker_modes import (
+    MockWakewordWorker,
+    UnavailableWakewordWorker,
+)
+from desktop.wakeword._worker_support import (
+    _backoff_sleep,
+    _is_voice_cancel_phrase,
+    _response_text_preview,
+    _sleep_while_running,
+    check_speech_to_text_readiness,
+)
 
-_NO_SPEECH_DETECTOR_YET = object()
-"""Marker separating "detector not yet resolved" from "resolved fail-open None"."""
-
-logger = logging.getLogger("vbot.desktop.wakeword.worker")
-
-_FRAME_SIZE_SAMPLES = 1280  # 80ms at 16kHz
-_SAMPLE_RATE = 16000
-_SAMPLE_WIDTH = 2  # 16-bit
-_CHANNELS = 1
-
-# Speech endpointing constants. The neural VAD (Silero, ONNX) consumes strict
-# 512-sample hops at 16 kHz with a 64-sample leading context, so the recording
-# loop reads 512-sample (32 ms) frames and each frame is exactly one hop. The
-# detector buffers partial hops for callers feeding other chunk sizes. WebRTC
-# VAD remains only as the fail-open fallback when the model cannot load.
-_SPEECH_VAD_HOP_SAMPLES = 512  # 32 ms — Silero v5's fixed inference hop
-_SPEECH_VAD_CONTEXT_SAMPLES = 64
-_SPEECH_VAD_SAMPLE_RATE = 16000
-_SPEECH_PROB_THRESHOLD = 0.5  # Silero's canonical speech threshold
-_SPEECH_PROB_NEG_THRESHOLD = 0.35  # exit threshold (threshold - 0.15)
-_VAD_MODE = 1  # Moderate aggressiveness (fallback paths remain WebRTC-based)
-_VAD_FRAME_DURATION_MS = 32
-_VAD_FRAME_SIZE = int(_SAMPLE_RATE * _VAD_FRAME_DURATION_MS / 1000)  # 512 samples
-
-# The legacy WebRTC detection gate slices each 80 ms detection chunk into
-# 10 ms frames; two speech slices (20 ms) open the gate so isolated blips
-# cannot, while real speech beginning mid-chunk still passes. Only used when
-# the neural speech detector is unavailable.
-_DETECTION_VAD_FRAME_BYTES = int(_SAMPLE_RATE * 0.010) * _SAMPLE_WIDTH  # 320 bytes
-_DETECTION_VAD_MIN_SPEECH_FRAMES = 2
-
-_SILENCE_DURATION_SECONDS = 1.0
-_SILENCE_FRAME_COUNT = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
-_SPEECH_START_TIMEOUT_SECONDS = 1.5
-_SPEECH_START_FRAME_COUNT = int(_SPEECH_START_TIMEOUT_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
-_PRE_SPEECH_DURATION_SECONDS = 0.36  # covers a full 0.32 s detection pre-roll at 32 ms frames
-_PRE_SPEECH_FRAME_COUNT = int(_PRE_SPEECH_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
-_DETECTION_PRE_ROLL_SECONDS = 0.32
-_DETECTION_PRE_ROLL_CHUNKS = int(_DETECTION_PRE_ROLL_SECONDS / (_FRAME_SIZE_SAMPLES / _SAMPLE_RATE))
-
-# Speech endpointing closes the recording itself; there is no fixed duration
-# cap. The only recording stop besides silence and worker shutdown is the
-# upload budget — the active ceiling the server enforces on every speech
-# upload — so a user may speak as long as the server would still accept the
-# audio. The budget is resolved once per worker (lazily, before the first
-# recording) via settings.get_path and falls back to the mirrored default
-# limit when the read fails, keeping a soft anti-runaway guard.
-_SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION = 0.9  # headroom for container overhead
-_UPLOAD_BUDGET_FALLBACK_BYTES = 104_857_600  # mirrors DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
-_UPLOAD_BUDGET_SETTING_PATH = "speech.upload_max_size_bytes"
-# The wave container adds a canonical 44-byte header before the PCM data.
-_WAV_HEADER_BYTES = 44
-_MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
-_MAX_RESAMPLER_FILL_READS = 16
-_MICROPHONE_RECONNECT_INTERVAL_SECONDS = 30.0
-_POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
-_INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
-
-# Local STT may download model weights on first use. Keep connection/upload
-# failures bounded separately from the longer inference response wait.
-_HTTP_TIMEOUT = httpx.Timeout(600.0, connect=10.0, write=30.0, pool=10.0)
-_RPC_TIMEOUT = 10.0
-_MAX_RETRIES = 3
-
-# Mock worker cadence. It walks the same detection→send state cycle the real
-# worker does — driven by a MockWakewordEngine, no audio hardware or network —
-# so the WebUI status indicator can be validated with --mock-wakeword.
-_MOCK_FRAME_SECONDS = 0.1
-_MOCK_STAGE_SECONDS = 0.8
-# Idle low scores then a spike, so the mock periodically triggers one full cycle.
-_MOCK_DEFAULT_SCORES = [0.0] * 25 + [1.0]
-
-# Mirrors the always-retryable set in core/utils/http_status.py for a
-# non-idempotent POST (audio transcription). Duplicated, not imported: the
-# desktop process must not import from core (see .vorch/PROJECT.md).
-_RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
-# Only RPC reads may be repeated after an ambiguous transport failure. Retrying
-# session.create or chat.stream can duplicate a committed Session or Run when
-# the server handled the first request but its response was lost.
-_RETRYABLE_RPC_METHODS = frozenset(["agent.get", "session.list", "settings.get_path"])
-
-_VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
-_COMMON_CAPTURE_SAMPLE_RATES = (16000, 48000, 44100, 32000)
-_CAPTURE_DTYPES = ("int16", "float32")
-_AUDIO_BACKEND_LOCK = threading.Lock()
-
-_OUTCOME_SENT = "sent"
-_OUTCOME_CANCELLED = "cancelled"
-_OUTCOME_NO_SPEECH = "no_speech"
-_OUTCOME_TRANSCRIPTION_FAILED = "transcription_failed"
-_TASK_SPEECH_TO_TEXT = "speech_to_text"
-_TASK_MODEL_STATUS_METHOD = "task_model.status"
-
-_ERROR_NO_SERVER = "no_server"
-_ERROR_SERVER_UNREACHABLE = "server_unreachable"
-_ERROR_SPEECH_TO_TEXT_UNCONFIGURED = "speech_to_text_unconfigured"
-_ERROR_SPEECH_TO_TEXT_UNAVAILABLE = "speech_to_text_unavailable"
-_ERROR_SPEECH_TO_TEXT_READINESS_FAILED = "speech_to_text_readiness_failed"
-
-
-class MicrophoneUnavailableError(RuntimeError):
-    """No usable input-device format could supply wakeword-quality audio."""
-
-
-class MicrophoneCaptureError(RuntimeError):
-    """A live input stream could not provide trustworthy command audio."""
-
-
-class SpeechDetector:
-    """Neural speech-or-noise decision for endpointing and detection gating.
-
-    Runs the bundled Silero VAD v5 ONNX model over 32 ms windows at 16 kHz and
-    answers a binary question per window: does this audio carry human speech,
-    or is it ambient noise (wind, rain, traffic, music)? Unlike the WebRTC VAD
-    fallback this decision is amplitude- and noise-robust, which is what keeps
-    the recording channel from being held open by continuous noise.
-
-    Loading can fail (onnxruntime or the model file absent); the caller treats
-    the detector factory's ``None`` result as fail-open, exactly like the
-    legacy WebRTC gate.
-
-    The binary decision applies hysteresis: speech opens at
-    ``_SPEECH_PROB_THRESHOLD`` and only closes below ``_SPEECH_PROB_NEG_THRESHOLD``,
-    so a word-internal dip never splits an utterance. ``reset()`` re-arms the
-    opening threshold for the next utterance.
-    """
-
-    def __init__(self, session: Any) -> None:
-        self._session = session
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
-        self._context = np.zeros(_SPEECH_VAD_CONTEXT_SAMPLES, dtype=np.float32)
-        self._pending = np.zeros(0, dtype=np.float32)
-        self._active = False
-
-    @classmethod
-    def create(cls) -> SpeechDetector | None:
-        """Load the bundled model, returning ``None`` when the stack is absent."""
-        try:
-            import onnxruntime
-
-            model_path = Path(__file__).with_name("models") / "silero_vad.onnx"
-            options = onnxruntime.SessionOptions()
-            options.inter_op_num_threads = 1
-            options.intra_op_num_threads = 1
-            options.log_severity_level = 3
-            session = onnxruntime.InferenceSession(
-                os.fspath(model_path),
-                providers=["CPUExecutionProvider"],
-                sess_options=options,
-            )
-            return cls(session)
-        except Exception:
-            logger.warning(
-                "Neural speech detector unavailable; WebRTC VAD fallback stays active",
-                exc_info=True,
-            )
-            return None
-
-    def reset(self) -> None:
-        """Clear model state so a new utterance starts from a clean history."""
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
-        self._context = np.zeros(_SPEECH_VAD_CONTEXT_SAMPLES, dtype=np.float32)
-        self._pending = np.zeros(0, dtype=np.float32)
-        self._active = False
-
-    def is_speech(self, pcm16: bytes) -> bool:
-        """Whether one 32 ms VAD frame still belongs to an active utterance.
-
-        Accepts one 512-sample PCM16 frame per call (the recording loop's
-        frame size, one Silero inference hop); internally the 64-sample
-        leading context is prepended. Other chunk sizes go through the
-        buffered ``probability`` path instead.
-        """
-        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-        if len(samples) == _SPEECH_VAD_HOP_SAMPLES:
-            probability = self._score_window(np.concatenate([self._context, samples]))
-        else:
-            probability = self.probability(samples)
-        if self._active:
-            if probability >= _SPEECH_PROB_NEG_THRESHOLD:
-                return True
-            self._active = False
-            return False
-        if probability >= _SPEECH_PROB_THRESHOLD:
-            self._active = True
-            return True
-        return False
-
-    def speech_probability(self, detection_pcm16: bytes) -> float:
-        """Score one 80 ms detection chunk on the 0..1 probability scale."""
-        samples = np.frombuffer(detection_pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-        return self.probability(samples)
-
-    def probability(self, samples_16k: np.ndarray) -> float:
-        """Score arbitrary 16 kHz float samples, returning the maximum window probability.
-
-        Partial hops are buffered inside the detector, so callers may feed any
-        chunk size; the model only ever sees complete 512-sample hops.
-        """
-        if self._session is None or len(samples_16k) == 0:
-            return 0.0
-        buffered = np.concatenate([self._pending, samples_16k])
-        max_probability = 0.0
-        consumed = 0
-        while consumed + _SPEECH_VAD_HOP_SAMPLES <= len(buffered):
-            hop = buffered[consumed : consumed + _SPEECH_VAD_HOP_SAMPLES]
-            probability = self._score_window(np.concatenate([self._context, hop]))
-            max_probability = max(max_probability, probability)
-            consumed += _SPEECH_VAD_HOP_SAMPLES
-        self._pending = np.array(buffered[consumed:], dtype=np.float32)
-        return max_probability
-
-    def _score_window(self, window: np.ndarray) -> float:
-        """Run one context-padded 512-sample window through the model."""
-        out, state = self._session.run(
-            None,
-            {
-                "input": window.reshape(1, -1).astype(np.float32),
-                "state": self._state,
-                "sr": np.array(_SPEECH_VAD_SAMPLE_RATE, dtype=np.int64),
-            },
-        )
-        self._state = np.asarray(state, dtype=np.float32)
-        self._context = window[-_SPEECH_VAD_CONTEXT_SAMPLES:]
-        probability: float = float(np.asarray(out).item())
-        return probability
-
-
-@dataclass(frozen=True)
-class CaptureFormat:
-    """Concrete device format used before conversion to 16 kHz PCM."""
-
-    device: int
-    name: str
-    sample_rate: int
-    dtype: str
-    host_api: str = ""
-
-
-@dataclass(frozen=True)
-class CapturedAudioFrame:
-    """One microphone read projected for detection and command recording."""
-
-    detection_pcm16: bytes
-    recording_pcm16: bytes
-    recording_sample_rate: int
-
-
-def check_speech_to_text_readiness(
-    server_url: str,
-    *,
-    post: Callable[..., httpx.Response] = httpx.post,
-) -> str | None:
-    """Return a stable activation error when server-side STT is not executable."""
-
-    normalized_server_url = (server_url or "").rstrip("/")
-    if not normalized_server_url:
-        return _ERROR_NO_SERVER
-
-    try:
-        response = post(
-            f"{normalized_server_url}/api/rpc",
-            json={
-                "method": _TASK_MODEL_STATUS_METHOD,
-                "params": {"task_type": _TASK_SPEECH_TO_TEXT},
-            },
-            timeout=_RPC_TIMEOUT,
-            trust_env=False,
-        )
-    except httpx.RequestError:
-        logger.warning("Speech-to-text readiness check could not reach the server", exc_info=True)
-        return _ERROR_SERVER_UNREACHABLE
-
-    if response.status_code != 200:
-        logger.warning(
-            "Speech-to-text readiness check failed: HTTP %s",
-            response.status_code,
-        )
-        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
-
-    try:
-        payload = response.json()
-    except ValueError:
-        logger.warning("Speech-to-text readiness check returned invalid JSON")
-        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        logger.warning("Speech-to-text readiness RPC was rejected")
-        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        logger.warning("Speech-to-text readiness RPC returned an invalid result")
-        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
-    if result.get("configured") is False:
-        return _ERROR_SPEECH_TO_TEXT_UNCONFIGURED
-    if result.get("usable") is False:
-        return _ERROR_SPEECH_TO_TEXT_UNAVAILABLE
-    if result.get("configured") is not True or result.get("usable") is not True:
-        logger.warning("Speech-to-text readiness RPC omitted readiness fields")
-        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
-    return None
-
-
-class ResamplingInputStream:
-    """Read a native sounddevice stream as 16 kHz mono signed PCM frames.
-
-    Native-rate command audio is preserved untouched; the 16 kHz detection
-    projection is produced by a stateful soxr stream whose anti-aliasing filter
-    keeps out-of-band device noise (fans, hiss) out of the detector's spectrum.
-    """
-
-    def __init__(self, stream: Any, capture_format: CaptureFormat) -> None:
-        self._stream = stream
-        self.capture_format = capture_format
-        self._resampler = _create_soxr_resampler(capture_format.sample_rate)
-        self._detection_samples = np.empty(0, dtype=np.int16)
-        self._recording_samples = np.empty(0, dtype=np.int16)
-        self._native_frame_remainder = 0
-
-    def start(self) -> None:
-        self._stream.start()
-
-    def read_pcm16(self, target_frames: int) -> bytes:
-        return self.read_capture_frame(target_frames).detection_pcm16
-
-    def read_capture_frame(self, target_frames: int) -> CapturedAudioFrame:
-        """Read native command audio plus its 16 kHz detection projection."""
-
-        if target_frames <= 0:
-            raise ValueError("target_frames must be positive")
-        native_numerator = (
-            target_frames * self.capture_format.sample_rate + self._native_frame_remainder
-        )
-        native_frames, self._native_frame_remainder = divmod(native_numerator, _SAMPLE_RATE)
-        native_frames = max(1, native_frames)
-
-        fill_reads = 0
-        while (
-            len(self._detection_samples) < target_frames
-            or len(self._recording_samples) < native_frames
-        ):
-            fill_reads += 1
-            if fill_reads > _MAX_RESAMPLER_FILL_READS:
-                raise MicrophoneCaptureError("Audio resampler stopped producing output")
-            self._read_native_samples(native_frames)
-
-        detection_pcm = self._detection_samples[:target_frames]
-        native_pcm = self._recording_samples[:native_frames]
-        self._detection_samples = self._detection_samples[target_frames:]
-        self._recording_samples = self._recording_samples[native_frames:]
-
-        return CapturedAudioFrame(
-            detection_pcm16=bytes(detection_pcm.tobytes()),
-            recording_pcm16=bytes(native_pcm.tobytes()),
-            recording_sample_rate=self.capture_format.sample_rate,
-        )
-
-    def _read_native_samples(self, frame_count: int) -> None:
-        """Append one native read and every resampler output sample to the FIFOs."""
-        audio, overflowed = self._stream.read(frame_count)
-        if overflowed:
-            raise MicrophoneCaptureError("Microphone input overflowed")
-        samples = np.asarray(audio).reshape(-1)
-        if len(samples) != frame_count:
-            raise MicrophoneCaptureError(
-                f"Microphone returned {len(samples)} samples instead of {frame_count}"
-            )
-        if self.capture_format.dtype == "float32":
-            normalized = np.clip(samples.astype(np.float32), -1.0, 1.0)
-            native_pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
-        else:
-            native_pcm = samples.astype(np.int16)
-        detection_pcm = (
-            native_pcm
-            if self._resampler is None
-            else np.asarray(self._resampler.resample_chunk(native_pcm), dtype=np.int16)
-        )
-        self._recording_samples = np.concatenate((self._recording_samples, native_pcm))
-        self._detection_samples = np.concatenate((self._detection_samples, detection_pcm))
-
-    def stop(self) -> None:
-        self._stream.stop()
-
-    def close(self) -> None:
-        self._stream.close()
+__all__ = [
+    "CaptureFormat",
+    "CapturedAudioFrame",
+    "MicrophoneCaptureError",
+    "MicrophoneUnavailableError",
+    "MockWakewordWorker",
+    "ResamplingInputStream",
+    "SpeechDetector",
+    "UnavailableWakewordWorker",
+    "WakewordWorker",
+    "check_speech_to_text_readiness",
+    "list_microphones",
+    "logger",
+    "refresh_microphone_devices",
+]
 
 
 class WakewordWorker:
@@ -1112,439 +795,3 @@ class WakewordWorker:
                 logger.warning("RPC %s request failed", method, exc_info=True)
                 return {}
         return {}
-
-
-# -- Helpers ----------------------------------------------------------------
-
-
-def _read_capture_frame(stream: Any, target_frames: int) -> CapturedAudioFrame:
-    reader = getattr(stream, "read_capture_frame", None)
-    if callable(reader):
-        frame = reader(target_frames)
-        if isinstance(frame, CapturedAudioFrame):
-            return frame
-        raise TypeError("Capture stream returned an invalid audio frame")
-    detection_pcm = stream.read_pcm16(target_frames)
-    return CapturedAudioFrame(
-        detection_pcm16=detection_pcm,
-        recording_pcm16=detection_pcm,
-        recording_sample_rate=_SAMPLE_RATE,
-    )
-
-
-def _detection_audio_bytes(
-    audio: bytes | tuple[CapturedAudioFrame, ...],
-) -> bytes:
-    if isinstance(audio, bytes):
-        return audio
-    return b"".join(frame.detection_pcm16 for frame in audio)
-
-
-def _encode_captured_audio(frames: list[CapturedAudioFrame]) -> bytes:
-    recording_sample_rate = frames[-1].recording_sample_rate
-    raw_frames = b"".join(
-        _resample_pcm16(
-            frame.recording_pcm16,
-            frame.recording_sample_rate,
-            recording_sample_rate,
-        )
-        for frame in frames
-    )
-    return _encode_wav(raw_frames, sample_rate=recording_sample_rate)
-
-
-def _resample_pcm16(audio: bytes, source_rate: int, target_rate: int) -> bytes:
-    if not audio or source_rate == target_rate:
-        return audio
-
-    import numpy as np
-    import soxr  # type: ignore[import-untyped]
-
-    samples = np.frombuffer(audio, dtype=np.int16)
-    return bytes(soxr.resample(samples, source_rate, target_rate).tobytes())
-
-
-def _create_soxr_resampler(source_rate: int) -> Any | None:
-    """Create a stateful int16 resampler, or None when capture is already 16 kHz."""
-    if source_rate == _SAMPLE_RATE:
-        return None
-
-    import soxr  # type: ignore[import-untyped]
-
-    return soxr.ResampleStream(source_rate, _SAMPLE_RATE, _CHANNELS, dtype="int16")
-
-
-def _encode_wav(raw_frames: bytes, *, sample_rate: int = _SAMPLE_RATE) -> bytes:
-    """Wrap mono 16-bit PCM frames in a WAV container."""
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(_CHANNELS)
-        wav_file.setsampwidth(_SAMPLE_WIDTH)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(raw_frames)
-    return buffer.getvalue()
-
-
-def _end_aligned_vad_frames(audio: bytes) -> list[bytes]:
-    """Split PCM into end-aligned full VAD frames, dropping incomplete leading audio."""
-    frame_bytes = _VAD_FRAME_SIZE * _SAMPLE_WIDTH
-    return [
-        audio[offset : offset + frame_bytes]
-        for offset in range(len(audio) % frame_bytes, len(audio), frame_bytes)
-    ]
-
-
-def _create_recording_fallback_vad() -> Any | None:
-    """Create the legacy WebRTC VAD used when the neural detector is absent."""
-    try:
-        import webrtcvad  # type: ignore[import-untyped]
-
-        return webrtcvad.Vad(_VAD_MODE)
-    except Exception:
-        logger.warning("WebRTC fallback VAD unavailable", exc_info=True)
-        return None
-
-
-def _frame_is_speech(
-    frame: CapturedAudioFrame,
-    detector: SpeechDetector | None,
-    fallback_vad: Any | None,
-) -> bool:
-    """Decide whether one 30 ms frame carries speech, with a fail-open bias.
-
-    The neural detector is authoritative when present. Without it (or on an
-    unexpected scoring error) the WebRTC fallback decides; a totally unavailable
-    stack counts frames as speech so a technical failure can never mute
-    recording — the worst case is today's noise-fragile behavior.
-    """
-    if detector is not None:
-        try:
-            return detector.is_speech(frame.detection_pcm16)
-        except Exception:
-            logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if fallback_vad is None:
-        return True
-    try:
-        verdict: bool = bool(fallback_vad.is_speech(frame.detection_pcm16, _SAMPLE_RATE))
-    except Exception:
-        return True
-    return verdict
-
-
-def _create_detection_vad() -> Any | None:
-    """Create the VAD that gates detection scores, or None when unavailable."""
-    try:
-        import webrtcvad  # type: ignore[import-untyped]
-
-        return webrtcvad.Vad(_VAD_MODE)
-    except Exception:
-        # A missing or broken VAD must not silently disable wake word
-        # detection — the gate fails open and scores stay ungated.
-        logger.warning("Detection VAD unavailable; wakeword scores stay ungated", exc_info=True)
-        return None
-
-
-def _chunk_contains_speech(
-    detection_pcm16: bytes,
-    speech_detector: SpeechDetector | None,
-    fallback_vad: Any | None,
-) -> bool:
-    """Whether one detection chunk carries enough speech to trust model scores.
-
-    Prefers the neural speech detector: ambient noise must not open the gate,
-    or wakeword scores would accumulate toward false activations in wind and
-    rain. Falls back to the legacy WebRTC VAD when no neural detector loaded,
-    keeping the previous 20 ms speech-slices rule. Both paths fail open — the
-    gate can never turn into an accidental mute.
-    """
-    if speech_detector is not None:
-        try:
-            return speech_detector.speech_probability(detection_pcm16) >= _SPEECH_PROB_THRESHOLD
-        except Exception:
-            logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if not fallback_vad or len(detection_pcm16) < _DETECTION_VAD_FRAME_BYTES:
-        return True
-    speech_frames = 0
-    frame_count = len(detection_pcm16) // _DETECTION_VAD_FRAME_BYTES
-    for frame_index in range(frame_count):
-        offset = frame_index * _DETECTION_VAD_FRAME_BYTES
-        try:
-            if fallback_vad.is_speech(
-                detection_pcm16[offset : offset + _DETECTION_VAD_FRAME_BYTES],
-                _SAMPLE_RATE,
-            ):
-                speech_frames += 1
-        except Exception:
-            return True
-        if speech_frames >= _DETECTION_VAD_MIN_SPEECH_FRAMES:
-            return True
-    return False
-
-
-def _backoff_sleep(attempt: int, running: threading.Event | None = None) -> None:
-    """Sleep with exponential backoff and jitter, interruptible by ``running``.
-
-    With a running flag, the sleep ends early when the worker is stopped
-    mid-backoff, so a disable does not wait out the full delay before the retry
-    loop notices it should bail.
-    """
-    delay = min((2**attempt) + random.random(), 10.0)
-    if running is None:
-        time.sleep(delay)
-        return
-    _sleep_while_running(running, delay)
-
-
-def _sleep_while_running(running: threading.Event, duration_seconds: float) -> None:
-    """Sleep in small slices so stop() can interrupt the post-detection hold."""
-    deadline = time.monotonic() + max(0.0, duration_seconds)
-    while running.is_set():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(_INTERRUPTIBLE_SLEEP_SLICE_SECONDS, remaining))
-
-
-def _response_text_preview(response: httpx.Response) -> str:
-    """Return a bounded response-body preview for diagnostics."""
-    try:
-        text = response.text.strip()
-    except Exception:
-        return ""
-    if not text:
-        return ""
-    return text[:500]
-
-
-def _is_voice_cancel_phrase(transcript: str) -> bool:
-    """Return whether a normalized transcript ends with a reserved cancel phrase."""
-    normalized = re.sub(r"[^\wäöüß]+", " ", transcript.casefold(), flags=re.UNICODE).strip()
-    return any(
-        normalized == phrase or normalized.endswith(f" {phrase}")
-        for phrase in _VOICE_CANCEL_PHRASES
-    )
-
-
-def _host_api_name(sd: Any, info: Any) -> str:
-    """Return a stable host-API label for one sounddevice descriptor."""
-    host_api_index = info.get("hostapi")
-    if host_api_index is None:
-        return ""
-    try:
-        host_api = sd.query_hostapis(host_api_index)
-    except Exception:
-        return str(host_api_index)
-    name = host_api.get("name") if isinstance(host_api, dict) else None
-    return str(name) if name else str(host_api_index)
-
-
-def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) -> list[int]:
-    """Return requested/default/fallback input devices in safe preference order."""
-    devices = sd.query_devices()
-    if requested_device is not None:
-        requested_index = requested_device["index"]
-        requested_name = requested_device["name"]
-        requested_host_api = requested_device["host_api"]
-        matches = [
-            index
-            for index, info in enumerate(devices)
-            if int(info.get("max_input_channels", 0)) > 0
-            and str(info.get("name", f"Device {index}")) == requested_name
-            and _host_api_name(sd, info) == requested_host_api
-        ]
-        if requested_index in matches:
-            return [requested_index]
-        return matches if len(matches) == 1 else []
-
-    candidates: list[int] = []
-    try:
-        default_input = int(sd.default.device[0])
-    except (IndexError, TypeError, ValueError):
-        default_input = -1
-    if default_input >= 0:
-        candidates.append(default_input)
-    for host_api in sd.query_hostapis():
-        host_default = host_api.get("default_input_device", -1)
-        if isinstance(host_default, int) and host_default >= 0:
-            candidates.append(host_default)
-    candidates.extend(
-        index for index, info in enumerate(devices) if int(info.get("max_input_channels", 0)) > 0
-    )
-    return list(dict.fromkeys(candidates))
-
-
-def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
-    """Find the best native format that can be normalized to 16 kHz mono PCM."""
-    try:
-        info = sd.query_devices(device)
-    except Exception:
-        return None
-    if int(info.get("max_input_channels", 0)) <= 0:
-        return None
-
-    default_rate = int(info.get("default_samplerate", 0) or 0)
-    sample_rates = list(dict.fromkeys([_SAMPLE_RATE, default_rate, *_COMMON_CAPTURE_SAMPLE_RATES]))
-    for sample_rate in sample_rates:
-        if sample_rate < _SAMPLE_RATE:
-            continue
-        for dtype in _CAPTURE_DTYPES:
-            try:
-                sd.check_input_settings(
-                    device=device,
-                    samplerate=sample_rate,
-                    channels=_CHANNELS,
-                    dtype=dtype,
-                )
-            except Exception:
-                continue
-            return CaptureFormat(
-                device=device,
-                name=str(info.get("name", f"Device {device}")),
-                sample_rate=sample_rate,
-                dtype=dtype,
-                host_api=_host_api_name(sd, info),
-            )
-    return None
-
-
-def _select_capture_format(sd: Any, requested_device: dict[str, Any] | None) -> CaptureFormat:
-    """Select a usable requested or automatic input format."""
-    for device in _candidate_device_indices(sd, requested_device):
-        capture_format = _capture_format_for_device(sd, device)
-        if capture_format is not None:
-            return capture_format
-    raise MicrophoneUnavailableError("No input device supports Voice capture")
-
-
-def list_microphones() -> list[dict[str, Any]]:
-    """Enumerate input devices and surface Voice-format compatibility."""
-    try:
-        import sounddevice as sd  # type: ignore[import-untyped]
-    except ImportError:
-        return []
-
-    devices: list[dict[str, Any]] = []
-    try:
-        with _AUDIO_BACKEND_LOCK:
-            for i, info in enumerate(sd.query_devices()):
-                if int(info.get("max_input_channels", 0)) > 0:
-                    capture_format = _capture_format_for_device(sd, i)
-                    devices.append(
-                        {
-                            "index": i,
-                            "name": info.get("name", f"Device {i}"),
-                            "host_api": _host_api_name(sd, info),
-                            "default_sample_rate": int(
-                                info.get("default_samplerate", _SAMPLE_RATE)
-                            ),
-                            "supported": capture_format is not None,
-                            "capture_sample_rate": (
-                                capture_format.sample_rate if capture_format is not None else None
-                            ),
-                        }
-                    )
-    except Exception:
-        logger.warning("Failed to enumerate microphones", exc_info=True)
-    return devices
-
-
-def refresh_microphone_devices() -> bool:
-    """Reinitialize PortAudio so a retry sees devices connected after startup."""
-    try:
-        import sounddevice as sd  # type: ignore[import-untyped]
-    except ImportError:
-        return False
-
-    terminate = getattr(sd, "_terminate", None)
-    initialize = getattr(sd, "_initialize", None)
-    if not callable(terminate) or not callable(initialize):
-        logger.warning("sounddevice does not expose PortAudio device refresh hooks")
-        return False
-
-    try:
-        with _AUDIO_BACKEND_LOCK:
-            terminate()
-            initialize()
-    except Exception:
-        logger.warning("Failed to refresh microphone devices", exc_info=True)
-        return False
-    return True
-
-
-class UnavailableWakewordWorker:
-    """Stable non-simulating worker used when the local Voice stack is absent."""
-
-    def __init__(self, bridge: Any) -> None:
-        self._bridge = bridge
-
-    def start(self) -> None:
-        self._bridge.publish_state("error", "voice_stack_unavailable")
-
-    def stop(self) -> None:
-        return
-
-    def is_running(self) -> bool:
-        return False
-
-
-class MockWakewordWorker:
-    """No-microphone worker used when the real wakeword stack is unavailable.
-
-    Drives the *same* detection → recording → transcribing → sending state cycle
-    the real worker publishes, but from a :class:`MockWakewordEngine` score script
-    instead of a live microphone, and with no network calls. This lets the WebUI
-    status indicator be validated with ``--mock-wakeword`` (and makes the mock
-    fallback visibly "alive" rather than frozen on ``listening``).
-    """
-
-    def __init__(self, bridge: Any, engine: Any = None) -> None:
-        self._bridge = bridge
-        self._engine = engine if engine is not None else MockWakewordEngine(_MOCK_DEFAULT_SCORES)
-        self._thread: threading.Thread | None = None
-        self._running = threading.Event()
-
-    def start(self) -> None:
-        """Start the simulated state loop without opening audio devices."""
-        if self.is_running():
-            return
-        self._running.set()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        """Stop the simulated state loop."""
-        self._running.clear()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-
-    def stop_recording(self) -> None:
-        """No-op: the mock has no real capture to end (keeps the bridge contract)."""
-
-    def is_running(self) -> bool:
-        """True while the mock loop thread is alive."""
-        return self._thread is not None and self._thread.is_alive()
-
-    def _run(self) -> None:
-        try:
-            self._engine.start()
-        except Exception:
-            logger.warning("Mock wakeword engine failed to start", exc_info=True)
-        self._bridge.publish_state("listening")
-        while self._running.is_set():
-            _sleep_while_running(self._running, _MOCK_FRAME_SECONDS)
-            if not self._running.is_set():
-                break
-            match = self._engine.detect(b"")
-            if match is not None:
-                self._simulate_cycle()
-                if self._running.is_set():
-                    self._bridge.publish_state("listening")
-
-    def _simulate_cycle(self) -> None:
-        """Publish one full post-detection state sequence with brief dwells."""
-        for state in ("wakeword_detected", "recording", "transcribing", "sending", "sent"):
-            if not self._running.is_set():
-                return
-            self._bridge.publish_state(state)
-            _sleep_while_running(self._running, _MOCK_STAGE_SECONDS)
