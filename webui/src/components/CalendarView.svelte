@@ -1,38 +1,37 @@
 <script>
-  import { onMount } from 'svelte';
-  import CalendarActions from './CalendarActions.svelte';
-
-  import Banner from './ui/Banner.svelte';
-  import Button from './ui/Button.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import FormField from './ui/FormField.svelte';
-  import Modal from './ui/Modal.svelte';
-  import TabList from './ui/TabList.svelte';
-  import TextArea from './ui/TextArea.svelte';
-  import TextField from './ui/TextField.svelte';
-  import Toggle from './ui/Toggle.svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
+  import Button from './ui/Button.svelte';
   import {
+    dayHeadingLabel,
     CALENDAR_VIEWS,
+    weekdayLabels,
+    formatTimeInZone,
     addDaysToKey,
     createCalendarController,
     createCalendarViewState,
-    dayHeadingLabel,
     dayKeyForOccurrence,
     dayKeyToUtcDate,
     eventById,
-    eventToFormValues,
-    formatTimeInZone,
     groupByDay,
     monthGridDays,
     monthLabel,
     sortDayEntries,
     todayKey,
-    weekdayLabels,
     weekStartKey,
     windowForView,
   } from '$lib/calendarView.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import TabList from './ui/TabList.svelte';
+  import Banner from './ui/Banner.svelte';
+  import Modal from './ui/Modal.svelte';
+  import FormField from './ui/FormField.svelte';
+  import TextField from './ui/TextField.svelte';
+  import Toggle from './ui/Toggle.svelte';
+  import TextArea from './ui/TextArea.svelte';
+  import CalendarActions from './CalendarActions.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import { onMount } from 'svelte';
+  import { createCalendarEventEditor } from './calendar/editor.svelte.js';
 
   let {
     onToast = () => {},
@@ -41,40 +40,22 @@
     onOpenCronJob = null,
     onOpenSession = null,
   } = $props();
-
   let viewState = $state(createCalendarViewState());
   const controller = createCalendarController({ state: viewState });
 
-  const EMPTY_FORM = () => ({
-    title: '',
-    notes: '',
-    all_day: false,
-    start_date: todayKey(viewState.systemTimeZone),
-    start_time: '09:00',
-    duration_minutes: 60,
-    duration_days: 1,
-    freq: 'none',
-    interval: 1,
-    by_weekday: ['mo', 'tu', 'we', 'th', 'fr'],
-    end_mode: 'never',
-    end_count: 10,
-    end_until: '',
+  const editor = createCalendarEventEditor({
+    get viewState() {
+      return viewState;
+    },
+    get controller() {
+      return controller;
+    },
+    get onToast() {
+      return onToast;
+    },
   });
 
   let lastRefreshToken = 0;
-
-  let formOpen = $state(false);
-  let formMode = $state('create');
-  let formEventId = $state('');
-  let formValues = $state(EMPTY_FORM());
-  let formError = $state('');
-  let submitting = $state(false);
-
-  let detailOpen = $state(false);
-  let detailOccurrence = $state(null);
-
-  let deleteTarget = $state(null);
-  let deleteOccurrenceOnly = $state(false);
 
   let locale = $derived(activeLocaleTag());
   let currentDayKey = $derived(todayKey(viewState.systemTimeZone));
@@ -168,94 +149,6 @@
     return sortDayEntries([...local, ...cron]);
   }
 
-  function openCreate(dayKey = viewState.anchorKey) {
-    formMode = 'create';
-    formEventId = '';
-    formValues = { ...EMPTY_FORM(), start_date: dayKey };
-    formError = '';
-    formOpen = true;
-  }
-
-  function openDetail(occurrence) {
-    detailOccurrence = occurrence;
-    detailOpen = true;
-  }
-
-  function openEdit(occurrence) {
-    const event = eventById(viewState.events, occurrence.event_id);
-    if (!event) {
-      return;
-    }
-    formMode = 'edit';
-    formEventId = event.id;
-    formValues = eventToFormValues(event, viewState.systemTimeZone);
-    formError = '';
-    detailOpen = false;
-    formOpen = true;
-  }
-
-  async function submitForm() {
-    if (!formValues.title.trim()) {
-      formError = t(
-        'calendar.errors.titleRequired',
-        'Please give the event a title.',
-      );
-      return;
-    }
-    submitting = true;
-    formError = '';
-    try {
-      const payload = formValuesToEventPayload(formValues);
-      if (formMode === 'edit') {
-        await controller.updateEvent(formEventId, payload);
-      } else {
-        const result = await controller.createEvent(payload);
-        const occurrence = viewState.occurrences.find(
-          (item) => item.event_id === result.event?.id,
-        );
-        if (occurrence) openDetail(occurrence);
-      }
-      formOpen = false;
-    } catch (error) {
-      formError = error?.message ?? String(error);
-    } finally {
-      submitting = false;
-    }
-  }
-
-  function requestDelete(occurrence) {
-    detailOpen = false;
-    deleteOccurrenceOnly = false;
-    deleteTarget = occurrence;
-  }
-
-  async function confirmDelete() {
-    const occurrence = deleteTarget;
-    deleteTarget = null;
-    if (!occurrence) {
-      return;
-    }
-    try {
-      if (occurrence.recurring && deleteOccurrenceOnly) {
-        await controller.excludeOccurrence(
-          occurrence.event_id,
-          occurrenceExdateValue(occurrence),
-        );
-      } else {
-        await controller.deleteEvent(occurrence.event_id);
-      }
-    } catch (error) {
-      onToast(error?.message ?? String(error));
-    }
-  }
-
-  // The exclusion (RFC 5545 EXDATE) uses the event's own start form: a naive
-  // local datetime for timed events, a plain date for all-day events. The
-  // server renders it per occurrence in the event's anchor zone.
-  function occurrenceExdateValue(occurrence) {
-    return occurrence.occurrence_start;
-  }
-
   function occurrenceHeading(occurrence) {
     if (occurrence.all_day) {
       return t('calendar.detail.allDay', 'All day');
@@ -265,41 +158,6 @@
 
   function cronTimeLabel(cron) {
     return formatTimeInZone(cron.fire_at, viewState.systemTimeZone, locale);
-  }
-
-  function formValuesToEventPayload(values) {
-    const payload = {
-      title: values.title,
-      notes: values.notes || null,
-      all_day: values.all_day,
-    };
-    if (values.all_day) {
-      payload.start = values.start_date;
-      payload.duration_days = Number(values.duration_days) || 1;
-    } else {
-      payload.start = `${values.start_date}T${values.start_time || '09:00'}:00`;
-      payload.duration_minutes = Number(values.duration_minutes) || 60;
-    }
-    if (values.freq !== 'none') {
-      const rrule = {
-        freq: values.freq,
-        interval: Number(values.interval) || 1,
-      };
-      if (values.freq === 'weekly') {
-        rrule.by_weekday = values.by_weekday?.length
-          ? values.by_weekday
-          : ['mo'];
-      }
-      if (values.end_mode === 'count') {
-        rrule.count = Number(values.end_count) || 10;
-      } else if (values.end_mode === 'until') {
-        rrule.until = values.end_until || undefined;
-      }
-      payload.rrule = rrule;
-    } else {
-      payload.rrule = null;
-    }
-    return payload;
   }
 </script>
 
@@ -376,7 +234,7 @@
             <span class="calendar-chip-count">{cronCount}</span>
           </button>
         </div>
-        <Button variant="primary" onClick={() => openCreate()}>
+        <Button variant="primary" onClick={() => editor.openCreate()}>
           {t('calendar.newEvent', 'New event')}
         </Button>
       </div>
@@ -433,7 +291,7 @@
             type="button"
             class="calendar-cell-surface"
             aria-label={t('calendar.addOnDay', 'Add an event on this day')}
-            onclick={() => openCreate(day.key)}
+            onclick={() => editor.openCreate(day.key)}
           >
             <span class="calendar-day-number">{day.dayOfMonth}</span>
             <span class="calendar-cell-add" aria-hidden="true">＋</span>
@@ -461,7 +319,7 @@
                   class:calendar-entry--allday={entry.all_day}
                   onclick={(event) => {
                     event.stopPropagation();
-                    openDetail(entry.occurrence);
+                    editor.openDetail(entry.occurrence);
                   }}
                 >
                   {#if !entry.all_day}
@@ -520,7 +378,7 @@
                   type="button"
                   class="calendar-entry"
                   class:calendar-entry--allday={entry.all_day}
-                  onclick={() => openDetail(entry.occurrence)}
+                  onclick={() => editor.openDetail(entry.occurrence)}
                 >
                   {#if !entry.all_day}
                     <span class="calendar-entry-time">
@@ -543,7 +401,7 @@
               <button
                 type="button"
                 class="calendar-column-add"
-                onclick={() => openCreate(dayKey)}
+                onclick={() => editor.openCreate(dayKey)}
               >
                 {t('calendar.addOnDay', 'Add an event on this day')}
               </button>
@@ -576,7 +434,7 @@
                 type="button"
                 class="calendar-entry"
                 class:calendar-entry--allday={entry.all_day}
-                onclick={() => openDetail(entry.occurrence)}
+                onclick={() => editor.openDetail(entry.occurrence)}
               >
                 {#if !entry.all_day}
                   <span class="calendar-entry-time">
@@ -598,7 +456,7 @@
             <button
               type="button"
               class="calendar-column-add"
-              onclick={() => openCreate()}
+              onclick={() => editor.openCreate()}
             >
               {t('calendar.addOnDay', 'Add an event on this day')}
             </button>
@@ -646,7 +504,7 @@
                         type="button"
                         class="calendar-entry"
                         class:calendar-entry--allday={entry.all_day}
-                        onclick={() => openDetail(entry.occurrence)}
+                        onclick={() => editor.openDetail(entry.occurrence)}
                       >
                         {#if !entry.all_day}
                           <span class="calendar-entry-time">
@@ -675,13 +533,13 @@
   {/if}
 </div>
 
-{#if formOpen}
+{#if editor.formOpen}
   <Modal
-    title={formMode === 'edit'
+    title={editor.formMode === 'edit'
       ? t('calendar.form.editTitle', 'Edit event')
       : t('calendar.form.createTitle', 'New event')}
     labelledById="calendar-form-title"
-    onClose={() => (formOpen = false)}
+    onClose={() => (editor.formOpen = false)}
   >
     {#snippet body()}
       <div class="modal-body">
@@ -690,7 +548,7 @@
           id="calendar-event-form"
           onsubmit={(event) => {
             event.preventDefault();
-            submitForm();
+            editor.submitForm();
           }}
         >
           <FormField
@@ -699,8 +557,8 @@
           >
             <TextField
               id="calendar-form-title-input"
-              value={formValues.title}
-              onInput={(next) => (formValues.title = next)}
+              value={editor.formValues.title}
+              onInput={(next) => (editor.formValues.title = next)}
               placeholder={t(
                 'calendar.form.titlePlaceholder',
                 'Dentist appointment',
@@ -715,12 +573,12 @@
               <TextField
                 id="calendar-form-date"
                 type="date"
-                value={formValues.start_date}
-                onInput={(next) => (formValues.start_date = next)}
+                value={editor.formValues.start_date}
+                onInput={(next) => (editor.formValues.start_date = next)}
                 ariaLabel={t('calendar.form.date', 'Date')}
               />
             </FormField>
-            {#if !formValues.all_day}
+            {#if !editor.formValues.all_day}
               <FormField
                 label={t('calendar.form.time', 'Start')}
                 controlId="calendar-form-time"
@@ -728,8 +586,8 @@
                 <TextField
                   id="calendar-form-time"
                   type="time"
-                  value={formValues.start_time}
-                  onInput={(next) => (formValues.start_time = next)}
+                  value={editor.formValues.start_time}
+                  onInput={(next) => (editor.formValues.start_time = next)}
                   ariaLabel={t('calendar.form.time', 'Start')}
                 />
               </FormField>
@@ -741,8 +599,9 @@
                 <TextField
                   id="calendar-form-duration"
                   type="number"
-                  value={formValues.duration_minutes}
-                  onInput={(next) => (formValues.duration_minutes = next)}
+                  value={editor.formValues.duration_minutes}
+                  onInput={(next) =>
+                    (editor.formValues.duration_minutes = next)}
                   min="5"
                   step="5"
                   ariaLabel={t('calendar.form.duration', 'Duration (minutes)')}
@@ -756,8 +615,8 @@
                 <TextField
                   id="calendar-form-days"
                   type="number"
-                  value={formValues.duration_days}
-                  onInput={(next) => (formValues.duration_days = next)}
+                  value={editor.formValues.duration_days}
+                  onInput={(next) => (editor.formValues.duration_days = next)}
                   min="1"
                   ariaLabel={t('calendar.form.days', 'Days')}
                 />
@@ -767,8 +626,8 @@
           <div class="calendar-form-toggle">
             <span>{t('calendar.form.allDay', 'All day')}</span>
             <Toggle
-              checked={formValues.all_day}
-              onChange={(next) => (formValues.all_day = next)}
+              checked={editor.formValues.all_day}
+              onChange={(next) => (editor.formValues.all_day = next)}
               size="sm"
               ariaLabel={t('calendar.form.allDay', 'All day')}
             />
@@ -780,7 +639,7 @@
             <select
               id="calendar-form-freq"
               class="s-input"
-              bind:value={formValues.freq}
+              bind:value={editor.formValues.freq}
             >
               <option value="none"
                 >{t('calendar.form.freqNone', 'Not repeating')}</option
@@ -799,7 +658,7 @@
               >
             </select>
           </FormField>
-          {#if formValues.freq !== 'none'}
+          {#if editor.formValues.freq !== 'none'}
             <FormField
               label={t('calendar.form.interval', 'Every')}
               controlId="calendar-form-interval"
@@ -807,13 +666,13 @@
               <TextField
                 id="calendar-form-interval"
                 type="number"
-                value={formValues.interval}
-                onInput={(next) => (formValues.interval = next)}
+                value={editor.formValues.interval}
+                onInput={(next) => (editor.formValues.interval = next)}
                 min="1"
                 ariaLabel={t('calendar.form.interval', 'Every')}
               />
             </FormField>
-            {#if formValues.freq === 'weekly'}
+            {#if editor.formValues.freq === 'weekly'}
               <FormField
                 label={t('calendar.form.weekdays', 'On days')}
                 controlId="calendar-form-weekdays"
@@ -826,13 +685,16 @@
                     <button
                       type="button"
                       class="calendar-weekday-option"
-                      class:is-active={formValues.by_weekday.includes(code)}
+                      class:is-active={editor.formValues.by_weekday.includes(
+                        code,
+                      )}
                       onclick={() => {
-                        formValues.by_weekday = formValues.by_weekday.includes(
-                          code,
-                        )
-                          ? formValues.by_weekday.filter((day) => day !== code)
-                          : [...formValues.by_weekday, code];
+                        editor.formValues.by_weekday =
+                          editor.formValues.by_weekday.includes(code)
+                            ? editor.formValues.by_weekday.filter(
+                                (day) => day !== code,
+                              )
+                            : [...editor.formValues.by_weekday, code];
                       }}
                     >
                       {label}
@@ -849,7 +711,7 @@
                 <select
                   id="calendar-form-end-mode"
                   class="s-input"
-                  bind:value={formValues.end_mode}
+                  bind:value={editor.formValues.end_mode}
                 >
                   <option value="never"
                     >{t('calendar.form.endsNever', 'Never')}</option
@@ -861,22 +723,22 @@
                     >{t('calendar.form.endsUntil', 'On date')}</option
                   >
                 </select>
-                {#if formValues.end_mode === 'count'}
+                {#if editor.formValues.end_mode === 'count'}
                   <TextField
                     type="number"
-                    value={formValues.end_count}
-                    onInput={(next) => (formValues.end_count = next)}
+                    value={editor.formValues.end_count}
+                    onInput={(next) => (editor.formValues.end_count = next)}
                     min="1"
                     ariaLabel={t('calendar.form.endsCount', 'After')}
                   />
                   <span class="calendar-form-ends-unit"
                     >{t('calendar.form.times', 'times')}</span
                   >
-                {:else if formValues.end_mode === 'until'}
+                {:else if editor.formValues.end_mode === 'until'}
                   <TextField
                     type="date"
-                    value={formValues.end_until}
-                    onInput={(next) => (formValues.end_until = next)}
+                    value={editor.formValues.end_until}
+                    onInput={(next) => (editor.formValues.end_until = next)}
                     ariaLabel={t('calendar.form.endsUntil', 'On date')}
                   />
                 {/if}
@@ -889,24 +751,28 @@
           >
             <TextArea
               id="calendar-form-notes"
-              value={formValues.notes}
-              onInput={(next) => (formValues.notes = next)}
+              value={editor.formValues.notes}
+              onInput={(next) => (editor.formValues.notes = next)}
               rows={3}
               placeholder={t('calendar.form.notesPlaceholder', 'Optional')}
             />
           </FormField>
-          {#if formError}
-            <Banner variant="error">{formError}</Banner>
+          {#if editor.formError}
+            <Banner variant="error">{editor.formError}</Banner>
           {/if}
         </form>
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" onClick={() => (formOpen = false)}>
+      <Button variant="secondary" onClick={() => (editor.formOpen = false)}>
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button variant="primary" onClick={submitForm} disabled={submitting}>
-        {formMode === 'edit'
+      <Button
+        variant="primary"
+        onClick={editor.submitForm}
+        disabled={editor.submitting}
+      >
+        {editor.formMode === 'edit'
           ? t('common.save', 'Save')
           : t('calendar.form.create', 'Create event')}
       </Button>
@@ -914,30 +780,30 @@
   </Modal>
 {/if}
 
-{#if detailOpen && detailOccurrence}
+{#if editor.detailOpen && editor.detailOccurrence}
   <Modal
-    title={detailOccurrence.title}
+    title={editor.detailOccurrence.title}
     labelledById="calendar-detail-title"
-    onClose={() => (detailOpen = false)}
+    onClose={() => (editor.detailOpen = false)}
   >
     {#snippet body()}
       <div class="modal-body">
         <div class="calendar-detail">
           <p class="calendar-detail-time">
-            {occurrenceHeading(detailOccurrence)}
+            {occurrenceHeading(editor.detailOccurrence)}
           </p>
-          {#if detailOccurrence.notes}
-            <p class="calendar-detail-notes">{detailOccurrence.notes}</p>
+          {#if editor.detailOccurrence.notes}
+            <p class="calendar-detail-notes">{editor.detailOccurrence.notes}</p>
           {/if}
-          {#if detailOccurrence.recurring}
+          {#if editor.detailOccurrence.recurring}
             <p class="calendar-detail-meta">
               {t('calendar.detail.recurring', 'Repeating event')}
             </p>
           {/if}
           <CalendarActions
-            eventId={detailOccurrence.event_id}
-            occurrenceStart={detailOccurrence.occurrence_start}
-            recurring={detailOccurrence.recurring}
+            eventId={editor.detailOccurrence.event_id}
+            occurrenceStart={editor.detailOccurrence.occurrence_start}
+            recurring={editor.detailOccurrence.recurring}
             actions={viewState.actions}
             executions={viewState.executions}
             timeZone={viewState.systemTimeZone}
@@ -949,20 +815,26 @@
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" onClick={() => openEdit(detailOccurrence)}>
+      <Button
+        variant="secondary"
+        onClick={() => editor.openEdit(editor.detailOccurrence)}
+      >
         {t('common.edit', 'Edit')}
       </Button>
-      <Button variant="danger" onClick={() => requestDelete(detailOccurrence)}>
+      <Button
+        variant="danger"
+        onClick={() => editor.requestDelete(editor.detailOccurrence)}
+      >
         {t('common.delete', 'Delete')}
       </Button>
     {/snippet}
   </Modal>
 {/if}
 
-{#if deleteTarget}
+{#if editor.deleteTarget}
   <ConfirmDialog
     title={t('calendar.deleteTitle', 'Delete event')}
-    body={deleteTarget.recurring
+    body={editor.deleteTarget.recurring
       ? t(
           'calendar.deleteBody',
           'This event repeats. You can delete the whole series or only this occurrence.',
@@ -971,16 +843,16 @@
           'calendar.deleteBodySingle',
           'This removes the event from your calendar.',
         )}
-    confirmLabel={deleteTarget.recurring && deleteOccurrenceOnly
+    confirmLabel={editor.deleteTarget.recurring && editor.deleteOccurrenceOnly
       ? t('calendar.deleteOccurrence', 'Only this occurrence')
       : t('calendar.deleteSeries', 'Delete event')}
     cancelLabel={t('common.cancel', 'Cancel')}
     danger={true}
-    onConfirm={confirmDelete}
-    onCancel={() => (deleteTarget = null)}
+    onConfirm={editor.confirmDelete}
+    onCancel={() => (editor.deleteTarget = null)}
   >
     {#snippet bodyExtra()}
-      {#if deleteTarget.recurring}
+      {#if editor.deleteTarget.recurring}
         <div
           class="calendar-delete-choice"
           role="radiogroup"
@@ -989,7 +861,7 @@
           <label>
             <input
               type="radio"
-              bind:group={deleteOccurrenceOnly}
+              bind:group={editor.deleteOccurrenceOnly}
               value={false}
             />
             {t('calendar.deleteSeries', 'Delete event')}
@@ -997,7 +869,7 @@
           <label>
             <input
               type="radio"
-              bind:group={deleteOccurrenceOnly}
+              bind:group={editor.deleteOccurrenceOnly}
               value={true}
             />
             {t('calendar.deleteOccurrence', 'Only this occurrence')}
