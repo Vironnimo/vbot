@@ -702,6 +702,25 @@ describe('StatisticsView', () => {
     flushSync();
 
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(16);
+    buttonNamed('statistics.subview.usage').click();
+    flushSync();
+    expect(
+      buttonNamed('statistics.granularity.week').getAttribute('aria-pressed'),
+    ).toBe('true');
+    buttonNamed('statistics.granularity.month').click();
+    flushSync();
+    buttonNamed('statistics.subview.overview').click();
+    flushSync();
+    expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(12);
+    expect(
+      buttonNamed('statistics.granularity.month').getAttribute('aria-pressed'),
+    ).toBe('true');
+    document.querySelector('.stats-links button').click();
+    flushSync();
+    expect(document.querySelector('[role="tabpanel"]').id).toBe(
+      'statistics-subviews-panel-compactions',
+    );
+    expect(rpcMock).toHaveBeenCalledTimes(1);
   });
 
   it('shows a period-specific empty state when all Runs are older than the selected window', async () => {
