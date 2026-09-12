@@ -66,7 +66,7 @@ Effective additional Agent targets are the current Project Team, excluding the c
 
 ## Working-Project Helpers
 
-The working-Project functions in `core/projects/resolver.py` expose a process-local snapshot used by paths that need the currently selected Project. Set and clear it through the owned helpers. It is not derived from cwd equality, does not establish Project identity, and does not replace explicit `project_id` routing in concurrent or persisted work.
+The working-Project functions in `core/projects/resolver.py` derive the admitted Project from an explicit Session/address Project or an Identity Agent's saved `root_project_id`. They hold no process-global selection. Prompt lookup validates the selected repository; Skill scope uses that same resolved Project. Workspace equality does not establish Project identity or replace explicit `project_id` routing.
 
 ## Change Rules
 
@@ -84,8 +84,10 @@ preserved independently of those ceilings. Evidence: `core/projects/resolver.py`
 
 ## Source & Tests
 
-- Resolver, effective configuration, capabilities, and working-Project helpers: `core/projects/resolver.py`
-- Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/resolver.py`
+- Resolution orchestration and working-Project helpers: `core/projects/resolver.py`
+- Resolved Agent contracts and Run overrides: `core/projects/_runtime_agent.py`
+- Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
+- Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
 - Project entity and override contract: `core/projects/projects.py`
 - Repository inputs: `core/projects/scanners/`
 - Primary tests: `tests/core/projects/test_resolver_config_chains.py`, `tests/core/projects/test_resolver_effective_config.py`, `tests/core/projects/test_resolver_connections.py`, and `tests/core/projects/test_resolver_prompt_skill_scopes.py`
