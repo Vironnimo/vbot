@@ -275,3 +275,23 @@ def test_file_probe_verifies_target_content_and_read_guard() -> None:
     for case in file_tolerance_cases():
         row = asyncio.run(file_case(Adapter(), args, case))
         assert row["passed"], row
+
+
+def test_skill_read_probe_checks_actual_package_files() -> None:
+    from scripts.provider_probe.workflow_skill_read_tolerance import (
+        skill_read_case,
+        skill_read_cases,
+    )
+
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            arguments = json.loads(messages[-1]["content"].removeprefix("Arguments: "))
+            return {"tool_calls": [{"id": "fixture", "name": "skill", "arguments": arguments}]}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args([])
+    for case in skill_read_cases():
+        row = asyncio.run(skill_read_case(Adapter(), args, case))
+        assert row["passed"], row

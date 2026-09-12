@@ -17,6 +17,7 @@ from core.skills.skills import (
     skill_origin_sort_key,
 )
 from core.tools.bash import format_bash_env_usage
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -86,6 +87,29 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
     },
     "required": [],
 }
+
+
+_SKILL_RUNTIME_CONTRACT = compile_tool_contract(
+    name=SKILL_TOOL_NAME, input_schema=SKILL_TOOL_PARAMETERS, require_closed_input=False
+)
+
+
+def _normalize_skill_arguments(
+    arguments: Any, *, contract: ToolContract = _SKILL_RUNTIME_CONTRACT
+) -> Any:
+    """Repair package addressing before the shared schema and package-scope checks."""
+    repaired = contract.normalize_arguments(arguments)
+    if not isinstance(repaired, dict):
+        return repaired
+    if isinstance(repaired.get("name"), str):
+        repaired["name"] = repaired["name"].strip()
+    path = repaired.get("file_path")
+    if isinstance(path, str):
+        text = path.strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+            path = text[1:-1]
+        repaired["file_path"] = path.replace("\\", "/")
+    return repaired
 
 
 def make_skill_handler(
@@ -248,6 +272,7 @@ def register_skill_tool(
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills),
+        argument_normalizer=_normalize_skill_arguments,
         family="skills",
         result_schema={"type": "object"},
         display=ToolDisplay(
