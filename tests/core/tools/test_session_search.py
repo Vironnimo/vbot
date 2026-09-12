@@ -130,17 +130,16 @@ async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> 
         {"query": ""},
         {"query": " "},
         {"query": "needle", "period": "/"},
-        {"query": "needle", "period": "2026-07-02/2026-07-01"},
-        {"request": {"operation": "search", "query": "needle"}},
-        {"action": "search", "query": "needle"},
+        {"query": "needle", "period": "2026-07-unknown/2026-07-01"},
         {"query": "needle", "roles": ["user"]},
         {"query": "needle", "match": "phrase"},
         {"query": "needle", "order": "oldest"},
-        {"query": "needle", "since": "2026-05-01"},
         {"query": "needle", "limit": 1},
         {"cursor": "opaque"},
         {"session_id": "past"},
-        {"query": "needle", "include_subagents": "yes"},
+        {"query": "needle", "include_subagents": "perhaps"},
+        {"query": "needle", "q": "different request"},
+        {"operation": "list"},
     ),
 )
 async def test_search_rejects_retired_and_advanced_fields(
@@ -155,3 +154,62 @@ async def test_search_rejects_retired_and_advanced_fields(
     )
 
     failure(result, "invalid_arguments")
+
+
+@pytest.mark.parametrize(
+    "value, included",
+    [
+        (True, True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        (1, True),
+        (False, False),
+        ("false", False),
+        ("no", False),
+        (0, False),
+    ],
+)
+async def test_dispatch_accepts_unambiguous_boolean_encodings(
+    tmp_path: Path, value: object, included: bool
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="delegated")
+    session.append(ChatMessage.user("needle"))
+    sessions.set_metadata(session.address, {"run_kinds": ["subagent"]})
+    registry = ToolRegistry()
+    register_session_search_tool(registry, CanonicalSessionRecallBackend(sessions))
+    arguments = {"query": "needle", "include_subagents": value}
+    data = success(await registry.dispatch(make_context(tmp_path), arguments))
+    assert bool(data["items"]) is included
+    assert arguments["include_subagents"] is value
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"qurey": "needle", "sessionId": "past"},
+        {"query": "needle", "q": " needle ", "session_id": " past ", "session": "past"},
+        {"search_query": "needle", "agent": "coder", "session": "past"},
+        {"request": {"operation": "SEARCH", "query": "needle", "session_id": "past"}},
+        {"action": "search", "query": "needle", "session_id": "past"},
+        {"query": "needle", "session_id": "past", "since": "2026-07-01", "until": "2026-07-31"},
+        {"query": "needle", "session_id": "past", "period": "2026-07-31/2026-07-01"},
+    ],
+)
+async def test_recognizable_search_intent_reaches_same_session(
+    tmp_path: Path, arguments: JsonObject
+) -> None:
+    import copy
+
+    sessions = ChatSessionManager(tmp_path)
+    for name in ("past", "other"):
+        sessions.create("coder", session_id=name).append(
+            ChatMessage.user("needle", timestamp=timestamp(1).replace(month=7))
+        )
+    original = copy.deepcopy(arguments)
+    registry = ToolRegistry()
+    register_session_search_tool(registry, CanonicalSessionRecallBackend(sessions))
+    data = success(await registry.dispatch(make_context(tmp_path), arguments))
+    assert [hit["session_id"] for hit in data["items"]] == ["past"]
+    assert arguments == original

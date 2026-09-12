@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import json
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from datetime import time as datetime_time
+from difflib import get_close_matches
 from typing import Any
 
 from core.recall import (
@@ -57,13 +59,13 @@ _LOGGER = get_logger("tools.session_search")
 
 SESSION_SEARCH_TOOL_NAME = "session_search"
 _SEARCH_INCLUDE_SUBAGENTS_DESCRIPTION = (
-    "Also search work delegated to Sub-Agents. Omit to exclude it."
+    "Include delegated Sessions owned by the selected Agent. To search another Agent, "
+    "set agent_id too. Omit to exclude delegated Sessions."
 )
 _DESCRIPTION_SUFFIX = (
-    "Returns up to 10 matching excerpts with nearby User/Assistant context; "
-    "Conversation summaries are labeled. Searches conversation content, not Tool Results or "
-    "reasoning. Narrow with period or a returned session_id when more detail is needed. "
-    "The current Session is unavailable."
+    "Searches User and Assistant text and labeled conversation summaries in past Sessions. "
+    "Returns matching excerpts with selected conversation context, not full transcripts. "
+    "Tool Results and reasoning are not searched."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = (
     f"{SqliteFtsRecallBackend.search_capabilities().tool_summary} {_DESCRIPTION_SUFFIX}"
@@ -87,21 +89,25 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
                 "type": "string",
                 "minLength": 2,
                 "description": (
-                    "Inclusive ISO-8601 start/end interval. Either endpoint may be empty, "
-                    "for example 2026-07-25/2026-07-26 or 2026-07-25T00:00:00+02:00/."
+                    "Time range as ISO-8601 start/end, for example 2026-07-01/2026-07-31. "
+                    "Both dates are included; either endpoint may be empty. Dates and "
+                    "timestamps without an offset use UTC. Omit for all dates. "
+                    "Filters matches; selected context may fall outside the range."
                 ),
             },
             "agent_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Agent whose Sessions to find. Omit for the current Agent.",
+                "description": "Id of the Agent whose Sessions to search. Use the named Agent "
+                "when one is specified. Omit for the current Agent.",
             },
             "session_id": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Past Session to restrict query matching. Omit to search "
-                    "across Sessions. The current Session is unavailable."
+                    "Session id from a result or the user, to search within that past "
+                    "conversation. "
+                    "Omit to search across Sessions. The current Session cannot be searched."
                 ),
             },
             "include_subagents": {
@@ -120,10 +126,7 @@ def build_session_search_description(recall_backend: Any) -> str:
     capabilities = _search_capabilities(recall_backend)
     if capabilities.tool_summary is not None:
         return f"{capabilities.tool_summary} {_DESCRIPTION_SUFFIX}"
-    return (
-        "Find persisted Sessions using backend-defined search behavior. "
-        f"{_DESCRIPTION_SUFFIX} Active search behavior: {capabilities.guidance}"
-    )
+    return f"Search past conversations. {_DESCRIPTION_SUFFIX} {capabilities.guidance}"
 
 
 def make_session_search_handler(
@@ -154,6 +157,7 @@ async def session_search_handler(
     resolved_sessions = sessions or _backend_sessions(recall_backend)
     resolved_name = _backend_name(recall_backend)
     try:
+        arguments = _normalize_search_arguments(arguments)
         if not isinstance(arguments, dict):
             raise _SessionSearchError("invalid_arguments", "arguments must be an object")
         _validate_session_search_fields(arguments)
@@ -172,12 +176,36 @@ async def session_search_handler(
         )
         return result
     except RecallSearchError as error:
-        return tool_failure(error.code, str(error))
+        return tool_failure(error.code, _backend_error_message(error))
     except _SessionSearchError as error:
         return tool_failure(error.code, str(error))
     except Exception:
         _LOGGER.error("session_search failed unexpectedly", exc_info=True)
-        return tool_failure("session_search_error", "Unable to access persisted Sessions.")
+        return tool_failure(
+            "session_search_error",
+            "Session search failed to read saved conversations. This is not a no-match result. "
+            "Use another available way to inspect the saved conversations, or report the failure.",
+        )
+
+
+def _backend_error_message(error: RecallSearchError) -> str:
+    if error.code == "semantic_unavailable":
+        return (
+            "Semantic search is unavailable. Changing query terms will not restore it. "
+            "Use another available way to read saved conversations, or ask for the search "
+            "configuration or service to be checked."
+        )
+    if error.code == "hybrid_unavailable":
+        return (
+            "Both keyword and semantic search are unavailable. Use another available way "
+            "to read saved conversations, or report that search is unavailable."
+        )
+    if error.code == "stale_cursor":
+        return "Saved conversations changed during search. Repeat the search to use current data."
+    return (
+        "Session search failed. Use another available way to read saved "
+        "conversations, or report the failure."
+    )
 
 
 def register_session_search_tool(
@@ -195,6 +223,7 @@ def register_session_search_tool(
         make_session_search_handler(recall_backend, sessions),
         family="sessions",
         open_input_schema=True,
+        handler_validates_arguments=True,
         result_schema={
             "type": "object",
             "required": ["items", "has_more"],
@@ -252,8 +281,9 @@ async def _search_sessions(
     if agent_id == context.agent_id and session_id == context.session_id:
         raise _SessionSearchError(
             "current_session_unavailable",
-            "Current Session is unavailable through session_search; use the conversation "
-            "context or history instead.",
+            "session_id refers to the current conversation, which session_search excludes. "
+            "Use the Messages already in your context. To find past conversations, omit "
+            "session_id or use a past Session id.",
         )
     roles = SESSION_RECALL_DEFAULT_ROLES
     match_mode = "all_terms"
@@ -261,7 +291,9 @@ async def _search_sessions(
     since, until = _parse_period(arguments.get("period"))
     if sessions is None:
         raise _SessionSearchError(
-            "session_search_unavailable", "Canonical Session storage is unavailable."
+            "session_search_unavailable",
+            "Saved Session data is unavailable. Changing the query will not restore access; "
+            "report this limitation if no other way to read the saved conversations is available.",
         )
     summaries = await run_tool_worker(
         sessions.list_summaries,
@@ -306,8 +338,11 @@ async def _search_sessions(
         project_id=context.project_id,
         sessions=sessions,
         include_subagents=arguments.get("include_subagents") is True,
+        summaries={str(summary["id"]): summary for summary in visible_summaries},
     )
-    data = _render_search_page(page, targets, session_contexts, project_id=context.project_id)
+    data = _render_search_page(
+        page, targets, session_contexts, project_id=context.project_id, agent_id=agent_id
+    )
     return data
 
 
@@ -321,7 +356,9 @@ async def _call_search_page(backend: Any, request: RecallSearchRequest) -> Recal
             result = await result
     if not isinstance(result, RecallSearchPage):
         raise _SessionSearchError(
-            "invalid_backend_result", "Recall backend returned an invalid typed search page."
+            "invalid_backend_result",
+            "Session search returned an unusable result. Report the search "
+            "failure; do not treat it as an empty search.",
         )
     return result
 
@@ -343,7 +380,9 @@ def _search_capabilities(backend: Any) -> RecallSearchCapabilities:
         if isinstance(result, RecallSearchCapabilities):
             return result
     raise _SessionSearchError(
-        "invalid_backend", "Recall backend must provide valid search capabilities."
+        "invalid_backend",
+        "Session search is not correctly configured. Report the "
+        "configuration problem; changing the query will not fix it.",
     )
 
 
@@ -363,13 +402,92 @@ def _backend_name(backend: Any) -> str:
     return known.get(class_name, class_name.removesuffix("RecallBackend").lower() or "backend")
 
 
+def _normalize_search_arguments(arguments: Any) -> JsonObject:
+    """Recover clear search intent without dropping meaningful instructions."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError as error:
+            raise _SessionSearchError(
+                "invalid_arguments", "Provide search arguments as an object with query text."
+            ) from error
+    if not isinstance(arguments, dict):
+        raise _SessionSearchError(
+            "invalid_arguments", "Provide search arguments as an object with query text."
+        )
+    values = dict(arguments)
+    nested = values.pop("request", None)
+    entries = list(_normalize_search_arguments(nested).items()) if nested is not None else []
+    entries.extend(values.items())
+    fields = ("query", "period", "agent_id", "session_id", "include_subagents", "since", "until")
+    spellings = {key.replace("_", ""): key for key in fields}
+    spellings.update(q="query", searchquery="query", agent="agent_id", session="session_id")
+    normalized: JsonObject = {}
+    for key, value in entries:
+        spelling = str(key).strip().casefold().replace("_", "").replace("-", "").replace(" ", "")
+        if spelling in {"action", "operation"}:
+            if isinstance(value, str) and value.strip().casefold() == "search":
+                continue
+            raise _SessionSearchError(
+                "invalid_arguments",
+                "This Tool searches conversation text. Use query for search; use another "
+                "available way to list Sessions or read a full transcript.",
+            )
+        field = spellings.get(spelling)
+        if field is None:
+            candidates = get_close_matches(
+                spelling, [name.replace("_", "") for name in fields], n=2, cutoff=0.8
+            )
+            field = spellings[candidates[0]] if len(candidates) == 1 else str(key)
+        if field != "query" and (value is None or value == ""):
+            continue
+        if field == "include_subagents":
+            if isinstance(value, str):
+                value = value.strip().casefold()
+            if value in (True, "true", "yes", "1"):
+                value = True
+            elif value in (False, "false", "no", "0"):
+                value = False
+        if (
+            field in {"query", "agent_id", "session_id"}
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            value = str(value)
+        if field in {"query", "agent_id", "session_id"} and isinstance(value, str):
+            value = value.strip()
+        if field in normalized and normalized[field] != value:
+            raise _SessionSearchError(
+                "invalid_arguments", f"Conflicting values for {field}; provide one intended value."
+            )
+        normalized[field] = value
+    if "since" in normalized or "until" in normalized:
+        start, end = normalized.pop("since", ""), normalized.pop("until", "")
+        if not isinstance(start, str) or not isinstance(end, str):
+            raise _SessionSearchError(
+                "invalid_arguments", "Use ISO-8601 dates for the search period."
+            )
+        interval = f"{start}/{end}"
+        if "period" in normalized and _parse_period(normalized["period"]) != _parse_period(
+            interval
+        ):
+            raise _SessionSearchError(
+                "invalid_arguments",
+                "Provide one time range using period; remove the competing since/until range.",
+            )
+        normalized["period"] = interval
+    return normalized
+
+
 def _validate_session_search_fields(arguments: JsonObject) -> None:
     allowed = {"query", "period", "agent_id", "session_id", "include_subagents"}
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
             "invalid_arguments",
-            f"Unsupported session_search arguments: {', '.join(unsupported)}",
+            f"Unsupported arguments: {', '.join(unsupported)}. Use query with optional period, "
+            "agent_id, session_id and include_subagents. This Tool searches text; it cannot "
+            "list Sessions or read a full transcript.",
         )
     _required_string(arguments, "query")
     for key in ("agent_id", "session_id"):
@@ -393,7 +511,15 @@ def _agent_id(arguments: JsonObject, context: ToolContext) -> str:
 def _required_string(arguments: JsonObject, key: str) -> str:
     value = _optional_string(arguments.get(key))
     if value is None:
-        raise _SessionSearchError("invalid_arguments", f"{key} must be a non-blank string")
+        raise _SessionSearchError(
+            "invalid_arguments",
+            f"{key} must contain text."
+            + (
+                " Provide words to search for; this Tool has no listing mode."
+                if key == "query"
+                else f" Omit {key} when no specific target is needed."
+            ),
+        )
     return value
 
 
@@ -431,7 +557,9 @@ def _parse_period(value: Any) -> tuple[datetime | None, datetime | None]:
     raw = value.strip()
     if raw.count("/") != 1:
         raise _SessionSearchError(
-            "invalid_arguments", "period must contain one start/end separator '/'"
+            "invalid_arguments",
+            "period must use start/end, such as 2026-07-01/2026-07-31. Omit "
+            "period to search all dates.",
         )
     start_raw, end_raw = raw.split("/", 1)
     if not start_raw and not end_raw:
@@ -439,7 +567,8 @@ def _parse_period(value: Any) -> tuple[datetime | None, datetime | None]:
     since = _parse_datetime(start_raw or None, "period start", end_of_day=False)
     until = _parse_datetime(end_raw or None, "period end", end_of_day=True)
     if since is not None and until is not None and since > until:
-        raise _SessionSearchError("invalid_arguments", "period start must not be after period end")
+        since = _parse_datetime(end_raw, "period start", end_of_day=False)
+        until = _parse_datetime(start_raw, "period end", end_of_day=True)
     return since, until
 
 

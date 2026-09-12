@@ -6,11 +6,18 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
-from core.recall import RecallBackendContext, SqliteFtsRecallBackend
+from core.recall import (
+    RecallBackendContext,
+    RecallSearchError,
+    RecallSearchPage,
+    SqliteFtsRecallBackend,
+    VectorRecallBackend,
+)
 from core.recall.canonical import SESSION_RECALL_DEFAULT_ROLES
 from core.recall.passages import build_session_passages
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import session_search_handler
+from scripts.provider_probe.recall_cases import FixtureEmbeddings
 from tests.core.tools.session_search_helpers import make_context, success
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -174,3 +181,68 @@ async def test_context_excludes_superseded_history(tmp_path: Path) -> None:
     assert [
         item["message_id"] for item in sessions.recall_context(session.address, question.id)
     ] == [replacement.id]
+
+
+async def test_multi_message_passage_does_not_attribute_all_text_to_first_speaker(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="conversation")
+    question = ChatMessage.user("Aurora Aufbewahrung?")
+    answer = ChatMessage.assistant(model="fixture", content="30 Tage.")
+    session.append_many([question, answer])
+    backend = VectorRecallBackend(
+        RecallBackendContext(tmp_path, sessions, embeddings=FixtureEmbeddings())
+    )
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path), {"query": "Aurora Aufbewahrung"}, backend
+        )
+    )
+    hit = data["items"][0]
+    assert hit["content_kind"] == "conversation_excerpt"
+    assert "role" not in hit
+    assert hit["message_id"] == question.id
+    assert hit["end_message_id"] == answer.id
+    assert "30 Tage." in hit["excerpt"]["text"]
+    assert not {"passage_id", "sources"} & hit.keys()
+
+
+async def test_empty_filtered_page_keeps_more_matches_signal(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+
+    class EmptyBackend(SqliteFtsRecallBackend):
+        async def search_page(self, request):
+            return RecallSearchPage((), "message", "relevance", "snapshot", True, 12)
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "Aurora"},
+            EmptyBackend(RecallBackendContext(tmp_path, sessions)),
+        )
+    )
+    assert data["items"] == []
+    assert data["has_more"] is True
+
+
+@pytest.mark.parametrize(
+    "code", ["semantic_unavailable", "hybrid_unavailable", "stale_cursor", "extension_failed"]
+)
+async def test_backend_failures_keep_code_without_leaking_internal_diagnostics(
+    tmp_path: Path, code: str
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+
+    class BrokenBackend(SqliteFtsRecallBackend):
+        async def search_page(self, request):
+            raise RecallSearchError(code, "private-database-path-and-provider-detail")
+
+    result = await session_search_handler(
+        make_context(tmp_path),
+        {"query": "Aurora"},
+        BrokenBackend(RecallBackendContext(tmp_path, sessions)),
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+    assert "private-database-path-and-provider-detail" not in str(result)
