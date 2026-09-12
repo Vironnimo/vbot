@@ -176,6 +176,10 @@ Resume request, not replay of the old Start/Resume request. Evidence:
 
 ## Verification routes
 
+Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` owns the single SQLite connection, reentrant lock, transaction boundary and signed cursor state. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch holds the same connection lock across each complete operation; delivery receipt lookups remain outside that lock. SQL, schema, request identities and transaction boundaries are unchanged.
+
+Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
+
 - Board/profile/policy transactions, races, receipt recovery and lifecycle:
   `tests/resources/extensions/test_swarm_store.py`.
 - Registered private Tool behavior and management boundaries:
@@ -255,4 +259,4 @@ The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; th
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
 
-Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `extension.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.
+Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.
