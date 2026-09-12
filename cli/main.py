@@ -64,6 +64,7 @@ from cli._output import (
     print_update_command_result,
     print_update_command_start,
 )
+from cli._progress import ProgressPrinter
 from cli.agent_management import (
     agent_create,
     agent_delete,
@@ -182,7 +183,7 @@ def run(
     preview_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_preview,
     list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
     read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
-    list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
+    list_providers: Callable[..., CommandResult] = provider_list,
     provider_status_fn: Callable[
         [ServerInstance, str, str | None], CommandResult
     ] = provider_status,
@@ -258,11 +259,15 @@ def run(
     if args.area == "update":
         version_before = read_checkout_version()
         print_update_command_start(version_before)
-        result = dispatch_update_command(args, resolve=resolve, stop=stop, start=start)
+        with ProgressPrinter() as progress:
+            result = dispatch_update_command(
+                args, resolve=resolve, stop=stop, start=start, progress=progress.emit
+            )
         print_update_command_result(
             result,
             version_before=version_before,
             version_after=read_checkout_version(),
+            shown_messages=progress.messages,
         )
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

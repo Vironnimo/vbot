@@ -292,6 +292,7 @@ def test_run_update_announces_before_work_and_ends_with_version_summary(
         resolve: object,
         stop: object,
         start: object,
+        progress: object,
     ) -> CommandResult:
         assert resolve is cli_main.resolve_instance
         assert stop is cli_main.stop_server

@@ -65,14 +65,61 @@ Options:
 USAGE
 }
 
-step() { echo "==> $1"; }
+status_line() {
+    local state="$1" message="$2" color="36" symbol="..."
+    case "$state" in
+        OK) color="32"; symbol="✓" ;;
+        WARN) color="33"; symbol="!" ;;
+        ERROR) color="31"; symbol="✗" ;;
+    esac
+    if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
+        if [ -z "${NO_COLOR:-}" ]; then
+            printf '\033[%sm%s %s\033[0m %s\n' "$color" "$symbol" "$state" "$message"
+        else
+            printf '%s %s %s\n' "$symbol" "$state" "$message"
+        fi
+    else
+        printf '[%s] %s\n' "$state" "$message"
+    fi
+}
+step() { status_line WORK "$1"; }
+
+# Preserve every setup line in the log, exposing phases and elapsed time live.
+show_setup_progress() {
+    local line="" pending="" read_status=0 phase="Installing and configuring vBot"
+    local started=$SECONDS last_report=$SECONDS
+    while true; do
+        line=""
+        if IFS= read -r -t 10 line; then read_status=0; else read_status=$?; fi
+        pending+="$line"
+        if [ "$read_status" -eq 0 ] || [ "$read_status" -eq 1 ]; then
+            if [ "$read_status" -eq 0 ] || [ -n "$pending" ]; then
+                printf '%s\n' "$pending" >> "$INSTALL_LOG" || return 1
+                if [[ "$pending" == '==> '* ]]; then
+                    phase="${pending#==> }"
+                    started=$SECONDS
+                    last_report=$SECONDS
+                    step "$phase"
+                elif [[ "$pending" == Warning:* ]]; then
+                    status_line WARN "$pending"
+                fi
+            fi
+            pending=""
+        fi
+        [ "$read_status" -ne 1 ] || break
+        if [ $((SECONDS - last_report)) -ge 10 ]; then
+            step "$phase ($((SECONDS - started))s elapsed)"
+            last_report=$SECONDS
+        fi
+    done
+}
 INSTALL_LOG=""
 PRESERVE_INSTALL_LOG=0
 FAILURE_REPORTED=0
 
 fail() {
     local message="$1"
-    echo "Error: ${message}" >&2
+    status_line ERROR "$message" >&2
     if [ -n "$INSTALL_LOG" ]; then
         printf 'Error: %s\n' "$message" >> "$INSTALL_LOG"
         PRESERVE_INSTALL_LOG=1
@@ -86,7 +133,7 @@ finish_install() {
     local status="$1"
     if [ "$status" -ne 0 ] && [ "$FAILURE_REPORTED" -eq 0 ] && [ -n "$INSTALL_LOG" ]; then
         PRESERVE_INSTALL_LOG=1
-        echo "vBot installation failed." >&2
+        status_line ERROR "vBot installation failed." >&2
         echo "Technical details: ${INSTALL_LOG}" >&2
     fi
     if [ "$status" -eq 0 ] && [ "$PRESERVE_INSTALL_LOG" -eq 0 ] && [ -n "$INSTALL_LOG" ]; then
@@ -345,6 +392,7 @@ run_setup() {
     fi
 
     local setup_exit=0
+    local setup_pipeline=()
     if [ "$VERBOSE" -eq 1 ]; then
         set +e
         if [ "${#args[@]}" -gt 0 ]; then
@@ -352,18 +400,21 @@ run_setup() {
         else
             bash "$setup_script" 2>&1 | tee -a "$INSTALL_LOG"
         fi
-        setup_exit=${PIPESTATUS[0]}
+        setup_pipeline=("${PIPESTATUS[@]}")
+        setup_exit=${setup_pipeline[0]}
         set -e
     else
         set +e
         if [ "${#args[@]}" -gt 0 ]; then
-            bash "$setup_script" "${args[@]}" >> "$INSTALL_LOG" 2>&1
+            bash "$setup_script" "${args[@]}" 2>&1 | show_setup_progress
         else
-            bash "$setup_script" >> "$INSTALL_LOG" 2>&1
+            bash "$setup_script" 2>&1 | show_setup_progress
         fi
-        setup_exit=$?
+        setup_pipeline=("${PIPESTATUS[@]}")
+        setup_exit=${setup_pipeline[0]}
         set -e
     fi
+    [ "${setup_pipeline[1]}" -eq 0 ] || fail "Could not preserve the setup output in the installation log."
     [ "$setup_exit" -eq 0 ] || fail "vBot setup did not complete successfully."
 }
 
@@ -446,7 +497,7 @@ finish_with_summary() {
     step "Verifying the installation"
     if [ "$DESKTOP_CLIENT" -eq 1 ]; then
         echo
-        echo "vBot is ready."
+        status_line OK "vBot is ready."
         echo "Open vBot Desktop from the application menu, or run: ${vbot_command} desktop"
         return
     fi
@@ -477,21 +528,21 @@ finish_with_summary() {
 
     echo
     if [ "$server_running" -eq 1 ] && { [ "$NO_AUTOSTART" -eq 1 ] || [ "$autostart_enabled" -eq 1 ]; }; then
-        echo "vBot is ready."
+        status_line OK "vBot is ready."
         echo "Open: http://${summary_host}:${summary_port}/"
         [ "$DESKTOP" -eq 0 ] || echo "Desktop: ${vbot_command} desktop"
         return
     fi
 
     if [ "$NO_AUTOSTART" -eq 1 ] && [ "$server_running" -eq 0 ]; then
-        echo "vBot is installed."
+        status_line OK "vBot is installed."
         echo "Autostart was not requested, so the server was not started."
         echo "Start it with: ${vbot_command} server start --host ${summary_host} --port ${summary_port} --data-dir \"${summary_data_dir}\""
         return
     fi
 
     PRESERVE_INSTALL_LOG=1
-    echo "vBot was installed, but it needs attention."
+    status_line WARN "vBot was installed, but it needs attention."
     if [ "$server_running" -eq 1 ]; then
         echo "The server is running, but Autostart is not enabled."
         echo "Open: http://${summary_host}:${summary_port}/"

@@ -45,7 +45,8 @@ def test_doctor_settings_reports_missing_file_as_ok(tmp_path: Path) -> None:
     result = doctor_management.doctor_settings(tmp_path)
 
     assert result.ok is True
-    assert result.message.splitlines() == [
+    assert result.message.splitlines()[-1].startswith("[OK]")
+    assert result.message.splitlines()[:-1] == [
         "doctor settings: ok",
         f"data_dir: {tmp_path.resolve()}",
         f"file: {tmp_path.resolve() / 'settings.json'}",
@@ -59,12 +60,21 @@ def test_doctor_settings_reports_valid_file(tmp_path: Path) -> None:
     result = doctor_management.doctor_settings(tmp_path)
 
     assert result.ok is True
-    assert result.message.splitlines() == [
+    assert result.message.splitlines()[-1].startswith("[OK]")
+    assert result.message.splitlines()[:-1] == [
         "doctor settings: ok",
         f"data_dir: {tmp_path.resolve()}",
         f"file: {tmp_path.resolve() / 'settings.json'}",
         "status: valid",
     ]
+
+
+def test_doctor_warning_is_visible_even_when_configuration_is_usable(tmp_path):
+    (tmp_path / "settings.json").write_text('{"typo": true}', encoding="utf-8")
+    result = doctor_management.doctor_settings(tmp_path)
+    assert result.ok
+    assert result.message.splitlines()[-1].startswith("[WARN]")
+    assert "$.typo" in result.message
 
 
 def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
@@ -75,6 +85,7 @@ def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
     result = doctor_management.doctor_settings(tmp_path)
 
     assert result.ok is False
+    assert result.message.splitlines()[-1].startswith("[ERROR]")
     assert f"data_dir: {tmp_path.resolve()}" in result.message
     assert f"file: {tmp_path.resolve() / 'settings.json'}" in result.message
     assert "errors: 1" in result.message

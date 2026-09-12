@@ -11,6 +11,7 @@ from cli._output import (
     FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
 )
+from cli._update_types import Progress
 from cli.autostart_management import autostart_status, disable_autostart, enable_autostart
 from cli.server_management import (
     DEFAULT_SERVICE_NAME,
@@ -96,6 +97,7 @@ def dispatch_update_command(
     stop: Callable[[ServerInstance], CommandResult],
     start: Callable[[ServerInstance], CommandResult],
     run_update_fn: Callable[..., CommandResult] = run_update,
+    progress: Progress | None = None,
 ) -> CommandResult:
     """Run the local self-update against the resolved server target."""
 
@@ -106,6 +108,7 @@ def dispatch_update_command(
     )
     return run_update_fn(
         instance,
+        **({"progress": progress} if progress is not None else {}),
         discard=args.discard,
         stash=args.stash,
         restart=not args.no_restart,
