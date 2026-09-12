@@ -1871,3 +1871,95 @@ def test_patch_probe_rejects_importing_a_different_checkout(monkeypatch):
     )
     with pytest.raises(RuntimeError):
         asyncio.run(PROBE._probe_apply_patch(None, args))
+
+
+class _TerminalAdapter:
+    def __init__(self, wrong=False):
+        self.wrong = wrong
+
+    async def send(self, messages, **kwargs):
+        from core.tools.terminal import TERMINAL_TOOL_PARAMETERS
+
+        assert kwargs["tools"][0]["parameters"] == TERMINAL_TOOL_PARAMETERS
+        arguments = json.loads(messages[-1]["content"])
+        if self.wrong:
+            arguments = {"action": "list"}
+        return {"tool_calls": [{"id": "fixture", "name": "terminal", "arguments": arguments}]}
+
+    def normalize_response(self, raw, **kwargs):
+        return raw
+
+
+def test_terminal_probe_dispatches_matrix_and_checks_effects():
+    args = PROBE._parser().parse_args(["--scenario", "terminal"])
+
+    async def evaluate():
+        for case in PROBE._terminal_cases():
+            if "arguments" in case:
+                row = await PROBE._probe_terminal_case(_TerminalAdapter(), args, case)
+                assert row["passed"], row
+                assert row["non_strict"]
+                assert row["definition_tokens"] <= 900
+        wrong = await PROBE._probe_terminal_case(
+            _TerminalAdapter(wrong=True), args, PROBE._terminal_cases()[0]
+        )
+        assert not wrong["passed"]
+
+    asyncio.run(evaluate())
+
+
+def test_terminal_shell_task_does_not_activate_coding_agent_skill():
+    class Adapter(_TerminalAdapter):
+        async def send(self, messages, **kwargs):
+            assert [message["role"] for message in messages] == ["user"]
+            return {
+                "tool_calls": [
+                    {"id": "shell", "name": "terminal", "arguments": {"action": "start"}}
+                ]
+            }
+
+    args = PROBE._parser().parse_args(["--scenario", "terminal"])
+    case = next(case for case in PROBE._terminal_cases() if case["id"] == "natural_start")
+    assert asyncio.run(PROBE._probe_terminal_case(Adapter(), args, case))["passed"]
+
+
+def test_terminal_delegation_probe_loads_references_and_rejects_unsolicited_discovery():
+    class Adapter(_TerminalAdapter):
+        async def send(self, messages, **kwargs):
+            skill_root = (
+                Path(PROBE.__file__).resolve().parents[1] / "resources/skills/coding-agents"
+            )
+            assert messages[0]["content"] == (
+                (skill_root / "SKILL.md").read_text(encoding="utf-8")
+                + "\n\n"
+                + (skill_root / "references" / case["reference"]).read_text(encoding="utf-8")
+            )
+            assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool", "user"]
+            observation = json.loads(messages[-2]["content"])["data"]
+            assert messages[-1]["content"] == (
+                case["task"]
+                .replace("{root}", observation["workdir"])
+                .replace("{terminal_id}", observation["terminal_id"])
+            )
+            arguments = dict(case["expected"])
+            if "workdir" in arguments:
+                arguments["workdir"] = observation["workdir"]
+            if "terminal_id" in arguments:
+                arguments["terminal_id"] = observation["terminal_id"]
+            if self.wrong:
+                arguments = {"action": "list"}
+            return {"tool_calls": [{"id": "decision", "name": "terminal", "arguments": arguments}]}
+
+    args = PROBE._parser().parse_args(["--scenario", "terminal"])
+
+    async def evaluate():
+        nonlocal case
+        for case in PROBE._terminal_cases():
+            if "reference" in case:
+                assert (await PROBE._probe_terminal_case(Adapter(), args, case))["passed"]
+                assert not (await PROBE._probe_terminal_case(Adapter(wrong=True), args, case))[
+                    "passed"
+                ]
+
+    case = {}
+    asyncio.run(evaluate())

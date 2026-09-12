@@ -2507,3 +2507,49 @@ async def test_operator_read_preserves_binding_and_rejects_stale_guarded_input(
             session.terminal_id, "second", expected_screen_revision=revision
         )
     assert session.attachment == original_attachment
+
+
+@pytest.mark.asyncio
+async def test_notification_revision_authorizes_only_the_delivered_screen(tmp_path):
+    import re
+
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(trigger, adapter_factory=factory, activity_quiet_seconds=0.03)
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        await manager.send_operator_input(session.terminal_id, "open")
+        factory.adapters[0].emit("Approve fixture change? [y/n]")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        body = trigger.submissions[0][1]["body"]
+        match = re.search(r"^screen_revision: (\d+)$", body, re.MULTILINE)
+        assert match is not None
+        revision = int(match[1])
+        assert revision == session.renderer.revision
+        assert "Approve fixture change? [y/n]" in body
+        sent = await manager.send_input(
+            session.terminal_id,
+            owner(),
+            data=None,
+            text="y",
+            key="enter",
+            expected_screen_revision=revision,
+            origin_run_id="answer",
+        )
+        assert sent["characters_sent"] == 2
+        assert factory.adapters[0].writes[-2:] == ["y", "\r"]
+        writes = list(factory.adapters[0].writes)
+        with pytest.raises(TerminalStaleScreenError):
+            await manager.send_input(
+                session.terminal_id,
+                owner(),
+                data=None,
+                text="y",
+                key="enter",
+                expected_screen_revision=revision,
+                origin_run_id="duplicate",
+            )
+        assert factory.adapters[0].writes == writes
+    finally:
+        await manager.aclose()
