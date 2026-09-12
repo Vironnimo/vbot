@@ -154,7 +154,9 @@ def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
             "Inspect vbot extensions list with the same target; the enabled "
             "setting is already saved."
         )
-        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+        return CommandResult(
+            ok=False, message="\n".join(lines), instance=instance, failure=extensions.failure
+        )
     record = _find_extension(extensions, name)
     loaded = record is not None and record.get("status") == "loaded"
     lines.append(f"status: {record.get('status', 'unknown') if record else 'missing'}")
@@ -543,10 +545,15 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
         )
     operation = next((item for item in operations if item["name"] == tokens[0]), None)
     if operation is None:
+        names = [item["name"] for item in operations]
         return CommandResult(
             ok=False,
             message=json.dumps(
-                {"unknown_operation": tokens[0], "available": [item["name"] for item in operations]}
+                {
+                    "unknown_operation": tokens[0],
+                    "available": names,
+                    "suggestions": get_close_matches(tokens[0], names, n=3, cutoff=0.7),
+                }
             ),
             instance=instance,
         )
@@ -596,8 +603,19 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
     while remaining:
         token = remaining.pop(0)
         key = token.removeprefix("--").replace("-", "_")
-        if not token.startswith("--") or key not in properties or not remaining or key in arguments:
-            raise ValueError("Unknown, duplicate, or incomplete Extension argument; inspect --help")
+        if not token.startswith("--") or key not in properties:
+            options = ["--" + name.replace("_", "-") for name in properties]
+            matches = get_close_matches(token.split("=", 1)[0], options, n=3, cutoff=0.7)
+            hint = f" Did you mean {', '.join(matches)}?" if matches else ""
+            raise ValueError(f"Unknown Extension argument.{hint} Available: {', '.join(options)}")
+        if key in arguments:
+            raise ValueError(
+                f"Duplicate Extension argument --{key.replace('_', '-')}; supply it once"
+            )
+        if not remaining:
+            raise ValueError(
+                f"Missing value for --{key.replace('_', '-')}; inspect operation --help"
+            )
         raw = remaining.pop(0)
         if properties[key].get("type") == "string" or (
             properties[key].get("enum")
@@ -605,5 +623,19 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
         ):
             arguments[key] = raw
         else:
-            arguments[key] = json.loads(raw)
+            try:
+                arguments[key] = json.loads(raw)
+            except ValueError:
+                raise ValueError(
+                    f"--{key.replace('_', '-')} requires a JSON value; "
+                    "use --stdin for complex input"
+                ) from None
+        if "enum" in properties[key] and arguments[key] not in properties[key]["enum"]:
+            choices = properties[key]["enum"]
+            matches = get_close_matches(raw, [str(choice) for choice in choices], n=3, cutoff=0.7)
+            hint = f" Did you mean {', '.join(matches)}?" if matches else ""
+            raise ValueError(
+                f"Invalid choice for --{key.replace('_', '-')}; "
+                f"choose from {', '.join(str(choice) for choice in choices)}.{hint}"
+            )
     return arguments

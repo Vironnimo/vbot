@@ -72,6 +72,8 @@ class _CliParser(argparse.ArgumentParser):
         kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
         self._error_help_path = self.prog
+        self._unknown_options: list[str] = []
+        self._selected_parser = self
         self.set_defaults(_command_path=self.prog.removeprefix("vbot "))
         self.add_argument(
             "--output",
@@ -90,16 +92,45 @@ class _CliParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> NoReturn:
         help_path = getattr(self, "_error_help_path", self.prog)
-        self.exit(
-            2, f"{status_line('error', message, stream=sys.stderr)}\nHelp: {help_path} --help\n"
+        selected = self._selected_parser
+        unknown = list(dict.fromkeys(selected._unknown_options))
+        if message.startswith("unrecognized arguments:"):
+            # Unconsumed values can be credentials. Name the bad flags, not their payloads.
+            message = (
+                "unrecognized options: " + ", ".join(unknown)
+                if unknown
+                else ("unexpected extra arguments; check the positional arguments in help")
+            )
+        hints = []
+        for option in unknown[:3]:
+            matches = get_close_matches(option, selected._option_string_actions, n=3, cutoff=0.7)
+            if matches:
+                hints.append(f"For {option}, did you mean {', '.join(matches)}?")
+        details = "\n".join(
+            [message, *hints, "No command was executed.", f"Help: {help_path} --help"]
         )
+        self.exit(2, f"{status_line('error', details, stream=sys.stderr)}\n")
+
+    def _parse_optional(self, arg_string):
+        result = super()._parse_optional(arg_string)
+        # Python 3.14 returns a list of interpretations; older supported versions a tuple.
+        interpretations = result if isinstance(result, list) else [result]
+        if result is not None and all(item[0] is None for item in interpretations):
+            self._unknown_options.append(arg_string.split("=", 1)[0])
+        return result
 
     def _check_value(self, action, value) -> None:
         if isinstance(action, argparse._SubParsersAction) and value not in action.choices:
             matches = get_close_matches(value, action.choices, n=1)
             hint = f" Did you mean '{matches[0]}'?" if matches else ""
             raise argparse.ArgumentError(action, f"unknown command '{value}'.{hint}")
-        super()._check_value(action, value)
+        try:
+            super()._check_value(action, value)
+        except argparse.ArgumentError as error:
+            choices = [str(choice) for choice in action.choices or ()]
+            matches = get_close_matches(str(value), choices, n=3, cutoff=0.7)
+            hint = f" Did you mean {', '.join(matches)}?" if matches else ""
+            raise argparse.ArgumentError(action, error.message + hint) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -191,6 +222,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         selected = commands.choices[token]
     if isinstance(parser, _CliParser):
         parser._error_help_path = selected.prog
+        if isinstance(selected, _CliParser):
+            parser._selected_parser = selected
     args = operation_args if operation_args is not None else parser.parse_args(tokens)
     if getattr(args, "area", None) == "extensions":
         action = getattr(args, "command", None)
@@ -241,9 +274,23 @@ def _extension_operation_args(
     """Keep name-first Extension calls, including opaque operation arguments, compatible."""
     if not tokens or tokens[0] != "extensions":
         return None
-    target_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    if len(tokens) > 1 and tokens[1] in {
+        "list",
+        "reload",
+        "enable",
+        "disable",
+        "show",
+        "set",
+        "operations",
+        "run",
+    }:
+        return None
+    target_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
     _add_target_arguments(target_parser)
-    target, remaining = target_parser.parse_known_args(tokens[1:])
+    try:
+        target, remaining = target_parser.parse_known_args(tokens[1:])
+    except argparse.ArgumentError as error:
+        parser.error(f"extensions: {error}")
     if (
         not remaining
         or remaining[0].startswith("-")
