@@ -634,7 +634,7 @@ def test_removed_agent_fields_are_rejected(
     cron_service.create_job.assert_not_called()
 
 
-def test_removed_agent_id_is_rejected(tmp_path: Path) -> None:
+def test_recognizable_agent_id_alias_selects_target(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-legacy")
     registry = ToolRegistry()
@@ -654,10 +654,9 @@ def test_removed_agent_id_is_rejected(tmp_path: Path) -> None:
         )
     )
 
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "invalid_arguments"
-    assert "does not accept: agent_id" in error["message"]
-    cron_service.create_job.assert_not_called()
+    assert result["ok"] is True
+    assert cron_service.create_job.call_args.kwargs["agent_id"] == "builder"
+    assert cron_service.create_job.call_args.kwargs["project_id"] == "vbot"
 
 
 def test_stringified_operation_payload_is_repaired(tmp_path: Path) -> None:
@@ -761,3 +760,25 @@ def test_unknown_id_failures_return_job_not_found(
     assert "Cron job not found: missing" in error["message"]
     assert '{"action":"list"}' in error["message"]
     getattr(cron_service, method_name).assert_called_once()
+
+
+def test_conflicting_cron_target_aliases_do_not_create_job(tmp_path: Path) -> None:
+    service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, service)
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "target": "first",
+                "agent_id": "second",
+                "prompt": "Check",
+                "schedule": "every 2h",
+            },
+        )
+    )
+    assert not result["ok"]
+    assert "different Agents" in cast(dict[str, Any], result["error"])["message"]
+    service.create_job.assert_not_called()

@@ -328,6 +328,10 @@ async def _edit_case(
 
 
 async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
+    if args.tolerance_tool == "cron":
+        from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
+
+        return await probe_cron_tolerance(adapter, args)
     rows = []
     semaphore = asyncio.Semaphore(3)
 
