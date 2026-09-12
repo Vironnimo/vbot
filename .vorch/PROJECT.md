@@ -2,9 +2,9 @@
 
 ## Project
 
-vBot is a local-first agent harness for technical users: maximum Agent agency with few critical guardrails. One async Python kernel powers a FastAPI server, Svelte WebUI, pywebview Desktop shell, and CLI.
+vBot is a self-hosted environment for working with AI Agents across conversations, Projects, and automated tasks. It brings together persistent Sessions, Agent identity and Memory, project context, and Tools for acting on the host system and connected services. Agents can work directly with the user or carry out tasks independently.
 
-Agents are first-class participants on the server host, with the user's capabilities: host Tool access, application-source editing for self-healing and small features, CLI configuration (e.g. Telegram channels, API Providers, Model selection), and application restarts. Desktop and CLI are accessors.
+The runtime and shared state live on the server. WebUI, Desktop, CLI, and Channels provide different ways to interact with the same system.
 
 ## Architecture
 
