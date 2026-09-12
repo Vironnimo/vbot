@@ -24,7 +24,7 @@ from core.channels.adapter import (
     RouteFacts,
     content_blocks_for_attachment,
 )
-from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
+from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.extensions import InteractionButton

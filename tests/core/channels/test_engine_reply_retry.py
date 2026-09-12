@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
+from core.channels import ChannelError
 from core.channels.adapter import ReplyPlanFacts
-from core.channels.channels import ChannelError
 
 from .engine_test_support import FakeTransport, make_engine
 

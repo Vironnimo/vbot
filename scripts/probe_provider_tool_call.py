@@ -31,7 +31,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
 
-from core.channels.channels import ChannelConfig
+from core.channels import ChannelConfig
 from core.providers.accounts import ConnectionRef
 from core.providers.tool_schema import (
     ToolSchemaProfile,

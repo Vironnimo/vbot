@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import core.channels.telegram as telegram_module
+from core.channels import ChannelConfigError
 from core.channels.adapter import (
     FileData,
 )
-from core.channels.channels import ChannelConfigError
 from core.channels.telegram import (
     TELEGRAM_MESSAGE_LIMIT,
 )

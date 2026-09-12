@@ -14,7 +14,7 @@ import pytest
 
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
-from core.channels.channels import ChannelConfig
+from core.channels import ChannelConfig
 from core.channels.telegram import (
     TelegramChannelAdapter,
 )

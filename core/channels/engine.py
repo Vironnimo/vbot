@@ -60,7 +60,7 @@ from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
-    from core.channels.channels import ChannelConfig
+    from core.channels.config import ChannelConfig
     from core.extensions.interactions import InteractionEvent
     from core.runs import Run, RunEvent
     from core.sessions import ChatSession, ChatSessionManager

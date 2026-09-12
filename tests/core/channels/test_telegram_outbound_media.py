@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.channels import ChannelError
 from core.channels.adapter import (
     FileData,
 )
-from core.channels.channels import ChannelError
 from core.channels.telegram import (
     TELEGRAM_CAPTION_LIMIT,
     split_telegram_message,

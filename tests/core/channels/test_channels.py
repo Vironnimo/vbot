@@ -33,7 +33,7 @@ from core.channels.adapter import (
     RouteFacts,
     parse_bound_run_callback_data,
 )
-from core.channels.channels import _normalize_channel_id
+from core.channels.config import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.chat import ReplySurface

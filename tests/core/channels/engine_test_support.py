@@ -16,6 +16,7 @@ import pytest
 
 import core.channels.engine as engine_module
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
+from core.channels import ChannelConfig
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
@@ -25,7 +26,6 @@ from core.channels.adapter import (
     RouteFacts,
     RunButtonBindingRegistry,
 )
-from core.channels.channels import ChannelConfig
 from core.channels.engine import ChannelConversationEngine
 from core.chat import MessageSender, ReplySurface
 from core.chat.commands import (

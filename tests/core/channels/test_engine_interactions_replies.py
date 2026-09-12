@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from core.channels import ChannelStorage
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
-from core.channels.channels import ChannelStorage
 from core.sessions import SessionAddress
 
 from .engine_test_support import (

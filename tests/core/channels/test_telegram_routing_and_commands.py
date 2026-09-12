@@ -15,7 +15,7 @@ import pytest
 import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
-from core.channels.channels import ChannelConfigError
+from core.channels import ChannelConfigError
 from core.channels.telegram import (
     TelegramChannelAdapter,
 )

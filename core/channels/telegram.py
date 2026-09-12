@@ -26,7 +26,7 @@ from core.channels.adapter import (
     UpdateOffsetStore,
     content_blocks_for_attachment,
 )
-from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
+from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.extensions import (
