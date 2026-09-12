@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
 import { init, t } from '../../../lib/i18n.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
 import {
@@ -14,6 +15,11 @@ vi.mock(
   async () => import('../../../../node_modules/svelte/src/index-client.js'),
 );
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
+vi.mock(
+  'svelte/reactivity',
+  async () =>
+    import('../../../../node_modules/svelte/src/reactivity/index-client.js'),
+);
 const { default: SkillsView } = await import('../SkillsView.svelte');
 
 const entry = (id, name, extra = {}) => ({
@@ -79,8 +85,13 @@ async function settle() {
 }
 
 let component, inventory, agents;
+const refreshState = new SvelteMap();
+function notifySkillsChanged() {
+  flushSync(() => refreshState.set('token', refreshState.get('token') + 1));
+}
 beforeEach(() => {
   init('en');
+  refreshState.set('token', 0);
   document.body.innerHTML = '';
   inventory = base();
   agents = [
@@ -108,7 +119,12 @@ afterEach(async () => {
 async function render() {
   component = mount(SkillsView, {
     target: document.body,
-    props: { settings: {}, skillsRefreshToken: 0 },
+    props: {
+      settings: {},
+      get skillsRefreshToken() {
+        return refreshState.get('token');
+      },
+    },
   });
   flushSync();
   await settle();
@@ -125,6 +141,7 @@ describe('Skills manager', () => {
       'Global',
       'Bundled',
       'Shared skills',
+      'Skill locations',
       'Main',
       'Reviewer',
     ]);
@@ -132,7 +149,7 @@ describe('Skills manager', () => {
       [...document.querySelectorAll('.skills-nav-label')].map(
         (el) => el.textContent,
       ),
-    ).toEqual(['Agents']);
+    ).toEqual(['Library', 'Agents']);
     collection('Global');
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
     collection('Bundled');
@@ -150,6 +167,27 @@ describe('Skills manager', () => {
     ]);
     click(options[1]);
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
+  });
+  it('keeps actions beside search and locations in navigation without header or refresh buttons', async () => {
+    await render();
+    expect(document.querySelector('.skills-header button')).toBeNull();
+    expect(button('Refresh')).toBeUndefined();
+    const add = button('Add skills');
+    expect(add.closest('.skills-toolbar')).toBeTruthy();
+    expect(add.textContent.trim()).toBe('');
+    collection('Skill locations');
+    expect(document.querySelector('.skills-directories').hidden).toBe(false);
+    expect(document.querySelector('#skills-title').textContent.trim()).toBe(
+      'Skill locations',
+    );
+    input(
+      document.querySelector('.skills-directory-add input'),
+      '/draft/location',
+    );
+    collection('All skills');
+    click(button('Add skills'));
+    await settle();
+    expect(document.activeElement.value).toBe('/draft/location');
   });
   it('shows direct actions and exposes descriptions only through hover or focus', async () => {
     await render();
@@ -181,8 +219,10 @@ describe('Skills manager', () => {
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
     );
     expect(document.querySelector('.app-tooltip--visible')).toBeNull();
-    expect(button('Share deploy')).toBeTruthy();
-    expect(button('Delete deploy')).toBeTruthy();
+    for (const name of ['Share deploy', 'Delete deploy']) {
+      expect(button(name).textContent.trim()).toBe('');
+      expect(button(name).querySelector('svg')).toBeTruthy();
+    }
     expect(button('Share teach')).toBeUndefined();
     expect(button('Delete teach')).toBeUndefined();
     expect(
@@ -311,15 +351,20 @@ describe('Skills manager', () => {
   it('creates in the selected Agent scope and retains draft content during inventory refresh', async () => {
     await render();
     collection('Main');
-    click(button('+ Add skills'));
+    click(button('Add skills'));
     click(button('Create a custom skill…'));
     const dialog = document.querySelector('[role="dialog"]');
     input(dialog.querySelector('#new-skill-name'), 'new-sentinel');
     input(dialog.querySelector('#new-skill-description'), 'Use for: reports');
     input(dialog.querySelector('#new-skill-content'), 'draft-sentinel');
-    // Resource refresh uses the same workflow as Refresh; an open draft stays mounted.
-    click(button('Refresh'));
+    const callsBefore = rpcMock.mock.calls.filter(
+      ([method]) => method === 'skill.inventory',
+    ).length;
+    notifySkillsChanged();
     await settle();
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'skill.inventory'),
+    ).toHaveLength(callsBefore + 1);
     expect(dialog.querySelector('textarea').value).toBe('draft-sentinel');
     click(button('Create skill', dialog));
     await settle();
@@ -426,20 +471,24 @@ describe('Skills manager', () => {
   });
   it('opens folder setup from the primary action without showing an authoring form', async () => {
     await render();
-    click(button('+ Add skills'));
+    click(button('Add skills'));
     const directories = document.querySelector('.skills-directories');
     expect(directories.hidden).toBe(false);
-    expect(directories.querySelector('input:not([readonly])')).toBeTruthy();
+    await settle();
+    expect(document.activeElement).toBe(
+      directories.querySelector('.skills-directory-add input'),
+    );
+    expect(button('Skill locations').getAttribute('aria-current')).toBe('page');
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(
       button('Create a custom skill…').classList.contains('btn-tertiary'),
     ).toBe(true);
-    click(button('Back to list'));
+    collection('All skills');
     expect(rows()).toHaveLength(4);
   });
   it('refreshes the list immediately after connecting a Skill folder', async () => {
     await render();
-    click(button('+ Add skills'));
+    click(button('Add skills'));
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'settings.update') {
         inventory = [
@@ -465,7 +514,7 @@ describe('Skills manager', () => {
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       skills: { directories: ['/skills/folder-sentinel'] },
     });
-    click(button('Back to list'));
+    collection('All skills');
     expect(rows().map((row) => row.dataset.skillId)).toContain(
       'folder-sentinel',
     );
@@ -512,17 +561,21 @@ describe('Skills manager', () => {
   });
   it('keeps the inventory visible after refresh failure and supports retry', async () => {
     await render();
-    rpcMock.mockRejectedValueOnce(new Error('refresh-sentinel'));
-    // Fail the inventory call specifically (Refresh also loads the roster).
     rpcMock.mockImplementation(async (method) => {
       if (method === 'skill.inventory') throw new Error('refresh-sentinel');
       return { agents };
     });
-    click(button('Refresh'));
+    notifySkillsChanged();
     await settle();
     expect(rows()).toHaveLength(4);
     expect(document.querySelector('[role="alert"]')).not.toBeNull();
     expect(button('Retry')).toBeTruthy();
+    inventory = [...inventory, entry('arrived', 'new-skill')];
+    rpcMock.mockImplementation(async () => ({ skills: inventory }));
+    click(button('Retry'));
+    await settle();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(rows()).toHaveLength(5);
   });
   it('shows a retryable content error without opening an empty editor', async () => {
     await render();
