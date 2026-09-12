@@ -42,9 +42,10 @@ Domain-specific vocabulary for skills. The core Skill term lives in `.vorch/GLOS
 
 `core/skills/authoring.py` (`SkillAuthoringService`) is the single validated write core behind the Agent Tool, RPC, WebUI, CLI, and `/learn`. It operates on an already-resolved target root with direct create/edit/patch/delete/write_file/remove_file methods; each success publishes immediately. Create/edit/SKILL.md patches reuse the loader's lenient document parsing and canonicalize complete YAML frontmatter, stamping `author` plus optional `source` under `metadata.vbot` and writing atomically; a missing name fills from the trigger-safe directory name and an explicit different name is rejected. Support-file writes accept UTF-8 only, confined to `scripts/`/`references/`/`assets/`; patches default to `SKILL.md`, target one support file otherwise, require unique match unless `replace_all=true`. Patch matching normalizes line endings (CR/CRLF tolerated in `match`), non-unique matches report their line numbers, and edit/patch/write_file preserve the target file's detected line-ending style. Every path stays under the target root; protected bundled roots are refused. Failures raise `SkillAuthoringError` with surface-neutral diagnostics.
 
-The `skill_manage` registration disables generic argument coercion: an explicit
-empty `content` is meaningful for patch removal and empty support files and must
-not become omission. Missing/non-text content still fails before writing
+The `skill_manage` registration uses shared Tool argument repair, including field
+spelling and action/envelope normalization. Explicit empty `content` remains
+meaningful for patch removal and empty support files; accepted text payloads are
+preserved. Missing/non-text content still fails before writing
 (`core/tools/skill_manage.py`, `tests/core/tools/test_skill_manage.py`).
 
 **Write-scope boundary (v1 is data-dir only - vBot never writes the repo as runtime state):**

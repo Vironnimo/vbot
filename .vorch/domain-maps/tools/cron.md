@@ -23,6 +23,6 @@ Manages persisted time-based automation jobs through `CronService`.
 ## Constraints & Gotchas
 
 - Unknown action-specific arguments, missing required arguments, domain validation failures, and missing jobs return non-retryable failure envelopes whose message includes an exact valid call or directs the Agent to `{"action":"list"}` for current ids.
-- The required `action` contract rejects retired nested `request.operation`, operation-key, and stringified operation shapes before the handler runs; the handler rejects the old `agent_id` spelling and removed `timezone`, `session_id`, or `status` arguments.
+- Shared dispatch repairs recognizable nested `request.operation`, operation-key, and stringified operation shapes before the handler runs; the handler rejects the old `agent_id` spelling and removed `timezone`, `session_id`, or `status` arguments.
 - The Tool never accepts a timezone. Cron expressions and offset-free Once values use the server's IANA system timezone, including future DST rules; an explicit Once offset remains an absolute instant.
 - A repeat is consumed when `TriggerService` admits or queues the Run, before its terminal result. A failed admitted Run therefore counts; a trigger failure before admission does not. Missed Once jobs do not catch up after restart; list reports them as `missed`. Repeated recurring Run failures eventually stop a job as `failed`; enable retries it after resetting the consecutive-failure streak.

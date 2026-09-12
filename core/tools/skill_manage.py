@@ -319,9 +319,6 @@ def register_skill_manage_tool(
         ),
         family="skills",
         constraints=("identity_agent",),
-        # Empty content deletes patch text or writes an empty support file.
-        # Generic optional-string omission would silently remove that payload.
-        coerce_arguments=False,
         open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(parts_builder=_skill_manage_display_parts),
