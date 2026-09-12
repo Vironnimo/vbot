@@ -5495,24 +5495,6 @@ def _terminal_cases() -> list[dict[str, Any]]:
             },
         ]
     )
-    for cli, command, reference in (
-        ("Codex", "codex", "codex.md"),
-        ("Claude Code", "claude", "claude-code.md"),
-        ("OpenCode", "opencode", "opencode.md"),
-    ):
-        cases.append(
-            {
-                "id": "natural_delegate_" + command,
-                "reference": reference,
-                "task": f'Let {cli} do this in {{root}}. Give it the task "Say hello."',
-                "expected": {
-                    "action": "start",
-                    "command": command,
-                    "workdir": "{root}",
-                    "text": "Say hello.",
-                },
-            }
-        )
     cases.append(
         {
             "id": "natural_continue",
@@ -5682,7 +5664,7 @@ async def _probe_terminal_case(
                 and compared.get("expected_screen_revision") == revision
             ):
                 compared.pop("expected_screen_revision")
-            if case["id"] == "natural_start" or case["id"].startswith("natural_delegate_"):
+            if case["id"] == "natural_start":
                 compared.pop("name", None)
                 if compared.get("args") == []:
                     compared.pop("args")

@@ -1923,7 +1923,7 @@ def test_terminal_shell_task_does_not_activate_coding_agent_skill():
     assert asyncio.run(PROBE._probe_terminal_case(Adapter(), args, case))["passed"]
 
 
-def test_terminal_delegation_probe_loads_references_and_rejects_unsolicited_discovery():
+def test_terminal_continuation_probe_loads_reference_and_uses_requested_target():
     class Adapter(_TerminalAdapter):
         async def send(self, messages, **kwargs):
             skill_root = (
