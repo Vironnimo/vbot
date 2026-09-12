@@ -8,6 +8,8 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 
 ## Ownership
 
+- **Editable configuration and existing-record editors use the shared autosave system** in `webui/src/lib/autosave.js`, including Extension-owned pages. Before adding or changing fields, save controls, or editor-replacing navigation, read `webui/autosave.md`; reuse its input timing, tracked saves, and transition integration. Domain controllers retain validation and response reconciliation.
+
 - `App.svelte` + `appController.js` own the shell: active view, global loading/availability, server-event routing, resource refreshes, view composition. `AppShell.svelte` adds the capability-gated Desktop context menu (global viewport/focus concern); host clipboard/browser launch stay behind `desktopBridge.js`.
 - Chat: `ChatWorkspace.svelte` owns up to two retained areas (Chat or website preview), split geometry, and area-local selection. Each `ChatView.svelte` owns its own `chatState.js` projection/workflows and `chatRunStream.js` reconciliation. Preview polling and the isolated frame belong to `chat/HtmlPreview.svelte` - detailed in `webui/chat.md`.
 - Settings forms (`SettingsView.svelte` + panels + `settingsView.js`) submit backend contracts without reinterpreting domain policy. The dedicated Skills management view (`components/skills/` + `skillsView.js`) owns the Configure -> Skills tab: collection navigation, paged search results with hover descriptions and direct share/delete/enable actions, exact-package inspection with a fixed management header, policy mutations (`skill.set_disabled`/`skill.share`), global/private authoring in secondary modals, and the Skill locations navigation destination (Add skills focuses its new-directory field), with automatic inventory refresh after a saved folder change and no manual Refresh control (`components/skills/__tests__/skillsView.test.js`) - Settings keeps no Skill surface.
@@ -37,7 +39,6 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 - Locales format dates/numbers; editable decimal settings stay text while edited so comma decimals normalize deliberately at payload boundary.
 - `dateTimePrefs.svelte.js` owns the app-wide IANA timezone projection seeded from `settings.get.general.timezone`; general settings updates it live, and non-Calendar/Cron timestamp formatters consume it instead of the browser's implicit zone. Calendar and Cron use their server responses' `system_timezone`, which resolves from the same Settings value.
 - `index.html` paints the canonical `Bg` (`#221A12`) inline before the Svelte bundle loads; keep it aligned with the implemented `--bg` token and the Desktop pywebview background so no white document/native layer appears between paints.
-- Configuration autosave shares `lib/autosave.js`: draft snapshots restart the common idle timer, number/decimal controls wait for blur, and IME composition waits for completion. Automatic saves keep controls mounted and editable and preserve newer drafts. Small tertiary Save actions sit after editor content in its scrollport; explicit creation, credentials and operational actions keep their own confirmation semantics. Details: `webui/settings.md` and `webui/app-shell.md`.
 - Shared feedback stays shared (`ToastStack`, hint components, existing lib modules) - extend the owning controller instead of growing views into alternate controllers. Frontend behavior changes bring focused Vitest coverage. Existing visual arrangements are descriptive implementation state, not requirements for new or redesigned views; the task-specific visual companion is indexed below.
 
 ## Constraints & gotchas
@@ -51,6 +52,8 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 ## References
 
 Read only when your task matches:
+
+- Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
 
 - Global voice companion, GPT-Live WebRTC, voice Chat/Terminal actions, or spoken Run updates -> `model_tasks/live.md`
 
