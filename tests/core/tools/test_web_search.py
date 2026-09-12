@@ -2601,3 +2601,63 @@ async def test_web_search_handler_perplexity_unauthorized_hints_at_api_key(
     error = assert_failure_envelope(result, "provider_request_failed")
     assert "PERPLEXITY_API_KEY" in error["message"]
     assert error["retryable"] is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "method", "endpoint"),
+    [
+        ("brave", "GET", _BRAVE_ENDPOINT),
+        ("searxng", "GET", _SEARXNG_ENDPOINT),
+        ("duckduckgo", "GET", _DUCKDUCKGO_ENDPOINT),
+        ("tavily", "POST", _TAVILY_ENDPOINT),
+        ("exa", "POST", _EXA_ENDPOINT),
+        ("serper", "POST", _SERPER_ENDPOINT),
+        ("firecrawl", "POST", _FIRECRAWL_ENDPOINT),
+        ("perplexity", "POST", _PERPLEXITY_ENDPOINT),
+    ],
+)
+@pytest.mark.parametrize("status_code", [408, 500, 503])
+async def test_web_search_preserves_provider_retry_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    method: str,
+    endpoint: str,
+    status_code: int,
+) -> None:
+    sleeps: list[tuple[int, float | None]] = []
+
+    async def record_sleep(attempt: int, retry_after: float | None = None) -> None:
+        sleeps.append((attempt, retry_after))
+
+    monkeypatch.setattr(web_search_module, "sleep_for_retry", record_sleep)
+    route = respx.request(method, endpoint).respond(
+        status_code,
+        headers={"Retry-After": "7"},
+        json={"message": "temporary failure"},
+    )
+    result = await web_search_handler(
+        make_context(tmp_path),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": provider, "searxng": {"base_url": "http://localhost:8888"}},
+    )
+
+    retryable = (
+        status_code == 503
+        or (status_code == 500 and method == "GET")
+        or (status_code == 408 and provider == "firecrawl")
+    )
+    error = assert_failure_envelope(result, "provider_request_failed")
+    assert error["message"] == f"HTTP {status_code}: temporary failure"
+    assert error["retryable"] is retryable
+    if retryable:
+        assert error["attempts_made"] == MAX_RETRIES + 1
+        assert route.call_count == MAX_RETRIES + 1
+        assert sleeps == [(attempt, 7.0) for attempt in range(MAX_RETRIES)]
+    else:
+        assert "attempts_made" not in error
+        assert route.call_count == 1
+        assert sleeps == []
