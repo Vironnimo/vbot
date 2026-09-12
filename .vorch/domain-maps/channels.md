@@ -90,6 +90,8 @@ A message can carry an inline keyboard; tapping produces a tap event normally ro
 - Channel ids are bare slugs (`^[A-Za-z0-9][A-Za-z0-9_-]*$`), enforced at the `_normalize_channel_id` choke point every storage/service call funnels through - the id is a path segment and `delete_channel` rmtree's its directory, so a separator or `..` must never reach the filesystem layer. Tighten id handling here, never just at config validation.
 - A bound `agent_id` must match the full agent-id slug pattern - it flows into session paths on every inbound message. RPC create/update additionally require the Agent to exist; the file-load slug check is the defense-in-depth backstop for hand-edited configs.
 
+Channel tests under `tests/core/channels/` separate service configuration, delivery, lifecycle and recovery (`test_channels*.py`), Discord routing/delivery (`test_discord*.py`), and Telegram routing, commands, application setup and worker behavior (`test_telegram_routing_and_commands*.py`). Shared fake adapters retain one helper owner per platform/service.
+
 ## References
 
 Read these only when your task matches - not by default.

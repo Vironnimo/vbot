@@ -103,6 +103,8 @@ Worker states (`getWakewordStatus().state`): `off` -> `starting` -> `listening` 
 - Isolated microphone read failures reopen the stream; a failed reopen or three consecutive failures move the worker to `microphone_disconnected` recovery (same for no compatible device at startup - a warning, not hard `error`). Empty/no-speech/failed transcriptions surface long enough for feedback, then return to listening - one bad utterance never stops detection.
 - A stop between capture and send discards the utterance (`_running` re-checked after recording and transcription; retry loops honor it); stop-induced empty results publish `off`, never `error`.
 
+Wakeword regression suites under `tests/desktop/` separate Bridge status/configuration, calibration, model management and server connections (`test_bridge*.py`) from Worker lifecycle, recording, VAD, audio conversion, dispatch, recovery, network, mock mode and microphone selection (`test_worker*.py`). Shared fake devices and scoped fixtures live in `bridge_helpers.py` and `worker_helpers.py`.
+
 ## External Dependencies
 
 All five ship in the `[desktop]` optional group (`soxr` also in `[dev]` for tests); all import lazily/optionally so the backend test gate never needs the GUI/audio stack.

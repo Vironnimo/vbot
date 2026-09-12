@@ -88,7 +88,7 @@ from Session Tool grants: child Runs can retain cancellation/usage ownership wit
 receiving the parent's Session Tools. `core/agents/temporary.py` closes group admission
 before cancelling exact owned Runs, Queue items and injected resource owners.
 Unrelated work in a reused target Session remains outside that group
-(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents.py`).
+(`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents_completion.py`).
 
 ## Constraints & Gotchas
 

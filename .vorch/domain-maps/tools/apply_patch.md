@@ -122,9 +122,11 @@ Applies ordered V4A file operations while retaining the existing `edit` Tool.
 
 ## Verification
 
-- `tests/core/tools/test_apply_patch.py` covers framing, matching/retries,
-  byte preservation, ordered plans, failure containment, locking/cancellation,
-  read stamps, statistics, syntax warnings, and generic display metadata.
+- `tests/core/tools/test_apply_patch.py` covers framing and matching;
+  `test_apply_patch_operations.py` covers byte preservation, ordered plans,
+  read stamps, statistics, syntax warnings, and display metadata;
+  `test_apply_patch_transactions.py` covers partial effects, failure containment,
+  locking, cancellation, and guarded retries.
 - Existing fuzzy-match, edit, write, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
 - `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the

@@ -38,7 +38,7 @@ They join only a matching owned Run's request boundary or use the injected owned
 continuation starter. Admission failure never falls back to an arbitrary Session
 write for these notices. Group closure retires only matching notices and rejects
 late submissions; unrelated notices retain normal delivery behavior
-(`automation.py`, `tests/core/automation/test_automation.py`).
+(`automation.py`, `tests/core/automation/test_automation_completion.py`).
 
 ## Reflection (background self-improvement reviews)
 

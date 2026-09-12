@@ -51,6 +51,8 @@ Runs Passage FTS and Vector concurrently, fusing ranks via Reciprocal Rank Fusio
 
 Canonical Messages always come from `ChatSessionManager`; Recall modules construct no Session paths and index/read only the folded active lineage, so suffixes superseded by `history_edit` controls cannot be rediscovered. Candidate and freshness enumeration uses normalized Session summaries rather than decoding open-ended metadata; complete active histories are loaded only for canonical scans or when a stale Session must be rechunked for a derived index. Vector and Hybrid hits carry canonical Passage boundaries and do not hydrate a complete Session per hit. Freshness comparisons use `(generation_id, history_revision)`, never revision alone, so archive/recreate cannot reuse stale rows. FTS/vector files are derived and disposable under `<data_dir>/recall/` - rebuild on change, never migrate. Deleted Sessions evict immediately from fts/vector/hybrid (`canonical_scan` needs nothing because it scans current canonical state). A Session that vanishes between listing, freshness lookup, and Vector hydration is skipped; a stale derived hit never fails the whole search and is pruned by subsequent complete-scope reconciliation.
 
+Vector regressions in `tests/core/recall/test_vector*.py` separate typed search, index lifecycle, embedding batching, Passage projection and scope isolation. `vector_helpers.py` owns shared fake embedding engines and canonical Session setup.
+
 ## Constraints & Gotchas
 
 - Never expose backend tuning just to make payloads look alike: capabilities describe real behavior while the public Tool keeps one compact field set with declared defaults.
