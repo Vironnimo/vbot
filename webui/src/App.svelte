@@ -658,27 +658,26 @@
   });
 
   const runAutosaveTransition = async (action) => {
+    pendingAutosaveTransition = action;
     autosaveTransitionSaving = true;
     const saved = await autosaveCoordinator.flushPending();
     autosaveTransitionSaving = false;
 
     if (!saved) {
-      pendingAutosaveTransition = action;
       autosaveFailureOpen = true;
       return false;
     }
 
+    const latestAction = pendingAutosaveTransition;
     pendingAutosaveTransition = null;
     autosaveFailureOpen = false;
-    return action();
+    return latestAction?.();
   };
 
   const requestAutosaveTransition = (action) => {
-    if (
-      typeof action !== 'function' ||
-      autosaveTransitionSaving ||
-      autosaveFailureOpen
-    ) {
+    if (typeof action !== 'function' || autosaveFailureOpen) return false;
+    if (autosaveTransitionSaving) {
+      pendingAutosaveTransition = action;
       return false;
     }
     if (!autosaveCoordinator.hasPending()) {
@@ -1279,7 +1278,14 @@
       window.removeEventListener('vbot-extension-page', onExtensionPage);
     };
   });
+  function protectPendingEdits(event) {
+    if (!autosaveCoordinator.hasPending()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }
 </script>
+
+<svelte:window onbeforeunload={protectPendingEdits} />
 
 <AppShell
   items={visibleNavigationItems}

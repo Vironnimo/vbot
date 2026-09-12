@@ -5,17 +5,67 @@ const MAX_STABLE_SAVE_PASSES = 10;
 
 export const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 800;
 
-const fallbackContext = Object.freeze({
-  register: () => () => {},
-  requestTransition: (action) => action(),
-});
+const composingInputs = new WeakSet();
+
+// Shared controls report composition without making draft values global.
+export function autosaveInput(node) {
+  const start = () => composingInputs.add(node);
+  const end = () => composingInputs.delete(node);
+  node.addEventListener('compositionstart', start);
+  node.addEventListener('compositionend', end);
+  return {
+    destroy() {
+      end();
+      node.removeEventListener('compositionstart', start);
+      node.removeEventListener('compositionend', end);
+    },
+  };
+}
+
+/** The common input-aware timer, also used by collection editors. */
+export function scheduleAutosave(run, delay = DEFAULT_AUTOSAVE_DEBOUNCE_MS) {
+  const input = typeof document === 'undefined' ? null : document.activeElement;
+  let timer = null;
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    clearTimeout(timer);
+    input?.removeEventListener('blur', finish);
+    input?.removeEventListener('compositionend', resume);
+  };
+  const finish = () => {
+    if (cancelled) return;
+    cancel();
+    void run();
+  };
+  const attempt = () => {
+    const focused = input && input.ownerDocument.activeElement === input;
+    if (
+      focused &&
+      (input.type === 'number' ||
+        input.inputMode === 'decimal' ||
+        composingInputs.has(input))
+    ) {
+      input.addEventListener('blur', finish, { once: true });
+      input.addEventListener('compositionend', resume, { once: true });
+      return;
+    }
+    finish();
+  };
+  const resume = () => {
+    clearTimeout(timer);
+    timer = setTimeout(attempt, delay);
+  };
+  timer = setTimeout(attempt, delay);
+  return cancel;
+}
 
 function snapshotKey(value) {
   return JSON.stringify(value);
 }
 
 export function createAutosaveParticipant({
-  cancelPending,
+  cancelPending = () => {},
   getSnapshot,
   hasChanges,
   save,
@@ -25,14 +75,19 @@ export function createAutosaveParticipant({
   let lastSuccessfulSnapshot = null;
 
   function runSave(reason = 'auto', { force = false } = {}) {
+    if (reason !== 'auto') cancelPending();
     if (activeSave) {
       return activeSave.then((succeeded) => {
-        if (!succeeded) {
+        if (
+          !succeeded &&
+          reason === 'auto' &&
+          snapshotKey(getSnapshot()) === failedSnapshot
+        ) {
           return false;
         }
         const currentSnapshot = snapshotKey(getSnapshot());
         if (hasChanges() && currentSnapshot !== lastSuccessfulSnapshot) {
-          return runSave(reason);
+          return runSave(reason, { force });
         }
         return true;
       });
@@ -42,6 +97,13 @@ export function createAutosaveParticipant({
     }
 
     const savedSnapshot = snapshotKey(getSnapshot());
+    if (
+      !force &&
+      reason === 'auto' &&
+      savedSnapshot === lastSuccessfulSnapshot
+    ) {
+      return Promise.resolve(true);
+    }
     if (reason === 'auto' && savedSnapshot === failedSnapshot) {
       return Promise.resolve(false);
     }
@@ -130,14 +192,17 @@ export function createDebouncedAutosave({
 
   function cancelPendingTimer() {
     if (timer !== null) {
-      clearTimeout(timer);
+      timer();
       timer = null;
     }
   }
 
   function scheduleRun() {
+    // Read the full draft in the caller's reactive effect: a boolean dirty
+    // flag alone stops changing after the first keystroke.
+    snapshotKey(getSnapshot());
     cancelPendingTimer();
-    timer = setTimeout(() => {
+    timer = scheduleAutosave(() => {
       timer = null;
       void participant.runSave();
     }, debounceMs);
@@ -206,5 +271,16 @@ export function provideAutosaveContext(context) {
 }
 
 export function useAutosaveContext() {
-  return getContext(AUTOSAVE_CONTEXT) ?? fallbackContext;
+  const context = getContext(AUTOSAVE_CONTEXT);
+  if (context) return context;
+  const coordinator = createAutosaveCoordinator();
+  return {
+    register: coordinator.register,
+    requestTransition: (action) => {
+      if (!coordinator.hasPending()) return action();
+      return coordinator
+        .flushPending()
+        .then((saved) => (saved ? action() : false));
+    },
+  };
 }

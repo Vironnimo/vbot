@@ -315,7 +315,7 @@ describe('SettingsView', () => {
     ).toBe(true);
   });
 
-  it('updates, toggles, and deletes channels from row actions', async () => {
+  it('autosaves existing channel edits without closing the form, then toggles and deletes', async () => {
     rpcMock.mockImplementation(
       createSettingsRpcMock({
         channels: [
@@ -339,7 +339,10 @@ describe('SettingsView', () => {
     flushSync();
 
     setInputValue('#channel-token-env-input', 'TELEGRAM_BOT_TOKEN_UPDATED');
-    submitChannelForm();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(document.querySelector('#channel-token-env-input').value).toBe(
+      'TELEGRAM_BOT_TOKEN_UPDATED',
+    );
 
     await waitForCondition(() =>
       rpcMock.mock.calls.some((call) => call[0] === 'channel.update'),

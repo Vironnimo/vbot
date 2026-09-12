@@ -261,10 +261,7 @@
   // project — empty when the form matches what the server already holds.
   let pendingChanges = $derived(projectsController.pendingChanges());
   let pendingToolAccessOverrides = $derived(
-    projectsController.pendingToolAccessOverrideChanges(),
-  );
-  let saveDisabled = $derived(
-    projectsState.editSaving || !hasManageChanges(pendingChanges),
+    projectsController.pendingOverrideChanges(),
   );
   const autosaveContext = useAutosaveContext();
   const projectAutosave = createAutosaveParticipant({
@@ -275,13 +272,25 @@
       });
     },
     getSnapshot: () => ({
+      projectId: projectsState.selectedProjectId,
       project: pendingChanges,
       toolAccessOverrides: pendingToolAccessOverrides,
     }),
     hasChanges: () =>
       hasManageChanges(projectsController.pendingChanges()) ||
-      projectsController.pendingToolAccessOverrideChanges().length > 0,
+      projectsController.pendingOverrideChanges().length > 0,
     save: async (reason) => {
+      if (
+        reason === 'manual' &&
+        !hasManageChanges(projectsController.pendingChanges()) &&
+        projectsController.pendingOverrideChanges().length === 0
+      ) {
+        onToast({
+          title: t('common.alreadySaved', 'Already saved'),
+          variant: 'success',
+        });
+        return true;
+      }
       if (
         hasManageChanges(projectsController.pendingChanges()) &&
         !(await projectsController.saveSelectedProject({
@@ -290,7 +299,7 @@
       ) {
         return false;
       }
-      return projectsController.savePendingToolAccessOverrides();
+      return projectsController.savePendingOverrides();
     },
   });
   const unregisterProjectAutosave = autosaveContext.register(projectAutosave);
@@ -360,10 +369,15 @@
 
   // Auto-save the settings form once it has been idle for the debounce window.
   $effect(() => {
-    if (saveDisabled) {
+    if (
+      projectsState.editSaving ||
+      (!hasManageChanges(pendingChanges) &&
+        pendingToolAccessOverrides.length === 0)
+    )
       return;
-    }
 
+    JSON.stringify(projectsState.overrideDrafts);
+    JSON.stringify(projectsState.editForm);
     projectsController.scheduleAutoSave(() => projectAutosave.runSave());
 
     return () => {
@@ -653,14 +667,6 @@
     return projectsController.isOverrideBusy(agentId, field);
   }
 
-  function canSetOverride(agentId, field) {
-    return projectsController.canSetOverride(agentId, field);
-  }
-
-  function applySetOverride(agentId, field) {
-    void projectsController.setMemberOverride(agentId, field);
-  }
-
   function updateToolAccessOverride(agentId, value) {
     updateOverrideDraft(agentId, 'tool_access', value);
     projectsController.scheduleToolAccessOverrideAutoSave(() =>
@@ -931,7 +937,6 @@
                   <Button
                     variant="secondary"
                     data-testid={`project-repoint-${selectedProject.project_id}`}
-                    disabled={projectsState.editSaving}
                     onClick={() => openRePoint(selectedProject)}
                   >
                     {t('projects.rePoint.submit', 'Re-point')}
@@ -990,7 +995,6 @@
                       <TextField
                         id="project-edit-name"
                         value={projectsState.editForm.display_name}
-                        disabled={projectsState.editSaving}
                         onInput={(next) =>
                           updateEditField('display_name', next)}
                       />
@@ -1013,7 +1017,6 @@
                           'projects.manage.sourceFormat',
                           'Source format',
                         )}
-                        disabled={projectsState.editSaving}
                         triggerClass="projects-dropdown"
                         onValueChange={(value) =>
                           updateEditField('source_format', value)}
@@ -1041,7 +1044,6 @@
                           'projects.manage.defaultAgent',
                           'Default agent',
                         )}
-                        disabled={projectsState.editSaving}
                         triggerClass="projects-dropdown"
                         onValueChange={(value) =>
                           updateEditField('default_agent', value)}
@@ -1076,7 +1078,6 @@
                           'projects.manage.defaultModel',
                           'Default model',
                         )}
-                        disabled={projectsState.editSaving}
                         triggerClass="projects-dropdown"
                         panelClass="projects-view__search-panel"
                         footerActionLabel={modelFilterFooter}
@@ -1118,7 +1119,6 @@
                           'projects.manage.defaultThinkingEffort',
                           'Default thinking effort',
                         )}
-                        disabled={projectsState.editSaving}
                         triggerClass="projects-dropdown"
                         onValueChange={(value) =>
                           updateEditField('default_thinking_effort', value)}
@@ -1143,7 +1143,6 @@
                           class="projects-override-input"
                           inputmode="decimal"
                           value={projectsState.editForm.default_temperature}
-                          disabled={projectsState.editSaving}
                           ariaLabel={t(
                             'projects.manage.defaultTemperature',
                             'Default temperature',
@@ -1399,10 +1398,6 @@
                                           'projects.team.effectiveModel',
                                           'Model',
                                         )}
-                                        disabled={isOverrideBusy(
-                                          member.agent_id,
-                                          'model',
-                                        )}
                                         triggerClass="projects-dropdown"
                                         panelClass="projects-view__search-panel"
                                         footerActionLabel={overrideModelFilterFooter(
@@ -1420,32 +1415,11 @@
                                           )}
                                       />
                                     </div>
-                                    <Button
-                                      variant="secondary"
-                                      data-testid={`project-override-set-model-${member.agent_id}`}
-                                      disabled={!canSetOverride(
-                                        member.agent_id,
-                                        'model',
-                                      )}
-                                      onClick={() =>
-                                        applySetOverride(
-                                          member.agent_id,
-                                          'model',
-                                        )}
-                                    >
-                                      {t(
-                                        'projects.team.setOverride',
-                                        'Set override',
-                                      )}
-                                    </Button>
+
                                     {#if memberFieldIsOverridden(member, 'model')}
                                       <Button
                                         variant="tertiary"
                                         data-testid={`project-override-clear-model-${member.agent_id}`}
-                                        disabled={isOverrideBusy(
-                                          member.agent_id,
-                                          'model',
-                                        )}
                                         onClick={() =>
                                           applyClearOverride(
                                             member.agent_id,
@@ -1484,10 +1458,6 @@
                                         'projects.team.overrideTemperaturePlaceholder',
                                         'e.g. 0.7',
                                       )}
-                                      disabled={isOverrideBusy(
-                                        member.agent_id,
-                                        'temperature',
-                                      )}
                                       ariaLabel={t(
                                         'projects.team.effectiveTemperature',
                                         'Temperature',
@@ -1499,32 +1469,11 @@
                                           next,
                                         )}
                                     />
-                                    <Button
-                                      variant="secondary"
-                                      data-testid={`project-override-set-temperature-${member.agent_id}`}
-                                      disabled={!canSetOverride(
-                                        member.agent_id,
-                                        'temperature',
-                                      )}
-                                      onClick={() =>
-                                        applySetOverride(
-                                          member.agent_id,
-                                          'temperature',
-                                        )}
-                                    >
-                                      {t(
-                                        'projects.team.setOverride',
-                                        'Set override',
-                                      )}
-                                    </Button>
+
                                     {#if memberFieldIsOverridden(member, 'temperature')}
                                       <Button
                                         variant="tertiary"
                                         data-testid={`project-override-clear-temperature-${member.agent_id}`}
-                                        disabled={isOverrideBusy(
-                                          member.agent_id,
-                                          'temperature',
-                                        )}
                                         onClick={() =>
                                           applyClearOverride(
                                             member.agent_id,
@@ -1563,10 +1512,6 @@
                                           'projects.team.effectiveThinkingEffort',
                                           'Thinking effort',
                                         )}
-                                        disabled={isOverrideBusy(
-                                          member.agent_id,
-                                          'thinking_effort',
-                                        )}
                                         triggerClass="projects-dropdown"
                                         onValueChange={(value) =>
                                           updateOverrideDraft(
@@ -1576,32 +1521,11 @@
                                           )}
                                       />
                                     </div>
-                                    <Button
-                                      variant="secondary"
-                                      data-testid={`project-override-set-thinking-${member.agent_id}`}
-                                      disabled={!canSetOverride(
-                                        member.agent_id,
-                                        'thinking_effort',
-                                      )}
-                                      onClick={() =>
-                                        applySetOverride(
-                                          member.agent_id,
-                                          'thinking_effort',
-                                        )}
-                                    >
-                                      {t(
-                                        'projects.team.setOverride',
-                                        'Set override',
-                                      )}
-                                    </Button>
+
                                     {#if memberFieldIsOverridden(member, 'thinking_effort')}
                                       <Button
                                         variant="tertiary"
                                         data-testid={`project-override-clear-thinking-${member.agent_id}`}
-                                        disabled={isOverrideBusy(
-                                          member.agent_id,
-                                          'thinking_effort',
-                                        )}
                                         onClick={() =>
                                           applyClearOverride(
                                             member.agent_id,
@@ -1639,23 +1563,6 @@
                                       idPrefix={`project-compaction-${member.agent_id}`}
                                     />
                                     <div class="projects-override-controls">
-                                      <Button
-                                        variant="secondary"
-                                        disabled={!canSetOverride(
-                                          member.agent_id,
-                                          'compaction_policy',
-                                        )}
-                                        onClick={() =>
-                                          applySetOverride(
-                                            member.agent_id,
-                                            'compaction_policy',
-                                          )}
-                                      >
-                                        {t(
-                                          'projects.team.setOverride',
-                                          'Set override',
-                                        )}
-                                      </Button>
                                       <Button
                                         variant="tertiary"
                                         onClick={() =>
@@ -1870,8 +1777,8 @@
                               icon
                               class="projects-file-handle"
                               draggable={!projectsState.editSaving}
-                              disabled={projectsState.editSaving ||
-                                projectsState.editForm.auto_load.length < 2}
+                              disabled={projectsState.editForm.auto_load
+                                .length < 2}
                               data-auto-load-handle={index}
                               ariaLabel={t(
                                 'projects.manage.autoLoadReorder',
@@ -1939,7 +1846,6 @@
                               type="button"
                               class="projects-file-remove"
                               data-testid={`project-auto-load-remove-${index}`}
-                              disabled={projectsState.editSaving}
                               aria-label={t(
                                 'projects.manage.autoLoadRemove',
                                 'Remove {file}',
@@ -1975,7 +1881,6 @@
                           'projects.manage.autoLoadPlaceholder',
                           'Add a file path…',
                         )}
-                        disabled={projectsState.editSaving}
                         ariaLabel={t(
                           'projects.manage.autoLoad',
                           'Auto-load files',
@@ -1988,8 +1893,8 @@
                       <Button
                         variant="secondary"
                         data-testid="project-auto-load-add"
-                        disabled={projectsState.editSaving ||
-                          projectsState.autoLoadDraft.trim().length === 0}
+                        disabled={projectsState.autoLoadDraft.trim().length ===
+                          0}
                         onClick={addAutoLoadEntry}
                       >
                         {t('projects.manage.autoLoadAdd', 'Add')}
@@ -2027,7 +1932,6 @@
                       items={toolChipItems}
                       grouped
                       groupLabel={projectToolGroupLabel}
-                      disabled={projectsState.editSaving}
                       emptyLabel={t(
                         'projects.manage.toolsEmpty',
                         'No tools available',
@@ -2044,7 +1948,6 @@
                         <Button
                           variant="tertiary"
                           data-testid="project-tools-reset"
-                          disabled={projectsState.editSaving}
                           onClick={resetToolsToDefaults}
                         >
                           {t(
@@ -2080,7 +1983,6 @@
                       </span>
                       <ToggleChipList
                         items={projectSkillChips}
-                        disabled={projectsState.editSaving}
                         ariaToggleLabel={(name) =>
                           t(
                             'projects.manage.toggleSkill',
@@ -2100,7 +2002,6 @@
                       </span>
                       <ToggleChipList
                         items={bundledSkillChips}
-                        disabled={projectsState.editSaving}
                         ariaToggleLabel={(name) =>
                           t(
                             'projects.manage.toggleSkill',
@@ -2120,7 +2021,6 @@
                       </span>
                       <ToggleChipList
                         items={globalSkillChips}
-                        disabled={projectsState.editSaving}
                         ariaToggleLabel={(name) =>
                           t(
                             'projects.manage.toggleSkill',
@@ -2146,27 +2046,18 @@
                 </div>
               </div>
             </div>
-          </div>
-          <div class="management-footer" hidden={activeDetail !== 'overview'}>
-            <span class="management-save-note"
-              >{projectsState.editSaving
-                ? t('common.saving', 'Saving…')
-                : t(
-                    'management.savedAutomatically',
-                    'Changes save automatically',
-                  )}</span
-            >
-            <Button
-              variant="primary"
-              type="submit"
-              form="project-settings-form"
-              data-testid={`project-save-${selectedProject.project_id}`}
-              disabled={projectsState.editSaving}
-            >
-              {projectsState.editSaving
-                ? t('projects.manage.saving', 'Saving…')
-                : t('projects.manage.save', 'Save changes')}
-            </Button>
+            <div class="management-footer">
+              <Button
+                variant="tertiary"
+                type="submit"
+                form="project-settings-form"
+                data-testid={`project-save-${selectedProject.project_id}`}
+              >
+                {projectsState.editSaving
+                  ? t('projects.manage.saving', 'Saving…')
+                  : t('projects.manage.save', 'Save changes')}
+              </Button>
+            </div>
           </div>
         </div>
       {/key}

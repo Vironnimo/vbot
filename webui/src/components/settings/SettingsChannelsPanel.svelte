@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -24,6 +24,10 @@
     setChannelIdentity,
     updateChannel,
   } from '$lib/api.js';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     CHANNEL_DM_SCOPES,
@@ -62,6 +66,33 @@
   let deleteConfirmChannel = $state(null);
   let lastChannelsRefreshToken = $state(null);
   let pendingExternalReload = $state(false);
+
+  let channelBaseline = $state('');
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => channelFormValues,
+    hasChanges: () =>
+      channelFormVisible &&
+      channelFormMode === CHANNEL_FORM_MODE_EDIT &&
+      JSON.stringify(channelFormValues) !== channelBaseline,
+    save: (reason) => persistChannelForm(reason),
+  });
+  const unregisterAutosave = autosaveContext.register(autosave.participant);
+  $effect(() => {
+    if (channelBusy || !autosave.participant.hasPending()) return;
+    autosave.scheduleRun();
+    return autosave.cancelPendingTimer;
+  });
+  onDestroy(() => {
+    unregisterAutosave();
+    autosave.cancelPendingTimer();
+  });
+  function submitChannelForm(event) {
+    event.preventDefault();
+    if (channelFormMode === CHANNEL_FORM_MODE_CREATE)
+      return persistChannelForm('manual');
+    return autosave.participant.runSave('manual', { force: true });
+  }
 
   let channelPlatformOptions = $derived(
     CHANNEL_PLATFORMS.map((platformId) => ({
@@ -121,6 +152,9 @@
   }
 
   function startCreateChannel() {
+    return autosaveContext.requestTransition(() => startCreateChannelNow());
+  }
+  function startCreateChannelNow() {
     channelFormMode = CHANNEL_FORM_MODE_CREATE;
     channelFormValues = createChannelFormValues();
     channelFormVisible = true;
@@ -128,13 +162,22 @@
   }
 
   function startEditChannel(channel) {
+    return autosaveContext.requestTransition(() =>
+      startEditChannelNow(channel),
+    );
+  }
+  function startEditChannelNow(channel) {
     channelFormMode = CHANNEL_FORM_MODE_EDIT;
     channelFormValues = createChannelFormValues(channel);
+    channelBaseline = JSON.stringify(channelFormValues);
     channelFormVisible = true;
     clearChannelFeedback();
   }
 
   function cancelChannelForm() {
+    return autosaveContext.requestTransition(() => cancelChannelFormNow());
+  }
+  function cancelChannelFormNow() {
     channelFormMode = CHANNEL_FORM_MODE_CREATE;
     channelFormValues = createChannelFormValues();
     channelFormVisible = false;
@@ -241,12 +284,8 @@
     }
   }
 
-  async function submitChannelForm(event) {
-    event.preventDefault();
-
-    if (channelBusy) {
-      return;
-    }
+  async function persistChannelForm(reason) {
+    if (channelBusy) return false;
 
     if (!channelFormValues.agent_id) {
       clearChannelFeedback();
@@ -254,9 +293,19 @@
         'settings.channels.agent.required',
         'Select an agent before saving.',
       );
-      return;
+      return false;
     }
 
+    const creating = channelFormMode === CHANNEL_FORM_MODE_CREATE;
+    const submitted = JSON.stringify(channelFormValues);
+    if (!creating && submitted === channelBaseline) {
+      if (reason === 'manual')
+        onToast({
+          title: t('common.alreadySaved', 'Already saved'),
+          variant: 'success',
+        });
+      return true;
+    }
     channelBusy = true;
     clearChannelFeedback();
 
@@ -269,20 +318,27 @@
         });
       } else {
         await updateChannel(buildChannelUpdatePayload(channelFormValues));
-        onToast({
-          title: t('settings.channels.updateSuccess', 'Channel updated.'),
-          variant: 'success',
-        });
+        if (reason === 'manual')
+          onToast({
+            title: t('settings.channels.updateSuccess', 'Channel updated.'),
+            variant: 'success',
+          });
       }
 
-      channelFormVisible = false;
-      channelFormMode = CHANNEL_FORM_MODE_CREATE;
-      channelFormValues = createChannelFormValues();
+      if (creating) {
+        channelFormVisible = false;
+        channelFormMode = CHANNEL_FORM_MODE_CREATE;
+        channelFormValues = createChannelFormValues();
+      } else {
+        channelBaseline = submitted;
+      }
       await loadChannelsPanel();
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       channelBusy = false;
     }
@@ -486,7 +542,7 @@
           value={channelFormValues.platform}
           options={channelPlatformOptions}
           ariaLabel={t('settings.channels.platform', 'Platform')}
-          disabled={channelBusy}
+          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
           triggerClass="settings-view__dropdown"
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('platform', value)}
@@ -505,7 +561,7 @@
             ? t('settings.channels.agent.placeholder', 'Select agent')
             : t('settings.channels.agent.none', 'No agents available')}
           ariaLabel={t('settings.channels.agent', 'Agent')}
-          disabled={channelBusy || channelAgents.length === 0}
+          disabled={channelAgents.length === 0}
           triggerClass="settings-view__dropdown"
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('agent_id', value)}
@@ -527,7 +583,7 @@
           value={channelFormValues.dm_scope}
           options={channelDmScopeOptions}
           ariaLabel={t('settings.channels.dm_scope', 'DM scope')}
-          disabled={channelBusy}
+          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
           triggerClass="settings-view__dropdown"
           listClass="settings-view__thinking-list"
           onValueChange={(value) => setChannelFormField('dm_scope', value)}
@@ -547,7 +603,7 @@
           id="channel-token-env-input"
           value={channelFormValues.token_env_var}
           required
-          disabled={channelBusy}
+          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
           onInput={(next) => setChannelFormField('token_env_var', next)}
         />
       </FormField>
@@ -565,7 +621,7 @@
         <TextField
           id="channel-allowed-chat-ids-input"
           value={channelFormValues.allowed_chat_ids}
-          disabled={channelBusy}
+          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
           placeholder={t(
             'settings.channels.allowed_chat_ids.placeholder',
             '12345, -1009876543210',
@@ -579,7 +635,13 @@
       <Button variant="secondary" onClick={cancelChannelForm}>
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button variant="primary" type="submit" disabled={channelBusy}>
+      <Button
+        variant={channelFormMode === CHANNEL_FORM_MODE_CREATE
+          ? 'primary'
+          : 'tertiary'}
+        type="submit"
+        disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
+      >
         {channelBusy
           ? t('common.saving', 'Saving…')
           : channelFormMode === CHANNEL_FORM_MODE_CREATE

@@ -1,11 +1,15 @@
 <script>
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 
   import {
     listModels,
     listProviderRoutingOptions,
     updateSettings,
   } from '$lib/api.js';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -88,6 +92,22 @@
     })),
   );
   let saveError = $derived(validateRouting(routing));
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => routing,
+    hasChanges: () => dirty,
+    save: saveRouting,
+  });
+  const unregisterAutosave = autosaveContext.register(autosave.participant);
+  $effect(() => {
+    if (!dirty || saving) return;
+    autosave.scheduleRun();
+    return autosave.cancelPendingTimer;
+  });
+  onDestroy(() => {
+    unregisterAutosave();
+    autosave.cancelPendingTimer();
+  });
 
   $effect(() => {
     const serialized = JSON.stringify(provider?.routing ?? {});
@@ -327,25 +347,34 @@
     return '';
   }
 
-  async function saveRouting() {
-    if (!dirty || saveError) {
-      return;
+  async function saveRouting(reason) {
+    if (!dirty) {
+      if (reason === 'manual')
+        onToast({
+          title: t('common.alreadySaved', 'Already saved'),
+          variant: 'success',
+        });
+      return true;
     }
+    if (saveError) return false;
+    const submitted = JSON.stringify(routing);
     saving = true;
     try {
       await updateSettings({
-        providers: { openrouter: { routing } },
+        providers: { openrouter: { routing: JSON.parse(submitted) } },
       });
-      dirty = false;
       onError('');
       await onReloadSettings();
-      onToast({
-        title: t(
-          'settings.providers.openrouter.saved',
-          'OpenRouter routing settings saved.',
-        ),
-        variant: 'success',
-      });
+      if (JSON.stringify(routing) === submitted) dirty = false;
+      if (reason === 'manual')
+        onToast({
+          title: t(
+            'settings.providers.openrouter.saved',
+            'OpenRouter routing settings saved.',
+          ),
+          variant: 'success',
+        });
+      return true;
     } catch (error) {
       onToast({
         title:
@@ -356,6 +385,7 @@
           ),
         variant: 'error',
       });
+      return false;
     } finally {
       saving = false;
     }
@@ -684,10 +714,10 @@
 
   <div class="openrouter-routing__save-row">
     <Button
-      variant="primary"
-      disabled={!dirty || Boolean(saveError)}
+      variant="tertiary"
+      disabled={saving}
       loading={saving}
-      onClick={saveRouting}
+      onClick={() => autosave.participant.runSave('manual', { force: true })}
     >
       {saving
         ? t('common.saving', 'Saving…')

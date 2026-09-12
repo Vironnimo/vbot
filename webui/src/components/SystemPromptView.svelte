@@ -31,7 +31,7 @@
     showProject,
     updatePromptBlock,
   } from '$lib/api.js';
-  import { useAutosaveContext } from '$lib/autosave.js';
+  import { scheduleAutosave, useAutosaveContext } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -586,23 +586,23 @@
     if (autoSaveTimers[blockId]) {
       return;
     }
-    autoSaveTimers[blockId] = setTimeout(() => {
+    autoSaveTimers[blockId] = scheduleAutosave(() => {
       delete autoSaveTimers[blockId];
-      void saveBlock(blockId);
+      void saveBlock(blockId, { showSuccessToast: false });
     }, AUTO_SAVE_DEBOUNCE_MS);
   }
 
   function clearAutoSaveTimer(blockId) {
     const timer = autoSaveTimers[blockId];
     if (timer) {
-      clearTimeout(timer);
+      timer();
       delete autoSaveTimers[blockId];
     }
   }
 
   function clearAutoSaveTimers() {
     for (const blockId of Object.keys(autoSaveTimers)) {
-      clearTimeout(autoSaveTimers[blockId]);
+      autoSaveTimers[blockId]();
       delete autoSaveTimers[blockId];
     }
   }
@@ -639,7 +639,11 @@
   function saveBlock(blockId, options = {}) {
     const activeSave = blockSavePromises.get(blockId);
     if (activeSave) {
-      return activeSave;
+      return activeSave.then((saved) => {
+        if (!saved) return false;
+        const block = blocks.find((entry) => entry.id === blockId);
+        return block?.isDirty ? saveBlock(blockId, options) : true;
+      });
     }
 
     const operation = persistBlock(blockId, options);
@@ -1533,7 +1537,7 @@
               )}</span
             >
             <Button
-              variant="primary"
+              variant="tertiary"
               class="sp-btn-sm"
               disabled={isBusy}
               onClick={handleManualSaveAll}
@@ -1999,15 +2003,13 @@
     font: var(--fs-mono-body)/1.7 var(--font-mono);
   }
   .sp-global-footer {
-    position: sticky;
-    bottom: -20px;
+    position: static;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 20px;
     background: var(--bg);
-    border-top: 1px solid var(--border);
-    padding: 16px 0;
+    padding: 12px 0 0;
   }
   .sp-global-footer span {
     color: var(--text-med);

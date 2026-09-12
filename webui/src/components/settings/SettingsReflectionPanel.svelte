@@ -144,7 +144,7 @@
     void reflectionAutosave.participant.runSave('manual');
   }
 
-  async function saveReflectionSettings() {
+  async function saveReflectionSettings(reason) {
     if (
       reflectionSettingsMatch(
         reflectionSettings,
@@ -155,6 +155,7 @@
     }
 
     return runSettingsSave({
+      reason,
       onCommit,
       onToast,
       onError,
@@ -264,7 +265,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualReflectionSettingsSave}
   >

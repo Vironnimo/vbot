@@ -3515,14 +3515,12 @@ kbd {
 :is(.agents-view, .projects-view)
   :is(.agent-detail-footer, .management-footer) {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 12px 30px;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  justify-content: flex-end;
+  padding: 12px 0 0;
+  border: 0;
+  background: transparent;
 }
+
 .management-save-note {
   color: var(--text-med);
   font-size: var(--fs-body-sm);

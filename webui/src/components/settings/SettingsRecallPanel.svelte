@@ -95,12 +95,13 @@
     void recallAutosave.participant.runSave('manual');
   }
 
-  async function saveRecallSettings() {
+  async function saveRecallSettings(reason) {
     if (recallSettingsMatch(recallSettings, getRecallSettings(settings))) {
       return true;
     }
 
     return runSettingsSave({
+      reason,
       onCommit,
       onToast,
       onError,
@@ -154,7 +155,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualRecallSettingsSave}
   >
