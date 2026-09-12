@@ -2,6 +2,8 @@
 
 Runs host shell commands and streams foreground stdout/stderr into the Run timeline.
 
+`bash.py` owns execution and cancellation coordination. Internal `_bash_environment.py` owns the cached host environment and login probe; `_bash_results.py` owns completion/handoff result shaping and durable background-status projection.
+
 ## Interfaces
 
 - Tool name: `bash`
@@ -22,7 +24,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 - Relative `workdir` resolves from `ToolContext.effective_cwd` (the working directory); absolute working directories are allowed.
 - Uses the platform-native shell: `pwsh -NonInteractive -Command` on Windows, `bash -c` elsewhere. `ProcessManager` connects the command's stdin to `DEVNULL` on every platform, so reads immediately receive EOF. There is no post-launch input or stdin opt-in. Required input belongs in files or pipelines inside the command; child processes may still create their own input pipes. Keeping `-NonInteractive` also disables PowerShell host prompts. Both Tool descriptions state the input boundary; Windows guidance names PowerShell and its syntax. Regression coverage: `test_bash_modes_finish_without_stdin_input`, `test_windows_shell_eof_and_command_pipelines`, and `test_shell_pipeline_and_script_owned_input_remain_available` in `tests/core/tools/test_bash.py`.
-- On Windows, command shells, the one-time environment probe, and probe-cleanup `taskkill` use the shared windowless creation flags from `process_manager.py`; none may create a visible console window in Desktop or background-server use.
+- On Windows, command shells, the one-time environment probe, and probe-cleanup `taskkill` use the shared windowless creation flags from `core/utils/processes.py`; none may create a visible console window in Desktop or background-server use.
 - Non-zero exits are successful tool results with an exit code.
 - `register_bash_tool(..., credential_resolver=..., prompt_blocks=...)` wires Runtime-owned credential lookup and declares the dynamic `tool:bash` Prompt Block. The block is empty without permanent Agent grants; otherwise it lists exact names and explains `env_keys`. Skill activation guidance is owned by the Skill Tool, not this System Prompt block.
 
