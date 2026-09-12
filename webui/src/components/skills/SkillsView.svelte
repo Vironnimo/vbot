@@ -106,6 +106,7 @@
   let shareReceivers = $state([]); // selected receiver agent ids
 
   let showDirectories = $state(false);
+  let directoryEditor = $state();
   let collections = $derived(skillCollections(inventory, agents, t));
   let collection = $derived(collections.find((item) => item.key === scope));
   let filtered = $derived(
@@ -262,10 +263,14 @@
     }
   }
 
-  function openDirectories() {
+  async function openDirectories(focusAdd = false) {
     createScope = scope.startsWith('agent:') ? scope : GLOBAL_SCOPE;
     showDirectories = true;
     changeScope('directories');
+    if (focusAdd) {
+      await tick();
+      directoryEditor?.focusNewDirectory();
+    }
   }
 
   function openCreateModal() {
@@ -485,6 +490,7 @@
     {#if entry.owner_id}
       <Button
         variant="tertiary"
+        icon
         disabled={busy || Boolean(agentError)}
         ariaLabel={t('skills.shareNamed', '', { name: entry.name })}
         tooltip={t('skills.sharing')}
@@ -503,14 +509,15 @@
             r="2"
           /><path d="m6 7 4-3M6 9l4 3" /></svg
         >
-        {t('skills.shareAction')}
       </Button>
     {/if}
     {#if entry.editable_scope}
       <Button
         variant="danger"
+        icon
         disabled={busy}
         ariaLabel={t('skills.deleteNamed', '', { name: entry.name })}
+        tooltip={t('common.delete')}
         onClick={() => requestDelete(entry)}
       >
         <svg
@@ -522,7 +529,6 @@
           aria-hidden="true"
           ><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 6v6M9 6v6" /></svg
         >
-        {t('common.delete')}
       </Button>
     {/if}
     <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
@@ -541,13 +547,14 @@
     class="skills-nav secondary-pane"
     aria-label={t('skills.collections', 'Skill collections')}
   >
-    <div class="skills-nav-title">{t('skills.library', 'Library')}</div>
     <nav class="secondary-list">
       {#each ['library', 'agents', 'projects'] as section (section)}
         {#if collections.some((item) => item.section === section)}
-          {#if section !== 'library'}
-            <h3 class="skills-nav-label">{t(`skills.section.${section}`)}</h3>
-          {/if}
+          <h3 class="skills-nav-label">
+            {section === 'library'
+              ? t('skills.library')
+              : t(`skills.section.${section}`)}
+          </h3>
           {#each collections.filter((item) => item.section === section) as item (item.key)}
             <button
               type="button"
@@ -562,14 +569,29 @@
               <span class="skills-count">{item.count}</span>
             </button>
           {/each}
+          {#if section === 'library'}
+            <button
+              type="button"
+              class="secondary-list__item skills-collection"
+              class:active={scope === 'directories'}
+              aria-current={scope === 'directories' ? 'page' : undefined}
+              onclick={() => openDirectories()}
+            >
+              <span class="skills-collection-name">{t('skills.locations')}</span
+              >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                aria-hidden="true"><path d="M2 4V3h4l2 2h6v8H2V4Z" /></svg
+              >
+            </button>
+          {/if}
         {/if}
       {/each}
     </nav>
-    <div class="skills-nav-footer">
-      <Button variant="secondary" onClick={openDirectories}>
-        {t('skills.locations', 'Skill locations')}
-      </Button>
-    </div>
   </aside>
 
   <div class="skills-main">
@@ -577,16 +599,20 @@
       <Dropdown
         value={scope}
         options={[
-          ...collections.map((item) => ({
+          ...collections.slice(0, 4).map((item) => ({
             value: item.key,
             label: `${item.label} (${item.count})`,
           })),
           { value: 'directories', label: t('skills.locations') },
+          ...collections.slice(4).map((item) => ({
+            value: item.key,
+            label: `${item.label} (${item.count})`,
+          })),
         ]}
         ariaLabel={t('skills.collections')}
         onValueChange={(next) => {
-          if (next === 'directories') showDirectories = true;
-          changeScope(next);
+          if (next === 'directories') void openDirectories();
+          else changeScope(next);
         }}
       />
     </div>
@@ -594,7 +620,7 @@
       <div>
         <h2 id="skills-title">
           {scope === 'directories'
-            ? t('skills.addSkills')
+            ? t('skills.locations')
             : collection?.label || t('skills.title')}
         </h2>
         <p>
@@ -606,29 +632,6 @@
                 ? t('skills.sharedSubtitle')
                 : t('skills.librarySubtitle')}
         </p>
-      </div>
-      <div class="skills-header-actions">
-        <Button
-          variant="secondary"
-          disabled={loading}
-          onClick={() => {
-            void loadAgents();
-            void loadInventory();
-          }}>{t('skills.refresh')}</Button
-        >
-        {#if scope !== 'directories'}
-          <Button variant="primary" onClick={openDirectories}
-            ><span aria-hidden="true">+</span>
-            {t('skills.addSkills')}</Button
-          >
-        {:else}
-          <Button
-            variant="secondary"
-            ariaLabel={t('skills.backToList')}
-            onClick={() => changeScope('all')}
-            >← {t('skills.backToList')}</Button
-          >
-        {/if}
       </div>
     </header>
 
@@ -669,6 +672,7 @@
         {#if directoryError}<Banner variant="error">{directoryError}</Banner
           >{/if}
         <SkillDirectoryEditor
+          bind:this={directoryEditor}
           {settings}
           onCommit={(nextSettings) => {
             onSettingsCommit(nextSettings);
@@ -686,6 +690,23 @@
     </div>
     {#if scope !== 'directories'}
       <div class="skills-toolbar" class:skills-mobile-hidden={selected}>
+        <Button
+          variant="primary"
+          icon
+          ariaLabel={t('skills.addSkills')}
+          tooltip={t('skills.addSkills')}
+          onClick={() => openDirectories(true)}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            aria-hidden="true"><path d="M9 3v12M3 9h12" /></svg
+          >
+        </Button>
         <div class="skills-search">
           <svg
             viewBox="0 0 16 16"
@@ -1153,15 +1174,22 @@
     min-height: 0;
     overflow: hidden;
   }
-  .skills-nav-title,
   .skills-nav-label {
-    font: 500 var(--fs-mono-xs)/1.4 var(--font-mono);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 600 var(--fs-mono-xs)/1.4 var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: var(--text-med);
+    color: var(--text-hi);
   }
-  .skills-nav-title {
-    padding: 20px 24px 8px;
+  .skills-nav-label::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--border-2);
+  }
+  .skills-nav-label:first-child {
+    margin-top: 8px;
   }
   .skills-nav nav {
     overflow-y: auto;
@@ -1169,13 +1197,13 @@
     flex: 1;
   }
   .skills-nav-label {
-    margin: 24px 12px 8px;
+    margin: 28px 6px 10px;
   }
   .skills-collection {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px;
+    padding: 10px 16px;
     color: var(--text-med);
     text-align: left;
     cursor: pointer;
@@ -1193,10 +1221,6 @@
   }
   .skills-count {
     font: 400 var(--fs-mono-xs)/1.4 var(--font-mono);
-  }
-  .skills-nav-footer {
-    padding: 14px 24px;
-    border-top: 1px solid var(--border);
   }
   .skills-main {
     display: flex;
@@ -1227,11 +1251,6 @@
     max-width: 62ch;
     color: var(--text-med);
     font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-  }
-  .skills-header-actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
   }
   .skills-toolbar {
     display: flex;
@@ -1638,15 +1657,16 @@
     .skills-header p {
       display: none;
     }
-    .skills-header-actions {
-      width: 100%;
-      justify-content: space-between;
-    }
     .skills-toolbar {
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: 40px minmax(0, 1fr);
     }
-    .skills-search {
-      flex-basis: 100%;
+    .skills-toolbar :global(.dropdown) {
+      grid-column: 2;
+      min-width: 0;
+    }
+    .skills-view :global(.btn-icon) {
+      min-width: 40px;
     }
     .skills-view :global(.btn-danger),
     .skills-view :global(.btn-secondary),
