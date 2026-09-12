@@ -1,410 +1,136 @@
-"""Agent persistence and workspace lifecycle management."""
+"""Identity Agent catalog, Session coordination and compensated mutations."""
 
 from __future__ import annotations
 
 import builtins
 import json
-import os
 import shutil
 import tempfile
-import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
+from dataclasses import asdict, replace
 from pathlib import Path
 from threading import RLock
-from typing import Any, cast
+from typing import Any
 
+from core.agents import _workspace as workspace_ops
+from core.agents._config import (
+    DEFAULT_ALLOWED_ITEMS,
+    DEFAULT_FALLBACK_MODELS,
+    DEFAULT_MODEL,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_THINKING_EFFORT,
+    _agent_from_dict,
+    _apply_agent_order,
+    _apply_defaults,
+    _normalize_agent_name,
+    _normalize_agent_tools,
+    _replace_list_item_once,
+    _utc_now,
+    _validate_agent_id,
+    _validate_allowed_items,
+    _validate_bool_field,
+    _validate_fallback_models,
+    _validate_memory_prompt_mode,
+    _validate_root_project_id,
+    _validate_string_field,
+    _validate_temperature,
+    _validate_thinking_effort,
+    _validate_tool_access,
+    _validated_agent_data,
+    load_validated_agent_json,
+    validate_agent_data,
+    validate_agent_file,
+    validate_agent_order_data,
+    validate_agent_order_file,
+)
+from core.agents._types import (
+    DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+    Agent,
+    AgentAlreadyExistsError,
+    AgentError,
+    AgentListResult,
+    AgentNotFoundError,
+    AgentOrderConflictError,
+    AgentReferenceUpdateResult,
+    AgentRenameResult,
+    AgentUpdateResult,
+    InvalidAgentIdError,
+    InvalidAgentOrderError,
+    _AgentOrderDocument,
+)
+from core.agents._workspace import (
+    WORKSPACE_IDENTITY_FILES,
+    WORKSPACE_TEMPLATE_FILES,
+    _is_missing_workspace,
+    _paths_are_same_location,
+    _rebase_path_with_tree,
+    _resolve_workspace,
+    _workspace_for_storage,
+    _WorkspaceRelocation,
+    default_workspace_dir,
+)
 from core.config_validation import (
     JsonConfigValidationError,
-    JsonDiagnostic,
-    JsonObject,
-    JsonValidationReport,
-    add_error,
-    error_diagnostic,
     load_validated_json_file,
-    validate_allowed_string,
-    validate_json_file,
-    validate_non_empty_string,
-    validate_optional_path_string,
-    validate_positive_integer,
-    validate_required_fields,
-    validate_string,
-    validate_string_list,
-    warn_unknown_keys,
 )
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
-    MEMORY_PROMPT_MODES,
     MemoryPromptMode,
-    validate_memory_prompt_mode,
 )
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings import (
-    MAX_FALLBACK_MODELS,
     AgentDefaults,
-    SettingsValidationError,
-    bake_agent_defaults,
     is_valid_agent_id,
-    validate_temperature,
-    validate_thinking_effort,
 )
 from core.settings.normalizers import normalize_compaction_policy
-from core.settings.validation import (
-    validate_optional_compaction_policy,
-    validate_temperature_diagnostic,
-    validate_thinking_effort_diagnostic,
-)
 from core.tools.availability import (
-    BASH_ALLOWED_ENV_KEY,
-    BASH_TOOL_SETTINGS_KEY,
     ToolAccess,
-    normalize_env_keys,
-    normalize_tool_access,
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
-DEFAULT_FALLBACK_MODELS: list[str] = []
-DEFAULT_MODEL = ""
-DEFAULT_TEMPERATURE: float | None = None
-DEFAULT_THINKING_EFFORT: str | None = None
-DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
-DEFAULT_ALLOWED_ITEMS = ("*",)
-_BOOTSTRAP_AGENT_ID = "main"
-_BOOTSTRAP_AGENT_NAME = "Main"
-_AGENT_ORDER_FILE_NAME = "order.json"
-_LOGGER = get_logger("agents")
-# Only SOUL.md is identity the agent domain owns and seeds. USER.md/MEMORY.md belong
-# to the memory system and are created lazily on the first memory write, so a
-# memory-off agent never gets them and deleting them does not resurrect them.
-WORKSPACE_TEMPLATE_FILES = ("SOUL.md",)
-WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+__all__ = [
+    "Agent",
+    "AgentAlreadyExistsError",
+    "AgentError",
+    "AgentListResult",
+    "AgentNotFoundError",
+    "AgentOrderConflictError",
+    "AgentReferenceUpdateResult",
+    "AgentRenameResult",
+    "AgentStore",
+    "AgentUpdateResult",
+    "DEFAULT_ALLOWED_ITEMS",
+    "DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED",
+    "DEFAULT_FALLBACK_MODELS",
+    "DEFAULT_MODEL",
+    "DEFAULT_TEMPERATURE",
+    "DEFAULT_THINKING_EFFORT",
+    "InvalidAgentIdError",
+    "InvalidAgentOrderError",
+    "WORKSPACE_IDENTITY_FILES",
+    "WORKSPACE_TEMPLATE_FILES",
+    "default_workspace_dir",
+    "load_validated_agent_json",
+    "validate_agent_data",
+    "validate_agent_file",
+    "validate_agent_order_data",
+    "validate_agent_order_file",
+]
 
-_AGENT_CONFIG_FIELDS = frozenset(
-    {
-        "allowed_skills",
-        "compaction_policy",
-        "created_at",
-        "current_session_id",
-        "custom_system_prompt_enabled",
-        "fallback_models",
-        "id",
-        "memory_prompt_mode",
-        "model",
-        "name",
-        "root_project_id",
-        "tools",
-        "temperature",
-        "thinking_effort",
-        "tool_access",
-        "updated_at",
-        "workspace",
-    }
-)
-_SUBAGENT_TOOL_SETTING_FIELDS = frozenset({"allowed_agents"})
-_BASH_TOOL_SETTING_FIELDS = frozenset({BASH_ALLOWED_ENV_KEY})
-_AGENT_ORDER_FIELDS = frozenset({"agent_ids", "revision"})
+_BOOTSTRAP_AGENT_ID = "main"
+
+_BOOTSTRAP_AGENT_NAME = "Main"
+
+_AGENT_ORDER_FILE_NAME = "order.json"
+
+_LOGGER = get_logger("agents")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
-
-
-class AgentError(ValueError):
-    """Base error for expected agent lifecycle failures."""
-
-
-class AgentAlreadyExistsError(AgentError):
-    """Raised when creating an agent whose ID already exists."""
-
-
-class AgentNotFoundError(AgentError):
-    """Raised when an agent cannot be found."""
-
-
-class InvalidAgentIdError(AgentError):
-    """Raised when an agent ID is unsafe for filesystem use."""
-
-
-class InvalidAgentOrderError(AgentError):
-    """Raised when a requested Identity Agent order is malformed."""
-
-
-class AgentOrderConflictError(AgentError):
-    """Raised when a reorder was based on stale roster or revision state."""
-
-    def __init__(self, message: str, *, current_revision: int) -> None:
-        super().__init__(message)
-        self.current_revision = current_revision
-
-
-def validate_agent_order_file(order_path: str | Path) -> JsonValidationReport:
-    """Validate the optional persisted Identity Agent order document."""
-    return validate_json_file(order_path, validate_agent_order_data, missing_ok=True)
-
-
-def validate_agent_order_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``agents/order.json`` mapping."""
-    diagnostics: list[JsonDiagnostic] = []
-    if not isinstance(data, dict):
-        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
-
-    warn_unknown_keys(diagnostics, "$", data, _AGENT_ORDER_FIELDS, "agent order field")
-    validate_required_fields(diagnostics, "$", data, _AGENT_ORDER_FIELDS)
-    if "revision" in data:
-        validate_positive_integer(diagnostics, "$.revision", data["revision"], required=True)
-    agent_ids = data.get("agent_ids")
-    if "agent_ids" in data:
-        validate_string_list(diagnostics, "$.agent_ids", agent_ids)
-    if isinstance(agent_ids, list):
-        seen: set[str] = set()
-        for index, agent_id in enumerate(agent_ids):
-            if not isinstance(agent_id, str):
-                continue
-            if not is_valid_agent_id(agent_id):
-                add_error(
-                    diagnostics,
-                    f"$.agent_ids[{index}]",
-                    "must be a valid Agent id",
-                )
-            if agent_id in seen:
-                add_error(diagnostics, f"$.agent_ids[{index}]", "must be unique")
-            seen.add(agent_id)
-    return diagnostics
-
-
-def validate_agent_file(agent_path: str | Path) -> JsonValidationReport:
-    """Validate one persisted ``agent.json`` without consuming it."""
-    return validate_json_file(agent_path, validate_agent_data, missing_ok=False)
-
-
-def load_validated_agent_json(agent_path: str | Path) -> JsonObject:
-    """Load one schema-valid ``agent.json`` mapping."""
-    try:
-        return cast(
-            "JsonObject",
-            load_validated_json_file(agent_path, validate_agent_data, missing_ok=False),
-        )
-    except JsonConfigValidationError as error:
-        raise AgentError(str(error)) from error
-
-
-def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``agent.json`` mapping."""
-    diagnostics: list[JsonDiagnostic] = []
-    if not isinstance(data, dict):
-        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
-
-    warn_unknown_keys(diagnostics, "$", data, _AGENT_CONFIG_FIELDS, "agent field")
-    if "allowed_tools" in data:
-        add_error(
-            diagnostics,
-            "$.allowed_tools",
-            "retired Identity Agent field; run the agent Tool-access converter",
-        )
-    _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
-    validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
-    validate_string(diagnostics, "$.model", data.get("model"), required=False)
-    _validate_fallback_models_diagnostics(
-        diagnostics, "$.fallback_models", data.get("fallback_models")
-    )
-    validate_optional_path_string(diagnostics, "$.workspace", data.get("workspace"))
-    validate_non_empty_string(
-        diagnostics,
-        "$.root_project_id",
-        data.get("root_project_id"),
-        required=False,
-    )
-    validate_temperature_diagnostic(
-        diagnostics, "$.temperature", data.get("temperature"), allow_none=True
-    )
-    validate_thinking_effort_diagnostic(
-        diagnostics,
-        "$.thinking_effort",
-        data.get("thinking_effort"),
-        allow_none=True,
-    )
-    if data.get("memory_prompt_mode") is not None:
-        validate_allowed_string(
-            diagnostics,
-            "$.memory_prompt_mode",
-            data["memory_prompt_mode"],
-            frozenset(MEMORY_PROMPT_MODES),
-        )
-    if data.get("tool_access") is not None:
-        try:
-            normalize_tool_access(data["tool_access"])
-        except ValueError as error:
-            add_error(diagnostics, "$.tool_access", str(error))
-    if data.get("allowed_skills") is not None:
-        validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
-    if data.get("tools") is not None:
-        _validate_agent_tools_diagnostics(diagnostics, data["tools"])
-    if data.get("custom_system_prompt_enabled") is not None and not isinstance(
-        data["custom_system_prompt_enabled"], bool
-    ):
-        add_error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
-    validate_optional_compaction_policy(
-        diagnostics, data.get("compaction_policy"), "$.compaction_policy"
-    )
-    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=False)
-    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=False)
-    if data.get("current_session_id") is not None:
-        validate_string(
-            diagnostics, "$.current_session_id", data.get("current_session_id"), required=False
-        )
-    return diagnostics
-
-
-def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: Any) -> None:
-    if not isinstance(tools, dict):
-        add_error(diagnostics, "$.tools", "must be an object")
-        return
-    for tool_name, tool_settings in tools.items():
-        path = f"$.tools.{tool_name}"
-        if tool_settings is None:
-            continue
-        if not isinstance(tool_settings, dict):
-            add_error(diagnostics, path, "must be an object")
-    bash = tools.get(BASH_TOOL_SETTINGS_KEY)
-    if isinstance(bash, dict):
-        bash_path = f"$.tools.{BASH_TOOL_SETTINGS_KEY}"
-        warn_unknown_keys(
-            diagnostics,
-            bash_path,
-            bash,
-            _BASH_TOOL_SETTING_FIELDS,
-            "bash setting",
-        )
-        allowed_env = bash.get(BASH_ALLOWED_ENV_KEY)
-        if allowed_env is not None:
-            try:
-                normalize_env_keys(
-                    allowed_env,
-                    field_name=f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}",
-                )
-            except ValueError as error:
-                add_error(
-                    diagnostics,
-                    f"{bash_path}.{BASH_ALLOWED_ENV_KEY}",
-                    str(error),
-                )
-    subagent = tools.get("subagent")
-    if not isinstance(subagent, dict):
-        return
-    warn_unknown_keys(
-        diagnostics,
-        "$.tools.subagent",
-        subagent,
-        _SUBAGENT_TOOL_SETTING_FIELDS,
-        "subagent setting",
-    )
-    if subagent.get("allowed_agents") is not None:
-        validate_string_list(
-            diagnostics,
-            "$.tools.subagent.allowed_agents",
-            subagent["allowed_agents"],
-        )
-
-
-def _validate_agent_config_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
-    if not isinstance(value, str) or not value:
-        add_error(diagnostics, path, "must be a non-empty string")
-    elif not is_valid_agent_id(value):
-        add_error(
-            diagnostics,
-            path,
-            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
-        )
-
-
-def default_workspace_dir(data_dir: str | os.PathLike[str], agent_id: str) -> Path:
-    """Return an agent's default identity home: ``agents/<id>/workspace/``.
-
-    The single source of the workspace-location convention. Everything that must
-    agree on where an agent's workspace lives by default — the store's create
-    path, and the chat tool-cwd / ``@``-mention fallbacks — resolves through here
-    so the convention can never drift across call sites. The workspace lives
-    inside the agent directory, so the whole agent (config, sessions, prompts,
-    private skills, identity) is one self-contained tree.
-    """
-    return Path(data_dir) / "agents" / agent_id / "workspace"
-
-
-@dataclass(frozen=True)
-class Agent:
-    """Persisted agent configuration stored in ``agent.json``."""
-
-    id: str
-    name: str
-    model: str
-    fallback_models: list[str]
-    workspace: str
-    temperature: float | None
-    thinking_effort: str | None
-    tool_access: ToolAccess
-    allowed_skills: list[str]
-    created_at: str
-    updated_at: str
-    tools: dict[str, Any] = field(default_factory=dict)
-    root_project_id: str | None = None
-    current_session_id: str = ""
-    custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
-    memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
-    compaction_policy: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class AgentListResult:
-    """The canonical Identity Agent roster and its persisted order revision."""
-
-    agents: tuple[Agent, ...]
-    order_revision: int
-    order_changed: bool = False
-
-
-@dataclass(frozen=True)
-class _AgentOrderDocument:
-    """Validated collection metadata stored once for the whole Agent roster."""
-
-    agent_ids: tuple[str, ...]
-    revision: int
-
-
-@dataclass(frozen=True)
-class AgentUpdateResult:
-    """An Agent update plus non-persisted Workspace relocation metadata."""
-
-    agent: Agent
-    copied_files: tuple[str, ...] = ()
-    backed_up_files: tuple[str, ...] = ()
-    backup_dir: str | None = None
-    created_files: tuple[str, ...] = field(default=(), repr=False)
-    destination: str | None = field(default=None, repr=False)
-
-
-@dataclass(frozen=True)
-class AgentRenameResult:
-    """A completed Identity Agent tree rename and its rollback snapshot."""
-
-    agent: Agent
-    previous_agent: Agent = field(repr=False)
-    previous_order: _AgentOrderDocument | None = field(default=None, repr=False)
-    order_updated: bool = field(default=False, repr=False)
-
-
-@dataclass(frozen=True)
-class AgentReferenceUpdateResult:
-    """Exact Agent-config snapshots changed by an Identity Agent rename."""
-
-    previous_agents: tuple[Agent, ...] = field(repr=False)
-
-    @property
-    def agent_ids(self) -> tuple[str, ...]:
-        """Return the Identity Agent configs whose policies changed."""
-        return tuple(agent.id for agent in self.previous_agents)
 
 
 class AgentStore:
@@ -459,7 +185,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
-        self._validate_agent_id(agent_id)
+        _validate_agent_id(agent_id)
         agent_dir = self._agent_dir(agent_id)
         if agent_dir.exists():
             raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
@@ -531,17 +257,17 @@ class AgentStore:
         # creation commit point; an auxiliary order write failure is logged there
         # and never turns a successfully created identity into a false failure.
         self.list_with_order()
-        return self._apply_defaults(agent, self._agent_defaults())
+        return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk."""
-        self._validate_agent_id(agent_id)
+        _validate_agent_id(agent_id)
         agent_path = self._agent_path(agent_id)
         if not agent_path.exists():
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
         raw_agent = self._load_raw_agent(agent_path)
-        return self._apply_defaults(raw_agent, self._agent_defaults())
+        return _apply_defaults(raw_agent, self._agent_defaults())
 
     def get_raw(self, agent_id: str) -> Agent:
         """Load an agent with its **un-baked** persisted values (no defaults applied).
@@ -554,7 +280,7 @@ class AgentStore:
         own persisted value from a baked global default; ``get``/``list``/``update``
         keep baking for every other consumer.
         """
-        self._validate_agent_id(agent_id)
+        _validate_agent_id(agent_id)
         agent_path = self._agent_path(agent_id)
         if not agent_path.exists():
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
@@ -607,7 +333,7 @@ class AgentStore:
         for agent_path in agent_paths:
             try:
                 raw_agent = self._load_raw_agent(agent_path)
-                agents.append(self._apply_defaults(raw_agent, defaults))
+                agents.append(_apply_defaults(raw_agent, defaults))
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
 
@@ -731,7 +457,7 @@ class AgentStore:
         a failure restores every destination touched before leaving the config on
         its original Workspace.
         """
-        self._validate_agent_id(agent_id)
+        _validate_agent_id(agent_id)
         if "id" in changes and changes["id"] != agent_id:
             raise AgentError("Agent id is immutable")
 
@@ -744,7 +470,7 @@ class AgentStore:
         if not changes:
             if copy_workspace_identity_files:
                 raise AgentError("copy_workspace_identity_files requires a workspace change")
-            return AgentUpdateResult(self._apply_defaults(agent, self._agent_defaults()))
+            return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
 
         allowed_fields = set(Agent.__dataclass_fields__) - {
             "id",
@@ -810,13 +536,15 @@ class AgentStore:
             self._validate_current_session(agent_id, changes["current_session_id"])
 
         if not changes:
-            return AgentUpdateResult(self._apply_defaults(agent, self._agent_defaults()))
+            return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
 
         updated_agent = replace(agent, **changes, updated_at=_utc_now())
         relocation = _WorkspaceRelocation()
         try:
             if "workspace" in changes:
-                relocation = self._relocate_workspace(
+                relocation = workspace_ops.relocate_workspace(
+                    self._agent_dir(agent_id),
+                    self._template_dir,
                     agent,
                     Path(updated_agent.workspace),
                     copy_identity_files=copy_workspace_identity_files,
@@ -826,7 +554,7 @@ class AgentStore:
             relocation.rollback()
             raise
         return AgentUpdateResult(
-            agent=self._apply_defaults(updated_agent, self._agent_defaults()),
+            agent=_apply_defaults(updated_agent, self._agent_defaults()),
             copied_files=relocation.copied_files,
             backed_up_files=relocation.backed_up_files,
             backup_dir=str(relocation.backup_dir) if relocation.backup_dir else None,
@@ -855,8 +583,8 @@ class AgentStore:
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
         """
-        self._validate_agent_id(agent_id)
-        self._validate_agent_id(new_agent_id)
+        _validate_agent_id(agent_id)
+        _validate_agent_id(new_agent_id)
         if agent_id == new_agent_id:
             raise AgentError("new agent id must differ from the current id")
 
@@ -889,7 +617,7 @@ class AgentStore:
         try:
             self._session_manager().retarget_identity_agent_sessions(agent_id, new_agent_id)
             sessions_retargeted = True
-            self._move_agent_tree(source_dir, destination_dir)
+            workspace_ops._move_agent_tree(source_dir, destination_dir)
             tree_moved = True
             self._write_agent(renamed_agent)
             agent_config_updated = True
@@ -907,7 +635,7 @@ class AgentStore:
                 order_updated = True
         except Exception:
             if tree_moved:
-                self._move_agent_tree(destination_dir, source_dir)
+                workspace_ops._move_agent_tree(destination_dir, source_dir)
             if sessions_retargeted:
                 self._session_manager().retarget_identity_agent_sessions(new_agent_id, agent_id)
             if agent_config_updated:
@@ -915,7 +643,7 @@ class AgentStore:
             raise
 
         return AgentRenameResult(
-            agent=self._apply_defaults(renamed_agent, self._agent_defaults()),
+            agent=_apply_defaults(renamed_agent, self._agent_defaults()),
             previous_agent=previous_agent,
             previous_order=previous_order,
             order_updated=order_updated,
@@ -927,7 +655,7 @@ class AgentStore:
             result.agent.id, result.previous_agent.id
         )
         try:
-            self._move_agent_tree(
+            workspace_ops._move_agent_tree(
                 self._agent_dir(result.agent.id),
                 self._agent_dir(result.previous_agent.id),
             )
@@ -952,8 +680,8 @@ class AgentStore:
         untouched. Exact config snapshots make this mutation reversible without
         reconstructing prior list order or timestamps.
         """
-        self._validate_agent_id(old_agent_id)
-        self._validate_agent_id(new_agent_id)
+        _validate_agent_id(old_agent_id)
+        _validate_agent_id(new_agent_id)
         previous_agents: list[Agent] = []
         try:
             for listed_agent in self.list():
@@ -989,50 +717,6 @@ class AgentStore:
         return [
             self.get_raw(agent.id) for agent in self.list() if agent.root_project_id == project_id
         ]
-
-    def _relocate_workspace(
-        self,
-        agent: Agent,
-        destination: Path,
-        *,
-        copy_identity_files: bool,
-    ) -> _WorkspaceRelocation:
-        source = Path(agent.workspace)
-        destination_existed = destination.exists()
-        destination.mkdir(parents=True, exist_ok=True)
-        relocation = _WorkspaceRelocation(
-            destination=destination,
-            remove_destination_dir=not destination_existed,
-        )
-        try:
-            if copy_identity_files:
-                for filename in WORKSPACE_IDENTITY_FILES:
-                    source_file = source / filename
-                    if not source_file.is_file():
-                        continue
-                    destination_file = destination / filename
-                    if destination_file.exists():
-                        backup_dir = relocation.ensure_backup_dir(self._agent_dir(agent.id))
-                        shutil.copy2(destination_file, backup_dir / filename)
-                        relocation.backed_up_files += (filename,)
-                    else:
-                        relocation.created_files += (filename,)
-                    temporary = destination / f".{filename}.{uuid.uuid4().hex}.tmp"
-                    try:
-                        shutil.copy2(source_file, temporary)
-                        os.replace(temporary, destination_file)
-                    finally:
-                        temporary.unlink(missing_ok=True)
-                    relocation.copied_files += (filename,)
-
-            soul_path = destination / "SOUL.md"
-            if not soul_path.exists():
-                self._seed_workspace(destination)
-                relocation.created_files += ("SOUL.md",)
-            return relocation
-        except Exception:
-            relocation.rollback()
-            raise
 
     def delete(self, agent_id: str) -> Path:
         """Archive the agent directory, then remove the active copy.
@@ -1104,14 +788,14 @@ class AgentStore:
         sees the pointer dangling at the just-removed id, preempting the
         last-active landing this method exists to provide.
         """
-        self._validate_agent_id(agent_id)
+        _validate_agent_id(agent_id)
         agent_path = self._agent_path(agent_id)
         if not agent_path.exists():
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
         agent = self._read_agent_config(agent_path)
         if agent.current_session_id != removed_session_id:
-            return self._apply_defaults(agent, self._agent_defaults())
+            return _apply_defaults(agent, self._agent_defaults())
 
         remaining = self._session_manager().list_with_metadata(agent_id)
         if remaining:
@@ -1122,26 +806,10 @@ class AgentStore:
 
         updated_agent = replace(agent, current_session_id=landing_session_id, updated_at=_utc_now())
         self._write_agent(updated_agent)
-        return self._apply_defaults(updated_agent, self._agent_defaults())
+        return _apply_defaults(updated_agent, self._agent_defaults())
 
     def _agent_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id
-
-    @staticmethod
-    def _move_agent_tree(source: Path, destination: Path) -> None:
-        """Move one Agent tree, including a Windows-safe case-only rename."""
-        if _paths_are_same_location(source, destination):
-            temporary = source.with_name(f".{source.name}.rename-{uuid.uuid4().hex}.tmp")
-            os.replace(source, temporary)
-            try:
-                os.replace(temporary, destination)
-            except Exception:
-                os.replace(temporary, source)
-                raise
-            return
-        if destination.exists():
-            raise AgentAlreadyExistsError(f"Agent already exists: {destination.name}")
-        os.replace(source, destination)
 
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
@@ -1240,7 +908,7 @@ class AgentStore:
         return AgentDefaults.from_dict(defaults)
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
-        data = self._validated_agent_data(agent_path)
+        data = _validated_agent_data(agent_path)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
         agent = _agent_from_dict(
             data,
@@ -1259,34 +927,12 @@ class AgentStore:
         current-session normalization, so a caller can inspect a dangling current
         pointer before it would otherwise be silently replaced.
         """
-        data = self._validated_agent_data(agent_path)
+        data = _validated_agent_data(agent_path)
         return _agent_from_dict(
             data,
             data_dir=self._data_dir,
             default_workspace=self._default_workspace(data["id"]),
         )
-
-    @staticmethod
-    def _validated_agent_data(agent_path: Path) -> JsonObject:
-        data = load_validated_agent_json(agent_path)
-        directory_id = agent_path.parent.name
-        if data["id"] != directory_id:
-            raise AgentError(
-                f"{agent_path}: Agent id {data['id']!r} does not match directory {directory_id!r}"
-            )
-        return data
-
-    def _apply_defaults(self, agent: Agent, defaults: AgentDefaults) -> Agent:
-        changes = bake_agent_defaults(
-            model=agent.model,
-            fallback_models=agent.fallback_models,
-            temperature=agent.temperature,
-            thinking_effort=agent.thinking_effort,
-            defaults=defaults,
-        )
-        if not changes:
-            return agent
-        return replace(agent, **changes)
 
     def _ensure_current_session(self, agent: Agent) -> Agent:
         if agent.current_session_id and self._session_exists(agent.id, agent.current_session_id):
@@ -1330,354 +976,4 @@ class AgentStore:
         return self._sessions
 
     def _seed_workspace(self, workspace_path: Path) -> None:
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        for filename in WORKSPACE_TEMPLATE_FILES:
-            target = workspace_path / filename
-            if target.exists():
-                continue
-            template = self._template_dir / filename
-            try:
-                template_content = template.read_text(encoding="utf-8")
-            except (OSError, UnicodeError) as error:
-                _LOGGER.warning("Skipping unreadable Workspace template %s: %s", template, error)
-                continue
-            target.write_text(template_content, encoding="utf-8")
-
-    @staticmethod
-    def _validate_agent_id(agent_id: str) -> None:
-        if not is_valid_agent_id(agent_id):
-            raise InvalidAgentIdError(
-                "Agent id must be 1-64 characters using only letters, numbers, "
-                "hyphen, or underscore"
-            )
-
-
-def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
-    if not isinstance(value, str):
-        raise AgentError(f"{field} must be a string")
-    if not allow_empty and not value:
-        raise AgentError(f"{field} must be a non-empty string")
-    return value
-
-
-def _apply_agent_order(
-    agents: list[Agent],
-    order: _AgentOrderDocument | None,
-) -> list[Agent]:
-    """Project valid Agents through stored order, appending new ids by id."""
-    if order is None:
-        return agents
-
-    agents_by_id = {agent.id: agent for agent in agents}
-    ordered = [agents_by_id[agent_id] for agent_id in order.agent_ids if agent_id in agents_by_id]
-    ordered_ids = {agent.id for agent in ordered}
-    ordered.extend(agent for agent in agents if agent.id not in ordered_ids)
-    return ordered
-
-
-def _normalize_agent_name(agent_id: str, value: Any) -> str:
-    """Use the immutable id as the display name when no name is configured."""
-    if value is None:
-        return agent_id
-    if not isinstance(value, str):
-        raise AgentError("name must be a string or null")
-    return value if value.strip() else agent_id
-
-
-def _validate_temperature(value: Any) -> float | None:
-    try:
-        return validate_temperature(value, label="temperature", allow_none=True)
-    except SettingsValidationError as exc:
-        raise AgentError(str(exc)) from exc
-
-
-def _validate_thinking_effort(value: Any) -> str | None:
-    try:
-        return validate_thinking_effort(value, label="thinking_effort", allow_none=True)
-    except SettingsValidationError as exc:
-        raise AgentError(str(exc)) from exc
-
-
-def _validate_memory_prompt_mode(value: Any) -> MemoryPromptMode:
-    if not isinstance(value, str):
-        raise AgentError("memory_prompt_mode must be a string")
-    try:
-        return validate_memory_prompt_mode(value)
-    except ValueError as exc:
-        allowed = ", ".join(repr(item) for item in MEMORY_PROMPT_MODES)
-        raise AgentError(f"memory_prompt_mode must be one of: {allowed}") from exc
-
-
-def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
-    if items is None:
-        return list(DEFAULT_ALLOWED_ITEMS)
-    if not isinstance(items, list):
-        raise AgentError(f"{field} must be a list of strings")
-    if not all(isinstance(item, str) for item in items):
-        raise AgentError(f"{field} must be a list of strings")
-    return list(items)
-
-
-def _validate_fallback_models(field: str, items: Any) -> list[str]:
-    """Validate the ordered fallback-model chain: string bindings, unique, capped."""
-    if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
-        raise AgentError(f"{field} must be a list of strings")
-    cleaned = [item.strip() for item in items]
-    if any(not item for item in cleaned):
-        raise AgentError(f"{field} entries must be non-empty model bindings")
-    if len(cleaned) > MAX_FALLBACK_MODELS:
-        raise AgentError(
-            f"{field} accepts at most {MAX_FALLBACK_MODELS} entries, got {len(cleaned)}"
-        )
-    duplicates = sorted({item for item in cleaned if cleaned.count(item) > 1})
-    if duplicates:
-        raise AgentError(f"{field} must not contain duplicates: {', '.join(duplicates)}")
-    return cleaned
-
-
-def _validate_fallback_models_diagnostics(
-    diagnostics: list[JsonDiagnostic], path: str, items: Any
-) -> None:
-    """Schema-validation twin of ``_validate_fallback_models`` (diagnostics style)."""
-    if items is None:
-        return
-    if not isinstance(items, list):
-        add_error(diagnostics, path, "must be a list of strings")
-        return
-    if any(not isinstance(item, str) for item in items):
-        add_error(diagnostics, path, "must be a list of strings")
-        return
-    if any(not item.strip() for item in items):
-        add_error(diagnostics, path, "entries must be non-empty model bindings")
-        return
-    if len(items) > MAX_FALLBACK_MODELS:
-        add_error(
-            diagnostics,
-            path,
-            f"accepts at most {MAX_FALLBACK_MODELS} entries, got {len(items)}",
-        )
-        return
-    stripped = [item.strip() for item in items]
-    duplicates = sorted({item for item in stripped if stripped.count(item) > 1})
-    if duplicates:
-        add_error(diagnostics, path, f"must not contain duplicates: {', '.join(duplicates)}")
-
-
-def _validate_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolAccess:
-    try:
-        return normalize_tool_access(value)
-    except ValueError as error:
-        raise AgentError(str(error)) from error
-
-
-def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Validate and copy the optional Tool-settings blocks from agent.json."""
-    if tools is None:
-        return {}
-    if not isinstance(tools, Mapping):
-        raise AgentError("tools must be an object")
-    normalized_tools: dict[str, Any] = {}
-    for tool_name, tool_settings in tools.items():
-        if not isinstance(tool_name, str) or not tool_name:
-            raise AgentError("tools keys must be non-empty strings")
-        if tool_settings is None:
-            continue
-        if not isinstance(tool_settings, Mapping):
-            raise AgentError(f"tools.{tool_name} must be an object")
-        normalized_tools[tool_name] = deepcopy(dict(tool_settings))
-    bash = normalized_tools.get(BASH_TOOL_SETTINGS_KEY)
-    if isinstance(bash, dict):
-        unsupported_bash = sorted(set(bash) - _BASH_TOOL_SETTING_FIELDS)
-        if unsupported_bash:
-            raise AgentError(
-                f"Unsupported tools.{BASH_TOOL_SETTINGS_KEY} fields: " + ", ".join(unsupported_bash)
-            )
-        if BASH_ALLOWED_ENV_KEY in bash:
-            try:
-                bash[BASH_ALLOWED_ENV_KEY] = normalize_env_keys(
-                    bash[BASH_ALLOWED_ENV_KEY],
-                    field_name=f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}",
-                )
-            except ValueError as error:
-                raise AgentError(str(error)) from error
-    subagent = normalized_tools.get("subagent")
-    if isinstance(subagent, dict):
-        unsupported_subagent = sorted(set(subagent) - _SUBAGENT_TOOL_SETTING_FIELDS)
-        if unsupported_subagent:
-            raise AgentError(
-                "Unsupported tools.subagent fields: " + ", ".join(unsupported_subagent)
-            )
-        if "allowed_agents" in subagent:
-            subagent["allowed_agents"] = _validate_allowed_items(
-                "tools.subagent.allowed_agents",
-                subagent["allowed_agents"],
-            )
-    return normalized_tools
-
-
-def _validate_bool_field(field: str, value: Any) -> bool:
-    if not isinstance(value, bool):
-        raise AgentError(f"{field} must be a boolean")
-    return value
-
-
-def _validate_workspace(workspace: str | Path) -> Path:
-    if not isinstance(workspace, str | os.PathLike):
-        raise AgentError("workspace must be a path string")
-    if not str(workspace).strip():
-        raise AgentError("workspace must be a non-empty path string")
-    return Path(workspace)
-
-
-def _resolve_workspace(workspace: str | Path, *, data_dir: str | Path) -> Path:
-    workspace_path = _validate_workspace(workspace).expanduser()
-    if not workspace_path.is_absolute():
-        workspace_path = Path(data_dir) / workspace_path
-    return workspace_path.resolve()
-
-
-def _workspace_for_storage(workspace: str | Path, *, data_dir: str | Path) -> str:
-    data_root = Path(data_dir).expanduser().resolve()
-    workspace_path = _resolve_workspace(workspace, data_dir=data_root)
-    try:
-        return workspace_path.relative_to(data_root).as_posix()
-    except ValueError:
-        return str(workspace_path)
-
-
-def _paths_are_same_location(left: Path, right: Path) -> bool:
-    """Return whether two path spellings differ only by platform case rules."""
-    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
-
-
-def _rebase_path_with_tree(value: str | Path, source: Path, destination: Path) -> Path:
-    """Keep an in-tree path at the same relative location after a tree move."""
-    path = Path(value).expanduser().resolve()
-    source_root = source.resolve(strict=False)
-    try:
-        relative = path.relative_to(source_root)
-    except ValueError:
-        return path
-    return (destination / relative).resolve(strict=False)
-
-
-def _replace_list_item_once(items: list[str], old: str, new: str) -> list[str]:
-    """Replace an exact list item and preserve order without creating duplicates."""
-    replaced: list[str] = []
-    for item in items:
-        candidate = new if item == old else item
-        if candidate not in replaced:
-            replaced.append(candidate)
-    return replaced
-
-
-def _validate_root_project_id(project_id: Any) -> str | None:
-    if project_id is None:
-        return None
-    if not isinstance(project_id, str) or not project_id.strip():
-        raise AgentError("root_project_id must be null or a non-empty string")
-    return project_id
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _agent_from_dict(
-    data: dict[str, Any],
-    *,
-    data_dir: str | Path,
-    default_workspace: str | Path | None = None,
-) -> Agent:
-    """Build an Agent from a mapping already validated by ``load_validated_agent_json``.
-
-    Field rules are enforced once by this domain's ``validate_agent_data`` at load
-    time; this constructor only normalizes shapes (workspace fallback, tool
-    sanitization, optional-field defaults) without re-validating.
-    """
-    agent_id = cast(str, data["id"])
-    timestamp_default = _utc_now()
-    temperature = data.get("temperature")
-    memory_prompt_mode = data.get("memory_prompt_mode")
-    return Agent(
-        id=agent_id,
-        name=data.get("name") or agent_id,
-        model=data.get("model") or "",
-        fallback_models=_validate_fallback_models(
-            "fallback_models", data.get("fallback_models") or []
-        ),
-        workspace=str(
-            _workspace_from_data(
-                data.get("workspace"),
-                data_dir=data_dir,
-                default_workspace=default_workspace,
-            )
-        ),
-        root_project_id=data.get("root_project_id"),
-        temperature=None if temperature is None else float(temperature),
-        thinking_effort=data.get("thinking_effort"),
-        memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
-        tool_access=_validate_tool_access(data.get("tool_access")),
-        allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
-        tools=_normalize_agent_tools(data.get("tools")),
-        custom_system_prompt_enabled=bool(
-            data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)
-        ),
-        compaction_policy=(
-            dict(data["compaction_policy"])
-            if isinstance(data.get("compaction_policy"), dict)
-            else None
-        ),
-        current_session_id=data.get("current_session_id") or "",
-        created_at=data.get("created_at") or timestamp_default,
-        updated_at=data.get("updated_at") or timestamp_default,
-    )
-
-
-def _workspace_from_data(
-    workspace: Any,
-    *,
-    data_dir: str | Path,
-    default_workspace: str | Path | None,
-) -> Path:
-    if _is_missing_workspace(workspace):
-        if default_workspace is None:
-            raise AgentError("workspace must be a path string")
-        return Path(default_workspace).resolve()
-    return _resolve_workspace(workspace, data_dir=data_dir)
-
-
-def _is_missing_workspace(workspace: Any) -> bool:
-    return workspace is None or workspace == ""
-
-
-@dataclass
-class _WorkspaceRelocation:
-    destination: Path | None = None
-    remove_destination_dir: bool = False
-    copied_files: tuple[str, ...] = ()
-    backed_up_files: tuple[str, ...] = ()
-    created_files: tuple[str, ...] = ()
-    backup_dir: Path | None = None
-
-    def ensure_backup_dir(self, agent_dir: Path) -> Path:
-        if self.backup_dir is None:
-            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-            self.backup_dir = agent_dir / "workspace-backups" / f"{timestamp}-{uuid.uuid4().hex}"
-            self.backup_dir.mkdir(parents=True)
-        return self.backup_dir
-
-    def rollback(self) -> None:
-        if self.destination is None:
-            return
-        for filename in self.backed_up_files:
-            if self.backup_dir is not None:
-                backup = self.backup_dir / filename
-                if backup.exists():
-                    shutil.copy2(backup, self.destination / filename)
-        for filename in self.created_files:
-            if filename not in self.backed_up_files:
-                (self.destination / filename).unlink(missing_ok=True)
-        if self.remove_destination_dir and self.destination.exists():
-            with suppress(OSError):
-                self.destination.rmdir()
+        workspace_ops.seed_workspace(self._template_dir, workspace_path)

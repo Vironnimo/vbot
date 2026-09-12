@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from core.sessions.schema import required_journal_mode
-from core.settings.agent_defaults import _fallback_chain_entries
+from core.settings.agent_defaults import validate_fallback_chain
 from core.settings.settings import (
     SettingsValidationError,
     validate_temperature,
@@ -3162,7 +3162,7 @@ def _formation(value: object) -> Json:
             raise SwarmStoreError("invalid_arguments", field="participants") from error
     if "fallback_models" in value:
         try:
-            formation["fallback_models"] = _fallback_chain_entries(value["fallback_models"])
+            formation["fallback_models"] = validate_fallback_chain(value["fallback_models"])
         except ValueError as error:
             raise SwarmStoreError("invalid_arguments", field="participants") from error
     return formation
