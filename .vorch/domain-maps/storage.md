@@ -22,7 +22,7 @@ The archived Browser Use Extension previously owned `artifacts/browser-use/` (in
 
 ## Settings & credentials
 
-- `<data_dir>/settings.json`: raw I/O, validation-gated loading, normalized persistence helpers, locked transactions - schema owned by `core/settings/`.
+- `<data_dir>/settings.json`: raw I/O, validation-gated loading, normalized persistence helpers and locked transactions remain in `StorageManager`. Internal `_settings_updates.py` applies pure merges to the transaction-owned mapping; schemas and the shared Subagent defaults stay in `core/settings/`.
 - `<data_dir>/.env` is a user-owned credential fallback: snapshot reads plus single-key updates; process environment keeps higher precedence when callers merge. Read failures log and yield an empty snapshot rather than blocking startup.
 - Credential writes validate shell-style keys, reject empty/multiline values, preserve unrelated lines, deduplicate the updated key, and write atomically - not a general editor. Removal touches only the file, so process-env credentials can outlive removal. `.env` values never copy into `os.environ` and never log.
 
