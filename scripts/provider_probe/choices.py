@@ -65,6 +65,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
 
 
 PROBE_SCENARIOS = (
+    "recall_workflow",
     "terminal",
     "apply_patch",
     "reflection_workflow",

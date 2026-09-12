@@ -44,7 +44,8 @@ SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
 SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 CANONICAL_FALLBACK_SCAN_LIMIT = 10_000
 CANONICAL_FALLBACK_PARTIAL_REASON = (
-    "The bounded canonical fallback reached its scan limit; results are partial."
+    "Search could not check all eligible Messages. Results are incomplete. Narrow period or "
+    "session_id; an empty result does not establish that no matching text exists."
 )
 
 

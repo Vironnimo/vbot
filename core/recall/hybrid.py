@@ -37,7 +37,7 @@ _HYBRID_SEARCH_GUIDANCE = (
     "Matches combine both rankings by relevance."
 )
 _HYBRID_TOOL_SUMMARY = (
-    "Find persisted Sessions and relevant passages using literal and semantic search."
+    "Find past conversations using both keywords and meaning, ranked by combined relevance."
 )
 
 
@@ -67,8 +67,6 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         depth = max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1)
         literal_page: RecallSearchPage | None = None
         semantic_page: RecallSearchPage | None = None
-        literal_error: Exception | None = None
-        semantic_error: Exception | None = None
         fused: list[RecallSearchHit] = []
 
         while True:
@@ -87,8 +85,6 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             semantic_page = (
                 semantic_result if isinstance(semantic_result, RecallSearchPage) else None
             )
-            literal_error = literal_result if isinstance(literal_result, Exception) else None
-            semantic_error = semantic_result if isinstance(semantic_result, Exception) else None
             if literal_page is None and semantic_page is None:
                 raise RecallSearchError(
                     "hybrid_unavailable",
@@ -115,10 +111,15 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         reason: str | None = None
         if degraded:
             failed_arm = "literal" if literal_page is None else "semantic"
-            error = literal_error if literal_page is None else semantic_error
-            reason = f"{failed_arm} retrieval unavailable"
-            if isinstance(error, RecallSearchError):
-                reason = str(error)
+            reason = (
+                "Only semantic search succeeded; keyword matches may be missing. "
+                "Use a topic description, and do not treat these results as an "
+                "exhaustive keyword search."
+                if failed_arm == "literal"
+                else "Only keyword search succeeded; paraphrases may be missing. "
+                "Use words likely to appear in the conversation; rephrasing cannot "
+                "restore semantic search."
+            )
         total_sessions = max(
             literal_page.total_candidate_sessions if literal_page is not None else 0,
             semantic_page.total_candidate_sessions if semantic_page is not None else 0,

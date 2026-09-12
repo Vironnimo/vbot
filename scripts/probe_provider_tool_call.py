@@ -89,6 +89,7 @@ from scripts.provider_probe.transport import (  # noqa: E402
 )
 from scripts.provider_probe.workflow_mcp import _probe_mcp_workflow  # noqa: E402
 from scripts.provider_probe.workflow_patch import _probe_apply_patch  # noqa: E402
+from scripts.provider_probe.workflow_recall import _probe_recall_workflow  # noqa: E402
 from scripts.provider_probe.workflow_reflection import _probe_reflection_workflow  # noqa: E402
 from scripts.provider_probe.workflow_swarm import _probe_swarm_tool  # noqa: E402
 from scripts.provider_probe.workflow_terminal import _probe_terminal  # noqa: E402
@@ -105,6 +106,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--terminal-case", default="all")
     parser.add_argument("--swarm-case", default="all")
     parser.add_argument("--reflection-case", default="all")
+    parser.add_argument("--recall-case", default="all")
+    parser.add_argument(
+        "--recall-report",
+        type=Path,
+        help="Write synthetic Recall interactions for independent review.",
+    )
     parser.add_argument(
         "--reflection-scope", choices=("all", "memory", "skill", "combined", "learn"), default="all"
     )
@@ -323,6 +330,7 @@ async def _run(args: argparse.Namespace) -> int:
         "mcp_workflow",
         "swarm_tool",
         "reflection_workflow",
+        "recall_workflow",
     }:
         runtime = Runtime(Config(data_dir=args.data_dir))
         _start_probe_runtime(runtime)
@@ -330,7 +338,9 @@ async def _run(args: argparse.Namespace) -> int:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 probe = (
-                    _probe_terminal
+                    _probe_recall_workflow
+                    if args.scenario == "recall_workflow"
+                    else _probe_terminal
                     if args.scenario == "terminal"
                     else _probe_apply_patch
                     if args.scenario == "apply_patch"

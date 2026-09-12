@@ -1,8 +1,10 @@
 # Extended Session search and transcripts
 
-Use this reference when ordinary conversation search does not provide enough evidence, or when you need to list Sessions, read a full transcript, or inspect an exact Tool Result. Search excerpts and their nearby context are selections, not complete conversations; later Messages may revise an earlier decision.
+Start with `session_search` for a focused question about a past conversation. Answer directly when the returned evidence is sufficient; partial context alone does not require reading the whole Session. Use this reference when evidence is missing, exact or complete wording is requested, or you need to list Sessions or inspect a Tool Result. Narrowing a search finds other excerpts; it does not expand one excerpt into a full Message. A later Message may revise an earlier decision.
 
 ## Locate and select
+
+If the available Tools cannot retrieve missing text, use only the evidence you can read and state what remains unknown. Search refinements should use supported clues; do not try to reconstruct unseen wording by repeatedly guessing unrelated words.
 
 `vbot session list <agent-id> --all` lists an Agent's Sessions; use `<agent-id>@<project-id>` for a Project Agent. For direct reads, run `vbot home` on the server machine and use its exact `data_dir`. The database is `<data_dir>/sessions.db`. Do not infer a remote server's data directory from a local CLI invocation.
 
@@ -22,6 +24,8 @@ agent_id = "agent-id"
 session_id = "session-id"
 scope = (project_id, agent_id, session_id)
 ```
+
+Scope mapping matters: a Tool result may use `project_id: null` for Identity Sessions. SQLite stores that scope as the empty string `""`, **not SQL NULL**; use `s.project_id = ?` with `""`, never `IS NULL`.
 
 `sessions` contains live and archived generations. Match the full address and `status = 'live'`; join Messages by `session_key`. `m.active = 1` excludes history replaced by an edit. `m.seq` is canonical order and disambiguates repeated Message ids. Compaction summaries have role `compaction_checkpoint`; they are summaries, not verbatim User or Assistant text. Do not confuse a same-named Session in another Agent or Project with the selected target.
 
@@ -53,8 +57,10 @@ For a known Session, a simple substring search is useful when the ordinary searc
 ```python
 query = "exact fragment"
 search_sql = """
-SELECT m.seq, m.message_id, m.role, m.timestamp,
-       substr(COALESCE(m.content, m.content_search, t.result_content, ''), 1, 2000) AS preview
+SELECT s.generation_id, m.seq, m.message_id, m.role, m.timestamp,
+       substr(COALESCE(m.content, m.content_search, t.result_content, ''),
+              max(1, instr(lower(COALESCE(m.content, m.content_search, t.result_content, '')),
+                           lower(?)) - 300), 2000) AS preview
 FROM sessions s JOIN messages m ON m.session_key = s.session_key
 LEFT JOIN tool_messages t ON t.message_key = m.message_key
 WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ?
@@ -63,11 +69,11 @@ WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ?
   AND instr(lower(COALESCE(m.content, m.content_search, t.result_content, '')), lower(?)) > 0
 ORDER BY m.seq LIMIT 50
 """
-for row in db.execute(search_sql, (*scope, query)):
+for row in db.execute(search_sql, (query, *scope, query)):
     print(json.dumps(dict(row), ensure_ascii=False))
 ```
 
-The preview and 50-row limit are bounded; an omitted row is not evidence of absence. Narrow the query or continue by `seq`. To search across this Agent's Sessions, remove `s.session_id = ?` and its parameter, and include `s.session_id` in the result. Direct SQL can also reveal internal or delegated Sessions that ordinary search hides, so keep the scope relevant to the user's request.
+The preview surrounds the match and is bounded, as is the 50-row limit; an omitted row is not evidence of absence. Narrow the query or continue by `seq`. To search across this Agent's Sessions, remove `s.session_id = ?` and its parameter, and include `s.session_id` in the result. Direct SQL can also reveal internal or delegated Sessions that ordinary search hides, so keep the scope relevant to the user's request.
 
 For an exact Tool Result, select its returned `seq` in the same Session and generation:
 
@@ -86,4 +92,4 @@ print(json.dumps(None if row is None else dict(row), ensure_ascii=False))
 db.close()
 ```
 
-Read the generation from the transcript query or `SELECT generation_id FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'`. If the generation changed or the selected Message is gone, locate it again rather than treating the same sequence in a replacement Session as the original evidence. For archived history, explicitly inspect the desired generation instead of broadening every query to all archives.
+Use the generation returned by the search or transcript query. If the generation changed or the selected Message is gone, locate it again rather than treating the same sequence in a replacement Session as the original evidence. For archived history, explicitly inspect the desired generation instead of broadening every query to all archives.
