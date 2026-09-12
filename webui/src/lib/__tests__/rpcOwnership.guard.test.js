@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_FILE = join(SRC_DIR, 'lib', 'api.js');
+const API_DIR = join(SRC_DIR, 'lib', 'api');
 const METHOD_LITERAL_EXCLUSIONS = new Set([
   'lib/i18n.js',
   'lib/i18n/insights.js',
@@ -23,7 +24,11 @@ function collectProductionSources(directory) {
       files.push(fullPath);
     }
   }
-  return files.filter((filePath) => filePath !== API_FILE);
+  return files;
+}
+
+function isApiSource(filePath) {
+  return filePath === API_FILE || filePath.startsWith(`${API_DIR}${sep}`);
 }
 
 function sourceLabel(filePath) {
@@ -31,9 +36,10 @@ function sourceLabel(filePath) {
 }
 
 describe('RPC ownership guard', () => {
-  it('keeps the raw rpc transport inside lib/api.js', () => {
+  it('keeps the raw rpc transport inside the API owner', () => {
     const violations = [];
     for (const filePath of collectProductionSources(SRC_DIR)) {
+      if (isApiSource(filePath)) continue;
       const source = readFileSync(filePath, 'utf8');
       if (/\brpc\s*\(/.test(source)) {
         violations.push(sourceLabel(filePath));
@@ -43,8 +49,10 @@ describe('RPC ownership guard', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps known server method names inside lib/api.js', () => {
-    const apiSource = readFileSync(API_FILE, 'utf8');
+  it('keeps known server method names inside the API owner', () => {
+    const apiSource = [API_FILE, ...collectProductionSources(API_DIR)]
+      .map((filePath) => readFileSync(filePath, 'utf8'))
+      .join('\n');
     const serverMethods = new Set(
       [...apiSource.matchAll(/\brpc\(\s*['"]([^'"]+)['"]/g)].map(
         (match) => match[1],
@@ -53,7 +61,10 @@ describe('RPC ownership guard', () => {
     const violations = [];
 
     for (const filePath of collectProductionSources(SRC_DIR)) {
-      if (METHOD_LITERAL_EXCLUSIONS.has(sourceLabel(filePath))) {
+      if (
+        isApiSource(filePath) ||
+        METHOD_LITERAL_EXCLUSIONS.has(sourceLabel(filePath))
+      ) {
         continue;
       }
       const source = readFileSync(filePath, 'utf8');
