@@ -8,8 +8,12 @@ import pytest
 
 from core.chat import ChatSessionManager
 from core.sessions import SessionAddress
-from core.subagents.subagents import SubAgentBatchTracker
-from core.subagents.tracker import _entry_result_text, _entry_status, _SubAgentEntry
+from core.subagents.tracker import (
+    SubAgentBatchTracker,
+    _entry_result_text,
+    _entry_status,
+    _SubAgentEntry,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 

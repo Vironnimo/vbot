@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 import core.chat as chat_api
+import core.subagents._constants as subagent_constants
 import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
@@ -26,15 +27,11 @@ from core.runs import (
 from core.sessions import SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.storage import TemporaryFileManager
-from core.subagents.subagents import (
-    SubAgentBatchTracker,
-    SubAgentCoordinator,
-    _handle_subagent_status,
-    _wait_for_subagent_result,
-)
-from core.subagents.subagents import (
-    _handle_subagent as _handle_subagent_impl,
-)
+from core.subagents._completion import _wait_for_subagent_result
+from core.subagents._status import _handle_subagent_status
+from core.subagents.subagents import SubAgentCoordinator
+from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
+from core.subagents.tracker import SubAgentBatchTracker
 from core.tools.subagent import (
     SUBAGENT_TOOL_NAME,
     register_subagent_tools,
@@ -89,7 +86,7 @@ BACKGROUND_TASK_SETTLE_TICKS = 5
 
 def activity_path_from_note(note: str) -> str:
     """Extract the concrete activity path from an ``activity_note`` sentence."""
-    before, after = subagent_module.SUBAGENT_ACTIVITY_NOTE_TEMPLATE.split("{path}")
+    before, after = subagent_constants.SUBAGENT_ACTIVITY_NOTE_TEMPLATE.split("{path}")
     assert note.startswith(before), note
     assert note.endswith(after), note
     return note[len(before) : len(note) - len(after)]

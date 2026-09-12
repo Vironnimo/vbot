@@ -242,7 +242,8 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     tmp_path: Path,
 ) -> None:
     """A self-delegated child is a normal child Session under its parent's temporary config."""
-    from core.subagents.subagents import SubAgentBatchTracker, _handle_subagent
+    from core.subagents.subagents import _handle_subagent
+    from core.subagents.tracker import SubAgentBatchTracker
     from core.tools import tool_success
     from core.tools.tools import ToolContext
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import core.subagents._constants as subagent_constants
+import core.subagents.tracker as subagent_tracker
 from core.runs import RunInterruptedError
 from tests.core.chat.chat_loop_support import build_chat_loop
 
@@ -324,7 +326,7 @@ async def test_subagent_completion_tracker_logs_unexpected_failures(
         lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
-        subagent_module._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
+        subagent_tracker._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
     )
 
     # Act
@@ -585,7 +587,7 @@ async def test_wait_for_subagent_result_marks_user_cancelled_run() -> None:
     # Assert
     assert result["status"] == "cancelled"
     assert result["cancelled_by_user"] is True
-    assert result["result"] == subagent_module.SUBAGENT_USER_CANCEL_MESSAGE
+    assert result["result"] == subagent_constants.SUBAGENT_USER_CANCEL_MESSAGE
 
 
 async def test_wait_for_subagent_result_marks_generic_cancellation_without_user_flag() -> None:
