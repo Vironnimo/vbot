@@ -37,7 +37,7 @@ The optional voice companion uses direct browser-to-OpenAI WebRTC media, initial
 
 ## Domain Maps
 
-**Always read a domain's map before working in or discussing that domain**, plus adjacent maps when ownership or contracts cross boundaries. Maps under `.vorch/domain-maps/` orient you to boundaries, contracts, and gotchas; read the actual source alongside them. Load supplementary files only when their References trigger matches the task. Maps are incomplete working notes: code is the source of truth; fix conflicting maps.
+Read domain roots and task-relevant references under `.vorch/domain-maps/` as described in `AGENTS.md` -> Load context for the task. Maps orient you to owners, boundaries, contracts, source, and tests. Code establishes implemented behavior; user requirements and engineering contracts establish obligations. Correct stale descriptions without treating existing behavior as the desired outcome (see `AGENTS.md` -> Interpret documentation).
 
 | Map | Domain | Covers |
 |---|---|---|

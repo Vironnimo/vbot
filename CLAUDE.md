@@ -33,7 +33,7 @@ During such a walk-through, take one decision per message and wait for the answe
 
 ## Architecture & code
 
-**Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget; the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
+For module ownership, boundaries, and file organization, follow `AGENTS.md` -> Architecture & code.
 
 **Code quality** — no magic numbers (name the constant); comments explain *why*, not *what*; no commented-out code (git keeps history); separation of concerns (UI displays and takes input, business logic has no UI or DB queries, data access owns its I/O, endpoints route only).
 
@@ -43,28 +43,22 @@ During such a walk-through, take one decision per message and wait for the answe
 
 ## You maintain the docs & domain maps
 
-There's no orchestrator here to keep these current — that's on you. When a change you make affects one, update it as part of the work (small, factual, not deferred):
+Maintain affected documentation as part of the task with small, factual updates:
 
 - `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
 - `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
-- `.vorch/GLOSSARY.md` — new or changed project-specific terms
+- `.vorch/GLOSSARY.md` — shared vocabulary under `AGENTS.md` -> Terminology
 - `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
 
-**⛔ HARD GATE — read the workflow before ANY domain-map work, no exceptions.** Before you create, edit, or audit *anything* under `.vorch/domain-maps/`, you MUST first read `.vorch/workflows/domain-map-workflow.md` in full. If you are about to write to a domain map or start a map audit and you have not read that workflow, stop and read it first — that read is the first action of the task, before any Edit, Write, or plan. It defines what belongs in a domain map (factual working notes, every claim backed by source/tests, no exhaustive API/field dumps) and the rules for creating, maintaining, and indexing them.
+Before creating, editing, or auditing domain maps or supplementary files, read `.vorch/workflows/domain-map-workflow.md` in full unless its current contents are already in context. Ordinary map reading does not require it.
 
 **Never hard-wrap prose.** In every Markdown file you write or maintain — this one, PROJECT.md, GLOSSARY.md, the domain maps, FLAGGED.md, all of them — write each paragraph and list item as a single line and let the editor soft-wrap. No manual line breaks mid-sentence at some fixed column. Hard-wrapped prose is miserable to read and to edit, and the wrap points rot the moment text changes. Do not add them, and when you touch a file that has them, unwrap the lines you touch.
 
 **Write all project documents in English.** Plans, design documents, decision records (like the system-prompt handoff), domain maps, PROJECT.md, GLOSSARY.md, FLAGGED.md — every project artifact is written in English, regardless of the language you and the user speak in chat. User-facing chat follows the user's language; the documents do not.
 
-## Glossary
+## Terminology
 
-`.vorch/GLOSSARY.md` is read at every session start and is shared context for the whole project — keeping it right matters, which means keeping it **small**. It holds only core, cross-cutting terms every agent needs regardless of what it touches, plus terms the user says in conversation. A **domain-internal** term — one you only need once you are already working inside that one domain, and that the user never says — lives in a `## Terms` section inside that domain's map instead, never in the glossary. **One home per term, never both** (writing a domain-map term is domain-map work — the HARD GATE above applies). Watch for term candidates as you work and while discussing with the user:
-
-- A term got **implicitly defined** through the conversation, a clarification, or a decision.
-- A **project-specific term** in play could plausibly be misread (non-obvious meaning here).
-- A term seems to cause **friction** because you and the user may mean different things by it.
-
-Only project-specific terms — never standard programming terms or anything self-evident. When a term matters, decide its home by the rule above, propose handling it (add full definition / add placeholder / skip), then run the `glossary` skill — it handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
+Follow `AGENTS.md` -> Terminology for glossary/domain-map placement and evidence-backed maintenance. No glossary Skill or separate interview is required.
 
 ## Git
 
@@ -73,7 +67,7 @@ Only project-specific terms — never standard programming terms or anything sel
 - Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
 - **Always use the PowerShell tool for git operations, never the Bash tool.** PowerShell is the primary shell here and its `@'…'@` here-string handles multi-line commit messages correctly; the stray `@` commits came from pasting that PowerShell syntax into the Bash tool, where it is invalid.
 - One logical unit per commit; never batch unrelated changes; never commit broken code.
-- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped** gate on what you changed for fast feedback — `python scripts/quality.py <paths>` for backend files, `python scripts/quality-frontend.py <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. Write tests together with the feature.
+- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped** gate on what you changed for fast feedback — `python scripts/quality.py <paths>` for backend files, `python scripts/quality-frontend.py <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. For behavior coverage, follow `AGENTS.md` -> Testing.
 - **Before the final commit that closes the task, run the full gate (no args) once for each side you actually touched — and only those.** Pick by what the task changed: backend code (Python, `pyproject.toml`, `scripts/`, `tests/` — anything the backend gate lints or tests) → `python scripts/quality.py`; frontend (anything under `webui/`) → `python scripts/quality-frontend.py`; both sides touched → both gates; a docs-only task (only Markdown / `.vorch/` / other files neither gate touches) → neither, no gate needed. Use the full no-args form, not a scoped one, so it sweeps the whole side; a code task isn't done until its side's gate has run once over the repo. **Don't run a scoped pass right before it — the full run already covers everything a scoped pass would check.** Keep every auto-fix. Any real failure the full run surfaces is now yours to handle: caused by your change or trivially related → fix it, then re-run only the scoped gate over the fixed paths — not the full gate again; genuinely pre-existing and unrelated → you may **not** silently dismiss it ("it was already broken") — report it to the user in your summary **and** append it to `.vorch/FLAGGED.md`.
 - **The quality gates auto-fix (ruff format, prettier, eslint --fix). KEEP every change they make — never revert a gate's auto-fix, even on files you did not touch. Letting the tools do their work across the repo is the whole point of running the full gates. Reverting their output is forbidden.** When a gate reports a real failure (test/type/lint error it cannot auto-fix), fix the underlying problem rather than working around it.
 
@@ -93,7 +87,7 @@ These two core files are **auto-loaded into every session** — imported at the 
 - `.vorch/PROJECT.md` — project context, architecture, conventions, dev/test commands, domain-maps index
 - `.vorch/GLOSSARY.md` — project-specific terms
 
-They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches.
+For task-specific root maps and supplementary reading, follow `AGENTS.md` -> Load context for the task. Apply its Interpret documentation rules: implemented behavior, examples, and past choices do not automatically constrain new work; explicit requirements and engineering contracts remain distinct from observations.
 
 @.vorch/PROJECT.md
 @.vorch/GLOSSARY.md
