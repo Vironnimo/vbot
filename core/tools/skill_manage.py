@@ -17,6 +17,8 @@ from core.skills.skill_validator import (
 from core.skills.skills import find_skill_package_dir
 from core.tools.arguments import ToolArgumentError, optional_string, required_string
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
+from core.tools.contracts import compile_tool_contract
+from core.tools.skill import _normalize_skill_arguments
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -104,6 +106,13 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["action", "name"],
 }
+
+
+_SKILL_MANAGE_RUNTIME_CONTRACT = compile_tool_contract(
+    name=SKILL_MANAGE_TOOL_NAME,
+    input_schema=SKILL_MANAGE_TOOL_PARAMETERS,
+    require_closed_input=False,
+)
 
 
 def make_skill_manage_handler(
@@ -320,6 +329,9 @@ def register_skill_manage_tool(
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,
+        argument_normalizer=lambda arguments: _normalize_skill_arguments(
+            arguments, contract=_SKILL_MANAGE_RUNTIME_CONTRACT
+        ),
         result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(parts_builder=_skill_manage_display_parts),
     )

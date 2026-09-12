@@ -32,6 +32,15 @@ def skill_tolerance_cases() -> list[dict[str, Any]]:
     }
     cases.extend(
         [
+            {"id": "path_backslash", "arguments": {**base, "file_path": "assets\\placeholder.txt"}},
+            {
+                "id": "path_quoted",
+                "arguments": {
+                    **base,
+                    "name": " provider-probe ",
+                    "file_path": '"assets/placeholder.txt"',
+                },
+            },
             {"id": "spelling", "arguments": {**base, "action": " WRITE-FILE "}},
             {
                 "id": "field_typo",
@@ -159,16 +168,18 @@ async def _skill_case(
             if p.is_file()
         }
         canonical = registry.get("skill_manage").contract
+        normalize = (
+            registry.get("skill_manage").argument_normalizer or canonical.normalize_arguments
+        )
         writes = [item for item in observed if item["call"]["name"] == "skill_manage"]
         checks = {
             "finished": bool(final),
             "successful_mutation": bool(writes) and all(item["result"]["ok"] for item in writes),
         }
         if "arguments" in case:
-            expected = canonical.normalize_arguments(case["arguments"])
+            expected = normalize(case["arguments"])
             checks["call_intent"] = (
-                len(writes) == 1
-                and canonical.normalize_arguments(writes[0]["call"]["arguments"]) == expected
+                len(writes) == 1 and normalize(writes[0]["call"]["arguments"]) == expected
             )
             action = expected["action"]
             target = "provider-probe/" + expected.get("file_path", "SKILL.md")
