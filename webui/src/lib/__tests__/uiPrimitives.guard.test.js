@@ -13,10 +13,10 @@ import { describe, expect, it } from 'vitest';
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP_CSS = readFileSync(join(SRC_DIR, 'styles', 'app.css'), 'utf8');
 const INDEX_HTML = readFileSync(join(SRC_DIR, '..', 'index.html'), 'utf8');
-const SYSTEM_PROMPT_SOURCE = readFileSync(
-  join(SRC_DIR, 'components', 'SystemPromptView.svelte'),
-  'utf8',
-);
+const SYSTEM_PROMPT_SOURCE = [
+  readFileSync(join(SRC_DIR, 'components', 'SystemPromptView.svelte'), 'utf8'),
+  readFileSync(join(SRC_DIR, 'components', 'prompt', 'prompt.css'), 'utf8'),
+].join('\n');
 
 function collectSvelteFiles(directory) {
   const files = [];
