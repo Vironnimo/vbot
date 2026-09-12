@@ -197,7 +197,13 @@ async def test_invalid_arguments_can_be_corrected_without_running_handler_twice(
         [
             {
                 "content": None,
-                "tool_calls": [{"id": "call_1", "name": "weather", "arguments": {"city": 7}}],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "weather",
+                        "arguments": {"city": {"unknown": "target"}},
+                    }
+                ],
             },
             {
                 "content": None,

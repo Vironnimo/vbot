@@ -148,7 +148,7 @@ def test_schema_exposes_flat_action_contract() -> None:
     )
 
 
-def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:
+def test_nested_create_operation_is_repaired(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-create")
     registry = ToolRegistry()
@@ -168,8 +168,8 @@ def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:
         )
     )
 
-    assert result["ok"] is False
-    cron_service.create_job.assert_not_called()
+    assert result["ok"] is True
+    cron_service.create_job.assert_called_once()
 
 
 def test_create_action_returns_success(tmp_path: Path) -> None:
@@ -587,7 +587,6 @@ def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> No
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "'action' is a required property" in error["message"]
 
 
 def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
@@ -661,7 +660,7 @@ def test_removed_agent_id_is_rejected(tmp_path: Path) -> None:
     cron_service.create_job.assert_not_called()
 
 
-def test_stringified_operation_payload_is_rejected(tmp_path: Path) -> None:
+def test_stringified_operation_payload_is_repaired(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = []
     registry = ToolRegistry()
@@ -669,13 +668,11 @@ def test_stringified_operation_payload_is_rejected(tmp_path: Path) -> None:
 
     result = asyncio.run(_dispatch(registry, tmp_path, {"list": "{}"}))
 
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "invalid_arguments"
-    assert "'action' is a required property" in error["message"]
-    cron_service.list_jobs.assert_not_called()
+    assert result["ok"] is True
+    cron_service.list_jobs.assert_called_once()
 
 
-def test_nested_create_request_is_rejected(tmp_path: Path) -> None:
+def test_nested_create_request_is_repaired(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-envelope")
     registry = ToolRegistry()
@@ -696,8 +693,8 @@ def test_nested_create_request_is_rejected(tmp_path: Path) -> None:
         )
     )
 
-    assert result["ok"] is False
-    cron_service.create_job.assert_not_called()
+    assert result["ok"] is True
+    cron_service.create_job.assert_called_once()
 
 
 def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:

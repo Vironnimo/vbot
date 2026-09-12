@@ -6,7 +6,7 @@ Discovers filesystem paths by glob-style pattern.
 
 - Tool name: `glob`
 - Registration: `register_glob_tool(registry)` - registers an async wrapper that runs the sync `glob_handler` through the bounded Tool worker pool (`run_tool_worker` in `core/tools/tools.py`), so a large tree walk never blocks the kernel event loop.
-- Schema: required `pattern`; optional `path`, `limit` (default 100, range 1-1,000), `offset` (default 0, range 0-10,000), and `include_ignored` (default false). Defaults are handler-owned and stated only in descriptions; the model-facing schema omits `additionalProperties`, and the handler rejects unknown fields including legacy/camelCase spellings.
+- Schema: required `pattern`; optional `path`, `limit` (default 100, range 1-1,000), `offset` (default 0, range 0-10,000), and `include_ignored` (default false). Defaults are handler-owned and stated only in descriptions; the model-facing schema omits `additionalProperties`, and the handler rejects unknown fields after shared spelling repair.
 - Success data returns textual matches under `data.content`.
 - Display: the primary is the quoted `pattern`. Every successful page publishes its displayed path count as a presentation-only `results` fact; a limited or timed-out non-empty page sets `at_least: true`, while failures publish no count. The Agent-visible success envelope remains unchanged.
 

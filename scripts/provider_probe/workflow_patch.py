@@ -303,7 +303,8 @@ async def _probe_apply_patch_case(
             # The evaluator can only mutate its disposable directory, even if
             # the model invents a path. Runtime file tools retain normal agency.
             try:
-                operations = _parse(arguments.get("patch", ""))
+                normalized = registry.get("apply_patch").contract.normalize_arguments(arguments)
+                operations = _parse(normalized.get("patch", ""))
             except Exception:
                 operations = []  # Let the real handler diagnose malformed input.
             safe = all(
@@ -333,7 +334,12 @@ async def _probe_apply_patch_case(
                 vbot_root=root,
                 data_root=root,
             )
-            outcomes.append(await registry.dispatch(context, arguments, ["apply_patch"]))
+            try:
+                outcomes.append(await registry.dispatch(context, arguments, ["apply_patch"]))
+            except ValueError as error:
+                outcomes.append(
+                    {"ok": False, "error": {"code": "invalid_arguments", "message": str(error)}}
+                )
         snapshot = {
             p.relative_to(root).as_posix(): p.read_bytes().decode("utf-8")
             for p in root.rglob("*")

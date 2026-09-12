@@ -312,8 +312,8 @@ def test_normalization_preserves_a_string_when_the_schema_accepts_it() -> None:
     assert contract.normalize_arguments({"value": "72"}) == {"value": "72"}
 
 
-@pytest.mark.parametrize("value", ("yes", "1", ""))
-def test_normalization_does_not_invent_boolean_aliases(value: str) -> None:
+@pytest.mark.parametrize("value", ("maybe", "2", ""))
+def test_normalization_rejects_ambiguous_boolean_values(value: str) -> None:
     contract = compile_tool_contract(
         name="sample",
         input_schema={
@@ -460,3 +460,100 @@ def test_fingerprint_is_deterministic_and_covers_result_and_scheduling_contracts
     assert base.schema_fingerprint == reordered.schema_fingerprint
     assert changed_result.schema_fingerprint != base.schema_fingerprint
     assert serial.schema_fingerprint != base.schema_fingerprint
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("YES", True), (1, True), ("1", True), ("off", False), (0, False), ("No", False)],
+)
+def test_boolean_aliases_preserve_intent(value: object, expected: bool) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+    )
+    normalized = contract.normalize_arguments({"enabled": value})
+    contract.validate_arguments(normalized)
+    assert normalized["enabled"] is expected
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"request": {"operation": " WRITE-FILE ", "filePath": "notes.txt", "content": ""}},
+        {"write_file": {"file_pth": "notes.txt", "content": ""}},
+        {"action": "wirte_file", "file_path": "notes.txt", "content": ""},
+    ],
+)
+def test_open_contract_repairs_spelling_and_wrappers_preserving_empty_payload(
+    arguments: dict[str, Any],
+) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["write_file", "delete"]},
+                "file_path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["action"],
+        },
+        require_closed_input=False,
+    )
+    assert contract.normalize_arguments(arguments) == {
+        "action": "write_file",
+        "file_path": "notes.txt",
+        "content": "",
+    }
+
+
+def test_repairs_optional_typo_even_when_open_schema_already_valid() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"include_links": {"type": "boolean"}}},
+        require_closed_input=False,
+    )
+    assert contract.normalize_arguments({"includeLinkS": "false"}) == {"include_links": False}
+
+
+def test_duplicate_conflicting_target_is_not_silently_overwritten() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"file_path": {"type": "string"}}},
+        require_closed_input=False,
+    )
+    with pytest.raises(ToolContractError):
+        contract.normalize_arguments({"file_path": "one.txt", "filePath": "two.txt"})
+    assert contract.normalize_arguments({"file_path": "one.txt", "filePath": "one.txt"}) == {
+        "file_path": "one.txt"
+    }
+
+
+def test_arbitrary_payload_keys_and_whitespace_are_preserved() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"payload": {"type": "object"}, "text": {"type": "string"}},
+        },
+        require_closed_input=False,
+    )
+    arguments = {
+        "payload": {"request": {"operation": "DELETE"}, "CamelCase": " YES "},
+        "text": "  ",
+    }
+    assert contract.normalize_arguments(arguments) == arguments
+
+
+def test_integral_json_float_reaches_integer_handler_as_int() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+        require_closed_input=False,
+    )
+    assert type(contract.normalize_arguments({"count": 3.0})["count"]) is int

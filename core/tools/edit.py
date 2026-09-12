@@ -16,6 +16,7 @@ from core.tools.arguments import (
     optional_bool,
     strip_line_number_gutters,
 )
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
@@ -104,6 +105,27 @@ EDIT_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]"
 ALREADY_APPLIED_STRATEGIES = frozenset({"exact", "normalized"})
 ALREADY_APPLIED_CONTEXT_MIN_CHARS = 4
 NO_MATCH_DIFFERENCE_EXCERPT_MAX_CHARS = 80
+
+
+# Normalize each item inside the batch boundary so a conflicting item cannot
+# prevent independent edits from executing.
+_EDIT_ITEM_CONTRACT = compile_tool_contract(
+    name="edit_item",
+    input_schema=EDIT_TOOL_PARAMETERS["properties"]["edits"]["items"],
+    require_closed_input=False,
+)
+_EDIT_BATCH_CONTRACT = compile_tool_contract(
+    name="edit",
+    input_schema={
+        **EDIT_TOOL_PARAMETERS,
+        "properties": {
+            **EDIT_TOOL_PARAMETERS["properties"]["edits"]["items"]["properties"],
+            **EDIT_TOOL_PARAMETERS["properties"],
+            "edits": {"type": "array", "items": {}},
+        },
+    },
+    require_closed_input=False,
+)
 
 
 def _bounded_context_line(line: str) -> str:
@@ -768,6 +790,12 @@ def _edit_batch(
 ) -> JsonObject:
     """Apply only the registered batched shape, with item-local validation."""
 
+    try:
+        arguments = _EDIT_BATCH_CONTRACT.normalize_arguments(arguments)
+    except ToolContractError as error:
+        return tool_failure("invalid_arguments", str(error))
+    if isinstance(arguments, dict) and "edits" not in arguments and "old_string" in arguments:
+        arguments = {"edits": [arguments]}
     validated_arguments = _validate_batch_arguments(arguments)
     if isinstance(validated_arguments, dict):
         return validated_arguments
@@ -777,12 +805,18 @@ def _edit_batch(
     added_lines = 0
     removed_lines = 0
     for index, edit in enumerate(edits):
-        effective_edit = _edit_with_default_path(edit, default_path)
-        result = (
-            _edit_one(context, effective_edit, file_state=file_state)
-            if isinstance(effective_edit, dict)
-            else tool_failure("invalid_arguments", "edit must be an object")
-        )
+        effective_edit = edit
+        try:
+            effective_edit = _edit_with_default_path(
+                _EDIT_ITEM_CONTRACT.normalize_arguments(edit), default_path
+            )
+            result = (
+                _edit_one(context, effective_edit, file_state=file_state)
+                if isinstance(effective_edit, dict)
+                else tool_failure("invalid_arguments", "edit must be an object")
+            )
+        except ToolContractError as error:
+            result = tool_failure("invalid_arguments", str(error))
         data = result.get("data")
         if result.get("ok") is True and isinstance(data, dict):
             outcomes.append(_successful_item(index, result))
@@ -875,6 +909,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         family="files",
         open_input_schema=True,
         handler_validates_arguments=True,
+        coerce_arguments=False,  # The handler normalizes at the batch and item boundaries.
         result_schema={
             "type": "object",
             "required": ["status", "total", "succeeded", "failed", "results"],
