@@ -430,7 +430,7 @@ async def _maybe_auto_compact(
 
 
 def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
-    from core.chat.chat import _latest_compaction_checkpoint
+    from core.chat.chat import latest_compaction_checkpoint
 
     first_user = ChatMessage.user("first")
     second_user = ChatMessage.user("second")
@@ -445,7 +445,7 @@ def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
         compacted_token_count=20,
     )
 
-    latest = _latest_compaction_checkpoint(
+    latest = latest_compaction_checkpoint(
         [first_user, first_checkpoint, second_user, second_checkpoint]
     )
 
@@ -453,13 +453,13 @@ def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
 
 
 def test_compaction_latest_checkpoint_helper_returns_none_when_absent() -> None:
-    from core.chat.chat import _latest_compaction_checkpoint
+    from core.chat.chat import latest_compaction_checkpoint
 
-    assert _latest_compaction_checkpoint([ChatMessage.user("only")]) is None
+    assert latest_compaction_checkpoint([ChatMessage.user("only")]) is None
 
 
 def test_effective_compaction_messages_use_checkpoint_projection() -> None:
-    from core.chat.messages import _effective_compaction_messages
+    from core.chat._message_history import effective_compaction_messages
 
     first = ChatMessage.user("first")
     second = ChatMessage.assistant(model="openai/gpt-5.2", content="second")
@@ -468,14 +468,14 @@ def test_effective_compaction_messages_use_checkpoint_projection() -> None:
         summary="s", projection=[second, third], compacted_token_count=1
     )
 
-    effective = _effective_compaction_messages([first, second, third, checkpoint])
+    effective = effective_compaction_messages([first, second, third, checkpoint])
 
     assert [message.role for message in effective] == ["note", "assistant", "user"]
     assert effective[1:] == [second, third]
 
 
 def test_effective_compaction_messages_append_newer_messages() -> None:
-    from core.chat.messages import _effective_compaction_messages
+    from core.chat._message_history import effective_compaction_messages
 
     older = ChatMessage.user("older")
     checkpoint = ChatMessage.compaction_checkpoint(
@@ -483,7 +483,7 @@ def test_effective_compaction_messages_append_newer_messages() -> None:
     )
     newer = ChatMessage.user("newer")
 
-    effective = _effective_compaction_messages([older, checkpoint, newer])
+    effective = effective_compaction_messages([older, checkpoint, newer])
 
     assert [message.role for message in effective] == ["note", "user", "user"]
     assert effective[1:] == [older, newer]

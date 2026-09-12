@@ -7,9 +7,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from core.chat import ChatLoop, MessageSender, ReplySurface
+from core.chat import ChatLoop, MessageSender, ReplySurface, reply_surface_from_note
 from core.chat.content_blocks import ContentBlock
-from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, reply_surface_from_note
+from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX
 from core.runs import (
     ActiveRunError,
     ChatRunManager,

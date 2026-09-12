@@ -14,6 +14,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.attachments.images import ImageConverter
+from core.chat._message_history import (
+    _append_input_origin_note,
+    _append_reply_surface_note,
+    _last_user_message,
+    _last_user_message_with_content_blocks,
+    _session_has_any_content_blocks,
+    effective_compaction_messages,
+    finalize_checkpoint_history_guidance,
+    history_available,
+)
+from core.chat._message_history import (
+    latest_compaction_checkpoint as latest_compaction_checkpoint,
+)
+from core.chat._message_validation import _validate_assistant_message as _validate_assistant_message
+from core.chat._skill_activation import _activate_triggered_skills
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.continuation import (
@@ -78,15 +93,7 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
     ReplySurface,
-    _append_input_origin_note,
-    _append_reply_surface_note,
     _display_content_preview,
-    _effective_compaction_messages,
-    _last_user_message,
-    _last_user_message_with_content_blocks,
-    _session_has_any_content_blocks,
-    finalize_checkpoint_history_guidance,
-    history_available,
     queue_content_is_editable,
 )
 from core.chat.messages import (
@@ -100,12 +107,6 @@ from core.chat.messages import (
 )
 from core.chat.messages import (
     ToolCallRejection as ToolCallRejection,
-)
-from core.chat.messages import (
-    _latest_compaction_checkpoint as _latest_compaction_checkpoint,
-)
-from core.chat.messages import (
-    _validate_assistant_message as _validate_assistant_message,
 )
 from core.chat.messages import (
     error_kind_llm_visible as error_kind_llm_visible,
@@ -132,7 +133,6 @@ from core.chat.streaming import (
 )
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
-    _activate_triggered_skills,
     _dispatch_tool_calls,
     _fail_tool_calls_without_dispatch,
     _read_media_outputs,
@@ -330,7 +330,7 @@ def _prepare_request_messages(
     system_messages = (
         [ChatMessage.system(system_prompt, agent_model).to_dict()] if system_prompt.strip() else []
     )
-    effective_messages = _effective_compaction_messages(session_messages)
+    effective_messages = effective_compaction_messages(session_messages)
     history = _embed_notes_into_request(
         effective_messages,
         replay_policy=replay_policy,

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
+from core.chat._message_history import reply_surface_from_note
 from core.chat.errors import ChatMessageValidationError, ImageBudgetExceededError
 from core.chat.messages import (
     _USAGE_ESTIMATION_FIELDS,
@@ -33,7 +34,6 @@ from core.chat.messages import (
     MessageSender,
     ToolCall,
     error_kind_llm_visible,
-    reply_surface_from_note,
     usage_token_is_estimated,
 )
 from core.providers.adapter import (
