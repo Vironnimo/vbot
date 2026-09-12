@@ -40,6 +40,7 @@ from core.tools._web_search_transport import (
     _ResponseTooLargeError,
 )
 from core.tools.arguments import ToolArgumentError, optional_int
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -117,6 +118,32 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["query"],
 }
+
+
+_WEB_SEARCH_RUNTIME_CONTRACT = compile_tool_contract(
+    name=WEB_SEARCH_TOOL_NAME,
+    input_schema={
+        **WEB_SEARCH_TOOL_PARAMETERS,
+        "properties": {
+            **WEB_SEARCH_TOOL_PARAMETERS["properties"],
+            "freshness": {"type": "string", "enum": [*_RECENCY_VALUES, "pd", "pm", "py"]},
+        },
+    },
+    require_closed_input=False,
+)
+
+
+def _normalize_web_search_arguments(arguments: Any) -> Any:
+    repaired = _WEB_SEARCH_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    if not isinstance(repaired, dict) or "freshness" not in repaired:
+        return repaired
+    freshness = repaired.pop("freshness")
+    if isinstance(freshness, str):
+        freshness = {"pd": "day", "pm": "month", "py": "year"}.get(freshness, freshness)
+    if "recency" in repaired and repaired["recency"] != freshness:
+        raise ValueError("freshness and recency conflict; provide one intended result age.")
+    repaired["recency"] = freshness
+    return repaired
 
 
 def _normalize_recency(raw: Any) -> tuple[str, str | None]:
@@ -393,6 +420,7 @@ def register_web_search_tool(
         _handler,
         family="web",
         open_input_schema=True,
+        argument_normalizer=_normalize_web_search_arguments,
         result_schema={"type": "object", "required": ["results"]},
         display=ToolDisplay(
             primary_candidates=(

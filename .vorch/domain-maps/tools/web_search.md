@@ -33,7 +33,7 @@ Searches the public web through the configured first-party search provider and r
 - The tool always registers. A missing credential produces a `missing_api_key` failure envelope at call time only when its provider is selected; the message names the credential key (`BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `SERPER_API_KEY`, `FIRECRAWL_API_KEY`, `PERPLEXITY_API_KEY`; DuckDuckGo needs no key).
 - Provider choice is not exposed as a tool argument; the Settings selection is the source of truth so agents cannot choose a different provider per call.
 - Settings are resolved at call time (before argument-count parsing, since the default comes from them); an invalid `web_search` settings section returns `configuration_error`.
-- Invalid `recency` values return `validation_error`; the retired `freshness`, `date_after`, and `date_before` fields are rejected as unknown arguments.
+- Invalid `recency` values return `validation_error`; recognizable `freshness` values (`day`/`month`/`year` and Brave `pd`/`pm`/`py`) become canonical `recency` before validation. Conflicting aliases fail before fetching. Unsupported `date_after` and `date_before` remain errors.
 - Provider/network failures map to `provider_request_failed`.
 - Provider response bodies are streamed into a 5 MB bounded buffer before status details or success JSON are decoded. A valid `Content-Length` over the limit is rejected before reading, while the byte counter catches missing or dishonest declarations; oversized responses return non-retryable `response_too_large`.
 - Transient-status retries honor a server `Retry-After` hint as a floor (parsed via `core/utils/http_status.parse_retry_after`, delay math via `core/utils/retry.compute_retry_delay`).
