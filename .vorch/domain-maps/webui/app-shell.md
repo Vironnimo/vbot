@@ -2,6 +2,8 @@
 
 Read this reference only for WebUI application-shell, navigation, connectivity, server-event, or global invalidation work. The root boundary and domain-wide frontend invariants live in `webui.md`; file-level ownership lives in `webui/source-map.md`.
 
+Before changing editor-replacing navigation or pending-save handling, read `webui/autosave.md` for participant integration. This file owns the App-level transition and failure presentation below.
+
 ## Ownership
 
 `App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.

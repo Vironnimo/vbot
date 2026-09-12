@@ -85,5 +85,6 @@ Read these only when your task matches - not by default.
 - Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled MCP client, transports, Agent grants, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
+- Adding or changing an Extension-owned page or configuration editor -> `webui.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
 - Informing the Model about a background event or state change -> `model-communication.md`

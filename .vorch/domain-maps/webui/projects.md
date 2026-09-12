@@ -2,6 +2,8 @@
 
 Read this reference only for the WebUI Projects management view, Project discovery/editing, scans, Team rows, or Project-level overrides. Enter the backend through `projects.md`; use `projects/configuration.md` for mutations and overrides, `projects/scanning.md` for discovery/findings, and `projects/resolution.md` for effective runtime values.
 
+Before adding or changing Project fields, Team overrides, or editor transitions, read `webui/autosave.md` for the common saving and input-continuity contract.
+
 ## Ownership and selection
 
 `ProjectsView.svelte` renders the master-detail management surface; `createProjectsState()` provides its reactive state and `createProjectsController()` owns loading, selection, form drafts, catalogs, scans, mutation reconciliation, and removal/re-point workflows. The Project selected here is management state and is intentionally independent of Chat's selected Project context.
