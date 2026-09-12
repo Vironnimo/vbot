@@ -557,3 +557,16 @@ def test_integral_json_float_reaches_integer_handler_as_int() -> None:
         require_closed_input=False,
     )
     assert type(contract.normalize_arguments({"count": 3.0})["count"]) is int
+
+
+def test_large_integer_text_representation_does_not_overflow_float() -> None:
+    contract = compile_tool_contract(
+        name="write",
+        input_schema={
+            "type": "object",
+            "properties": {"content": {"type": "string"}},
+            "required": ["content"],
+        },
+        require_closed_input=False,
+    )
+    assert contract.normalize_arguments({"content": 10**309}) == {"content": str(10**309)}

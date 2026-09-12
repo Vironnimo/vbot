@@ -332,7 +332,7 @@ def _direct_normalization_candidates(
         "string" in declared_types
         and isinstance(value, (int, float))
         and not isinstance(value, bool)
-        and math.isfinite(value)
+        and (isinstance(value, int) or math.isfinite(value))
     ):
         candidates.append(str(value))
 

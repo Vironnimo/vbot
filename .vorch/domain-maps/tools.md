@@ -70,6 +70,8 @@ Live Extension catalogs publish atomically through `ExtensionOperations.replace_
 - Relative paths resolve from `effective_cwd` (Project repo else Workspace); absolute bypass unless a specific Tool forbids. File tools and `bash` use it; `memory` deliberately stays on Workspace (identity home, not project-relative).
 - A live per-name denial resolver runs before hooks and handler for every sibling; the dispatcher also carries that resolver and the Run Tool restriction through ToolContext for delegated calls. Denial returns `tool_not_allowed` without side effects.
 
+- `ToolContext.resolve_path` preserves existing literal names, otherwise repairs matching enclosing quotes and equivalent separators before resolving against the working directory. Repaired targets pass the same scope, read-state, and mutation checks.
+
 ## References
 
 Read these only when your task matches - not by default.
