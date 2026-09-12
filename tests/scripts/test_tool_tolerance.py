@@ -241,3 +241,20 @@ def test_status_probe_verifies_resolved_session_targets() -> None:
     for case in status_tolerance_cases():
         row = asyncio.run(status_case(Adapter(), args, case))
         assert row["passed"], row
+
+
+def test_search_probe_checks_provider_query_filters_and_results() -> None:
+    from scripts.provider_probe.workflow_search_tolerance import search_case, search_tolerance_cases
+
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            arguments = json.loads(messages[-1]["content"].removeprefix("Arguments: "))
+            return {"tool_calls": [{"id": "fixture", "name": "web_search", "arguments": arguments}]}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args([])
+    for case in search_tolerance_cases():
+        row = asyncio.run(search_case(Adapter(), args, case))
+        assert row["passed"], row

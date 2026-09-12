@@ -151,7 +151,7 @@ async def test_web_search_handler_count_out_of_range(tmp_path: Path, count: int)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retired_field", ["freshness", "date_after", "date_before"])
+@pytest.mark.parametrize("retired_field", ["date_after", "date_before"])
 async def test_web_search_handler_rejects_retired_time_filters(
     tmp_path: Path,
     retired_field: str,

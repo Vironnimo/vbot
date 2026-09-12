@@ -332,7 +332,14 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
 
         return await probe_cron_tolerance(adapter, args)
-    if args.tolerance_tool == "status":
+    if args.tolerance_tool == "web_search":
+        from scripts.provider_probe.workflow_search_tolerance import (
+            search_case,
+            search_tolerance_cases,
+        )
+
+        runner, cases = search_case, search_tolerance_cases()
+    elif args.tolerance_tool == "status":
         from scripts.provider_probe.workflow_status_tolerance import (
             status_case,
             status_tolerance_cases,
@@ -367,7 +374,14 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
     semaphore = asyncio.Semaphore(
         1
         if args.tolerance_tool
-        in {"web_fetch", "ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services"}
+        in {
+            "web_fetch",
+            "web_search",
+            "ha_call_service",
+            "ha_get_state",
+            "ha_list_entities",
+            "ha_list_services",
+        }
         else 3
     )
 
