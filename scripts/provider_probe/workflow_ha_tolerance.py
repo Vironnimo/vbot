@@ -17,7 +17,14 @@ from scripts.provider_probe.choices import HA_CALL_SERVICE_CASES
 from scripts.provider_probe.scenario_extensions import _ha_call_service_scenario
 
 
-def ha_tolerance_cases() -> list[dict[str, Any]]:
+def ha_tolerance_cases(tool: str = "ha_call_service") -> list[dict[str, Any]]:
+    if tool == "ha_get_state":
+        return [
+            {"id": "light", "arguments": {"entity_id": "light.living_room"}},
+            {"id": "sensor", "arguments": {"entity_id": "sensor.outdoor_temperature"}},
+            {"id": "case", "arguments": {"entityId": " LIGHT.Living_Room "}},
+            {"id": "traversal", "arguments": {"entity_id": "light/../sensor"}, "success": False},
+        ]
     cases: list[dict[str, Any]] = [
         {"id": name, "arguments": _ha_call_service_scenario(name).expected_arguments}
         for name in HA_CALL_SERVICE_CASES
@@ -85,7 +92,7 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
         )
         registry = ToolRegistry()
         extensions.apply_tools(registry)
-        name = "ha_call_service"
+        name = getattr(args, "tolerance_tool", "ha_call_service")
         raw = await adapter.send(
             [
                 {
@@ -105,12 +112,28 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
         received = []
 
         def receive(request: httpx.Request) -> httpx.Response:
-            received.append({"path": request.url.path, "body": json.loads(request.content)})
+            received.append(
+                {
+                    "path": request.url.path,
+                    "body": json.loads(request.content) if request.content else None,
+                }
+            )
+            if name == "ha_get_state":
+                return httpx.Response(
+                    200,
+                    json={
+                        "entity_id": request.url.path.rsplit("/", 1)[1],
+                        "state": "on",
+                        "attributes": {},
+                        "last_changed": "fixture",
+                        "last_updated": "fixture",
+                    },
+                )
             return httpx.Response(200, json=[{"entity_id": "light.living_room", "state": "on"}])
 
         results = []
         with respx.mock(assert_all_called=False) as router:
-            router.post(url__startswith="https://ha.fixture/").mock(side_effect=receive)
+            router.route(url__startswith="https://ha.fixture/").mock(side_effect=receive)
             for call in calls:
                 context = ToolContext(
                     agent_id="probe",
@@ -128,7 +151,14 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                 except ValueError as error:
                     results.append(tool_failure("invalid_arguments", str(error)))
         checks = {"one_call": len(calls) == len(results) == 1}
-        if case.get("success", True):
+        if name == "ha_get_state" and case.get("success", True):
+            request = case["arguments"]
+            entity = request.get("entity_id", request.get("entityId")).strip().lower()
+            checks["receiver"] = received == [{"path": "/api/states/" + entity, "body": None}]
+            checks["result"] = (
+                bool(results) and results[0].get("data", {}).get("entity_id") == entity
+            )
+        elif case.get("success", True):
             request = case["arguments"]
             body = dict(request.get("data") or {})
             entity = request.get("entity_id", body.get("entity_id"))

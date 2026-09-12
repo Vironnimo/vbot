@@ -163,6 +163,20 @@ _CALL_SERVICE_CONTRACT = compile_tool_contract(
 )
 
 
+def _identifier_normalizer(name: str, schema: JsonObject):
+    contract = compile_tool_contract(name=name, input_schema=schema, require_closed_input=False)
+
+    def normalize(arguments: Any) -> Any:
+        repaired = contract.normalize_arguments(arguments)
+        if isinstance(repaired, dict):
+            for field in ("domain", "entity_id"):
+                if isinstance(repaired.get(field), str):
+                    repaired[field] = repaired[field].strip().lower()
+        return repaired
+
+    return normalize
+
+
 def _normalize_call_service_arguments(arguments: Any) -> Any:
     repaired = _CALL_SERVICE_CONTRACT.normalize_arguments(arguments)
     if not isinstance(repaired, dict):
@@ -739,6 +753,7 @@ def register(api: Any) -> None:
         HA_GET_STATE_DESCRIPTION,
         HA_GET_STATE_PARAMETERS,
         get_state_handler,
+        argument_normalizer=_identifier_normalizer(HA_GET_STATE_NAME, HA_GET_STATE_PARAMETERS),
         result_schema={
             "type": "object",
             "required": ["entity_id", "state", "attributes", "last_changed", "last_updated"],

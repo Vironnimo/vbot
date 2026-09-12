@@ -327,7 +327,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--tolerance-case", default="all")
     parser.add_argument(
         "--tolerance-tool",
-        choices=("skill_manage", "edit", "cron", "channel_send", "web_fetch", "ha_call_service"),
+        choices=(
+            "skill_manage",
+            "edit",
+            "cron",
+            "channel_send",
+            "web_fetch",
+            "ha_call_service",
+            "ha_get_state",
+        ),
         default="skill_manage",
     )
     return parser
