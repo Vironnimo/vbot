@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import ParamSpec
 
 from cli._progress import ProgressPrinter, Status, current_progress, status_line
+from cli._recovery import format_command, recovery_guidance
 from cli._update_types import UpdateResult
 from cli.formatting import output_mode
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import UNKNOWN_VBOT_VERSION
+from core.utils.errors import ConfigError
 
 SUCCESS_EXIT_CODE = 0
 
@@ -49,6 +51,18 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
                     progress.track(f"Waiting for {path}")
                 try:
                     code = function(*args, **kwargs)
+                except (OSError, ValueError, ConfigError) as error:
+                    sys.stdout.flush()
+                    print(
+                        status_line("error", f"{type(error).__name__}: {error}", stream=sys.stderr),
+                        file=sys.stderr,
+                    )
+                    if isinstance(error, ConfigError):
+                        command: tuple[str, ...] = ("vbot", "doctor", "settings")
+                        if getattr(parsed, "data_dir", None):
+                            command += ("--data-dir", parsed.data_dir)
+                        print(f"Next: {format_command(command)}", file=sys.stderr)
+                    code = FAILURE_EXIT_CODE
                 except KeyboardInterrupt:
                     sys.stdout.flush()
                     print(
@@ -79,6 +93,20 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
                     file=sys.stderr,
                     flush=True,
                 )
+            if code:
+                result = _last_result.get()
+                guidance = recovery_guidance(parsed, result)
+                sys.stdout.flush()
+                if result and result.failure and result.failure.request_state == "responded":
+                    print(
+                        f"rpc_method: {result.failure.method}\nserver: {result.instance.url}\n"
+                        f"request_state: {result.failure.request_state}",
+                        file=sys.stderr,
+                    )
+                if guidance.explanation:
+                    print(guidance.explanation, file=sys.stderr)
+                for command in guidance.commands:
+                    print(f"Next: {format_command(command)}", file=sys.stderr)
             return code
         finally:
             _last_result.reset(result_token)
@@ -110,6 +138,7 @@ def print_server_command_start(command: str, instance: ServerInstance) -> None:
 def print_command_result(command: str, result: CommandResult) -> None:
     """Print deterministic plain-text server command output."""
 
+    _last_result.set(result)
     lines = [f"command: server {command}", f"result: {_result_message(result)}"]
     if command in {"start", "restart"}:
         lines.extend(_start_like_output_lines(result))
@@ -176,6 +205,7 @@ def print_update_command_result(
 ) -> None:
     """Print update details followed by one readable completion sentence."""
 
+    _last_result.set(result)
     remaining = [
         line
         for line in _result_message(result).splitlines()

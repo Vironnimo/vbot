@@ -133,6 +133,10 @@ def test_transport_failure_reports_delivery_state_without_replay_or_secret(
     command_result = result.to_command_result()
     assert not command_result.ok
     assert command_result.message == result.message
+    assert command_result.failure is result.failure
+    assert result.failure is not None
+    assert result.failure.request_state == request_state
+    assert result.failure.method == "provider.set_key"
 
 
 @pytest.mark.parametrize(
@@ -143,6 +147,9 @@ def test_transport_failure_reports_delivery_state_without_replay_or_secret(
         httpx.Response(200, json={"ok": True}),
         httpx.Response(200, json={"ok": True, "result": ["sk-test-secret"]}),
         httpx.Response(200, json={"ok": "true", "secret": "sk-test-secret"}),
+        httpx.Response(502, json={"error": {"message": "sk-test-secret"}}),
+        httpx.Response(200, json={"ok": False, "error": ["sk-test-secret"]}),
+        httpx.Response(200, json={"ok": False, "error": {"message": "sk-test-secret"}}),
     ],
 )
 def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
@@ -166,6 +173,8 @@ def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
     assert "request_state: unknown" in result.message
     assert "rpc_method: agent.create" in result.message
     assert "sk-test-secret" not in result.message
+    assert result.failure is not None
+    assert result.failure.request_state == "unknown"
 
 
 @pytest.mark.parametrize("status_code", [200, 400, 500])
@@ -183,3 +192,7 @@ def test_server_error_code_and_message_are_preserved(
 
     assert not result.ok
     assert result.message == "test_code: test sentinel"
+    assert result.failure is not None
+    assert result.failure.code == "test_code"
+    assert result.failure.http_status == status_code
+    assert result.failure.request_state == "responded"

@@ -33,7 +33,11 @@ def test_failed_entry_lookup_never_claims_the_scope_is_empty(tmp_path, monkeypat
         calls.append(json["method"])
         if json["method"] == "memory.remove":
             return httpx.Response(
-                200, json={"ok": False, "error": {"message": "entry 99 does not exist"}}
+                200,
+                json={
+                    "ok": False,
+                    "error": {"code": "domain_error", "message": "entry 99 does not exist"},
+                },
             )
         return httpx.Response(200, json=listing)
 
@@ -46,6 +50,8 @@ def test_failed_entry_lookup_never_claims_the_scope_is_empty(tmp_path, monkeypat
     assert "entry lookup" in result.message
     assert "has no agent-scope entries" not in result.message
     assert calls == ["memory.remove", "memory.list"]
+    assert result.failure.method == "memory.remove"
+    assert result.failure.code == "domain_error"
 
 
 def memory_response(entry: dict[str, Any] | None = None) -> dict[str, Any]:
