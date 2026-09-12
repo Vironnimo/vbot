@@ -1,29 +1,33 @@
 # AGENTS.md
 
-## Read at session start (if not already in your context/system prompt)
+## Load context for the task
 
-Read these two core files completely before doing anything (even saying 'hi'), every session, no exceptions — there is no auto-import here, so loading them is on you:
+At session start, read these core files completely unless their current contents are already in context. Load them once; re-read affected sections when they change:
 
-- `.vorch/PROJECT.md` — project context
-- `.vorch/GLOSSARY.md` — project-specific terms
+- `.vorch/PROJECT.md` - project context
+- `.vorch/GLOSSARY.md` - project-specific terms
 
-They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
+Before working in or discussing a domain, read its root map under `.vorch/domain-maps/` (index in PROJECT.md), plus adjacent maps when ownership or contracts cross domains. Use them to locate owners, contracts, source, and tests. The task's `read:` list is a starting point, not a ceiling. Follow the root map's `## References` only for supplementary files whose triggers match the task; do not preload a supplementary folder. Supplementary files never replace the root map or enter the Domain Maps index.
+
+Before creating, editing, or auditing a domain map or supplementary file, read `.vorch/workflows/domain-map-workflow.md` in full unless its current contents are already in context. Ordinary map reading does not require that workflow.
+
+## Interpret documentation
+
+Distinguish explicit user requirements and engineering contracts from descriptions of current behavior, examples, and proposals. Follow applicable requirements and contracts; a documented implementation or past choice is not automatically a constraint on new work. Existing behavior and design may be revised within the user's requested scope without a documentation exception.
+
+Source code establishes what is implemented, not what ought to be implemented. Verify behavior claims against source and relevant tests. Correct stale descriptions; when code conflicts with an explicit requirement or contract, address the discrepancy rather than rewriting the requirement to match the code. Keep observations, requirements, and proposed changes identifiable in the docs.
 
 ## Communication with the user
 
 ### Develop ideas together
 
-When the user brings an idea or a rough plan, help develop it into a coherent approach. First understand the intended outcome and why it matters. Treat proposed implementation choices as starting hypotheses unless the user explicitly establishes them as constraints. Surface alternatives and explain when they would better serve the user's intent.
+Match discussion depth to the task's uncertainty and consequences. Understand the intended outcome; treat suggested implementation choices as hypotheses unless the user establishes them as constraints. Explain meaningful alternatives and recommend an approach when useful.
 
-Start with a short, provisional picture of the whole undertaking. Identify its major areas, how they depend on each other, and the consequential questions that remain open. Take responsibility for surfacing important areas the user may not know to ask about.
+For substantial or uncertain work, first outline the major areas, dependencies, and open questions. Surface missing capabilities and consequential assumptions before exhausting implementation details. Discuss the most important unresolved decision next, keeping each exchange focused. Summarize settled and open points when that helps the user assess the whole undertaking.
 
-Explore breadth before depth. Do not exhaust one subtopic while other areas still contain unresolved foundational questions. Choose the next question by its impact on the overall outcome, not simply because it follows from the previous answer. Introduce technical decisions when they materially shape feasibility, behavior, or later choices; defer incidental details.
+For small, clear changes, a brief explanation is enough. Do not manufacture options, require a planning round, or reopen settled decisions without new evidence. Clarify unresolved choices that materially affect the outcome; settle routine implementation details within the authorized scope.
 
-Discuss one important decision at a time. Offer concrete options, explain their tradeoffs, and give a reasoned recommendation when useful. Keep replies focused and allow the user to challenge the framing or suggest another direction.
-
-Periodically summarize what is settled, which foundational questions remain, and what can safely wait. Agreement with your recommendations does not establish that the important ground has been covered. Before proposing implementation, review the overall approach for missing capabilities, unresolved dependencies, and assumptions that could materially change it. Make remaining uncertainty visible.
-
-Apply this approach to exploratory discussion. Respect explicit implementation requests and established decisions; exploration alone does not authorize implementation.
+Exploratory discussion alone does not authorize implementation. Once the user requests implementation, proceed with established decisions; revisit them only when new evidence materially changes the approach.
 
 ### Preserve the ongoing task across detours
 
@@ -35,11 +39,9 @@ Before declaring completion, check the full agreed scope across the conversation
 
 ### State the expected outcome before implementation
 
-Before implementation, briefly list what you understand the requested end result to be. Describe concrete, observable outcomes so the user can spot misunderstandings and you can carry the list through the work.
+Before implementation, briefly state the concrete, observable outcome you understand the user wants. One sentence is enough for a small change; use a short list when several outcomes need tracking. Base it on the request and established context; do not invent requirements, numerical targets, or scope.
 
-Keep the list proportional to the task. Base it on the user's request and established context; do not invent requirements, numerical targets, or additional scope.
-
-Check the completed work against that list. In the final response, briefly state what was achieved, any material deviations or remaining gaps, and the relevant verification results. Keep this in the conversation; create a separate verification report only when requested.
+Check completed work against those outcomes. Report what was achieved, material deviations or remaining gaps, and relevant verification results in the conversation. Create a separate verification report only when requested.
 
 ### Present Agent-facing text changes
 
@@ -59,13 +61,15 @@ Runtime Agent-facing text must be self-contained for a fresh Agent that has not 
 
 ## Architecture & code
 
-**Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
+**Few, deep modules:** Prefer clear ownership, small interfaces, and hidden implementation. Extend an existing owner when the capability belongs there. Before introducing a new responsibility, public interface, layer, or abstraction, identify the closest existing owner and explain why the new boundary is warranted. Avoid pass-through layers and abstractions that expose their internals or add little beyond their interface.
+
+Judge complexity by responsibilities, coupling, and what callers must understand, not file count alone. Tests, documentation, components, and internal file splits do not need a new-owner justification unless they introduce an architectural boundary. Split files when it improves clarity and cohesion; do not overload an existing file merely to avoid creating one.
 
 **Technical Decisions** — when making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long-term maintainability.
 
 ## Testing
 
-Write tests **together with the feature** — never skip.
+Cover behavior changes with appropriate tests as part of implementation. Extend existing tests where possible; add tests for meaningful gaps and regressions, not to mirror implementation details or satisfy a file count. When existing tests already cover the change, run them rather than adding duplicates. For documentation-only edits, review content, references, and the diff; application tests are unnecessary. Run the applicable quality gates below for code changes.
 
 ## Dependencies
 
@@ -73,34 +77,22 @@ If a task requires a new dependency, **check first** that no existing dependency
 
 ## You maintain the docs & domain maps
 
-There's no orchestrator here to keep these current — that's on you. When a change you make affects one, update it as part of the work (small, factual, not deferred):
+Maintain affected documentation as part of the task with small, factual updates:
 
 - `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
 - `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
-- `.vorch/GLOSSARY.md` — new or changed project-specific terms
+- `.vorch/GLOSSARY.md` — shared vocabulary under the Terminology rules below
 - `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
-
-**⛔ HARD GATE — read the workflow before ANY domain-map work, no exceptions.** Before you create, edit, or audit *anything* under `.vorch/domain-maps/`, you MUST first read `.vorch/workflows/domain-map-workflow.md` in full. If you are about to write to a domain map or start a map audit and you have not read that workflow, stop and read it first — that read is the first action of the task, before any Edit, Write, or plan. It defines what belongs in a domain map (factual working notes, every claim backed by source/tests, no exhaustive API/field dumps) and the rules for creating, maintaining, and indexing them.
 
 **Write all project documents in English.** Plans, design documents, decision records (like the system-prompt handoff), domain maps, PROJECT.md, GLOSSARY.md, FLAGGED.md — every project artifact is written in English, regardless of the language you and the user speak in chat. User-facing chat follows the user's language; the documents do not.
 
-## Working with domain maps
+## Terminology
 
-When working on a domain, start with its root map at `.vorch/domain-maps/<domain>.md`; root maps are the always-read routing and safety layer. Treat the task's `read:` list as a starting point, not a ceiling, and read additional root maps when ownership or contracts cross domains.
+`.vorch/GLOSSARY.md` holds the small shared vocabulary needed to interpret vBot correctly across tasks, especially terms easily confused with the coding agent's own environment or other systems, such as Agent, Tool, Session, and Workspace.
 
-After reading a root map, inspect its `## References` and load only the exact supplementary files whose trigger matches the current task. Never preload a domain's supplementary folder. A supplementary file adds task-specific depth, never replaces its root, and is deliberately absent from the Domain Maps index in `.vorch/PROJECT.md`.
+Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary. Give each term one canonical home; use references elsewhere.
 
-Terminology has two homes: core, cross-cutting terms live in `.vorch/GLOSSARY.md`; a domain's own terms live in a `## Terms` section inside its map. So a domain map is also where that domain's vocabulary is defined — reading the map gives you both the domain and its words.
-
-## Glossary
-
-`.vorch/GLOSSARY.md` is shared context for the whole project — keeping it right matters, which means keeping it **small**. It holds only core, cross-cutting terms every agent needs regardless of what it touches, plus terms the user says in conversation. A **domain-internal** term — one you only need once you are already working inside that one domain, and that the user never says — lives in a `## Terms` section inside that domain's map instead, never in the glossary. **One home per term, never both** (writing a domain-map term is domain-map work — the HARD GATE above applies). Watch for term candidates as you work and while discussing with the user:
-
-- A term got **implicitly defined** through the conversation, a clarification, or a decision.
-- A **project-specific term** in play could plausibly be misread (non-obvious meaning here).
-- A term seems to cause **friction** because you and the user may mean different things by it.
-
-Only project-specific terms — never standard programming terms or anything self-evident. When a term matters, decide its home by the rule above, propose handling it (add full definition / add placeholder / skip), then run the `glossary` skill — it handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
+Maintain terminology as part of relevant work when a missing, stale, or ambiguous definition could cause mistakes. Make clear, evidence-backed updates directly; no separate Skill or interview is required. Ask the user when competing meanings would materially affect the work, rather than silently establishing a new meaning.
 
 ## Git
 

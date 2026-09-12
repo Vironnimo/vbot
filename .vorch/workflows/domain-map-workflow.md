@@ -1,6 +1,6 @@
 # Domain Map Workflow
 
-Use this workflow when creating, auditing, or updating `.vorch/domain-maps/<domain>.md`.
+Use this workflow when creating, auditing, or updating domain maps and supplementary files under `.vorch/domain-maps/`.
 
 Domain maps are factual working notes for agents. They are the always-read routing and safety layer for a domain: they provide the context needed across work in that domain and point to task-gated depth. They are not architecture documentation, not generated API reference, not the container for every verified fact about the domain, and not a line-count contest.
 
@@ -13,15 +13,15 @@ Shorter is useful only when it removes noise. Do not lose high-signal behavior, 
 
 ## Ownership
 
-The Orchestrator creates and maintains domain maps. All other agents read them.
+The agent doing the work maintains the affected maps and supplementary files as part of the task. No separate Orchestrator or documentation role is required.
 
-If source verification is needed and your role must not read source code directly, delegate bounded exploration to `explorer` or use Builder/Reviewer findings that include concrete source/test references. Do not write factual claims from memory or intuition.
+Verify implementation claims against source and relevant tests. Existing findings are usable when their concrete references can be checked. Do not write factual claims from memory or intuition.
 
 ## Read First
 
 Before domain-map work:
-1. Read `AGENTS.md`, `.vorch/PROJECT.md`, and `.vorch/GLOSSARY.md` as required by the system.
-2. Read this workflow in full.
+1. Load core context according to `AGENTS.md` -> Load context for the task.
+2. Read this workflow in full unless its current contents are already in context.
 3. Read the current target map if it exists.
 4. Read related maps when boundaries or contracts cross domains.
 
@@ -52,7 +52,7 @@ Cut information that slows agents down without making them safer:
 
 Do not discard important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Move task-gated signal to a supplementary file, and replace cross-map repetition with a pointer to the canonical owner. Short but wrong is worse than long.
 
-**Mirroring vs operational knowledge.** An inventory is a cut candidate only when it restates what the artifact reliably tells its caller at runtime. Semantics a caller must know before or without running the artifact - flag consequences, exit-code behavior, security rules, offline behavior - are decision-relevant signal: never delegate documented content to `--help`, live probing, or source diving, because the agent's task may be repairing exactly the artifact it would have to execute. Never cut the imperative that makes task-gating work (a read-the-map mandate, a gate contract) on dedup grounds because another always-read file states something similar - that mandate is the mechanism the other cuts rely on, not noise.
+**Mirroring vs operational knowledge.** An inventory is a cut candidate only when it restates what the artifact reliably tells its caller at runtime. Semantics a caller must know before or without running the artifact - flag consequences, exit-code behavior, security rules, offline behavior - are decision-relevant signal: never delegate documented content to `--help`, live probing, or source diving, because the agent's task may be repairing exactly the artifact it would have to execute. When consolidating instructions, preserve an explicit route to the required context or gate. Keep task-specific read triggers where they guide the work; avoid repeating global rules already loaded through `AGENTS.md`.
 
 ## Formatting: plain ASCII punctuation only
 
@@ -60,11 +60,11 @@ Domain maps use plain ASCII punctuation exclusively. Use `->` for pointers, `-` 
 
 ## Domain Terms (the `## Terms` section)
 
-A domain map carries a `## Terms` section: the crisp vocabulary specific to this domain - the `Definition:` / `Not:` entries an agent (or the user) needs to read the domain the same way everyone else does. This is the domain-local half of the project's shared vocabulary; the cross-cutting core lives in `.vorch/GLOSSARY.md`.
+A domain map's `## Terms` section defines vocabulary needed within that domain. Shared terms needed to interpret vBot across tasks live in `.vorch/GLOSSARY.md`; placement and routine maintenance follow `AGENTS.md` -> Terminology. Omit the section when there are no domain-specific terms.
 
-- **What belongs here:** a term you only need once you are already working inside this domain, and that the user never says in conversation - implementation-level vocabulary. A term that is core and cross-cutting (any agent needs it regardless of domain), or that the user uses, belongs in `.vorch/GLOSSARY.md` instead. **One home per term, never both** - if you move a term in from the glossary, delete the glossary copy and fix the pointers.
-- **Placement:** put `## Terms` **high** - right after the Overview, before the detailed sections - because agents often read only the first screen of a map. Never at the end.
-- **Format:** one `### <Term>` per entry, a `**Definition:**` line (max ~2 sentences, agent-perspective), and an optional `**Not:**` line only when confusion with a nearby term is a real risk - the same shape as a glossary entry, one heading level deeper. Open the section with one line naming which of this domain's core terms live in the glossary, so the split is visible (e.g. "Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
+- **What belongs here:** project-specific meanings and useful distinctions needed only within this domain, even when the user mentions them. Shared vocabulary that prevents misreading vBot across tasks belongs in `.vorch/GLOSSARY.md`. Keep one canonical home per term; when moving an entry, remove its old definition and repair references.
+- **Placement:** put `## Terms` after Overview, before detailed sections, so readers encounter necessary vocabulary first.
+- **Format:** one `### <Term>` per entry with a concise definition, usually one or two sentences. Include a distinction from nearby terms only when it prevents likely confusion; `Definition:` / `Not:` labels are optional. Where applicable, open with one line pointing to relevant shared terms (e.g. "Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
 - **Cross-references:** name a term in another map plainly ("see `models.md`"); point at a core term as "GLOSSARY -> <Term>". When a term leaves the glossary, sweep the maps for stale "GLOSSARY -> <Term>" pointers to it.
 
 ## References & Supplementary Files
@@ -110,7 +110,7 @@ Every factual claim should be backed by one of:
 - Existing maps or `.vorch/PROJECT.md`
 - An explicit user/project decision
 
-If a statement cannot be backed, either remove it or rewrite it as a convention/policy that the Orchestrator is intentionally establishing.
+Distinguish implementation observations from explicit requirements, engineering contracts, and proposals (`AGENTS.md` -> Interpret documentation). Code shows what is implemented, not whether it satisfies the intended behavior. Correct stale observations; investigate conflicts with requirements rather than silently rewriting those requirements. Remove unsupported claims or mark them as unresolved/proposed when useful; never turn an unverified claim into a policy merely to keep it.
 
 For doc-only map work, do not run application tests unless the user asks or application/test code also changed. Verify by reading source-of-truth evidence, adjacent maps, and the diff.
 
@@ -127,21 +127,21 @@ Use when a new domain emerges or an existing domain has no map.
 
 ## Maintaining A Domain Map
 
-Use when implementation changes a domain, a Builder/Reviewer reports project-doc impact, a domain boundary changes, or an existing map is stale, noisy, misleading, incomplete, or large enough that task-gated content should move to supplementary files.
+Use when work affects documented behavior, ownership, or contracts, or an existing map is stale, noisy, misleading, incomplete, or contains task-gated detail that belongs in supplementary files.
 
 For routine maintenance during implementation:
 1. Decide placement before writing: apply the different-feature test from References & Supplementary Files. Always-relevant context updates the map; task-gated context updates a supplementary file.
 2. Update one canonical documented home. When a supplementary file is created or its task scope changes, add or sharpen its trigger in the map's References index.
 3. Make the narrow factual update needed by the completed work.
-4. Base the change on Builder/Reviewer output, explorer summaries, source/test evidence, or explicit user decisions.
+4. Base changes on source/test evidence, verifiable findings, or explicit user decisions.
 5. Update the Domain Maps index if a map was created, renamed, split, or removed. Supplementary files never enter that index.
 6. After slimming, diff old against new and account for every removed fact: point to its verified new home (verified by reading it, not assumed) or record why it was safe to delete outright. Establish path/reference resolution conventions before the document's first bare reference.
 
 For dedicated map cleanup or audit:
 1. Read the current map and identify what each section is trying to help agents do.
 2. Verify kept factual claims against source/test evidence or explicit decisions.
-3. Present a numbered edit plan before judgment-heavy rewrites: what stays, what is removed, what is added, and what moves - including any task-gated content that moves to a supplementary file.
-4. After approval, edit the map.
+3. For substantial or judgment-heavy rewrites, briefly explain what stays, changes, or moves, including task-gated material. Scale discussion to uncertainty and consequences; routine factual maintenance needs no separate planning round.
+4. Edit within the user's authorized scope. Existing authorization is sufficient; ask only when unresolved choices would materially change meaning or scope.
 5. Re-check the remaining claims and the diff. The work is done only when the map is useful for agents and factually correct.
 
 ## Template
@@ -159,7 +159,7 @@ Use this as a starting point. Remove every section that does not apply.
 
 ## Terms
 
-[Domain-local vocabulary - the terms specific to this domain, one `### Term` each with a `**Definition:**` (+ optional `**Not:**`). Place high, right after Overview. Core cross-cutting terms live in `.vorch/GLOSSARY.md`, not here. Omit the section if the domain has no domain-specific terms.]
+[Domain-local vocabulary, one `### Term` with a concise definition and useful distinctions. Place after Overview. Shared vocabulary needed across tasks lives in `.vorch/GLOSSARY.md`; user mentions do not determine placement. Omit if there are no domain-specific terms.]
 
 ## Data Model
 
