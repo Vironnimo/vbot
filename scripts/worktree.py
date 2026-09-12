@@ -7,11 +7,9 @@ import argparse
 import importlib
 import json
 import os
-import random
 import re
 import runpy
 import shutil
-import socket
 import stat
 import subprocess
 import sys
@@ -19,7 +17,42 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from urllib.parse import urlsplit
+
+# Direct execution loads helper modules from this checkout.
+_checkout_root = Path(__file__).resolve().parents[1]
+if str(_checkout_root) not in sys.path:
+    sys.path.insert(0, str(_checkout_root))
+
+from scripts._worktree_args import parse_args  # noqa: E402
+from scripts._worktree_lock import (  # noqa: E402
+    KIND_MERGE,
+    KIND_REPAIR,
+    MergeLockBusyError,
+    _holder_record_is_current,
+    _merge_exclusive_lock,
+    _own_repair_window_is_active,
+    _probe_lock_is_busy,
+    _read_holder_record,
+    _request_window_release,
+    cmd_keeper_hold,
+)
+from scripts._worktree_ports import (  # noqa: E402
+    FAKE_PROVIDER_PORT_OFFSET,
+    find_free_port,
+)
+from scripts._worktree_records import (  # noqa: E402
+    DATA_DIR_KEY,
+    MANAGED_BRANCH_KEY,
+    SERVER_PORT_KEY,
+    UNKNOWN_VALUE,
+    WORKTREE_FILE_NAME,
+    _list_uncommitted_paths,
+    _marker_data_dir,
+    _marker_managed_branch,
+    _read_settings_port,
+    _read_worktree_branch_name,
+    _read_worktree_marker,
+)
 
 
 def _resolve_project_root() -> Path:
@@ -48,16 +81,8 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT = _resolve_project_root()
 
-MAIN_DEV_PORT = 8421
-FIRST_WORKTREE_PORT = 8422
-FAKE_PROVIDER_PORT_OFFSET = 10_000
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
-WORKTREE_FILE_NAME = ".vbot-worktree"
 FAKE_PROVIDER_SETTINGS_PATH = PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json"
-DATA_DIR_KEY = "data_dir"
-MANAGED_BRANCH_KEY = "managed_branch"
-SERVER_PORT_KEY = "server_port"
-UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
@@ -66,23 +91,10 @@ MERGE_LOCK_FILE_NAME = "vbot-merge.lock"
 MERGE_HOLDER_FILE_NAME = "vbot-merge.lock.holder.json"
 MERGE_RELEASE_FILE_NAME = "vbot-merge.lock.release"
 REPAIR_LOG_FILE_NAME = "vbot-merge-repair.log"
-KIND_MERGE = "merge"
-KIND_REPAIR = "repair"
 MERGE_CONFLICT_EXIT_CODE = 2
-DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS = 30 * 60
-DEFAULT_REPAIR_WINDOW_SECONDS = 15 * 60
-MERGE_LOCK_POLL_MIN_SECONDS = 0.4
-MERGE_LOCK_POLL_MAX_SECONDS = 1.2
-KEEPER_POLL_SECONDS = 1.0
-HOLDER_FRESHNESS_SECONDS = 15.0
-RELEASE_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — keeps the repair keeper alive
 # after the spawning CLI exits and outside the caller's Ctrl+C group.
 WINDOWS_DETACHED_CREATION_FLAGS = 0x00000008 | 0x00000200
-
-
-class MergeLockBusyError(Exception):
-    """Raised when the merge lock stayed busy longer than the wait timeout."""
 
 
 def print_ok(**fields: str | int | bool | Path) -> None:
@@ -106,19 +118,6 @@ def validate_worktree_name(name: str) -> str | None:
         "worktree name must start with a letter or number and contain only "
         "letters, numbers, dots, underscores, and hyphens"
     )
-
-
-def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
-    """Read a worktree marker JSON object."""
-    try:
-        data = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    return data
 
 
 def _expected_data_dir(name: str) -> Path:
@@ -246,24 +245,6 @@ def sweep_trash_directories(worktrees_dir: Path) -> None:
             _remove_directory_tree(candidate)
 
 
-def _list_uncommitted_paths(worktree_path: Path) -> list[str]:
-    """List porcelain status lines for uncommitted files in a worktree."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(worktree_path), "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return []
-
-    if result.returncode != 0:
-        return []
-
-    return [line for line in result.stdout.splitlines() if line.strip()]
-
-
 def _worktree_registration_state(worktree_path: Path) -> bool | None:
     """Return whether Git still registers a worktree, or ``None`` if unknown."""
     try:
@@ -288,109 +269,6 @@ def _worktree_registration_state(worktree_path: Path) -> bool | None:
         if os.path.normcase(str(registered)) == target:
             return True
     return False
-
-
-def _read_worktree_branch_name(worktree_path: Path) -> str | None:
-    """Read the currently checked-out branch in a worktree."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(worktree_path), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return None
-
-    if result.returncode != 0:
-        return None
-
-    branch = result.stdout.strip()
-    if not branch or branch == "HEAD":
-        return None
-    return branch
-
-
-def scan_used_ports(worktrees_dir: Path) -> set[int]:
-    """Collect server and seeded fake-Provider ports declared by worktrees."""
-    ports: set[int] = set()
-    if not worktrees_dir.exists():
-        return ports
-
-    for candidate in worktrees_dir.iterdir():
-        if not candidate.is_dir() or candidate.name.startswith("."):
-            continue
-
-        marker = candidate / WORKTREE_FILE_NAME
-        if not marker.exists():
-            continue
-
-        data = _read_worktree_marker(marker)
-        if data is None:
-            continue
-
-        try:
-            raw_data_dir = data.get(DATA_DIR_KEY, "")
-            if not isinstance(raw_data_dir, str) or not raw_data_dir:
-                continue
-            settings_path = Path(raw_data_dir).expanduser() / "settings.json"
-            if not settings_path.exists():
-                continue
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            if not isinstance(settings, dict):
-                continue
-            port = settings.get(SERVER_PORT_KEY)
-            if isinstance(port, int):
-                ports.add(port)
-            providers = settings.get("providers")
-            if not isinstance(providers, dict):
-                continue
-            custom = providers.get("custom")
-            if not isinstance(custom, dict):
-                continue
-            fake_provider = custom.get("fake")
-            if not isinstance(fake_provider, dict):
-                continue
-            base_url = fake_provider.get("base_url")
-            if not isinstance(base_url, str):
-                continue
-            parsed_port = urlsplit(base_url).port
-            if parsed_port is not None:
-                ports.add(parsed_port)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-
-    return ports
-
-
-def is_port_bound(port: int) -> bool:
-    """Return True when localhost accepts a TCP connection on the port."""
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-            return True
-    except OSError:
-        return False
-
-
-def find_free_port(worktrees_dir: Path, start: int = FIRST_WORKTREE_PORT) -> int:
-    """Find a free server port whose paired fake-Provider port is also free."""
-    used_ports = scan_used_ports(worktrees_dir)
-    candidate = start
-
-    while True:
-        provider_port = candidate + FAKE_PROVIDER_PORT_OFFSET
-        if provider_port > 65_535:
-            raise RuntimeError("no paired server and fake-Provider ports are available")
-        unavailable = (
-            candidate == MAIN_DEV_PORT
-            or candidate in used_ports
-            or provider_port in used_ports
-            or is_port_bound(candidate)
-            or is_port_bound(provider_port)
-        )
-        if not unavailable:
-            return candidate
-        candidate += 1
 
 
 @contextmanager
@@ -454,184 +332,6 @@ def _merge_lock_paths() -> tuple[Path, Path, Path]:
     )
 
 
-def _acquire_file_lock(lock_file) -> bool:
-    """Try to take the exclusive advisory lock without blocking."""
-    lock_file.seek(0, os.SEEK_END)
-    if lock_file.tell() == 0:
-        lock_file.write(b"0")
-        lock_file.flush()
-    lock_file.seek(0)
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl = importlib.import_module("fcntl")
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
-def _release_file_lock(lock_file) -> None:
-    """Release the advisory lock taken by `_acquire_file_lock`."""
-    lock_file.seek(0)
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl = importlib.import_module("fcntl")
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except OSError:
-        pass
-
-
-def _probe_lock_is_busy(lock_path: Path) -> bool:
-    """Return whether another process currently holds the merge lock."""
-    with lock_path.open("a+b") as lock_file:
-        busy = not _acquire_file_lock(lock_file)
-        if not busy:
-            _release_file_lock(lock_file)
-    return busy
-
-
-def _write_holder_record(holder_path: Path, record: dict[str, object]) -> None:
-    """Publish the current lock holder's identity and heartbeat."""
-    holder_path.parent.mkdir(parents=True, exist_ok=True)
-    holder_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
-
-
-def _read_holder_record(holder_path: Path) -> dict[str, object] | None:
-    """Read a lock holder record, tolerating absence or corruption."""
-    try:
-        data = json.loads(holder_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _holder_record_is_current(record: dict[str, object] | None) -> bool:
-    """Return whether a holder record has a recent heartbeat."""
-    if record is None:
-        return False
-    heartbeat = record.get("heartbeat")
-    return isinstance(heartbeat, (int, float)) and (
-        time.time() - heartbeat <= HOLDER_FRESHNESS_SECONDS
-    )
-
-
-def _own_repair_window_is_active(holder_path: Path, task: str) -> bool:
-    """Return whether a fresh repair window is held for this exact task."""
-    record = _read_holder_record(holder_path)
-    if record is None or not _holder_record_is_current(record):
-        return False
-    return bool(record.get("kind") == KIND_REPAIR and record.get("task") == task)
-
-
-@contextmanager
-def _merge_exclusive_lock(
-    *,
-    task: str,
-    kind: str,
-    timeout_seconds: float,
-    lock_path: Path,
-    holder_path: Path,
-) -> Iterator[None]:
-    """Hold the cross-process merge lock, waiting up to the timeout."""
-    deadline = time.monotonic() + timeout_seconds
-    lock_file = lock_path.open("a+b")
-    while not _acquire_file_lock(lock_file):
-        if time.monotonic() >= deadline:
-            lock_file.close()
-            raise MergeLockBusyError(
-                f"merge lock stayed busy for {int(timeout_seconds)}s "
-                "(another merge or protected repair window is running)"
-            )
-        time.sleep(random.uniform(MERGE_LOCK_POLL_MIN_SECONDS, MERGE_LOCK_POLL_MAX_SECONDS))
-
-    _write_holder_record(
-        holder_path,
-        {
-            "task": task,
-            "kind": kind,
-            "pid": os.getpid(),
-            "started_at": time.time(),
-            "heartbeat": time.time(),
-            "deadline": None,
-        },
-    )
-    try:
-        yield
-    finally:
-        with suppress(OSError):
-            holder_path.unlink()
-        _release_file_lock(lock_file)
-        lock_file.close()
-
-
-def _request_window_release(release_path: Path, holder_path: Path, lock_path: Path) -> bool:
-    """Signal the repair keeper to exit and wait until the lock is free."""
-    release_path.parent.mkdir(parents=True, exist_ok=True)
-    release_path.write_text("release\n", encoding="utf-8")
-    deadline = time.monotonic() + RELEASE_SHUTDOWN_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        record = _read_holder_record(holder_path)
-        if not _holder_record_is_current(record) or not _probe_lock_is_busy(lock_path):
-            with suppress(OSError):
-                holder_path.unlink()
-            return True
-        time.sleep(0.2)
-    if not _probe_lock_is_busy(lock_path):
-        with suppress(OSError):
-            holder_path.unlink()
-        return True
-    return False
-
-
-def cmd_keeper_hold(args: argparse.Namespace) -> int:
-    """Internal keeper process holding the lock for a protected repair window."""
-    lock_path = Path(args.lock_path)
-    holder_path = Path(args.holder_path)
-    release_path = Path(args.release_path)
-    deadline = float(args.deadline)
-
-    record: dict[str, object] = {
-        "task": args.task,
-        "kind": KIND_REPAIR,
-        "pid": os.getpid(),
-        "started_at": time.time(),
-        "deadline": deadline,
-    }
-    lock_file = lock_path.open("a+b")
-    try:
-        while not _acquire_file_lock(lock_file):
-            if time.time() >= deadline:
-                return 1
-            time.sleep(random.uniform(MERGE_LOCK_POLL_MIN_SECONDS, MERGE_LOCK_POLL_MAX_SECONDS))
-        try:
-            while time.time() < deadline:
-                if release_path.exists():
-                    break
-                record["heartbeat"] = time.time()
-                _write_holder_record(holder_path, record)
-                time.sleep(KEEPER_POLL_SECONDS)
-        finally:
-            with suppress(OSError):
-                holder_path.unlink()
-    finally:
-        _release_file_lock(lock_file)
-        lock_file.close()
-
-    with suppress(OSError):
-        release_path.unlink()
-    return 0
-
-
 def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
     """Seed the free local Provider and Models without replacing existing settings."""
 
@@ -680,52 +380,6 @@ def _run_command(
     except OSError as exc:
         return 1, str(exc)
     return result.returncode, result.stderr.strip()
-
-
-def _read_settings_port(data_dir: Path | None) -> int | None:
-    """Read the configured server port from a data directory."""
-    if data_dir is None:
-        return None
-
-    settings_path = data_dir / "settings.json"
-    if not settings_path.exists():
-        return None
-
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    if not isinstance(settings, dict):
-        return None
-
-    port = settings.get(SERVER_PORT_KEY)
-    if isinstance(port, int):
-        return port
-    return None
-
-
-def _marker_data_dir(marker_data: dict[str, object] | None) -> tuple[str, Path | None]:
-    """Return display and resolved data-dir values from marker data."""
-    if marker_data is None:
-        return UNKNOWN_VALUE, None
-
-    raw_data_dir = marker_data.get(DATA_DIR_KEY)
-    if not isinstance(raw_data_dir, str) or not raw_data_dir:
-        return UNKNOWN_VALUE, None
-
-    return raw_data_dir, Path(raw_data_dir).expanduser()
-
-
-def _marker_managed_branch(marker_data: dict[str, object] | None) -> str:
-    """Return a stable display value for marker managed-branch state."""
-    if marker_data is None:
-        return UNKNOWN_VALUE
-
-    managed_branch = marker_data.get(MANAGED_BRANCH_KEY)
-    if isinstance(managed_branch, bool):
-        return str(managed_branch).lower()
-    return UNKNOWN_VALUE
 
 
 def iter_worktree_entries(worktrees_dir: Path) -> list[dict[str, str | int | Path]]:
@@ -1302,68 +956,6 @@ def cmd_repair_finish(args: argparse.Namespace) -> int:
         return 1
     print_ok(status="repair-window-closed", task=name)
     return 0
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Manage vBot git worktrees")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    create_parser = subparsers.add_parser("create", help="Create a worktree")
-    create_parser.add_argument("name")
-    create_parser.add_argument("--from", dest="from_branch", metavar="BRANCH")
-
-    delete_parser = subparsers.add_parser("delete", help="Delete a worktree")
-    delete_parser.add_argument("name")
-    delete_parser.add_argument("--force", action="store_true")
-
-    subparsers.add_parser("list", help="List worktrees")
-
-    merge_parser = subparsers.add_parser(
-        "merge",
-        help="Merge a finished worktree branch into main and remove the worktree",
-    )
-    merge_parser.add_argument("name")
-    merge_parser.add_argument("-m", "--message", default=None, metavar="SUMMARY")
-    merge_parser.add_argument(
-        "--wait-timeout",
-        type=float,
-        default=DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS,
-        metavar="SECONDS",
-    )
-
-    repair_start_parser = subparsers.add_parser(
-        "repair-start",
-        help="Open a protected repair window after a conflicted merge",
-    )
-    repair_start_parser.add_argument("name")
-    repair_start_parser.add_argument(
-        "--window",
-        type=float,
-        default=DEFAULT_REPAIR_WINDOW_SECONDS,
-        metavar="SECONDS",
-    )
-    repair_start_parser.add_argument(
-        "--wait-timeout",
-        type=float,
-        default=DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS,
-        metavar="SECONDS",
-    )
-
-    repair_finish_parser = subparsers.add_parser(
-        "repair-finish",
-        help="Close this task's protected repair window",
-    )
-    repair_finish_parser.add_argument("name")
-
-    keeper_parser = subparsers.add_parser("keeper-hold", help=argparse.SUPPRESS)
-    keeper_parser.add_argument("--task", required=True)
-    keeper_parser.add_argument("--deadline", required=True, type=float)
-    keeper_parser.add_argument("--lock-path", required=True)
-    keeper_parser.add_argument("--holder-path", required=True)
-    keeper_parser.add_argument("--release-path", required=True)
-
-    return parser.parse_args(argv)
 
 
 def main() -> int:
