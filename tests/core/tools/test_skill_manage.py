@@ -556,6 +556,12 @@ def test_create_shadows_foreign_name_unblocked_by_scope_check(tmp_path: Path) ->
             }
         },
         {"write_file": {"name": "demo", "file_path": "assets/empty.txt", "content": ""}},
+        {
+            "action": "write_file",
+            "name": " demo ",
+            "file_path": '"assets\\empty.txt"',
+            "content": "",
+        },
     ],
 )
 def test_recognizable_mistakes_write_real_empty_file(
