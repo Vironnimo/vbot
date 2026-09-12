@@ -18,7 +18,7 @@ Before adding or changing panel fields or saving behavior, read `webui/autosave.
 
 Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/values.js` (`isPlainObject` strict `[object Object]`, `asText`, `asOptionalText`).
 
-The Voice card under Tools & Media also owns the Live voice opt-in for all accessors. `WakewordVoiceSettings` saves `live_voice.enabled` through `settings.patch`, reloads canonical Settings, and publishes the successful commit through `SettingsView.onSettingsCommit` to App. A failed save retains the previous setting. See `model_tasks/live.md` for the sidebar control and active-connection lifecycle.
+`WakewordVoiceSettings.svelte` retains Desktop runtime polling, configuration saving and Model management. Internal `voice/TranscriptionAudioSettings.svelte` owns the independent audio draft/autosave participant; `WakewordCalibration.svelte` owns calibration controls and actions against the same bound runtime state and calibration baseline. `voiceLabels.js` and the namespaced `voice.css` hold presentation details. The Voice card under Tools & Media also owns the Live voice opt-in for all accessors. `WakewordVoiceSettings` saves `live_voice.enabled` through `settings.patch`, reloads canonical Settings, and publishes the successful commit through `SettingsView.onSettingsCommit` to App. A failed save retains the previous setting. See `model_tasks/live.md` for the sidebar control and active-connection lifecycle.
 
 ## Providers and models
 
