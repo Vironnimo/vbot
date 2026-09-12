@@ -13,13 +13,13 @@ from cli._output import (
 )
 from cli.autostart_management import autostart_status, disable_autostart, enable_autostart
 from cli.server_management import (
-    DEFAULT_HOST,
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
     restart_via_systemd_if_managed,
 )
 from cli.update_management import run_update
+from core.utils.config import DEFAULT_HOST
 
 
 def _launch_desktop(argv: Sequence[str]) -> None:
