@@ -127,9 +127,10 @@
     });
   }
 
-  async function save() {
+  async function save(reason) {
     if (compactionPoliciesEqual(policy, settings?.compaction)) return true;
     return runSettingsSave({
+      reason,
       onCommit,
       onToast,
       onError,
@@ -164,7 +165,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={saveNow}
   >

@@ -152,6 +152,20 @@
       ? [...new Set([...draft.prompt_blocks, id])]
       : draft.prompt_blocks.filter((item) => item !== id);
   }
+  function profilePayload() {
+    const payload = JSON.parse(JSON.stringify(draft));
+    payload.name = payload.name.trim();
+    payload.participants = payload.participants.map((row) => ({
+      ...row,
+      count: Number(row.count),
+    }));
+    for (const field of ['coalesce_ms', 'batch_messages', 'batch_chars']) {
+      const text = String(payload.delivery[field]).trim();
+      payload.delivery[field] = text === '' ? null : Number(text);
+    }
+    if (!payload.slug?.trim()) delete payload.slug;
+    return payload;
+  }
   async function inspectPrompt() {
     const request = ++previewRequest;
     const submitted = `${previewFormation}:${snapshot()}`;
@@ -159,7 +173,7 @@
     previewError = '';
     try {
       const result = await bridgeClient.operation('profiles.preview', {
-        profile: copy(draft),
+        profile: profilePayload(),
         formation_index: Number(previewFormation),
       });
       if (request !== previewRequest) return;
@@ -349,13 +363,7 @@
     const submittedSnapshot = snapshot();
     saving = true;
     try {
-      const payload = JSON.parse(JSON.stringify(draft));
-      payload.name = payload.name.trim();
-      payload.participants = payload.participants.map((row) => ({
-        ...row,
-        count: Number(row.count),
-      }));
-      if (!payload.slug?.trim()) delete payload.slug;
+      const payload = profilePayload();
       const saved = await onSave(payload);
       if (profile) {
         savedProfile = copy(saved);
@@ -932,8 +940,7 @@
                 min="0"
                 max="5000"
                 value={draft.delivery.coalesce_ms}
-                onInput={(value) =>
-                  (draft.delivery.coalesce_ms = Number(value))}
+                onInput={(value) => (draft.delivery.coalesce_ms = value)}
               />
             </FormField>
             <FormField
@@ -946,8 +953,7 @@
                 min="1"
                 max="100"
                 value={draft.delivery.batch_messages}
-                onInput={(value) =>
-                  (draft.delivery.batch_messages = Number(value))}
+                onInput={(value) => (draft.delivery.batch_messages = value)}
               />
             </FormField>
             <FormField
@@ -960,40 +966,30 @@
                 min="16000"
                 max="128000"
                 value={draft.delivery.batch_chars}
-                onInput={(value) =>
-                  (draft.delivery.batch_chars = Number(value))}
+                onInput={(value) => (draft.delivery.batch_chars = value)}
               />
             </FormField>
           </div>
         </details>
       </div>
     </fieldset>
+    <footer class="editor-footer">
+      <div>
+        {#if !profile}<Button disabled={busy} onClick={onCancel}
+            >{t('common.cancel', 'Cancel')}</Button
+          >{/if}
+        <Button
+          variant={profile ? 'tertiary' : 'primary'}
+          loading={saving}
+          onClick={save}
+        >
+          {profile
+            ? t('common.saveChanges', 'Save changes')
+            : t('swarm.profile.save', 'Save Swarm')}
+        </Button>
+      </div>
+    </footer>
   </div>
-  <footer class="editor-footer">
-    <span class="management-save-note" aria-live="polite"
-      >{saving
-        ? t('common.saving', 'Saving…')
-        : profile
-          ? error
-            ? t('swarm.profile.unsaved', 'Changes not saved')
-            : t('management.savedAutomatically', 'Changes save automatically')
-          : ''}</span
-    >
-    <div>
-      {#if !profile}<Button disabled={busy} onClick={onCancel}
-          >{t('common.cancel', 'Cancel')}</Button
-        >{/if}
-      <Button
-        variant={profile ? 'secondary' : 'primary'}
-        loading={saving}
-        onClick={save}
-      >
-        {profile
-          ? t('common.saveChanges', 'Save changes')
-          : t('swarm.profile.save', 'Save Swarm')}
-      </Button>
-    </div>
-  </footer>
 </section>
 
 {#if pendingTransition}
@@ -1185,9 +1181,8 @@
     margin-top: 14px;
   }
   .editor-footer {
-    border-top: 1px solid var(--border);
-    padding: 12px 28px;
-    background: var(--bg);
+    justify-content: flex-end;
+    padding: 12px 0 0;
   }
   .editor-footer > div {
     flex-shrink: 0;

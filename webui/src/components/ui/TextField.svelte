@@ -1,4 +1,5 @@
 <script>
+  import { autosaveInput } from '$lib/autosave.js';
   // Shared text field. Covers the default input, the modal-contrast variant,
   // and the read-only value-box presentation. It uses the callback-prop pattern
   // (`value` in, `onInput(next, event)` out) rather than `bind:` so it follows
@@ -42,6 +43,7 @@
   <div {...rest} class={valueBoxClass}>{value}</div>
 {:else}
   <input
+    use:autosaveInput
     {...rest}
     class={inputClass}
     {type}

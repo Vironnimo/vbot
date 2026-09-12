@@ -216,7 +216,7 @@
   </div>
 
   <div class="skills-footer">
-    <Button variant="primary" onClick={handleManualSkillDirectoriesSave}>
+    <Button variant="tertiary" onClick={handleManualSkillDirectoriesSave}>
       {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
     </Button>
   </div>

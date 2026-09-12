@@ -337,12 +337,13 @@
     void agentDefaultsAutosave.participant.runSave('manual');
   }
 
-  async function saveAgentDefaults() {
+  async function saveAgentDefaults(reason) {
     if (!agentDefaultsDraftHasChanges()) {
       return true;
     }
 
     return runSettingsSave({
+      reason,
       onCommit,
       onToast,
       onError,
@@ -522,7 +523,7 @@
 </div>
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualAgentDefaultsSave}
   >

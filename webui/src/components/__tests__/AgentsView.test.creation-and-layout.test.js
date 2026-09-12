@@ -247,6 +247,9 @@ describe('AgentsView', () => {
       new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
     );
     flushSync();
+    await waitForCondition(
+      () => !document.querySelector('#agent-detail-panel-behavior').hidden,
+    );
     expect(document.querySelector('#agent-detail-panel-behavior').hidden).toBe(
       false,
     );

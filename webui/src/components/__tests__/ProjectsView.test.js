@@ -128,6 +128,14 @@ describe('ProjectsView', () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo' })],
     });
+    setProjectMock.mockImplementation(async (_id, changes) => {
+      const saved = project({ project_id: 'demo', ...changes });
+      listProjectsMock.mockResolvedValue({ projects: [saved] });
+      return {
+        project: saved,
+        scan: { team: [], report: { clean: true, findings: [] } },
+      };
+    });
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
     await waitForCondition(() => document.querySelector('#project-edit-name'));
@@ -138,6 +146,9 @@ describe('ProjectsView', () => {
     for (const topic of ['team', 'context', 'access', 'overview']) {
       document.querySelector(`#project-detail-tab-${topic}`).click();
       flushSync();
+      await waitForCondition(
+        () => !document.querySelector(`#project-detail-panel-${topic}`).hidden,
+      );
       const visible = Array.from(
         document.querySelectorAll('.management-topic'),
       ).filter((panel) => !panel.hidden);
@@ -294,6 +305,27 @@ describe('ProjectsView', () => {
     );
     expect(document.querySelector('.projects-team')).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeFalsy();
+  });
+
+  it('confirms a manual Save even when the Project is already saved', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    const onToast = vi.fn();
+    mountedComponent = mount(ProjectsView, {
+      target: document.body,
+      props: { onToast },
+    });
+    flushSync();
+    await selectDemo();
+    await waitForCondition(() => inputById('project-edit-name'));
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => onToast.mock.calls.length > 0);
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Already saved',
+      variant: 'success',
+    });
+    expect(setProjectMock).not.toHaveBeenCalled();
   });
 
   it('saves only the changed fields through a sparse project.set', async () => {
@@ -955,6 +987,44 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('saves the same delta independently for different Projects', async () => {
+    const records = {
+      demo: project({ project_id: 'demo', display_name: 'Demo' }),
+      other: project({ project_id: 'other', display_name: 'Other' }),
+    };
+    const scan = { team: [], report: { clean: true, findings: [] } };
+    listProjectsMock.mockImplementation(async () => ({
+      projects: Object.values(records),
+    }));
+    showProjectMock.mockImplementation(async (id) => ({
+      project: records[id],
+      scan,
+    }));
+    setProjectMock.mockImplementation(async (id, changes) => {
+      records[id] = { ...records[id], ...changes };
+      return { project: records[id], scan };
+    });
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    await waitForCondition(
+      () => inputById('project-edit-name')?.value === 'Demo',
+    );
+    setInputValue('project-edit-name', 'Shared name');
+    await wait(AUTO_SAVE_WAIT_MS);
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    buttonByTestId('project-toggle-other').click();
+    await waitForCondition(
+      () => inputById('project-edit-name')?.value === 'Other',
+    );
+    setInputValue('project-edit-name', 'Shared name');
+    await wait(AUTO_SAVE_WAIT_MS);
+    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+    expect(setProjectMock).toHaveBeenLastCalledWith('other', {
+      display_name: 'Shared name',
+    });
+  });
+
   // ── Team rows: effective values, source badges, overrides ────────────────
 
   it('expands a team member and shows effective values with source badges', async () => {
@@ -1085,12 +1155,22 @@ describe('ProjectsView', () => {
         return Promise.resolve({
           models: [
             { id: 'openai/gpt-5.2', name: 'GPT-5.2', capabilities: {} },
-            { id: 'openai/gpt-mini', name: 'GPT-mini', capabilities: {} },
+            {
+              id: 'openai/gpt-mini',
+              name: 'GPT-mini',
+              provider_id: 'openai',
+              capabilities: { tools: true },
+              context_window: 128000,
+            },
           ],
         });
       }
       if (method === 'connection.list') {
-        return Promise.resolve({ connections: [] });
+        return Promise.resolve({
+          connections: [
+            { id: 'openai:api-key', provider_id: 'openai', usable: true },
+          ],
+        });
       }
       if (method === 'settings.get') {
         return Promise.resolve({ defaults: { agent: {} } });
@@ -1104,9 +1184,9 @@ describe('ProjectsView', () => {
           member({
             agent_id: 'builder',
             display_name: 'Builder',
-            overrides: { model: 'openai/gpt-5.2' },
+            overrides: { model: 'openai/gpt-mini::api-key' },
             effective: {
-              model: { value: 'openai/gpt-5.2', source: 'override' },
+              model: { value: 'openai/gpt-mini::api-key', source: 'override' },
               temperature: { value: null, source: null },
               thinking_effort: { value: null, source: null },
             },
@@ -1126,21 +1206,22 @@ describe('ProjectsView', () => {
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();
 
-    // The draft is seeded from the effective model (openai/gpt-5.2), so Set is
-    // enabled without picking anything.
-    await waitForCondition(() =>
-      document.querySelector(
-        '[data-testid="project-override-set-model-builder"]',
-      ),
-    );
-    buttonByTestId('project-override-set-model-builder').click();
+    expect(setOverrideMock).not.toHaveBeenCalled();
+    document.getElementById('project-override-model-builder').click();
+    flushSync();
+    const option = Array.from(
+      document.querySelectorAll('[role="option"]'),
+    ).find((node) => node.textContent.includes('gpt-mini'));
+    expect(option).toBeTruthy();
+    option.click();
+    flushSync();
+    await wait(AUTO_SAVE_WAIT_MS);
 
-    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
     expect(setOverrideMock).toHaveBeenCalledWith(
       'demo',
       'builder',
       'model',
-      'openai/gpt-5.2',
+      'openai/gpt-mini::api-key',
     );
     await waitForCondition(() =>
       document.querySelector(
@@ -1283,7 +1364,7 @@ describe('ProjectsView', () => {
       inputById('project-override-temperature-builder'),
     );
     setInputValue('project-override-temperature-builder', '0,3');
-    buttonByTestId('project-override-set-temperature-builder').click();
+    await wait(AUTO_SAVE_WAIT_MS);
 
     await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
     expect(setOverrideMock).toHaveBeenCalledWith(
@@ -1400,12 +1481,8 @@ describe('ProjectsView', () => {
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();
 
-    await waitForCondition(() =>
-      document.querySelector(
-        '[data-testid="project-override-set-model-builder"]',
-      ),
-    );
-    buttonByTestId('project-override-set-model-builder').click();
+    setInputValue('project-override-temperature-builder', '0.3');
+    await wait(AUTO_SAVE_WAIT_MS);
 
     await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
     await waitForCondition(() =>

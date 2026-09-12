@@ -1,4 +1,9 @@
 <script>
+  import { onDestroy, untrack } from 'svelte';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
@@ -32,61 +37,77 @@
     formatServerHost(settings?.general?.server, t),
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
-  let keepAwakeValue = $derived(settings?.general?.keep_awake === true);
-  let timezoneValue = $derived(settings?.general?.timezone ?? 'UTC');
+  let keepAwakeValue = $state(
+    untrack(() => settings?.general?.keep_awake === true),
+  );
+  let timezoneValue = $state(
+    untrack(() => settings?.general?.timezone ?? 'UTC'),
+  );
   let timezoneOptions = $derived(
     (settings?.general?.available_timezones ?? []).map((timezone) => ({
       value: timezone,
       label: timezone,
     })),
   );
-  let savingKeepAwake = $state(false);
-  let savingTimezone = $state(false);
-
-  async function handleTimezoneChange(next) {
-    if (savingTimezone || next === timezoneValue) {
-      return;
-    }
-    savingTimezone = true;
-    onError('');
-    try {
-      const nextSettings = await updateSettings({ server: { timezone: next } });
-      onCommit(nextSettings);
+  let baselineKeepAwake = untrack(() => keepAwakeValue);
+  let baselineTimezone = untrack(() => timezoneValue);
+  $effect(() => {
+    const nextKeepAwake = settings?.general?.keep_awake === true;
+    const nextTimezone = settings?.general?.timezone ?? 'UTC';
+    untrack(() => {
+      if (keepAwakeValue === baselineKeepAwake) keepAwakeValue = nextKeepAwake;
+      if (timezoneValue === baselineTimezone) timezoneValue = nextTimezone;
+      baselineKeepAwake = nextKeepAwake;
+      baselineTimezone = nextTimezone;
+    });
+  });
+  async function manualSave() {
+    const pending = autosave.participant.hasPending();
+    if (await autosave.participant.runSave('manual'))
       onToast({
-        title: t('settings.general.timezone', 'Time zone'),
+        title: pending
+          ? t('common.saved', 'Saved')
+          : t('common.alreadySaved', 'Already saved'),
         variant: 'success',
       });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      savingTimezone = false;
-    }
   }
-
-  async function handleKeepAwakeChange(next) {
-    if (savingKeepAwake || next === keepAwakeValue) {
-      return;
-    }
-    savingKeepAwake = true;
-    onError('');
-    try {
-      const nextSettings = await updateSettings({
-        server: { keep_awake: next },
-      });
-      onCommit(nextSettings);
-      onToast({
-        title: t('settings.general.keepAwake', 'Keep computer awake'),
-        variant: 'success',
-      });
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      savingKeepAwake = false;
-    }
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () =>
+      page === 'preferences' ? timezoneValue : keepAwakeValue,
+    hasChanges: () =>
+      page === 'preferences'
+        ? timezoneValue !== (settings?.general?.timezone ?? 'UTC')
+        : keepAwakeValue !== (settings?.general?.keep_awake === true),
+    save: async () => {
+      onError('');
+      try {
+        const server =
+          page === 'preferences'
+            ? { timezone: timezoneValue }
+            : { keep_awake: keepAwakeValue };
+        onCommit(await updateSettings({ server }));
+        return true;
+      } catch (error) {
+        onError(
+          `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+        );
+        return false;
+      }
+    },
+  });
+  const unregisterAutosave = autosaveContext.register(autosave.participant);
+  onDestroy(() => {
+    unregisterAutosave();
+    autosave.cancelPendingTimer();
+  });
+  function handleTimezoneChange(next) {
+    timezoneValue = next;
+    void autosave.participant.runSave();
+  }
+  function handleKeepAwakeChange(next) {
+    keepAwakeValue = next;
+    void autosave.participant.runSave();
   }
 
   // This window's own presence id — matches the row the WebSocket registered so
@@ -192,7 +213,6 @@
         id="settings-general-timezone"
         value={timezoneValue}
         options={timezoneOptions}
-        disabled={savingTimezone}
         ariaLabel={t('settings.general.timezone', 'Time zone')}
         searchPlaceholder={t(
           'settings.general.timezoneSearch',
@@ -270,7 +290,6 @@
     <div class="s-row-control">
       <Toggle
         checked={keepAwakeValue}
-        disabled={savingKeepAwake}
         ariaLabel={t('settings.general.keepAwake', 'Keep computer awake')}
         onChange={handleKeepAwakeChange}
       />
@@ -328,3 +347,9 @@
     </div>
   {/if}
 {/if}
+
+<div class="s-footer">
+  <Button variant="tertiary" onClick={manualSave}
+    >{t('common.save', 'Save')}</Button
+  >
+</div>

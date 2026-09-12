@@ -105,11 +105,12 @@
     void debugAutosave.participant.runSave('manual');
   }
 
-  async function saveDebugSettings() {
+  async function saveDebugSettings(reason) {
     if (debugSettingsMatch(debugSettings, getDebugSettings(settings))) {
       return true;
     }
 
+    const submitted = JSON.stringify(debugSettings);
     const nextEnabled = debugSettings.enabled === true;
     saving = true;
     onError('');
@@ -119,9 +120,11 @@
         debug: getDebugSettings({ debug: debugSettings }),
       });
       onCommit(nextSettings);
-      debugSettings = getDebugSettings(nextSettings);
+      if (JSON.stringify(debugSettings) === submitted)
+        debugSettings = getDebugSettings(nextSettings);
       onDebugEnabledChange(nextEnabled);
-      onToast({ title: t('debug.settings', 'Debug'), variant: 'success' });
+      if (reason === 'manual')
+        onToast({ title: t('debug.settings', 'Debug'), variant: 'success' });
       return true;
     } catch (error) {
       onError(
@@ -236,7 +239,7 @@
 
 <div class="s-footer">
   <Button
-    variant="primary"
+    variant="tertiary"
     class="s-save-button s-save-button--inline"
     onClick={handleManualDebugSettingsSave}
   >

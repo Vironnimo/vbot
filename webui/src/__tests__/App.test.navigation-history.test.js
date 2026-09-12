@@ -440,7 +440,7 @@ describe('App', () => {
     });
   });
 
-  it('flushes a pending Settings autosave before switching app tabs', async () => {
+  it('flushes edits before the latest requested tab and guards closing while pending', async () => {
     const settingsRpc = createSettingsRpcMock();
     let resolveUpdate;
     rpcMock.mockImplementation((method, params) => {
@@ -481,10 +481,20 @@ describe('App', () => {
     );
     expect(document.querySelector('#logs-title')).toBeFalsy();
 
+    const pendingUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(pendingUnload);
+    expect(pendingUnload.defaultPrevented).toBe(true);
+    sidebarNavButton('Projects')?.click();
+    flushSync();
     resolveUpdate();
     await waitForCondition(() => {
-      expect(document.querySelector('#logs-title')).toBeTruthy();
+      expect(sidebarNavButton('Projects')?.getAttribute('aria-current')).toBe(
+        'page',
+      );
     });
+    const savedUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(savedUnload);
+    expect(savedUnload.defaultPrevented).toBe(false);
   });
 
   it('saves an Agent tool change before leaving the Agents tab', async () => {

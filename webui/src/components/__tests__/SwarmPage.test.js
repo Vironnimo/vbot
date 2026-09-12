@@ -784,6 +784,9 @@ describe('SwarmPage', () => {
     flushSync();
     await choose('swarm-model-0', 'demo/model');
     fill('swarm-directory', 'C:/work');
+    button('Communication').click();
+    await tick();
+    fill('swarm-coalesce', '350');
     button('System Prompt').click();
     await tick();
     fill('swarm-instructions', 'unsaved-sentinel');
@@ -795,6 +798,7 @@ describe('SwarmPage', () => {
       expect.objectContaining({
         profile: expect.objectContaining({
           instructions: 'unsaved-sentinel',
+          delivery: expect.objectContaining({ coalesce_ms: 350 }),
           prompt_blocks: ['core:tools', 'core:skills'],
         }),
         formation_index: 0,
