@@ -20,6 +20,7 @@ from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission
 from core.sessions import SessionAddress, TemporarySessionBinding
 from core.tools import ToolContext, tool_success
+from core.tools.contracts import compile_tool_contract
 from core.utils.ids import new_id
 
 from ._extension_values import (
@@ -58,6 +59,27 @@ from .agent_text import (
 from .store import SwarmStore, SwarmStoreError
 
 __all__ = ["Json", "SwarmExtension", "register"]
+
+
+_RUNTIME_CONTRACTS = {
+    name: compile_tool_contract(
+        name=name,
+        input_schema={
+            **parameters,
+            "properties": {
+                **parameters["properties"],
+                **({"action": {"type": "string", "enum": [action]}} if action else {}),
+                **{field: {"type": "string"} for field in ("swarm_id", "participant_id", "sender")},
+            },
+        },
+        require_closed_input=False,
+    )
+    for name, parameters, action in (
+        ("swarm_board", BOARD_PARAMETERS, None),
+        ("swarm_inbox", INBOX_PARAMETERS, "receive"),
+        ("swarm_state", STATE_PARAMETERS, "status"),
+    )
+}
 
 
 class SwarmExtension:
@@ -145,10 +167,25 @@ class SwarmExtension:
             raise SwarmStoreError("swarm_closed")
         return binding, swarm
 
+    async def _bound_arguments(
+        self, context: ToolContext, arguments: Json
+    ) -> tuple[TemporarySessionBinding, Json, Json]:
+        arguments = _RUNTIME_CONTRACTS[context.tool_name].normalize_arguments(arguments)
+        binding, swarm = await self._participant(context)
+        identities = {
+            "swarm_id": binding.group_id,
+            "participant_id": binding.participant_id,
+            "sender": binding.participant_id,
+        }
+        for field, identity in identities.items():
+            if field in arguments and arguments.pop(field) != identity:
+                raise SwarmStoreError("scope_mismatch", field=field)
+        return binding, swarm, arguments
+
     async def board(self, context: ToolContext, arguments: Json) -> Json:
         try:
+            binding, swarm, arguments = await self._bound_arguments(context, arguments)
             action = _validate_board(arguments)
-            binding, swarm = await self._participant(context)
             store = self._store()
             sid, pid = binding.group_id, binding.participant_id
             if action == "list":
@@ -221,13 +258,15 @@ class SwarmExtension:
 
     async def inbox(self, context: ToolContext, arguments: Json) -> Json:
         try:
+            binding, _swarm, arguments = await self._bound_arguments(context, arguments)
+            if arguments.get("action") == "receive":
+                arguments.pop("action")
             unexpected = sorted(set(arguments) - {"limit"})
             if unexpected:
                 raise SwarmStoreError("invalid_arguments", field=unexpected[0])
             limit = arguments.get("limit", 20)
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise SwarmStoreError("invalid_arguments", field="limit")
-            binding, _swarm = await self._participant(context)
             prepared = await self._store().prepare_inbox_delivery(
                 binding.group_id, binding.participant_id, limit=limit
             )
@@ -249,8 +288,10 @@ class SwarmExtension:
 
     async def state(self, context: ToolContext, arguments: Json) -> Json:
         try:
+            binding, _, arguments = await self._bound_arguments(context, arguments)
+            if arguments.get("action") == "status":
+                arguments.pop("action")
             _validate_state(arguments)
-            binding, _ = await self._participant(context)
             data = await self._store().participant_status(
                 binding.group_id,
                 binding.participant_id,

@@ -202,7 +202,6 @@ class ExtensionAPI:
                 handler=handler,
                 catalog_visible=False,
                 open_input_schema=True,
-                coerce_arguments=False,
                 session_scoped=True,
                 activation="session_grant",
                 **kwargs,

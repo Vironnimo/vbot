@@ -164,6 +164,13 @@ def _failure(
     error: SwarmStoreError, arguments: Json | None = None, parameters: Json | None = None
 ) -> Json:
     code = error.code
+    if code == "scope_mismatch":
+        return tool_failure(
+            "invalid_arguments",
+            f"{error.field} does not match this Session's Swarm or participant. "
+            "Omit it only if you intend to use this Session's bound identity. "
+            "No change was applied.",
+        )
     if code in {"stale_epoch", "swarm_not_found"}:
         code = "swarm_closed"
     elif code == "participant_not_found":

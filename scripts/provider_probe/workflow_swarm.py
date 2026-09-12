@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from core.providers.tool_schema import render_tool_definitions
 from core.tools.contracts import ToolContractError
@@ -274,15 +274,13 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             invalids = [
                 {},
                 {"action": "unsupported"},
-                {"action": "list", "swarm_id": sid},
-                {"action": "list", "sender": pid},
+                {"action": "list", "swarm_id": "foreign"},
+                {"action": "list", "sender": "foreign"},
                 {"action": "read", "text": "wrong"},
                 {"action": "list", "limit": True},
-                {"action": "list", "limit": "1"},
                 {"action": "list", "limit": 0},
                 {"action": "list", "limit": 101},
                 {"action": "read", "message_id": topic["opening_post_id"], "limit": 20},
-                {"action": "read", "cursor": None},
                 {"action": "post", "text": "missing request"},
                 {"action": "post", "request_id": "missing-text"},
                 {**post, "text": "", "request_id": "empty"},
@@ -290,7 +288,18 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 {"action": "join"},
                 {"action": "leave"},
             ]
-            cases.extend((f"invalid_{index}", value, False) for index, value in enumerate(invalids))
+            cases.extend(
+                [
+                    ("recovered_count", {"action": "list", "limit": "1"}, True),
+                    ("recovered_scope", {"action": "list", "swarm_id": sid, "sender": pid}, True),
+                    ("recovered_cursor", {"action": "read", "cursor": None}, True),
+                    ("recovered_wrapper", {"request": {"operation": "LIST", "limti": "1.0"}}, True),
+                ]
+            )
+            cases.extend(
+                (f"invalid_{index}", cast(dict[str, Any], value), False)
+                for index, value in enumerate(invalids)
+            )
             cases.extend(
                 [
                     (
@@ -334,20 +343,22 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("receive_default", {}, True),
                     ("receive_max", {"limit": 100}, True),
                     ("receive_empty", {}, True),
+                    ("recovered_count", {"limit": "1"}, True),
+                    ("recovered_default", {"limit": None}, True),
+                    ("recovered_action", {"action": "receive"}, True),
+                    ("recovered_wrapper", {"receive": {"limti": "1"}}, True),
+                    ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
                 ]
                 cases.extend(
-                    (f"invalid_{index}", value, False)
+                    (f"invalid_{index}", cast(dict[str, Any], value), False)
                     for index, value in enumerate(
                         [
-                            {"action": "receive"},
-                            {"swarm_id": sid},
-                            {"participant_id": pid},
+                            {"swarm_id": "foreign"},
+                            {"participant_id": "foreign"},
                             {"cursor": "invented"},
                             {"limit": True},
-                            {"limit": "1"},
                             {"limit": 0},
                             {"limit": 101},
-                            {"limit": None},
                             {"limit": 1.5},
                         ]
                     )
@@ -357,6 +368,11 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 status = await store.participant_status(sid, pid, limit=1)
                 cases = [
                     ("status_default", {}, True),
+                    ("recovered_count", {"limit": "1"}, True),
+                    ("recovered_cursor", {"cursor": None}, True),
+                    ("recovered_action", {"action": "status"}, True),
+                    ("recovered_wrapper", {"request": {"operation": "STATUS", "limit": "1"}}, True),
+                    ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
                     ("status_one", {"limit": 1}, True),
                     ("status_max", {"limit": 100}, True),
                     (
@@ -385,18 +401,15 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("name_field_rejected", {"name": "Analyst"}, False),
                 ]
                 cases.extend(
-                    (f"invalid_{index}", value, False)
+                    (f"invalid_{index}", cast(dict[str, Any], value), False)
                     for index, value in enumerate(
                         [
-                            {"action": "status"},
                             {"action": "unsupported"},
-                            {"swarm_id": sid},
-                            {"participant_id": pid},
+                            {"swarm_id": "foreign"},
+                            {"participant_id": "foreign"},
                             {"limit": True},
-                            {"limit": "1"},
                             {"limit": 0},
                             {"limit": 101},
-                            {"cursor": None},
                             {"cursor": "foreign"},
                             {"include_summaries": "true"},
                             {"include_summaries": None},
@@ -462,11 +475,24 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     )
                 response = adapter.normalize_response(raw, model_id=args.model)
                 calls = response.get("tool_calls") or []
-                valid_call = (
-                    len(calls) == 1
-                    and calls[0].get("name") == tool_name
-                    and calls[0].get("arguments") == expected
-                )
+                valid_call = len(calls) == 1 and calls[0].get("name") == tool_name
+                if valid_call:
+                    from resources.extensions.swarm.extension import _RUNTIME_CONTRACTS
+
+                    contract = _RUNTIME_CONTRACTS[tool_name]
+                    try:
+                        actual = contract.normalize_arguments(calls[0].get("arguments"))
+                        wanted = contract.normalize_arguments(expected)
+                        # These redundant action labels select the only available operation.
+                        if tool_name in {"swarm_inbox", "swarm_state"}:
+                            for values in (actual, wanted):
+                                if isinstance(values, dict) and values.get("action") in {
+                                    "receive" if tool_name == "swarm_inbox" else "status"
+                                }:
+                                    values.pop("action")
+                        valid_call = actual == wanted
+                    except ToolContractError:
+                        valid_call = calls[0].get("arguments") == expected
                 success = False
                 actual_code = None
                 durable = True
@@ -474,7 +500,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     call_context = replace(context, tool_call_id=f"{name}-{calls[0]['id']}")
                     try:
                         result = await registry.dispatch(
-                            call_context, expected, allowed_tools=[tool_name]
+                            call_context, calls[0]["arguments"], allowed_tools=[tool_name]
                         )
                         success = result["ok"]
                         actual_code = (result.get("error") or {}).get("code")
@@ -510,6 +536,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 row = {
                     "case": name,
                     "model_call_valid": valid_call,
+                    "arguments": calls[0].get("arguments") if len(calls) == 1 else None,
                     "runtime_ok": success,
                     "expected_ok": should_succeed,
                     "error_code": actual_code,
