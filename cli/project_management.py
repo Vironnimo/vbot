@@ -21,6 +21,7 @@ from typing import Any
 
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -370,12 +371,15 @@ def _format_project_row(project: object) -> str:
     display_name = _string_or_default(project.get("display_name"), "?")
     cwd = _string_or_default(project.get("cwd"), "-")
     default_agent = _string_or_default(project.get("default_agent"), "-")
-    return (
-        f"- id={project_id}"
-        f" name={display_name}"
-        f" cwd={cwd}"
-        f" cwd_exists={_bool_text(project.get('cwd_exists'))}"
-        f" default_agent={default_agent}"
+    return record_fields(
+        [
+            f"- id={project_id}",
+            f" name={display_name}",
+            f" cwd={cwd}",
+            f" cwd_exists={_bool_text(project.get('cwd_exists'))}",
+            f" default_agent={default_agent}",
+        ],
+        separator="",
     )
 
 

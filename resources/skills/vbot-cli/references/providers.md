@@ -6,26 +6,26 @@
 vbot provider list
 vbot provider status <provider-id> [--connection <provider:connection-id>]
 vbot provider usage [--connection <provider:connection-id>]...
-vbot provider usage-history [--since <iso>] [--until <iso>]
-vbot provider usage-history-clear --yes
+vbot provider history list [--since <iso>] [--until <iso>]
+vbot provider history clear --yes
 ```
 
 `provider list` (also `providers list`) groups Connections by Provider and shows a readable state alongside exact ids, Account names, and local endpoint reachability. Use `vbot provider list --details` for all enabled/usable fields and credential sources, or `provider status <provider-id>` for one Provider. Configured means enabled with credentials; this listing does not test upstream access. Use it when selecting a Connection or diagnosing missing Models.
 
-`provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider usage-history [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider usage-history-clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token totals.
+`provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider history list [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider history clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token totals.
 
 ## Custom Providers
 
 ```bash
-vbot provider custom-list
-vbot provider custom-save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key-stdin] [--models-endpoint /models] [--model <wire-id>]...
-vbot provider custom-delete <provider-id>
+vbot provider custom list
+vbot provider custom save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key-stdin] [--models-endpoint /models] [--model <wire-id>]...
+vbot provider custom delete <provider-id>
 ```
 
 - Custom Providers are secret-free Settings records with one implicit `default` Connection. The current Adapter is `openai_compatible`.
-- `custom-save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
+- `custom save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
 - `--api-key-stdin` reads the key from UTF-8 stdin and stores it under the generated data-dir `.env` key. Never echo it. Omission preserves the stored key; changing the Provider record still replaces its complete non-secret configuration.
-- `custom-delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
+- `custom delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
 
 ## Enable / disable a connection
 
@@ -42,28 +42,28 @@ vbot provider disable <provider-id> [--connection <provider:connection-id>]
 ## API-key credentials
 
 ```bash
-vbot provider set-key <provider-id> --stdin [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
-vbot provider unset-key <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+vbot provider key set <provider-id> --stdin [--connection <provider:connection-id>] [--account <account-id>] [--refresh-models]
+vbot provider key unset <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
-- Supply the key through UTF-8 stdin. `set-key` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
+- Supply the key through UTF-8 stdin. `key set` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
 - `--connection` is required only when the provider has more than one API-key connection.
 - Add `--refresh-models` to discover Models after saving the key. If discovery fails, the command exits nonzero and reports both the saved key and failed refresh. Correct the connection, then retry `model refresh`; do not resend the key just to retry discovery.
-- `unset-key` removes only data-dir `.env` keys; a credential set in the process environment is out of its reach and stays usable.
+- `key unset` removes only data-dir `.env` keys; a credential set in the process environment is out of its reach and stays usable.
 
 ## OAuth device flow
 
-`vbot provider connect openai` starts the Subscription sign-in. When `--connection` is omitted, connect, connect-status, and disconnect select the Provider's only OAuth Connection. Multiple candidates require an explicit `--connection`; API-key Connections are never selected for OAuth. The response names the exact Connection and Account for subsequent checks.
+`vbot provider connect openai` starts the Subscription sign-in. When `--connection` is omitted, `connect`, `connection status`, and `disconnect` select the Provider's only OAuth Connection. Multiple candidates require an explicit `--connection`; API-key Connections are never selected for OAuth. The response names the exact Connection and Account for subsequent checks.
 
-OAuth/subscription connections use the device flow instead of `set-key` (`set-key` rejects OAuth connections, `connect` rejects API-key connections):
+OAuth/subscription connections use the device flow instead of `key set` (`key set` rejects OAuth connections, `connect` rejects API-key connections):
 
 ```bash
 vbot provider connect <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
-vbot provider connect-status <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+vbot provider connection status <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 vbot provider disconnect <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
-`connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connect-status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
+`connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connection status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
 
 ## Accounts — multiple credentials per connection
 
@@ -90,29 +90,29 @@ Bind a specialized task to a model target. Task types: `image_generation`, `imag
 ```bash
 vbot task-model list
 vbot task-model status <task-type>
-vbot task-model targets <task-type>
-vbot task-model options <task-type> [<target-id>]
+vbot task-model target list <task-type>
+vbot task-model option list <task-type> [<target-id>]
 vbot task-model set <task-type> <target-id> [--option <name> <value>]...
 vbot task-model set <task-type> <target-id> [--options '<json-object>' | --options-stdin]
-vbot task-model set-option <task-type> <name> [<value> | --stdin]
-vbot task-model unset-option <task-type> <name>
+vbot task-model option set <task-type> <name> [<value> | --stdin]
+vbot task-model option unset <task-type> <name>
 vbot task-model clear <task-type>
 ```
 
-- Read target ids from `targets` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `targets` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
-- Run `options <task-type> <target-id>` before the first binding. After a binding exists, omit the target to inspect its `fields`, `configured_options`, and default-merged `effective_options`.
+- Read target ids from `target list` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `target list` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
+- Run `option list <task-type> <target-id>` before the first binding. After a binding exists, omit the target to inspect its `fields`, `configured_options`, and default-merged `effective_options`.
 - Prefer repeated `--option <name> <value>` over `--options` for ordinary setup; scalar values are parsed as JSON types when possible. Use `--options` only when replacing the complete option object is intentional. On shells that alter JSON quoting, pipe the object to `--options-stdin` instead.
-- Use `set-option` and `unset-option` for later changes. They preserve every sibling option and reject unknown names, invalid select values, wrong types, and out-of-range numbers before persistence. For object-valued options such as `extra_options`, pipe JSON to `set-option ... --stdin` so shell quoting cannot corrupt it.
-- A Model's `supported_voices` and the `voice` choices returned by `task-model options` are exact ids. Never shorten them, invent a friendly name, or reuse a voice from a different Model.
+- Use `option set` and `option unset` for later changes. They preserve every sibling option and reject unknown names, invalid select values, wrong types, and out-of-range numbers before persistence. For object-valued options such as `extra_options`, pipe JSON to `option set ... --stdin` so shell quoting cannot corrupt it.
+- A Model's `supported_voices` and the `voice` choices returned by `task-model option list` are exact ids. Never shorten them, invent a friendly name, or reuse a voice from a different Model.
 - `set` changes only the given task type; other bindings stay untouched. Changing its target without options starts from the new target's defaults and never carries options from the old Model.
 
 ```bash
 vbot model show openrouter/microsoft/mai-voice-2
-vbot task-model targets text_to_speech
-vbot task-model options text_to_speech openrouter/microsoft/mai-voice-2::api-key
+vbot task-model target list text_to_speech
+vbot task-model option list text_to_speech openrouter/microsoft/mai-voice-2::api-key
 vbot task-model set text_to_speech openrouter/microsoft/mai-voice-2::api-key --option voice en-us-harper:mai-voice-2
-vbot task-model set-option text_to_speech speed 1.1
-vbot task-model options text_to_speech
+vbot task-model option set text_to_speech speed 1.1
+vbot task-model option list text_to_speech
 vbot task-model set text_embedding openai/text-embedding-3-small::api-key
-# PowerShell: '{"some_provider_field":true}' | vbot task-model set-option text_to_speech extra_options --stdin
+# PowerShell: '{"some_provider_field":true}' | vbot task-model option set text_to_speech extra_options --stdin
 ```

@@ -32,7 +32,14 @@ def extensions_list(instance: ServerInstance) -> CommandResult:
     extensions = _load_extensions(instance)
     if isinstance(extensions, CommandResult):
         return extensions
-    return CommandResult(ok=True, message=_format_extension_rows(extensions), instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_extension_rows(extensions),
+        instance=instance,
+        attention=("Some Extensions failed to load; see their diagnostics",)
+        if any(isinstance(item, dict) and item.get("status") == "failed" for item in extensions)
+        else (),
+    )
 
 
 def extensions_reload(instance: ServerInstance) -> CommandResult:
@@ -333,7 +340,7 @@ def _format_extension_settings(record: dict[str, Any]) -> str:
     for declaration in schema:
         if isinstance(declaration, dict):
             lines.append(_format_settings_field(declaration, config))
-    lines.append(f"set with: vbot extensions {name} set <field> <value>")
+    lines.append(f"set with: vbot extensions set {name} <field> <value>")
     return "\n".join(lines)
 
 
@@ -444,7 +451,7 @@ def _format_waiting(extension: dict[str, object]) -> str:
     return (
         f"waiting for configuration{suffix}: "
         f"run 'vbot extensions {name}' to see its settings, then "
-        f"'vbot extensions {name} set <field> <value>' (or Settings > Extensions)"
+        f"'vbot extensions set {name} <field> <value>' (or Settings > Extensions)"
     )
 
 

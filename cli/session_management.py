@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
+from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -258,20 +259,22 @@ def _format_session_row(session: object) -> str:
     session_id = _string_or_default(session.get("id"), "?")
     created_at = _string_or_default(session.get("created_at"), "-")
     last_active_at = _string_or_default(session.get("last_active_at"), "-")
-    line = f"- id={session_id} created_at={created_at} last_active_at={last_active_at}"
+    fields = [f"- id={session_id}", f"created_at={created_at}", f"last_active_at={last_active_at}"]
     title = session.get("title")
     if isinstance(title, str) and title:
-        line = f"{line} title={json.dumps(title, ensure_ascii=False)}"
+        fields.append(f"title={json.dumps(title, ensure_ascii=False)}")
     source_channel_id = session.get("source_channel_id")
     if isinstance(source_channel_id, str) and source_channel_id:
-        line = f"{line} channel={source_channel_id}"
+        fields.append(f"channel={source_channel_id}")
     if "compaction_policy_override" in session:
-        line = f"{line} compaction_override={_json_text(session.get('compaction_policy_override'))}"
-    if "compaction_policy_effective" in session:
-        line = (
-            f"{line} compaction_effective={_json_text(session.get('compaction_policy_effective'))}"
+        fields.append(
+            f"compaction_override={_json_text(session.get('compaction_policy_override'))}"
         )
-    return line
+    if "compaction_policy_effective" in session:
+        fields.append(
+            f"compaction_effective={_json_text(session.get('compaction_policy_effective'))}"
+        )
+    return record_fields(fields)
 
 
 def _json_text(value: object) -> str:

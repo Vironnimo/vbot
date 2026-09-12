@@ -55,6 +55,7 @@ from cli._dispatch_operations import (
 from cli._output import (
     FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
+    command_arguments,
     exit_code_for,
     print_channel_command_result,
     print_command_result,
@@ -63,6 +64,7 @@ from cli._output import (
     print_server_command_start,
     print_update_command_result,
     print_update_command_start,
+    with_command_output,
 )
 from cli._progress import ProgressPrinter
 from cli.agent_management import (
@@ -128,6 +130,7 @@ from cli.update_management import read_checkout_version
 from core.utils.config import VBOT_ROOT, Config
 
 
+@with_command_output
 def run(
     argv: Sequence[str] | None = None,
     *,
@@ -221,7 +224,7 @@ def run(
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
-    args = parse_args(argv)
+    args = command_arguments()
     if args.area == "home":
         config = Config(data_dir=Path(args.data_dir) if args.data_dir is not None else None)
         print(f"vbot_root: {VBOT_ROOT}")

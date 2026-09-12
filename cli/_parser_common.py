@@ -15,6 +15,40 @@ from core.models import MODEL_TASK_ORDER
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.config import DEFAULT_HOST
 
+# Public paths are registered here, alongside their compatibility spellings.
+# Dispatch keeps its existing action ids; help teaches the readable paths.
+COMMAND_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
+    "project": {
+        "set-override": ("override", "set"),
+        "clear-override": ("override", "clear"),
+        "rm": ("remove",),
+    },
+    "session": {"set-compaction-policy": ("policy", "set"), "link-channel": ("channel", "link")},
+    "channel": {
+        "set-token": ("token", "set"),
+        "grant-admin": ("admin", "grant"),
+        "revoke-admin": ("admin", "revoke"),
+    },
+    "prompt": {"set-layout": ("layout", "set"), "reset-layout": ("layout", "reset")},
+    "provider": {
+        "set-key": ("key", "set"),
+        "unset-key": ("key", "unset"),
+        "connect-status": ("connection", "status"),
+        "usage-history": ("history", "list"),
+        "usage-history-clear": ("history", "clear"),
+        "custom-list": ("custom", "list"),
+        "custom-save": ("custom", "save"),
+        "custom-delete": ("custom", "delete"),
+    },
+    "task-model": {
+        "set-option": ("option", "set"),
+        "unset-option": ("option", "unset"),
+        "options": ("option", "list"),
+        "targets": ("target", "list"),
+    },
+    "skill": {"write-file": ("file", "write"), "remove-file": ("file", "remove")},
+}
+
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
 
 
@@ -368,7 +402,24 @@ def _add_command_parser(
     *,
     example: str | None = None,
 ) -> argparse.ArgumentParser:
+    original_subparsers = subparsers
+    area = subparsers._prog_prefix.removeprefix("vbot ")
+    path = COMMAND_PATHS.get(area, {}).get(command, (command,))
+    if example is not None:
+        example = example.replace(f"{area} {command}", f"{area} {' '.join(path)}", 1)
+    for group in path[:-1]:
+        if group not in subparsers.choices:
+            group_parser = subparsers.add_parser(group, help=f"Manage {group.replace('-', ' ')}")
+            group_parser.add_subparsers(dest=argparse.SUPPRESS, required=True)
+        subparsers = next(
+            action
+            for action in subparsers.choices[group]._actions
+            if isinstance(action, argparse._SubParsersAction)
+        )
     description = help_text if example is None else f"{help_text}. Example: vbot {example}"
-    command_parser = subparsers.add_parser(command, help=help_text, description=description)
+    command_parser = subparsers.add_parser(path[-1], help=help_text, description=description)
+    if path != (command,):
+        command_parser.set_defaults(command=command)
+        original_subparsers.choices[command] = command_parser
     _add_target_arguments(command_parser)
     return command_parser

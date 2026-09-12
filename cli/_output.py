@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
+from collections.abc import Callable
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
+from typing import ParamSpec
 
-from cli._progress import Status, status_line
+from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._update_types import UpdateResult
+from cli.formatting import output_mode
+from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import UNKNOWN_VBOT_VERSION
 
@@ -14,9 +22,77 @@ SUCCESS_EXIT_CODE = 0
 
 FAILURE_EXIT_CODE = 1
 
+_P = ParamSpec("_P")
+_arguments: ContextVar[argparse.Namespace] = ContextVar("cli_arguments")
+_last_result: ContextVar[CommandResult | None] = ContextVar("cli_last_result", default=None)
+
+
+def command_arguments() -> argparse.Namespace:
+    return _arguments.get()
+
+
+def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
+    """Own presentation for every command, including injected operations in tests."""
+
+    @wraps(function)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> int:
+        argv = args[0] if args else kwargs.get("argv")
+        parsed = parse_args(argv)  # type: ignore[arg-type]
+        arguments_token = _arguments.set(parsed)
+        mode_token = output_mode.set(getattr(parsed, "output", "auto"))
+        result_token = _last_result.set(None)
+        path = parsed._command_path
+        try:
+            with ProgressPrinter(stream=sys.stderr) as progress:
+                progress_token = current_progress.set(progress if parsed.area != "update" else None)
+                if output_mode.get() != "plain" and parsed.area != "update":
+                    progress.track(f"Waiting for {path}")
+                try:
+                    code = function(*args, **kwargs)
+                except KeyboardInterrupt:
+                    sys.stdout.flush()
+                    print(
+                        status_line(
+                            "warning",
+                            f"{path}: interrupted. Check the same target before repeating "
+                            "a mutation; it may already have taken effect.",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 130
+                finally:
+                    current_progress.reset(progress_token)
+            if output_mode.get() != "plain" and parsed.area not in {"server", "update", "doctor"}:
+                result = _last_result.get()
+                attention = result.attention if result else ()
+                state: Status = "error" if code else "warning" if attention else "success"
+                summary = (
+                    "; ".join(attention)
+                    if attention
+                    else ("command completed" if not code else "command failed; see details")
+                )
+                sys.stdout.flush()
+                print(
+                    status_line(state, f"{path}: {summary}", stream=sys.stderr),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return code
+        finally:
+            _last_result.reset(result_token)
+            output_mode.reset(mode_token)
+            _arguments.reset(arguments_token)
+
+    return wrapped
+
 
 def print_server_command_start(command: str, instance: ServerInstance) -> None:
     """Announce a server lifecycle operation before it can block."""
+
+    if output_mode.get() == "plain":
+        return
 
     actions = {
         "start": "Starting",
@@ -51,13 +127,15 @@ def print_command_result(command: str, result: CommandResult) -> None:
         or (command != "stop" and result.webui is not None and not result.webui.available)
     ):
         state = "warning"
-    lines.append(status_line(state, _server_completion_message(command, result)))
+    if output_mode.get() != "plain":
+        lines.append(status_line(state, _server_completion_message(command, result)))
     print("\n".join(lines))
 
 
 def print_channel_command_result(command: str, result: CommandResult) -> None:
     """Print deterministic plain-text channel command output."""
 
+    _last_result.set(result)
     lines = [
         f"command: channel {command}",
         f"result: {_result_message(result)}",
@@ -70,11 +148,15 @@ def print_channel_command_result(command: str, result: CommandResult) -> None:
 def print_management_command_result(result: CommandResult) -> None:
     """Print plain-text output for non-channel RPC management command areas."""
 
+    _last_result.set(result)
     print(_result_message(result))
 
 
 def print_update_command_start(version: str) -> None:
     """Announce the self-update before its long-running work begins."""
+
+    if output_mode.get() == "plain":
+        return
 
     if version == UNKNOWN_VBOT_VERSION:
         print(
@@ -123,7 +205,7 @@ def print_update_command_result(
 def print_config_command_result(result: CommandResult) -> None:
     """Print deterministic plain-text config command output."""
 
-    print(_result_message(result))
+    print_management_command_result(result)
 
 
 def _result_message(result: CommandResult) -> str:
