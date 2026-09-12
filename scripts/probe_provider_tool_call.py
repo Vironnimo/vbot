@@ -124,7 +124,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
-        "--mcp-workflow-case", choices=("render", "no_match", "large_result"), default="render"
+        "--mcp-workflow-case",
+        choices=("render", "no_match", "large_result", "tolerance_true", "tolerance_false"),
+        default="render",
     )
     parser.add_argument(
         "--optional-case",

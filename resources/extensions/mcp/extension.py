@@ -18,6 +18,7 @@ from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
 from core.projects.address import format_agent_address, parse_agent_address
 from core.tools.availability import resolve_tool_access
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     ToolContext,
     ToolDefinitionProfile,
@@ -491,6 +492,18 @@ class MCPService:
                 payload["call"] = {"action": "call", "target": entry["target"]}
             return await self._present(runner, context, payload, source=source)
         inputs = arguments.get("arguments", {})
+        try:
+            contract = compile_tool_contract(
+                name="mcp_target", input_schema=schema, require_closed_input=False
+            )
+            inputs = contract.normalize_arguments(inputs)
+        except ToolContractError as repair_error:
+            return tool_failure(
+                "mcp_invalid_arguments",
+                MCP_MESSAGES["target_invalid"].format(
+                    pointer="/arguments", detail=runner._redact(str(repair_error))[:500]
+                ),
+            )
         error = next(Draft202012Validator(schema).iter_errors(inputs), None)
         if error is not None:
             pointer = "/arguments" + "".join(
