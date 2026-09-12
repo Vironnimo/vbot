@@ -18,9 +18,9 @@ Every finding carries a recommended refactor — that is the point of the audit.
 
 ## Dimensions
 
-Each dimension = a cheap signal to find candidates + a judgment rule to confirm (with its "legitimate when…" escape) + the remediation the finding recommends. **Size and similarity are signals, never the finding itself.**
+Each dimension combines candidate discovery, confirmation and a recommended refactor. Oversized source files are independently actionable because of their reading/editing context cost; similarity and the other structural signals still need confirmation.
 
-1. **Oversized files** — *Signal:* files at/over the file-size soft limit `PROJECT.md` sets, or far larger than their siblings. *Judge:* one deep responsibility that is legitimately large, or several responsibilities bundled? *Legitimate when:* a single cohesive capability that would only fragment if split. *Recommend:* split by responsibility into a deeper owner, or record why it stays.
+1. **Oversized files** — *Inventory:* source files at/over the file-size soft limit in `PROJECT.md`, or far larger than their siblings. *Judge:* identify the context a typical edit actually requires and the internal boundaries that allow focused reading. Cohesion does not cancel the size finding. *Recommend:* split cohesive implementations internally under the same owner; separate owners only when responsibilities warrant it. Do not use arbitrary chunks, method-binding tables or formatting compression. Track every oversized candidate through implementation or explicit deferral.
 2. **Shallow modules** — *Signal:* a module/file whose public surface is nearly as large as its implementation; mostly delegation/pass-through; a thin wrapper; a folder-module whose main file just re-exports. *Judge:* does it hide complexity / add an abstraction, or is it a relay callers could skip? *Legitimate when:* it's a deliberate seam (a Protocol boundary, an injection point) that hides a real choice. *Recommend:* fold it back into the caller, or deepen it until it earns its interface.
 3. **Duplicate / near-duplicate logic** — *Signal:* repeated blocks, parallel implementations of the same concern across files or domains (recurring names, copied literals, twin functions). *Judge:* one concept with two homes, or coincidental shape? *Legitimate when:* the similarity is superficial and coupling them would marry unrelated things. *Recommend:* extract to a single owner (name it).
 4. **Domain boundary violations (outliers)** — *Signal:* logic or imports crossing a declared layer/domain line — business logic in the transport/UI layer, an accessor importing project code it must not, a domain reaching into another domain's internals, data/IO outside its owning layer. Check the relevant root map first; load a supplementary file only when its trigger matches the candidate's task-specific behavior. *Judge:* does the source behavior contradict the intended owner/boundary or a relevant documented contract? *Legitimate when:* the declared boundary explicitly allows it. *Recommend:* move the code to its owner, or classify the finding as documentation drift when source/tests and explicit project decisions show the map is stale.
@@ -31,8 +31,8 @@ Each dimension = a cheap signal to find candidates + a judgment rule to confirm 
 
 The value of this audit is a short list of real findings, not a long list of suspicions.
 
-- **A signal is a suspect, not a finding.** Confirm against the judgment rule and the source-of-truth docs before it enters the report.
-- **Big ≠ bad, similar ≠ duplicate, off-the-list ≠ wrong.** Each dimension's "legitimate when" is a real exit — use it.
+- **Confirm structural suspicions against source and contracts.** For size findings, confirm the file's role and recommend meaningful internal boundaries; do not dismiss the context cost because the owner is cohesive.
+- **Similar does not imply duplicate; off-the-list does not imply wrong.** Preserve justified domain boundaries while reducing oversized implementation files.
 - **Never recommend a cure worse than the disease.** Weigh refactor cost and risk against the pain; a costly refactor for a cosmetic issue is itself a bad recommendation.
 - **The map might be wrong, not the code.** Use source/tests for implemented behavior and the root plus any trigger-matched supplement for the documented boundary/contract. Classify the survivor explicitly as a code boundary violation or documentation drift; do not silently choose one.
 
