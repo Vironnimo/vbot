@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from core.tools._tool_context import ToolHandler
 from core.tools._tool_display import ToolDisplay
@@ -156,6 +157,9 @@ class Tool:
     # and per-item validation; the precise Provider schema remains unchanged.
     handler_validates_arguments: bool = False
     coerce_arguments: bool = True
+    argument_normalizer: Callable[[Any], Any] | None = field(
+        default=None, repr=False, compare=False
+    )
     definition_profile_resolver: ToolDefinitionProfileResolver | None = field(
         default=None,
         repr=False,
@@ -163,6 +167,8 @@ class Tool:
     )
 
     def __post_init__(self) -> None:
+        if self.argument_normalizer is not None and not callable(self.argument_normalizer):
+            raise ValueError("argument_normalizer must be callable")
         if self.activation not in TOOL_ACTIVATION_KINDS:
             raise ValueError(f"Unsupported Tool activation: {self.activation}")
         if not isinstance(self.requires_opt_in, bool):

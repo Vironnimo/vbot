@@ -332,6 +332,17 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
 
         return await probe_cron_tolerance(adapter, args)
+    if args.tolerance_tool == "channel_send":
+        from scripts.provider_probe.workflow_channel_tolerance import (
+            channel_case,
+            channel_tolerance_cases,
+        )
+
+        runner, cases = channel_case, channel_tolerance_cases()
+    elif args.tolerance_tool == "edit":
+        runner, cases = _edit_case, edit_tolerance_cases()
+    else:
+        runner, cases = _skill_case, skill_tolerance_cases()
     rows = []
     semaphore = asyncio.Semaphore(3)
 
@@ -339,7 +350,6 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         async with semaphore:
             try:
                 async with asyncio.timeout(args.total_timeout):
-                    runner = _edit_case if args.tolerance_tool == "edit" else _skill_case
                     row = await runner(adapter, args, case)
             except Exception as error:
                 row = {"case": case["id"], "passed": False, "error": str(error)}
@@ -349,8 +359,9 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
                     json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
-    cases = edit_tolerance_cases() if args.tolerance_tool == "edit" else skill_tolerance_cases()
-    await asyncio.gather(*(run(case) for case in cases))
+    await asyncio.gather(
+        *(run(case) for case in cases if args.tolerance_case in {"all", case["id"]})
+    )
     return {
         "scenario": "tool_tolerance",
         "passed": all(row["passed"] for row in rows),
