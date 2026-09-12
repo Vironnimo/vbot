@@ -332,7 +332,14 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
 
         return await probe_cron_tolerance(adapter, args)
-    if args.tolerance_tool in {
+    if args.tolerance_tool == "status":
+        from scripts.provider_probe.workflow_status_tolerance import (
+            status_case,
+            status_tolerance_cases,
+        )
+
+        runner, cases = status_case, status_tolerance_cases()
+    elif args.tolerance_tool in {
         "ha_call_service",
         "ha_get_state",
         "ha_list_entities",
