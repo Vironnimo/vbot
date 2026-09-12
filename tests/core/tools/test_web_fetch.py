@@ -156,21 +156,9 @@ def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mod
             {"url": "https://example.com", "output": "unsupported"},
             "output must be one of",
         ),
-        (
-            {"url": "https://example.com", "output": "markdown", "raw": False},
-            "Unknown argument(s): raw",
-        ),
-        (
-            {
-                "url": "https://example.com",
-                "output": "markdown",
-                "include_links": True,
-            },
-            "Unknown argument(s): include_links",
-        ),
     ],
 )
-async def test_web_fetch_handler_rejects_missing_invalid_or_legacy_output_arguments(
+async def test_web_fetch_handler_rejects_invalid_output_arguments(
     tmp_path: Path,
     arguments: dict[str, Any],
     message: str,
