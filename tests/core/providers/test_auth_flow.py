@@ -16,7 +16,7 @@ import httpx
 import pytest
 import respx
 
-from core.providers.auth_flow import DeviceFlowEngine, DeviceFlowTerminalError
+from core.providers.auth_flow import DeviceFlowEngine, DeviceFlowSession, DeviceFlowTerminalError
 from core.providers.errors import ProviderError
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import TokenStore
@@ -141,7 +141,7 @@ async def test_start_device_flow_posts_client_id_and_scope(tmp_path: Path) -> No
     )
 
     # Act
-    session = await engine.start_device_flow("github-copilot", "oauth", _oauth_config())
+    session = await engine._request_device_session("github-copilot", "oauth", _oauth_config())
 
     # Assert
     assert session.device_code == "device-code"
@@ -170,7 +170,7 @@ async def test_start_xai_flow_prefers_complete_verification_uri(tmp_path: Path) 
         )
     )
 
-    session = await engine.start_device_flow("xai", "subscription", _xai_oauth_config())
+    session = await engine._request_device_session("xai", "subscription", _xai_oauth_config())
 
     assert session.verification_uri == "https://auth.x.ai/device?user_code=XAI-CODE"
     assert parse_qs(route.calls.last.request.content.decode()) == {
@@ -260,7 +260,7 @@ async def test_nous_flow_uses_inference_scope_and_accepts_http_400_pending(
         ]
     )
 
-    session = await engine.start_device_flow("nous", "subscription", _nous_oauth_config())
+    session = await engine._request_device_session("nous", "subscription", _nous_oauth_config())
     with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
         await engine._poll_for_token(
             "nous",
@@ -347,7 +347,7 @@ async def test_opencode_flow_posts_json_accepts_pending_and_stores_rotating_toke
         ]
     )
 
-    session = await engine.start_device_flow(
+    session = await engine._request_device_session(
         "opencode-zen",
         "account",
         _opencode_oauth_config(),
@@ -413,7 +413,7 @@ async def test_start_openai_device_flow_posts_json_and_uses_configured_verificat
     )
 
     # Act
-    session = await engine.start_device_flow(
+    session = await engine._request_device_session(
         "openai",
         "subscription",
         _openai_oauth_config(),
@@ -781,46 +781,6 @@ async def test_poll_loop_reports_failure_before_reraising_unexpected_errors(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> None:
-    """Cancelling an active flow cancels its polling task."""
-    # Arrange
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    respx.post(TOKEN_URL).mock(
-        return_value=httpx.Response(200, json={"error": "authorization_pending"})
-    )
-    sleep_started = asyncio.Event()
-    release_sleep = asyncio.Event()
-
-    async def sleep_until_released(_interval: int) -> None:
-        sleep_started.set()
-        await release_sleep.wait()
-
-    task = asyncio.create_task(
-        engine._poll_for_token(
-            "github-copilot",
-            "oauth",
-            _oauth_config(),
-            "device-code",
-            1,
-            900,
-            AsyncMock(),
-        )
-    )
-
-    # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", side_effect=sleep_until_released):
-        await sleep_started.wait()
-        engine.cancel_flow("github-copilot", "oauth")
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    # Assert
-    assert task.cancelled()
-
-
-@respx.mock
-@pytest.mark.asyncio
 async def test_poll_loop_saves_token_under_named_account(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -864,97 +824,6 @@ async def test_poll_loop_saves_token_under_named_account(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_cancel_flow_is_account_scoped(tmp_path: Path) -> None:
-    """Cancelling one account's flow leaves another account's flow running."""
-    # Arrange
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    respx.post(TOKEN_URL).mock(
-        return_value=httpx.Response(200, json={"error": "authorization_pending"})
-    )
-    sleeps_started: asyncio.Queue[None] = asyncio.Queue()
-    release_sleep = asyncio.Event()
-
-    async def sleep_until_released(_interval: int) -> None:
-        sleeps_started.put_nowait(None)
-        await release_sleep.wait()
-
-    work_task = asyncio.create_task(
-        engine._poll_for_token(
-            "github-copilot",
-            "oauth",
-            _oauth_config(),
-            "device-code",
-            1,
-            900,
-            AsyncMock(),
-            account_id="work",
-        )
-    )
-    default_task = asyncio.create_task(
-        engine._poll_for_token(
-            "github-copilot",
-            "oauth",
-            _oauth_config(),
-            "device-code",
-            1,
-            900,
-            AsyncMock(),
-        )
-    )
-
-    # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", side_effect=sleep_until_released):
-        await sleeps_started.get()
-        await sleeps_started.get()
-        engine.cancel_flow("github-copilot", "oauth", "work")
-
-        with pytest.raises(asyncio.CancelledError):
-            await work_task
-
-        # Assert
-        assert work_task.cancelled()
-        assert not default_task.done()
-        assert ("github-copilot", "oauth", "default") in engine._active_flows
-        await engine.aclose()
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_aclose_cancels_active_polling_tasks(tmp_path: Path) -> None:
-    """Closing the engine cancels and awaits active polling tasks."""
-    engine = DeviceFlowEngine(TokenStore(tmp_path))
-    respx.post(TOKEN_URL).mock(
-        return_value=httpx.Response(200, json={"error": "authorization_pending"})
-    )
-    sleep_started = asyncio.Event()
-    release_sleep = asyncio.Event()
-
-    async def sleep_until_released(_interval: int) -> None:
-        sleep_started.set()
-        await release_sleep.wait()
-
-    task = asyncio.create_task(
-        engine._poll_for_token(
-            "github-copilot",
-            "oauth",
-            _oauth_config(),
-            "device-code",
-            1,
-            900,
-            AsyncMock(),
-        )
-    )
-
-    with patch("core.providers.auth_flow.asyncio.sleep", side_effect=sleep_until_released):
-        await sleep_started.wait()
-        await engine.aclose()
-
-    assert task.cancelled()
-    assert engine._active_flows == {}
-
-
-@respx.mock
-@pytest.mark.asyncio
 async def test_start_minimax_flow_posts_pkce_and_normalizes_millisecond_fields(
     tmp_path: Path,
 ) -> None:
@@ -979,7 +848,9 @@ async def test_start_minimax_flow_posts_pkce_and_normalizes_millisecond_fields(
 
     route = respx.post(MINIMAX_DEVICE_AUTH_URL).mock(side_effect=authorization_response)
 
-    session = await engine.start_device_flow("minimax", "subscription", _minimax_oauth_config())
+    session = await engine._request_device_session(
+        "minimax", "subscription", _minimax_oauth_config()
+    )
 
     assert session.device_code == "MINIMAX-CODE"
     assert session.user_code == "MINIMAX-CODE"
@@ -1012,7 +883,7 @@ async def test_start_minimax_flow_rejects_state_mismatch(tmp_path: Path) -> None
     )
 
     with pytest.raises(DeviceFlowTerminalError, match="state_mismatch"):
-        await engine.start_device_flow("minimax", "subscription", _minimax_oauth_config())
+        await engine._request_device_session("minimax", "subscription", _minimax_oauth_config())
 
 
 @respx.mock
@@ -1059,7 +930,9 @@ async def test_minimax_flow_polls_pending_then_saves_rotatable_token(tmp_path: P
 
     respx.post(MINIMAX_DEVICE_AUTH_URL).mock(side_effect=authorization_response)
     respx.post(MINIMAX_TOKEN_URL).mock(side_effect=token_response)
-    session = await engine.start_device_flow("minimax", "subscription", _minimax_oauth_config())
+    session = await engine._request_device_session(
+        "minimax", "subscription", _minimax_oauth_config()
+    )
     on_complete = AsyncMock()
 
     with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
@@ -1089,3 +962,90 @@ async def test_minimax_flow_polls_pending_then_saves_rotatable_token(tmp_path: P
     )
     assert authorization_form["code_challenge"] == [expected_challenge]
     on_complete.assert_awaited_once_with(success=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["cancel", "close"])
+async def test_managed_flow_can_stop_before_polling_starts(tmp_path: Path, stop: str) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    session = DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+    on_complete = AsyncMock()
+    with (
+        patch.object(engine, "_request_device_session", AsyncMock(return_value=session)),
+        patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
+    ):
+        result = await engine.connect("provider", "oauth", _oauth_config(), on_complete)
+        assert result is session
+        assert engine.is_flow_active("provider", "oauth")
+        assert not engine.is_flow_active("provider", "oauth", "work")
+        if stop == "cancel":
+            engine.cancel_flow("provider", "oauth")
+            assert not engine.is_flow_active("provider", "oauth")
+        await engine.aclose()
+        assert not engine.is_flow_active("provider", "oauth")
+        poll.assert_not_awaited()
+        on_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_managed_replacement_preserves_account_and_drains_cancelled_tasks(
+    tmp_path: Path,
+) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    session = DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+    started: asyncio.Queue[str] = asyncio.Queue()
+    stopped = []
+
+    async def pending(*args, account_id, **kwargs):
+        started.put_nowait(account_id)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.append(account_id)
+
+    with (
+        patch.object(engine, "_request_device_session", AsyncMock(return_value=session)),
+        patch.object(engine, "_poll_until_complete", side_effect=pending),
+    ):
+        await engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        assert await started.get() == "default"
+        await engine.connect("provider", "oauth", _oauth_config(), AsyncMock(), account_id="work")
+        assert await started.get() == "work"
+        await engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        assert engine.is_flow_active("provider", "oauth")
+        assert engine.is_flow_active("provider", "oauth", "work")
+        engine.cancel_flow("provider", "oauth", "work")
+        assert not engine.is_flow_active("provider", "oauth", "work")
+        assert engine.is_flow_active("provider", "oauth")
+        await engine.aclose()
+        assert sorted(stopped) == ["default", "work"]
+        assert not engine.is_flow_active("provider", "oauth")
+        assert not engine.is_flow_active("provider", "oauth", "work")
+
+
+@pytest.mark.asyncio
+async def test_managed_poll_failure_is_observed_and_reports_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from core.providers import auth_flow
+
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    session = DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+    on_complete = AsyncMock()
+    recorded = asyncio.Event()
+
+    def record_error(*args, **kwargs):
+        recorded.set()
+
+    monkeypatch.setattr(auth_flow._LOGGER, "error", record_error)
+    with (
+        patch.object(engine, "_request_device_session", AsyncMock(return_value=session)),
+        patch.object(
+            engine, "_poll_until_complete", AsyncMock(side_effect=RuntimeError("failure"))
+        ),
+    ):
+        await engine.connect("provider", "oauth", _oauth_config(), on_complete)
+        await asyncio.wait_for(recorded.wait(), timeout=1)
+        await engine.aclose()
+    on_complete.assert_awaited_once_with(success=False)
+    assert not engine.is_flow_active("provider", "oauth")

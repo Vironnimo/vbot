@@ -7,8 +7,8 @@
   import EmptyState from './ui/EmptyState.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import TabList from './ui/TabList.svelte';
-  import LimitHistory from './statistics/LimitHistory.svelte';
-  import { getProviderUsage, getStatisticsReport } from '$lib/api.js';
+  import ProviderLimits from './statistics/ProviderLimits.svelte';
+  import { getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -20,7 +20,6 @@
     barFractions,
     buildActivityTimeline,
     cacheHitRate,
-    clampUsagePercent,
     formatActivityDate,
     formatChartTick,
     formatDateTime,
@@ -28,7 +27,6 @@
     formatHourLabel,
     formatInteger,
     formatPercent,
-    formatResetAt,
     formatShare,
     formatTokens,
     formatUsageRate,
@@ -41,7 +39,6 @@
     tokenTimeline,
     tokenSplit,
     topN,
-    usageSeverity,
   } from '$lib/statisticsView.js';
 
   const CHAT_MESSAGE_ROLES = ['user', 'assistant'];
@@ -58,7 +55,6 @@
     'history_edit',
   ];
   const STATUS_KEYS = ['completed', 'failed', 'cancelled', 'interrupted'];
-  const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
   let report = $state(null);
   let loading = $state(false);
@@ -68,17 +64,7 @@
   let requestedRange = 'all';
   let granularity = $state('day');
   let destroyed = false;
-  let pageVisible = $state(true);
-
-  // The Limits sub-view loads live provider usage on its own (provider.usage),
-  // separate from the read-only statistics.report above. It is fetched lazily on
-  // first open so opening Statistics never pings provider usage endpoints.
-  // While the sub-view stays visible it polls through the server's shared
-  // provider cache, so multiple windows do not multiply outbound requests.
-  let usageReport = $state(null);
-  let usageLoading = $state(false);
-  let usageError = $state('');
-  let usageRequest = null;
+  let limitsOpened = $state(false);
 
   const locale = $derived(activeLocaleTag());
   const overview = $derived(report?.overview ?? null);
@@ -89,31 +75,9 @@
   const tools = $derived(report?.tools ?? null);
   const skills = $derived(report?.skills ?? null);
   const insights = $derived(statisticsInsights(report));
-  const usageProviders = $derived(usageReport?.providers ?? []);
   const statisticsTabs = $derived(
     STATISTICS_SUB_VIEWS.map((id) => ({ id, label: subViewLabel(id) })),
   );
-
-  $effect(() => {
-    if (activeSubView !== 'limits' || !pageVisible) {
-      return;
-    }
-
-    let cancelled = false;
-    let timeoutId;
-    async function pollUsage() {
-      await loadUsage();
-      if (!cancelled) {
-        timeoutId = setTimeout(pollUsage, USAGE_REFRESH_INTERVAL_MS);
-      }
-    }
-
-    pollUsage();
-    return () => {
-      cancelled = true;
-      clearTimeout(timeoutId);
-    };
-  });
 
   const statusTotal = $derived(
     overview
@@ -178,16 +142,9 @@
   );
 
   onMount(() => {
-    const handleVisibilityChange = () => {
-      pageVisible = document.visibilityState !== 'hidden';
-    };
-
-    handleVisibilityChange();
-    document.addEventListener('visibilitychange', handleVisibilityChange);
     loadReport();
     return () => {
       destroyed = true;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   });
 
@@ -214,41 +171,6 @@
     } finally {
       if (!destroyed) {
         loading = false;
-      }
-    }
-  }
-
-  function loadUsage() {
-    if (usageRequest) {
-      return usageRequest;
-    }
-    usageRequest = fetchUsage().finally(() => {
-      usageRequest = null;
-    });
-    return usageRequest;
-  }
-
-  async function fetchUsage() {
-    usageLoading = true;
-    usageError = '';
-    try {
-      const result = await getProviderUsage();
-      if (destroyed) {
-        return;
-      }
-      usageReport = result;
-    } catch (error) {
-      if (destroyed) {
-        return;
-      }
-      usageReport = null;
-      usageError = errorMessageText(
-        error,
-        t('statistics.limits.loadError', 'Usage limits could not be loaded.'),
-      );
-    } finally {
-      if (!destroyed) {
-        usageLoading = false;
       }
     }
   }
@@ -385,7 +307,21 @@
     </div>
   </header>
 
-  {#if errorMessage}
+  <div class="stats-view__subnav view-toolbar view-toolbar--tabs">
+    <TabList
+      class="view-toolbar__tabs"
+      items={statisticsTabs}
+      value={activeSubView}
+      ariaLabel={t('statistics.title', 'Statistics')}
+      idPrefix="statistics-subviews"
+      onChange={(value) => {
+        activeSubView = value;
+        if (value === 'limits') limitsOpened = true;
+      }}
+    />
+  </div>
+
+  {#if errorMessage && activeSubView !== 'limits'}
     <Banner variant="error" aria-live="polite">
       <span>{errorMessage}</span>
       <Button
@@ -398,97 +334,84 @@
     </Banner>
   {/if}
 
-  {#if loading && !report}
+  {#if loading && !report && activeSubView !== 'limits'}
     <p class="stats-view__placeholder">
       {t('statistics.loading', 'Loading statistics…')}
     </p>
-  {:else if report}
-    <div class="stats-view__subnav view-toolbar view-toolbar--tabs">
-      <TabList
-        class="view-toolbar__tabs"
-        items={statisticsTabs}
-        value={activeSubView}
-        ariaLabel={t('statistics.title', 'Statistics')}
-        idPrefix="statistics-subviews"
-        onChange={(value) => (activeSubView = value)}
-      />
-    </div>
-    {#if activeSubView !== 'limits'}
-      <div class="stats-scope view-toolbar">
-        <div class="stats-scope__range">
-          <span>{t('statistics.range.label', 'Time range')}</span>
-          <div
-            class="stats-toggle"
-            role="group"
-            aria-label={t('statistics.range.label', 'Time range')}
-          >
-            {#each STATISTICS_RANGES as range (range)}
-              <button
-                type="button"
-                class="stats-toggle__option"
-                class:stats-toggle__option--active={reportRange === range}
-                aria-pressed={reportRange === range}
-                aria-label={rangeLabel(range)}
-                disabled={loading}
-                onclick={() => loadReport(range)}
-                >{t(
-                  `statistics.range.short.${range}`,
-                  rangeLabel(range),
-                )}</button
-              >
-            {/each}
-          </div>
-          <InfoHint
-            text={t(
-              'statistics.range.hint',
-              'Activity uses UTC calendar days, including today so far. Agent, Session and Skill inventory totals describe the current collection. Skill offers use the offering Session’s creation date.',
-            )}
-          />
+  {/if}
+  {#if report && activeSubView !== 'limits'}
+    <div class="stats-scope view-toolbar">
+      <div class="stats-scope__range">
+        <span>{t('statistics.range.label', 'Time range')}</span>
+        <div
+          class="stats-toggle"
+          role="group"
+          aria-label={t('statistics.range.label', 'Time range')}
+        >
+          {#each STATISTICS_RANGES as range (range)}
+            <button
+              type="button"
+              class="stats-toggle__option"
+              class:stats-toggle__option--active={reportRange === range}
+              aria-pressed={reportRange === range}
+              aria-label={rangeLabel(range)}
+              disabled={loading}
+              onclick={() => loadReport(range)}
+              >{t(`statistics.range.short.${range}`, rangeLabel(range))}</button
+            >
+          {/each}
         </div>
-        <div class="stats-view__header-actions view-toolbar__actions">
-          {#if report?.generated_at}
-            <span class="stats-view__generated view-toolbar__meta">
-              {t('statistics.generatedAt', 'Generated {time}', {
-                time: formatDateTime(report.generated_at, locale),
-              })}
-            </span>
-          {/if}
-          <Button
-            variant="secondary"
-            disabled={loading}
-            onClick={() => loadReport(reportRange)}
-          >
-            {loading
-              ? t('statistics.refreshing', 'Refreshing…')
-              : t('common.refresh', 'Refresh')}
-          </Button>
-        </div>
+        <InfoHint
+          text={t(
+            'statistics.range.hint',
+            'Activity uses UTC calendar days, including today so far. Agent, Session and Skill inventory totals describe the current collection. Skill offers use the offering Session’s creation date.',
+          )}
+        />
       </div>
-    {/if}
-
-    <div
-      role="tabpanel"
-      id={`statistics-subviews-panel-${activeSubView}`}
-      aria-labelledby={`statistics-subviews-tab-${activeSubView}`}
-      aria-busy={activeSubView !== 'limits' && loading}
-    >
-      {#if activeSubView === 'overview'}
-        {@render overviewPanel()}
-      {:else if activeSubView === 'usage'}
-        {@render usagePanel()}
-      {:else if activeSubView === 'runs'}
-        {@render runsPanel()}
-      {:else if activeSubView === 'compactions'}
-        {@render compactionsPanel()}
-      {:else if activeSubView === 'tools'}
-        {@render toolsPanel()}
-      {:else if activeSubView === 'skills'}
-        {@render skillsPanel()}
-      {:else if activeSubView === 'limits'}
-        {@render limitsPanel()}
-      {/if}
+      <div class="stats-view__header-actions view-toolbar__actions">
+        {#if report?.generated_at}
+          <span class="stats-view__generated view-toolbar__meta">
+            {t('statistics.generatedAt', 'Generated {time}', {
+              time: formatDateTime(report.generated_at, locale),
+            })}
+          </span>
+        {/if}
+        <Button
+          variant="secondary"
+          disabled={loading}
+          onClick={() => loadReport(reportRange)}
+        >
+          {loading
+            ? t('statistics.refreshing', 'Refreshing…')
+            : t('common.refresh', 'Refresh')}
+        </Button>
+      </div>
     </div>
   {/if}
+
+  <div
+    role="tabpanel"
+    id={`statistics-subviews-panel-${activeSubView}`}
+    aria-labelledby={`statistics-subviews-tab-${activeSubView}`}
+    aria-busy={activeSubView !== 'limits' && loading}
+  >
+    {#if limitsOpened}
+      <ProviderLimits active={activeSubView === 'limits'} />
+    {/if}
+    {#if report && activeSubView === 'overview'}
+      {@render overviewPanel()}
+    {:else if report && activeSubView === 'usage'}
+      {@render usagePanel()}
+    {:else if report && activeSubView === 'runs'}
+      {@render runsPanel()}
+    {:else if report && activeSubView === 'compactions'}
+      {@render compactionsPanel()}
+    {:else if report && activeSubView === 'tools'}
+      {@render toolsPanel()}
+    {:else if report && activeSubView === 'skills'}
+      {@render skillsPanel()}
+    {/if}
+  </div>
 </section>
 
 {#snippet statCard(label, value, hint, detail)}
@@ -2245,147 +2168,6 @@
   </div>
 {/snippet}
 
-{#snippet limitWindow(window)}
-  {@const percent = clampUsagePercent(window.used_percent)}
-  {@const severity = usageSeverity(window.used_percent)}
-  {@const reset = formatResetAt(window.reset_at, locale)}
-  <li class="stats-limit-window">
-    <div class="stats-limit-window__head">
-      <span class="stats-limit-window__label">{window.label}</span>
-      <span class="stats-limit-window__used">
-        {t('statistics.limits.usedPercent', '{percent}% used', {
-          percent: Math.round(percent),
-        })}
-      </span>
-    </div>
-    <span class="stats-limit-window__track">
-      <span
-        class={`stats-limit-window__fill stats-limit-window__fill--${severity}`}
-        style={`width: ${percent}%`}
-      ></span>
-    </span>
-    {#if reset}
-      <span class="stats-limit-window__reset" use:tooltip={reset.absolute}>
-        {reset.relative
-          ? t('statistics.limits.resetsIn', 'Resets in {duration}', {
-              duration: reset.relative,
-            })
-          : reset.absolute}
-      </span>
-    {/if}
-    {#if window.unlimited}
-      <span class="stats-limit-window__units">
-        {t('statistics.limits.unlimited', 'Unlimited')}
-      </span>
-    {:else if window.remaining_units != null && window.total_units != null}
-      <span class="stats-limit-window__units">
-        {t(
-          'statistics.limits.remainingUnits',
-          '{remaining} of {total} {unit} remaining',
-          {
-            remaining: formatInteger(window.remaining_units, locale),
-            total: formatInteger(window.total_units, locale),
-            unit: window.unit ?? t('statistics.limits.units', 'units'),
-          },
-        )}
-      </span>
-    {:else if window.used_units != null}
-      <span class="stats-limit-window__units">
-        {t(
-          'statistics.limits.observedUnits',
-          '{used} {unit} observed; quota usage is provider-weighted',
-          {
-            used: formatInteger(window.used_units, locale),
-            unit: window.unit ?? t('statistics.limits.units', 'units'),
-          },
-        )}
-      </span>
-    {/if}
-  </li>
-{/snippet}
-
-{#snippet limitCard(snapshot)}
-  <div class="stats-limit-card">
-    <div class="stats-limit-card__head">
-      <div>
-        <span class="stats-limit-card__name">{snapshot.display_name}</span>
-        <span class="stats-limit-card__account">{snapshot.account}</span>
-      </div>
-      <div class="stats-limit-card__labels">
-        {#if snapshot.plan}
-          <span class="stats-limit-card__plan">{snapshot.plan}</span>
-        {/if}
-        {#if snapshot.credits?.enabled && snapshot.credits.balance != null}
-          <span class="stats-limit-card__credits">
-            {t('statistics.limits.credits', '{balance} credits', {
-              balance: formatInteger(snapshot.credits.balance, locale),
-            })}
-          </span>
-        {:else if snapshot.credits?.enabled}
-          <span class="stats-limit-card__credits">
-            {t('statistics.limits.creditsAvailable', 'Credits available')}
-          </span>
-        {/if}
-      </div>
-    </div>
-    {#if snapshot.error || snapshot.windows.length === 0}
-      <p class="stats-limit-card__unavailable">
-        {snapshot.error ??
-          t('statistics.limits.unavailable', 'Usage unavailable')}
-      </p>
-    {:else}
-      <ul class="stats-limit-windows">
-        {#each snapshot.windows as window (window.label)}
-          {@render limitWindow(window)}
-        {/each}
-      </ul>
-    {/if}
-  </div>
-{/snippet}
-
-{#snippet limitsPanel()}
-  <div class="stats-panel">
-    {#if usageLoading && !usageReport}
-      <p class="stats-view__placeholder">
-        {t('statistics.limits.loading', 'Loading usage limits…')}
-      </p>
-    {:else}
-      <div class="stats-block__head">
-        <p class="stats-note">
-          {t(
-            'statistics.limits.note',
-            'Live subscription usage, updated every 10 seconds while this tab is visible. Only the hourly automatic snapshot is stored.',
-          )}
-        </p>
-      </div>
-
-      {#if usageError}
-        <Banner variant="error" aria-live="polite">
-          <span>{usageError}</span>
-          <Button variant="secondary" onClick={loadUsage}>
-            {t('common.retry', 'Retry')}
-          </Button>
-        </Banner>
-      {:else if usageProviders.length === 0}
-        <EmptyState
-          density="compact"
-          description={t(
-            'statistics.limits.empty',
-            'No subscription providers connected.',
-          )}
-        />
-      {:else}
-        <div class="stats-limits">
-          {#each usageProviders as snapshot (`${snapshot.connection}:${snapshot.account}`)}
-            {@render limitCard(snapshot)}
-          {/each}
-        </div>
-      {/if}
-    {/if}
-    <LimitHistory />
-  </div>
-{/snippet}
-
 <style>
   .stats-view {
     display: flex;
@@ -3053,120 +2835,6 @@
   .stats-block--narrow .stats-table {
     font-size: var(--fs-mono-sm);
   }
-  .stats-limits {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 12px;
-  }
-  .stats-limit-card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-  }
-  .stats-limit-card__head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-  }
-  .stats-limit-card__name {
-    font-size: var(--fs-label-md);
-    font-weight: 600;
-    color: var(--text-hi);
-  }
-  .stats-limit-card__account {
-    display: block;
-    margin-top: 2px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-  }
-  .stats-limit-card__labels {
-    display: flex;
-    align-items: flex-end;
-    flex-direction: column;
-    gap: var(--space-xs);
-  }
-  .stats-limit-card__plan {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-med);
-    border: 1px solid var(--border-2);
-    border-radius: 10px;
-    padding: 1px 8px;
-  }
-  .stats-limit-card__credits {
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-  }
-  .stats-limit-card__unavailable {
-    margin: 0;
-    font-size: var(--fs-mono-body);
-    color: var(--text-lo);
-    font-style: italic;
-  }
-  .stats-limit-windows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .stats-limit-window {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .stats-limit-window__head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-    font-size: var(--fs-mono-body);
-  }
-  .stats-limit-window__label {
-    color: var(--text-med);
-  }
-  .stats-limit-window__used {
-    font-family: var(--font-mono);
-    color: var(--text-hi);
-  }
-  .stats-limit-window__track {
-    height: 7px;
-    background: var(--surface-3);
-    border-radius: var(--r-sm);
-    overflow: hidden;
-  }
-  .stats-limit-window__fill {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-  }
-  .stats-limit-window__fill--warn {
-    background: var(--amber);
-  }
-  .stats-limit-window__fill--critical {
-    background: var(--red);
-  }
-  .stats-limit-window__reset {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    color: var(--text-lo);
-  }
-  .stats-limit-window__units {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-  }
-
   @media (max-width: 960px) {
     .stats-dashboard,
     .stats-columns {

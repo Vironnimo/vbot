@@ -28,7 +28,7 @@ import json
 import math
 import sqlite3
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1663,11 +1663,13 @@ class StatisticsService:
         aggregator = _Aggregator(since=since, until=until)
         scopes = self._statistics_scopes()
         snapshot = self._indexed_snapshot(scopes)
-        if snapshot is None:
-            self._scan_live_report(aggregator, scopes)
-        else:
-            for scope in scopes:
-                self._scan_indexed_scope(aggregator, scope, snapshot)
+        for scope in scopes:
+            summaries: list[JsonObject] = []
+            aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
+            for summary, messages in self._scope_sessions(scope, snapshot):
+                aggregator.process_session(scope.display_key, str(summary["id"]), messages, summary)
+                summaries.append(summary)
+            aggregator.register_agent(scope.display_key, summaries)
         return aggregator.build(self._skill_inventory)
 
     def run_activity(
@@ -1681,26 +1683,22 @@ class StatisticsService:
         runs: list[RunActivity] = []
         scopes = self._statistics_scopes()
         snapshot = self._indexed_snapshot(scopes)
-        if snapshot is None:
-            for scope in scopes:
-                self._scan_run_activity_scope(
-                    runs,
-                    project_id=scope.project_id,
-                    agent_id=scope.agent_id,
-                    display_key=scope.display_key,
-                    since=since,
-                    until=until,
-                    summaries=list(scope.summaries),
-                )
-        else:
-            for scope in scopes:
-                self._scan_indexed_run_activity_scope(
-                    runs,
-                    scope,
-                    snapshot,
-                    since=since,
-                    until=until,
-                )
+        for scope in scopes:
+            for summary, messages in self._scope_sessions(scope, snapshot):
+                session_id = str(summary["id"])
+                title = summary.get("title")
+                session_title = title if isinstance(title, str) and title else None
+                group: list[ChatMessage] = []
+                for message in messages:
+                    if message.role != "run_summary":
+                        group.append(message)
+                        continue
+                    activity = _run_activity_record(
+                        scope.display_key, session_id, session_title, group, message
+                    )
+                    if _run_overlaps(activity, since=since, until=until):
+                        runs.append(activity)
+                    group = []
 
         runs.sort(key=lambda run: run.started_at, reverse=True)
         total_runs = len(runs)
@@ -1882,164 +1880,37 @@ class StatisticsService:
                     )
         return None
 
-    def _scan_live_report(
+    def _scope_sessions(
         self,
-        aggregator: _Aggregator,
-        scopes: tuple[StatisticsScope, ...],
-    ) -> None:
-        for scope in scopes:
-            self._scan_scope(
-                aggregator,
-                project_id=scope.project_id,
-                agent_id=scope.agent_id,
-                display_key=scope.display_key,
-                summaries=list(scope.summaries),
-            )
-
-    @staticmethod
-    def _scan_indexed_scope(
-        aggregator: _Aggregator,
         scope: StatisticsScope,
-        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession],
-    ) -> None:
-        indexed_sessions: list[IndexedStatisticsSession] = []
+        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession] | None,
+    ) -> Iterator[tuple[JsonObject, list[ChatMessage]]]:
+        """Resolve surviving Sessions with fork prefixes excluded exactly once.
+
+        Report consumers share this read boundary regardless of whether the
+        disposable index is available. A Session removed during reconciliation
+        or canonical loading contributes neither structure nor activity.
+        """
         for summary in scope.summaries:
-            indexed = snapshot.get(
-                statistics_session_key(
-                    scope.project_id,
-                    scope.agent_id,
-                    str(summary["id"]),
+            session_id = str(summary["id"])
+            if snapshot is not None:
+                indexed = snapshot.get(
+                    statistics_session_key(scope.project_id, scope.agent_id, session_id)
                 )
-            )
-            if indexed is not None:
-                indexed_sessions.append(indexed)
-        summaries = [session.summary for session in indexed_sessions]
-        aggregator.register_agent(scope.display_key, summaries)
-        aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
-        for session in indexed_sessions:
-            summary = _indexed_activity_summary(session.summary)
-            aggregator.process_session(
-                scope.display_key,
-                str(summary["id"]),
-                list(session.messages),
-                summary,
-            )
-
-    def _scan_scope(
-        self,
-        aggregator: _Aggregator,
-        *,
-        project_id: str | None,
-        agent_id: str,
-        display_key: str,
-        summaries: list[JsonObject] | None = None,
-    ) -> None:
-        """Aggregate one session scope under its report display key."""
-        resolved_summaries = (
-            self._sessions.list_summaries(
-                agent_id,
-                project_id,
-                metadata_keys=("seen_skills",),
-            )
-            if summaries is None
-            else summaries
-        )
-        live_sessions: list[tuple[JsonObject, list[ChatMessage]]] = []
-        for summary in resolved_summaries:
-            session_id = str(summary["id"])
-            address = SessionAddress(
-                project_id=project_id, agent_id=agent_id, session_id=session_id
-            )
-            try:
-                messages = self._sessions.get(address).load()
-            except SessionNotFoundError:
-                continue
-            live_sessions.append((summary, messages))
-
-        aggregator.register_agent(display_key, [summary for summary, _messages in live_sessions])
-        aggregator.register_scope(agent_id=agent_id, project_id=project_id)
-        for summary, messages in live_sessions:
-            session_id = str(summary["id"])
-            aggregator.process_session(display_key, session_id, messages, summary)
-
-    def _scan_run_activity_scope(
-        self,
-        runs: list[RunActivity],
-        *,
-        project_id: str | None,
-        agent_id: str,
-        display_key: str,
-        since: datetime,
-        until: datetime,
-        summaries: list[JsonObject] | None = None,
-    ) -> None:
-        resolved_summaries = (
-            self._sessions.list_summaries(
-                agent_id,
-                project_id,
-                metadata_keys=("seen_skills",),
-            )
-            if summaries is None
-            else summaries
-        )
-        for summary in resolved_summaries:
-            session_id = str(summary["id"])
-            title = summary.get("title")
-            session_title = title if isinstance(title, str) and title else None
-            address = SessionAddress(
-                project_id=project_id, agent_id=agent_id, session_id=session_id
-            )
-            try:
-                messages = self._sessions.get(address).load()
-            except SessionNotFoundError:
-                continue
-            activity_messages = _session_activity_messages(messages, summary)
-            group: list[ChatMessage] = []
-            for message in activity_messages:
-                if message.role != "run_summary":
-                    group.append(message)
+                if indexed is None:
                     continue
-                activity = _run_activity_record(
-                    display_key,
-                    session_id,
-                    session_title,
-                    group,
-                    message,
+                summary = indexed.summary
+                messages = list(indexed.messages)
+            else:
+                address = SessionAddress(
+                    project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
                 )
-                if _run_overlaps(activity, since=since, until=until):
-                    runs.append(activity)
-                group = []
-
-    @staticmethod
-    def _scan_indexed_run_activity_scope(
-        runs: list[RunActivity],
-        scope: StatisticsScope,
-        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession],
-        *,
-        since: datetime,
-        until: datetime,
-    ) -> None:
-        for raw_summary in scope.summaries:
-            session_id = str(raw_summary["id"])
-            indexed = snapshot[statistics_session_key(scope.project_id, scope.agent_id, session_id)]
-            summary = _indexed_activity_summary(indexed.summary)
-            title = summary.get("title")
-            session_title = title if isinstance(title, str) and title else None
-            group: list[ChatMessage] = []
-            for message in indexed.messages:
-                if message.role != "run_summary":
-                    group.append(message)
+                try:
+                    messages = self._sessions.get(address).load()
+                except SessionNotFoundError:
                     continue
-                activity = _run_activity_record(
-                    scope.display_key,
-                    session_id,
-                    session_title,
-                    group,
-                    message,
-                )
-                if _run_overlaps(activity, since=since, until=until):
-                    runs.append(activity)
-                group = []
+                messages = _session_activity_messages(messages, summary)
+            yield _indexed_activity_summary(summary), messages
 
 
 # ---------------------------------------------------------------------------
@@ -2048,7 +1919,7 @@ class StatisticsService:
 
 
 def _indexed_activity_summary(summary: JsonObject) -> JsonObject:
-    """Remove fork slicing metadata after the index already omitted that prefix."""
+    """Remove fork slicing metadata after the read boundary omitted that prefix."""
     projected = dict(summary)
     projected.pop(FORK_SOURCE_META_KEY, None)
     return projected

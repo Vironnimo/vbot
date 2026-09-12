@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -357,3 +358,63 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
     assert report.overview.total_runs == 1
     with sqlite3.connect(index_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("indexed", [True, False])
+@pytest.mark.parametrize("projection", ["report", "run_activity"])
+def test_all_statistics_reads_skip_sessions_deleted_after_listing(
+    tmp_path: Path, monkeypatch, indexed: bool, projection: str
+) -> None:
+    service, manager, session = _service(tmp_path)
+    snapshot = service._indexed_snapshot
+    address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
+
+    def delete_after_listing(scopes):
+        manager.delete(address)
+        return snapshot(scopes) if indexed else None
+
+    monkeypatch.setattr(service, "_indexed_snapshot", delete_after_listing)
+    if projection == "report":
+        result = service.report()
+        assert result.overview.total_sessions == 0
+        assert result.overview.total_runs == 0
+    else:
+        activity = service.run_activity(since=BASE, until=BASE + timedelta(minutes=1))
+        assert activity.total_runs == 0
+        assert activity.runs == []
+
+
+def test_index_and_live_fallback_agree_on_forks_windows_and_run_activity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, manager, source = _service(tmp_path)
+    fork = asyncio.run(manager.fork(SessionAddress(None, "main", source.id)))
+    fork.append_many(
+        [
+            ChatMessage.assistant(
+                model="other/model",
+                content="new work",
+                timestamp=BASE + timedelta(seconds=2),
+                usage={"input_tokens": 7, "output_tokens": 3, "estimated": True},
+            ),
+            ChatMessage.run_summary(
+                run_id="fork-run",
+                status="failed",
+                iteration_count=1,
+                timing=_timing(BASE + timedelta(seconds=2), 1000),
+                timestamp=BASE + timedelta(seconds=3),
+            ),
+        ]
+    )
+    window = {"since": BASE, "until": BASE + timedelta(seconds=4)}
+    indexed_report = asdict(service.report(**window))
+    indexed_activity = asdict(service.run_activity(**window))
+    assert indexed_report["overview"]["total_runs"] == 2
+    assert indexed_activity["total_runs"] == 2
+    monkeypatch.setattr(service, "_indexed_snapshot", lambda scopes: None)
+    live_report = asdict(service.report(**window))
+    live_activity = asdict(service.run_activity(**window))
+    for result in [indexed_report, indexed_activity, live_report, live_activity]:
+        result.pop("generated_at")
+    assert live_report == indexed_report
+    assert live_activity == indexed_activity
