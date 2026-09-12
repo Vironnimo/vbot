@@ -24,11 +24,13 @@ from core.recall.canonical import RECALL_TOOL_RESULT_NAMES
 from core.recall.hybrid import HybridRecallBackend
 from core.recall.vector import VectorRecallBackend
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress, SessionDescriptorSource
-from core.tools.session_search import (
+from core.tools._session_recall_results import (
     SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS,
+    SESSION_SEARCH_EXCERPT_MAX_CHARS,
+)
+from core.tools.session_search import (
     SESSION_READ_TOOL_NAME,
     SESSION_READ_TOOL_PARAMETERS,
-    SESSION_SEARCH_EXCERPT_MAX_CHARS,
     SESSION_SEARCH_RESULT_MAX_BYTES,
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
@@ -1410,32 +1412,32 @@ async def test_search_excludes_its_own_persisted_results(
     assert [item["message_id"] for item in data["items"]] == [real.id]
 
 
-async def test_legacy_extension_search_is_adapted_without_blocking(tmp_path: Path) -> None:
+async def test_sync_extension_search_runs_outside_event_loop(tmp_path: Path) -> None:
+    from core.recall import RecallSearchCapabilities, RecallSearchPage
+
     caller_thread = threading.get_ident()
 
-    class _SimpleLegacyBackend:
+    class _SyncBackend:
         sessions = ChatSessionManager(tmp_path)
+        search_thread: int | None = None
 
-        def __init__(self) -> None:
-            self.search_thread: int | None = None
+        def search_capabilities(self) -> RecallSearchCapabilities:
+            return RecallSearchCapabilities(result_type="message", guidance="Search messages.")
 
-        def search(self, request: Any) -> JsonObject:
+        def search_page(self, request: Any) -> RecallSearchPage:
+            assert request.query == "extension"
             self.search_thread = threading.get_ident()
-            return {"matches": [{"query": request.query}]}
+            return RecallSearchPage((), "message", "extension", "snapshot", False, 0)
 
-    legacy = _SimpleLegacyBackend()
+    backend = _SyncBackend()
     data = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "legacy"},
-            legacy,
-        )
+        await session_search_handler(make_context(tmp_path), {"query": "extension"}, backend)
     )
 
-    assert data["result_type"] == "backend_defined"
-    assert data["items"][0]["backend_result"]["matches"][0]["query"] == "legacy"
-    assert legacy.search_thread is not None
-    assert legacy.search_thread != caller_thread
+    assert data["result_type"] == "message"
+    assert data["items"] == []
+    assert backend.search_thread is not None
+    assert backend.search_thread != caller_thread
 
 
 async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) -> None:

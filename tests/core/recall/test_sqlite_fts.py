@@ -13,7 +13,6 @@ from core.chat import ChatMessage, ToolCall
 from core.chat.content_blocks import FileBlock, TextBlock
 from core.recall import (
     RecallBackendContext,
-    RecallRequest,
     RecallSearchRequest,
     SqliteFtsRecallBackend,
 )
@@ -33,20 +32,19 @@ def request(
     match_mode: str = "all_terms",
     roles: tuple[str, ...] = ("user", "assistant", "tool", "error", "compaction_checkpoint"),
     limit: int = 20,
-) -> RecallRequest:
-    return RecallRequest(
+) -> RecallSearchRequest:
+    return RecallSearchRequest(
         agent_id="coder",
+        project_id=None,
+        offset=0,
         session_id=None,
-        around_message_id=None,
         query=query,
         since=None,
         until=None,
         roles=roles,
         match_mode=match_mode,  # type: ignore[arg-type]
         limit=limit,
-        context_messages=0,
-        bookend_messages=2,
-        sort="newest",
+        order="newest",
     )
 
 
@@ -200,21 +198,17 @@ async def test_sqlite_fts_filtered_search_keeps_other_scope_sessions_indexed(
     assert indexed == {"one", "two"}
 
 
-async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) -> None:
+async def test_sqlite_fts_message_search_uses_canonical_storage(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="search-session")
-    session.append(ChatMessage.user("Release deploy plan", timestamp=timestamp(3)))
-
+    sessions.create("coder", session_id="search-session").append(
+        ChatMessage.user("Release deploy plan", timestamp=timestamp(3))
+    )
     recall = backend(tmp_path, sessions)
-    data = await recall.search(request(query="release deploy"))
 
-    assert data["matches"][0]["session_id"] == "search-session"
-    # Canonical FTS lives inside sessions.db; disposable index is fallback.
-    if not sessions.is_fts_available():
-        assert (tmp_path / "recall" / "session_index.sqlite").is_file()
-    else:
-        # Search succeeded via canonical FTS; disposable may not be created.
-        assert data["matches"]
+    page = await recall.search_page(request(query="release deploy"))
+
+    assert page.hits[0].session_id == "search-session"
+    assert not recall.index_path.exists()
 
 
 async def test_passage_index_does_not_duplicate_canonical_message_storage(
@@ -248,43 +242,42 @@ async def test_sqlite_fts_reindexes_stale_session_after_append(tmp_path: Path) -
     session.append(ChatMessage.user("Initial release notes", timestamp=timestamp(1)))
     recall = backend(tmp_path, sessions)
 
-    first_data = await recall.search(request(query="release"))
+    first_data = await recall.search_page(request(query="release"))
     session.append(ChatMessage.user("SQLite recall needle", timestamp=timestamp(2)))
-    second_data = await recall.search(request(query="sqlite recall"))
+    second_data = await recall.search_page(request(query="sqlite recall"))
 
-    assert len(first_data["matches"]) == 1
-    assert second_data["matches"][0]["snippet"] == "SQLite recall needle"
+    assert len(first_data.hits) == 1
+    assert second_data.hits[0].text == "SQLite recall needle"
 
 
 async def test_sqlite_fts_rebuilds_when_index_file_is_deleted(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="rebuild-session")
-    session.append(ChatMessage.user("Disposable recall index", timestamp=timestamp(1)))
+    sessions.create("coder", session_id="rebuild-session").append(
+        ChatMessage.user("Disposable recall index", timestamp=timestamp(1))
+    )
     recall = backend(tmp_path, sessions)
-    await recall.search(request(query="disposable"))
-    index_path = tmp_path / "recall" / "session_index.sqlite"
-    # Canonical FTS does not use the disposable file; only delete if it exists.
-    if index_path.exists():
-        index_path.unlink()
+    await recall.search_passages(passage_request("disposable"))
+    assert recall.index_path.is_file()
+    recall.index_path.unlink()
 
-    data = await recall.search(request(query="disposable"))
+    page = await recall.search_passages(passage_request("disposable"))
 
-    assert data["matches"][0]["session_id"] == "rebuild-session"
-    if not sessions.is_fts_available():
-        assert index_path.is_file()
+    assert page.hits[0].session_id == "rebuild-session"
+    assert recall.index_path.is_file()
 
 
 async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="corrupt-session")
-    session.append(ChatMessage.user("Corrupt index still searchable", timestamp=timestamp(1)))
-    index_path = tmp_path / "recall" / "session_index.sqlite"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text("not sqlite", encoding="utf-8")
+    sessions.create("coder", session_id="corrupt-session").append(
+        ChatMessage.user("Corrupt index still searchable", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+    recall.index_path.parent.mkdir(parents=True, exist_ok=True)
+    recall.index_path.write_text("not sqlite", encoding="utf-8")
 
-    data = await backend(tmp_path, sessions).search(request(query="corrupt searchable"))
+    page = await recall.search_passages(passage_request("corrupt searchable"))
 
-    assert data["matches"][0]["session_id"] == "corrupt-session"
+    assert page.hits[0].session_id == "corrupt-session"
 
 
 async def test_sqlite_fts_phrase_and_any_term_modes(tmp_path: Path) -> None:
@@ -294,11 +287,11 @@ async def test_sqlite_fts_phrase_and_any_term_modes(tmp_path: Path) -> None:
     session.append(ChatMessage.user("gamma", timestamp=timestamp(2)))
     recall = backend(tmp_path, sessions)
 
-    phrase_data = await recall.search(request(query="alpha beta", match_mode="phrase"))
-    any_data = await recall.search(request(query="missing gamma", match_mode="any_term"))
+    phrase_data = await recall.search_page(request(query="alpha beta", match_mode="phrase"))
+    any_data = await recall.search_page(request(query="missing gamma", match_mode="any_term"))
 
-    assert [match["snippet"] for match in phrase_data["matches"]] == ["alpha beta"]
-    assert [match["snippet"] for match in any_data["matches"]] == ["gamma"]
+    assert [match.text for match in phrase_data.hits] == ["alpha beta"]
+    assert [match.text for match in any_data.hits] == ["gamma"]
 
 
 async def test_sqlite_search_text_matches_canonical_scanner_sources(tmp_path: Path) -> None:
@@ -331,13 +324,13 @@ async def test_sqlite_search_text_matches_canonical_scanner_sources(tmp_path: Pa
     )
     recall = backend(tmp_path, sessions)
 
-    block_data = await recall.search(request(query="contract pdf"))
-    reasoning_data = await recall.search(request(query="private clue"))
-    tool_call_data = await recall.search(request(query="indexed argument"))
+    block_data = await recall.search_page(request(query="contract pdf"))
+    reasoning_data = await recall.search_page(request(query="private clue"))
+    tool_call_data = await recall.search_page(request(query="indexed argument"))
 
-    assert block_data["matches"][0]["session_id"] == "sources-session"
-    assert reasoning_data["matches"][0]["role"] == "assistant"
-    assert tool_call_data["matches"][0]["role"] == "assistant"
+    assert block_data.hits[0].session_id == "sources-session"
+    assert reasoning_data.hits[0].role == "assistant"
+    assert tool_call_data.hits[0].role == "assistant"
 
 
 async def test_sqlite_fts_finds_substring_within_token(tmp_path: Path) -> None:
@@ -346,9 +339,9 @@ async def test_sqlite_fts_finds_substring_within_token(tmp_path: Path) -> None:
     session.append(ChatMessage.user("Switched the agent to gpt4o today", timestamp=timestamp(1)))
     recall = backend(tmp_path, sessions)
 
-    data = await recall.search(request(query="gpt"))
+    data = await recall.search_page(request(query="gpt"))
 
-    assert data["matches"][0]["session_id"] == "substring-session"
+    assert data.hits[0].session_id == "substring-session"
 
 
 async def test_sqlite_fts_case_insensitive_substring(tmp_path: Path) -> None:
@@ -357,9 +350,9 @@ async def test_sqlite_fts_case_insensitive_substring(tmp_path: Path) -> None:
     session.append(ChatMessage.user("Running GPT4O benchmark", timestamp=timestamp(1)))
     recall = backend(tmp_path, sessions)
 
-    data = await recall.search(request(query="gpt4o"))
+    data = await recall.search_page(request(query="gpt4o"))
 
-    assert data["matches"][0]["session_id"] == "case-session"
+    assert data.hits[0].session_id == "case-session"
 
 
 async def test_sqlite_fts_short_query_falls_back_to_canonical_substring(tmp_path: Path) -> None:
@@ -368,25 +361,23 @@ async def test_sqlite_fts_short_query_falls_back_to_canonical_substring(tmp_path
     session.append(ChatMessage.user("Go fast", timestamp=timestamp(1)))
     recall = backend(tmp_path, sessions)
 
-    data = await recall.search(request(query="go"))
+    data = await recall.search_page(request(query="go"))
 
-    assert data["matches"][0]["session_id"] == "short-session"
+    assert data.hits[0].session_id == "short-session"
 
 
-def _project_request(*, query: str, project_id: str | None, limit: int = 20) -> RecallRequest:
-    return RecallRequest(
+def _project_request(*, query: str, project_id: str | None, limit: int = 20) -> RecallSearchRequest:
+    return RecallSearchRequest(
         agent_id="coder",
+        offset=0,
         session_id=None,
-        around_message_id=None,
         query=query,
         since=None,
         until=None,
         roles=("user", "assistant", "tool", "error", "compaction_checkpoint"),
         match_mode="all_terms",
         limit=limit,
-        context_messages=0,
-        bookend_messages=2,
-        sort="newest",
+        order="newest",
         project_id=project_id,
     )
 
@@ -403,11 +394,11 @@ async def test_sqlite_fts_project_recall_finds_only_project_sessions(tmp_path: P
     )
     recall = backend(tmp_path, sessions)
 
-    project = await recall.search(_project_request(query="release", project_id="alpha"))
-    identity = await recall.search(_project_request(query="release", project_id=None))
+    project = await recall.search_page(_project_request(query="release", project_id="alpha"))
+    identity = await recall.search_page(_project_request(query="release", project_id=None))
 
-    assert [m["session_id"] for m in project["matches"]] == ["proj-s"]
-    assert [m["session_id"] for m in identity["matches"]] == ["global-s"]
+    assert [m.session_id for m in project.hits] == ["proj-s"]
+    assert [m.session_id for m in identity.hits] == ["global-s"]
 
 
 async def test_sqlite_fts_same_uuid_global_and_project_do_not_collide(tmp_path: Path) -> None:
@@ -424,18 +415,16 @@ async def test_sqlite_fts_same_uuid_global_and_project_do_not_collide(tmp_path: 
     recall = backend(tmp_path, sessions)
 
     # Each scope sees only its own content for the shared UUID.
-    global_data = await recall.search(_project_request(query="carrots", project_id=None))
-    project_data = await recall.search(_project_request(query="bananas", project_id="alpha"))
+    global_data = await recall.search_page(_project_request(query="carrots", project_id=None))
+    project_data = await recall.search_page(_project_request(query="bananas", project_id="alpha"))
 
-    assert [m["snippet"] for m in global_data["matches"]] == ["global carrots"]
-    assert [m["snippet"] for m in project_data["matches"]] == ["project bananas"]
+    assert [m.text for m in global_data.hits] == ["global carrots"]
+    assert [m.text for m in project_data.hits] == ["project bananas"]
     # The global scope must not surface the project-only term and vice versa.
-    assert (await recall.search(_project_request(query="bananas", project_id=None)))[
-        "matches"
-    ] == []
-    assert (await recall.search(_project_request(query="carrots", project_id="alpha")))[
-        "matches"
-    ] == []
+    assert (await recall.search_page(_project_request(query="bananas", project_id=None))).hits == ()
+    assert (
+        await recall.search_page(_project_request(query="carrots", project_id="alpha"))
+    ).hits == ()
 
 
 async def test_sqlite_fts_identity_recall_unchanged_by_project_field(tmp_path: Path) -> None:
@@ -447,11 +436,13 @@ async def test_sqlite_fts_identity_recall_unchanged_by_project_field(tmp_path: P
     )
     recall = backend(tmp_path, sessions)
 
-    explicit_none = await recall.search(_project_request(query="release deploy", project_id=None))
-    default = await recall.search(request(query="release deploy"))
+    explicit_none = await recall.search_page(
+        _project_request(query="release deploy", project_id=None)
+    )
+    default = await recall.search_page(request(query="release deploy"))
 
-    assert [m["session_id"] for m in explicit_none["matches"]] == ["s1"]
-    assert [m["session_id"] for m in default["matches"]] == ["s1"]
+    assert [m.session_id for m in explicit_none.hits] == ["s1"]
+    assert [m.session_id for m in default.hits] == ["s1"]
 
 
 async def test_tool_inclusive_substring_search_uses_complete_bounded_fallback(
@@ -482,7 +473,8 @@ async def test_large_canonical_fallback_reports_partial_instead_of_false_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.sessions import store as store_module
+    from core.sessions import FtsHealth, _store_fts
+    from core.sessions import _store_values as store_module
 
     monkeypatch.setattr(store_module, "_CANONICAL_SEARCH_SCAN_LIMIT", 3)
     sessions = ChatSessionManager(tmp_path)
@@ -492,7 +484,11 @@ async def test_large_canonical_fallback_reports_partial_instead_of_false_empty(
         [target]
         + [ChatMessage.user(f"filler {day}", timestamp=timestamp(day)) for day in range(2, 8)]
     )
-    monkeypatch.setattr(sessions._store, "is_fts_available", lambda: False)
+    monkeypatch.setattr(
+        _store_fts,
+        "_fts_health_from_connection",
+        lambda *_args, **_kwargs: FtsHealth(state="unavailable", reason="test fallback"),
+    )
     try:
         page = await backend(tmp_path, sessions).search_page(message_request("hiddenneedle"))
 
