@@ -29,15 +29,13 @@ For small, clear changes, a brief explanation is enough. Do not manufacture opti
 
 Exploratory discussion alone does not authorize implementation. Once the user requests implementation, proceed with established decisions; revisit them only when new evidence materially changes the approach.
 
-### Preserve the ongoing task across detours
+### Preserve task continuity and state next steps
 
 Keep the active objective, earlier decisions, and unfinished commitments in view. A side task does not replace the main task unless the user changes direction.
 
-After a detour, briefly state what was done and remind the user where the main task stands. Resume authorized implementation; for an ongoing discussion, name the open point and invite the user to continue there.
+Always tell the user what comes next in its own paragraph, even if it is only one sentence. After a detour, first briefly report what was done and where the main task stands. Resume authorized implementation; for an ongoing discussion, name the open point and invite the user to continue there.
 
 Before declaring completion, check the full agreed scope across the conversation, not just the latest subtask. Respect explicit pauses, cancellations, and changes of direction.
-
-Always state what comes next in a separate paragraph, even if it is only one sentence. Keep that paragraph separate from completion summaries, verification results, and housekeeping updates.
 
 ### State the expected outcome before implementation
 
