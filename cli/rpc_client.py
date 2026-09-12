@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from cli._progress import operation_progress
+from cli._server_target import RpcFailure
 from cli.server_management import CommandResult, ServerInstance
 
 RPC_PATH = "/api/rpc"
@@ -41,14 +42,18 @@ class RpcPayload:
         instance: ServerInstance,
         data: Mapping[str, Any] | None = None,
         message: str = "",
+        failure: RpcFailure | None = None,
     ) -> None:
         self.ok = ok
         self.instance = instance
         self.data = data or {}
         self.message = message
+        self.failure = failure
 
     def to_command_result(self) -> CommandResult:
-        return CommandResult(ok=False, message=self.message, instance=self.instance)
+        return CommandResult(
+            ok=False, message=self.message, instance=self.instance, failure=self.failure
+        )
 
 
 def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> RpcPayload:
@@ -90,28 +95,33 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
     if not isinstance(payload, dict):
         return _transport_failure(instance, method, "RPC response must be an object")
 
-    if response.status_code != httpx.codes.OK:
+    ok_flag = payload.get("ok")
+    error = payload.get("error")
+    if (
+        ok_flag is False
+        and isinstance(error, dict)
+        and (isinstance(error.get("code"), str) and isinstance(error.get("message"), str))
+    ):
         return RpcPayload(
             ok=False,
             instance=instance,
-            message=_rpc_error_message(
-                payload.get("error"),
-                fallback=f"RPC request failed with HTTP {response.status_code}",
-            ),
+            message=_rpc_error_message(error, fallback="RPC request failed"),
+            failure=RpcFailure(method, "responded", error["code"], response.status_code),
         )
-
-    ok_flag = payload.get("ok")
+    if response.status_code != httpx.codes.OK:
+        return _transport_failure(
+            instance,
+            method,
+            f"No valid RPC error result (HTTP {response.status_code})",
+            http_status=response.status_code,
+        )
     if ok_flag is True:
         result = payload.get("result")
         if not isinstance(result, dict):
             return _transport_failure(instance, method, "RPC result must be an object")
         return RpcPayload(ok=True, instance=instance, data=result)
     if ok_flag is False:
-        return RpcPayload(
-            ok=False,
-            instance=instance,
-            message=_rpc_error_message(payload.get("error"), fallback="RPC request failed"),
-        )
+        return _transport_failure(instance, method, "RPC response missing a valid error")
 
     return _transport_failure(instance, method, "RPC response missing boolean ok flag")
 
@@ -121,12 +131,13 @@ def _transport_failure(
     method: str,
     reason: str,
     *,
-    request_state: str = "unknown",
+    request_state: Literal["not_sent", "unknown"] = "unknown",
+    http_status: int | None = None,
 ) -> RpcPayload:
     """Preserve delivery uncertainty without exposing request or response bodies."""
     recovery = (
-        "This RPC was not sent. Check connectivity and server status with the same target "
-        "options before retrying."
+        "This RPC was not sent; earlier steps in the command may already be applied. "
+        "Check connectivity to this target; server lifecycle checks must run on the server machine."
         if request_state == "not_sent"
         else "No valid result was received. The operation may have taken effect. Inspect the "
         "same target's current state before retrying a mutation; do not repeat completed steps."
@@ -134,6 +145,7 @@ def _transport_failure(
     return RpcPayload(
         ok=False,
         instance=instance,
+        failure=RpcFailure(method, request_state, http_status=http_status),
         message=(
             f"{reason}\nrpc_method: {method}\nserver: {instance.url}\n"
             f"request_state: {request_state}\n{recovery}"

@@ -38,7 +38,10 @@ def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
                 200,
                 json={
                     "ok": False,
-                    "error": {"message": "assistant owns no private skill named 'x'"},
+                    "error": {
+                        "code": "domain_error",
+                        "message": "assistant owns no private skill named 'x'",
+                    },
                 },
             )
         return httpx.Response(200, json=listing)
@@ -49,6 +52,8 @@ def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
     assert "inventory lookup" in result.message
     assert "assistant owns no private skills" not in result.message
     assert calls == ["skill.share", "skill.inventory"]
+    assert result.failure.method == "skill.share"
+    assert result.failure.code == "domain_error"
 
 
 def test_parse_args_supports_skill_catalog_command() -> None:

@@ -225,7 +225,10 @@ def provider_set_key(
     if refresh_models:
         refresh = model_refresh(instance, provider_id)
         return CommandResult(
-            ok=refresh.ok, message=f"{message}\n{refresh.message}", instance=instance
+            ok=refresh.ok,
+            message=f"{message}\n{refresh.message}",
+            instance=instance,
+            failure=refresh.failure,
         )
 
     return CommandResult(

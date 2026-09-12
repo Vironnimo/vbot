@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -52,6 +53,16 @@ class WebUIProbeResult:
 
 
 @dataclass(frozen=True)
+class RpcFailure:
+    """Evidence about one failed RPC, never a rollback claim for a whole command."""
+
+    method: str
+    request_state: Literal["not_sent", "unknown", "responded"]
+    code: str | None = None
+    http_status: int | None = None
+
+
+@dataclass(frozen=True)
 class CommandResult:
     """Automation-safe outcome returned by lifecycle commands."""
 
@@ -64,6 +75,7 @@ class CommandResult:
     process_id: int | None = None
     forced: bool = False
     attention: tuple[str, ...] = ()
+    failure: RpcFailure | None = None
 
 
 def resolve_instance(

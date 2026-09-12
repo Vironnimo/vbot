@@ -46,7 +46,9 @@ def _memory_failure_result(
         lines.append(f"did you mean: {close[0]}")
     if names:
         lines.append(f"available agents: {', '.join(names)}")
-    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=False, message="\n".join(lines), instance=instance, failure=failed.failure
+    )
 
 
 def memory_add(
@@ -194,6 +196,7 @@ def _with_available_entry_ids(
             ok=False,
             message=f"{failed.message}\nentry lookup failed: {listing.message}",
             instance=instance,
+            failure=failed.failure,
         )
     scopes = listing.data.get("scopes")
     entries = scopes.get(scope) if isinstance(scopes, dict) else None
@@ -209,7 +212,9 @@ def _with_available_entry_ids(
         lines.append(f"existing {scope}-scope entries: {', '.join(str(i) for i in ids)}")
     else:
         lines.append(f"{agent_id} has no {scope}-scope entries")
-    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    return CommandResult(
+        ok=False, message="\n".join(lines), instance=instance, failure=failed.failure
+    )
 
 
 def _first_quoted(message: str) -> str:
