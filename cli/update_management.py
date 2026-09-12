@@ -21,11 +21,13 @@ from cli._update_assets import (
 )
 from cli._update_types import (
     CommandRun,
+    Progress,
     ReleaseInfo,
     ReleaseLookup,
     ResolveInstance,
     Restart,
     Runner,
+    UpdateResult,
     _Step,
 )
 from cli.install_state import (
@@ -187,9 +189,12 @@ def run_update(
     port: int | None = None,
     data_dir: str | Path | None = None,
     session_snapshot_fn: Callable[[ServerInstance], _Step] = _ensure_update_session_snapshot,
+    progress: Progress | None = None,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
 
+    announce = progress or (lambda _status, _message: None)
+    announce("busy", "Checking the installation")
     run = runner or _default_runner
     repo = root if root is not None else VBOT_ROOT
     lookup = latest_release or _fetch_latest_release
@@ -206,7 +211,13 @@ def run_update(
     if not before:
         return _fail(instance, "update: could not resolve the checkout's current commit")
 
-    lines = [f"update: {track} track"]
+    lines: list[str] = []
+
+    def record(message: str, ok: bool = True) -> None:
+        lines.append(message)
+        announce("info" if ok else "error", message)
+
+    record(f"Update channel: {track}")
     inferred_state = False
     try:
         state = read_install_state(repo)
@@ -245,11 +256,14 @@ def run_update(
     if not desktop_guard.ok:
         return _fail(instance, desktop_guard.message)
 
+    announce("busy", "Creating and verifying a Session snapshot")
     session_snapshot = session_snapshot_fn(instance)
     if session_snapshot.message:
-        lines.append(session_snapshot.message)
+        record(session_snapshot.message, session_snapshot.ok)
     if not session_snapshot.ok:
         return _fail(instance, session_snapshot.message)
+
+    announce("success", "Session snapshot check completed")
 
     if inferred_state:
         try:
@@ -258,12 +272,13 @@ def run_update(
             return _fail(
                 instance, f"update: saving the inferred installation manifest failed: {exc}"
             )
-        lines.append(
+        record(
             f"installation manifest created from the current environment "
             f"(shape={state.install_shape})"
         )
-    lines.append(f"install shape: {state.install_shape}")
+    record(f"install shape: {state.install_shape}")
 
+    announce("busy", "Checking local changes")
     dirty_result = run(["git", "status", "--porcelain", "--untracked-files=no"], repo)
     if dirty_result.returncode != 0:
         return _fail(
@@ -278,6 +293,7 @@ def run_update(
             return _fail(instance, guard.message)
         stashed = guard.stashed
 
+    announce("busy", "Checking and downloading the latest code")
     release: ReleaseInfo | None = None
     if track == "dev":
         advanced = _advance_dev(run, repo)
@@ -330,10 +346,12 @@ def run_update(
             stashed=stashed,
         )
     if before and before == after:
-        lines.append(f"already up to date at {_short(after)}")
+        record(f"already up to date at {_short(after)}")
     else:
-        lines.append(f"updated {_short(before)} -> {_short(after)}")
+        record(f"updated {_short(before)} -> {_short(after)}")
 
+    announce("success", "Code is current")
+    announce("busy", "Checking and installing Python dependencies")
     deps = _refresh_dependencies(
         run,
         repo,
@@ -341,24 +359,26 @@ def run_update(
         platform_name=effective_platform,
     )
     if deps.message:
-        lines.append(deps.message)
+        record(deps.message, deps.ok)
     if not deps.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+    announce("success", "Python dependencies are current")
     current_digest = file_digest(repo / "pyproject.toml")
     if state.dependency_digest != current_digest:
         state = replace(state, dependency_digest=current_digest)
         saved = _save_state(repo, state)
         if not saved.ok:
-            lines.append(saved.message)
+            record(saved.message, saved.ok)
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
+    announce("busy", "Checking command launcher and Desktop shortcuts")
     command_shim = _refresh_windows_command_shim(
         repo,
         state,
         platform_name=effective_platform,
     )
     if command_shim.message:
-        lines.append(command_shim.message)
+        record(command_shim.message, command_shim.ok)
     if not command_shim.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
@@ -369,44 +389,50 @@ def run_update(
         platform_name=effective_platform,
     )
     if shortcut.message:
-        lines.append(shortcut.message)
+        record(shortcut.message, shortcut.ok)
     if not shortcut.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
+    announce("success", "Command launcher and shortcut checks completed")
+
     if state.install_shape != DESKTOP_CLIENT_SHAPE:
+        announce("busy", "Preparing WebUI and Extension pages")
         if track == "dev":
             webui = _refresh_dev_webui(run, repo, state.webui_revision, after)
         else:
             assert release is not None
             webui = _refresh_release_webui(release, repo, state.webui_revision, after)
         if webui.message:
-            lines.append(webui.message)
+            record(webui.message, webui.ok)
         if not webui.ok:
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+        announce("success", "WebUI and Extension pages are current")
         if state.webui_revision != after:
             state = replace(state, webui_revision=after)
             saved = _save_state(repo, state)
             if not saved.ok:
-                lines.append(saved.message)
+                record(saved.message, saved.ok)
                 return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
     state = replace(state, source_track=track, applied_revision=after)
     saved = _save_state(repo, state)
     if not saved.ok:
-        lines.append(saved.message)
+        record(saved.message, saved.ok)
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
     if stashed is not None:
+        announce("busy", "Restoring your local changes")
         restored = _restore_stash(run, repo, stashed)
         if not restored.ok:
-            lines.append(restored.message)
-            lines.append(
+            record(restored.message, restored.ok)
+            record(
                 "the code, dependencies, and WebUI are updated, but the server was not "
                 "restarted; resolve the conflicts and restart it manually"
             )
             return CommandResult(ok=False, message="\n".join(lines), instance=instance)
-        lines.append(restored.message)
+        record(restored.message, restored.ok)
 
+    announce("busy", "Finishing the update and checking the server restart")
     return _finish(
         instance,
         lines,
@@ -772,18 +798,31 @@ def _finish(
 
     if install_shape == DESKTOP_CLIENT_SHAPE:
         lines.append("server: not applicable (desktop-client install)")
-        return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+        return UpdateResult(
+            ok=True, message="\n".join(lines), instance=instance, restart_state="not_applicable"
+        )
 
     if not restart:
         lines.append("server: not restarted (--no-restart)")
-        return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+        return UpdateResult(
+            ok=True, message="\n".join(lines), instance=instance, restart_state="skipped"
+        )
 
-    if has_vbot_run_context():
+    deferred = has_vbot_run_context()
+    if deferred:
         restarted = schedule_server_restart(instance, service_name=service_name)
     else:
         restarted = restart_server(instance, service_name=service_name, stop=stop, start=start)
     lines.append(f"server: {restarted.message}")
-    return CommandResult(ok=restarted.ok, message="\n".join(lines), instance=instance)
+    return UpdateResult(
+        ok=restarted.ok,
+        message="\n".join(lines),
+        instance=instance,
+        health=restarted.health,
+        webui=restarted.webui,
+        forced=restarted.forced,
+        restart_state=("pending" if deferred else "completed") if restarted.ok else "failed",
+    )
 
 
 def _fetch_latest_release() -> ReleaseInfo:

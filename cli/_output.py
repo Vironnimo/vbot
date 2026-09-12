@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cli._progress import Status, status_line
+from cli._update_types import UpdateResult
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import UNKNOWN_VBOT_VERSION
 
@@ -26,7 +28,7 @@ def print_server_command_start(command: str, instance: ServerInstance) -> None:
         action = actions[command]
     except KeyError as exc:
         raise ValueError(f"Unsupported server command: {command}") from exc
-    print(f"{action} the vBot server at {instance.url}...", flush=True)
+    print(status_line("busy", f"{action} the vBot server at {instance.url}..."), flush=True)
 
 
 def print_command_result(command: str, result: CommandResult) -> None:
@@ -42,7 +44,14 @@ def print_command_result(command: str, result: CommandResult) -> None:
     else:
         raise ValueError(f"Unsupported server command: {command}")
 
-    lines.append(_server_completion_message(command, result))
+    state: Status = "success" if result.ok else "error"
+    if result.ok and (
+        result.forced
+        or (command == "status" and _running_text(result) != "yes")
+        or (command != "stop" and result.webui is not None and not result.webui.available)
+    ):
+        state = "warning"
+    lines.append(status_line(state, _server_completion_message(command, result)))
     print("\n".join(lines))
 
 
@@ -68,9 +77,12 @@ def print_update_command_start(version: str) -> None:
     """Announce the self-update before its long-running work begins."""
 
     if version == UNKNOWN_VBOT_VERSION:
-        print("Updating vBot. The current version could not be determined...", flush=True)
+        print(
+            status_line("busy", "Updating vBot. The current version could not be determined..."),
+            flush=True,
+        )
         return
-    print(f"Updating vBot from version {version}...", flush=True)
+    print(status_line("busy", f"Updating vBot from version {version}..."), flush=True)
 
 
 def print_update_command_result(
@@ -78,11 +90,34 @@ def print_update_command_result(
     *,
     version_before: str,
     version_after: str,
+    shown_messages: set[str] | None = None,
 ) -> None:
     """Print update details followed by one readable completion sentence."""
 
-    print(_result_message(result))
-    print(_update_completion_message(result, version_before, version_after))
+    remaining = [
+        line
+        for line in _result_message(result).splitlines()
+        if line not in (shown_messages or set())
+    ]
+    if remaining:
+        print("\n".join(remaining))
+    state: Status = "success" if result.ok else "error"
+    if result.ok and (
+        not isinstance(result, UpdateResult)
+        or result.restart_state in {"pending", "skipped"}
+        or result.forced
+        or (result.webui is not None and not result.webui.available)
+    ):
+        state = "warning"
+    print()
+    print(status_line(state, _update_completion_message(result)))
+    print(f"  Version: {version_before} -> {version_after}")
+    if not isinstance(result, UpdateResult) or result.restart_state != "not_applicable":
+        print(f"  Server: {result.instance.url}")
+    if result.webui is not None:
+        print(f"  WebUI: {_webui_text(result)}")
+    if result.forced:
+        print("  Attention: stopping the old server required forced termination.")
 
 
 def print_config_command_result(result: CommandResult) -> None:
@@ -138,18 +173,32 @@ def _server_completion_message(command: str, result: CommandResult) -> str:
     raise ValueError(f"Unsupported server command: {command}")
 
 
-def _update_completion_message(
-    result: CommandResult, version_before: str, version_after: str
-) -> str:
-    versions = f"checkout version: {version_before} -> {version_after}"
+def _update_completion_message(result: CommandResult) -> str:
     if result.ok:
-        return (
-            f"Update steps succeeded ({versions}). The server restart state is "
-            "reported above; a scheduled restart still needs a health check."
-        )
+        if isinstance(result, UpdateResult):
+            if result.restart_state == "pending":
+                return (
+                    "Update installed — server restart pending. "
+                    "Availability has not yet been verified."
+                )
+            if result.restart_state == "skipped":
+                return (
+                    "Update installed — server was not restarted (--no-restart). "
+                    "Restart it to use the update."
+                )
+            if result.restart_state == "not_applicable":
+                return (
+                    "Update completed — Desktop client is current; "
+                    "no local server restart is needed."
+                )
+            if result.restart_state == "completed":
+                if result.webui is not None and not result.webui.available:
+                    return "Update completed — server is healthy, but the WebUI is unavailable."
+                return "Update completed — server restarted and passed its health check."
+        return "Update steps completed. Server readiness has not been verified."
     return (
-        f"Update stopped with an error ({versions}). Earlier steps may already "
-        "be applied; use the recovery details above."
+        "Update stopped with an error. Earlier steps may already be applied; "
+        "follow the recovery details above."
     )
 
 

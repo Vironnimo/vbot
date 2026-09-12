@@ -16,6 +16,76 @@ from tests.cli.cli_provider_test_support import (
 )
 
 
+@pytest.mark.parametrize(
+    "command,method",
+    [
+        ("connect", "provider.connect"),
+        ("connect-status", "provider.connection_status"),
+        ("disconnect", "provider.disconnect"),
+    ],
+)
+def test_short_oauth_commands_select_only_oauth_and_preserve_target(
+    tmp_path, monkeypatch, command, method
+):
+    instance = make_instance(tmp_path)
+    calls = []
+
+    def fake_post(url, *, json, **kwargs):
+        assert url == f"{instance.url}/api/rpc"
+        calls.append(json)
+        data = {"account": "work"}
+        if json["method"] == "connection.list":
+            data = {
+                "connections": [
+                    {"id": "openai:api-key", "provider_id": "openai", "type": "api_key"},
+                    {"id": "openai:subscription", "provider_id": "openai", "type": "oauth"},
+                    {"id": "other:oauth", "provider_id": "other", "type": "oauth"},
+                ]
+            }
+        return httpx.Response(200, json={"ok": True, "result": data})
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+    code = cli_main.run(
+        ["providers", command, "openai", "--account", "work"], resolve=lambda **kwargs: instance
+    )
+    assert code == 0
+    assert calls == [
+        {"method": "connection.list", "params": {}},
+        {
+            "method": method,
+            "params": {
+                "provider_id": "openai",
+                "connection_id": "openai:subscription",
+                "account": "work",
+            },
+        },
+    ]
+
+
+@pytest.mark.parametrize("types", [[], ["api_key"], ["oauth", "oauth"]])
+def test_short_connect_never_mutates_without_exactly_one_oauth(tmp_path, monkeypatch, types):
+    instance = make_instance(tmp_path)
+    calls = []
+
+    def fake_post(url, *, json, **kwargs):
+        calls.append(json["method"])
+        assert json["method"] == "connection.list"
+        connections = [
+            {"id": f"example:connection-{index}", "provider_id": "example", "type": kind}
+            for index, kind in enumerate(types)
+        ]
+        return httpx.Response(200, json={"ok": True, "result": {"connections": connections}})
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+    result = provider_management.provider_connect(instance, "example")
+    assert not result.ok
+    assert calls == ["connection.list"]
+    if types == ["oauth", "oauth"]:
+        assert "example:connection-0" in result.message
+        assert "example:connection-1" in result.message
+        assert "--connection" in result.message
+
+
 def test_parse_args_supports_provider_oauth_commands() -> None:
     connect_args = cli_main.parse_args(
         ["provider", "connect", "openai", "--connection", "openai:subscription"]

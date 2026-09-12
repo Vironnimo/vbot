@@ -7,6 +7,10 @@ description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, 
 
 Use `vbot` through Bash to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
 
+Commands read as `vbot <area> <command> [target] [options]`; a command may have further subcommands. For example: `vbot server restart`, `vbot provider list`, and `vbot provider connect openai`. Options refine the action.
+
+Collection plurals such as `providers`, `models`, and `agents` also work; examples use the canonical area names. Discover commands with `vbot --help`, then narrow with `vbot <area> --help`. A syntax error includes a help command and may suggest a correction; no correction is executed automatically.
+
 ## Start with the task
 
 1. Read the relevant reference below before writing. It explains scope, replacement rules, and verification. Use `vbot <area> <command> --help` for exact arguments; primary ids are positional.

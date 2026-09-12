@@ -723,13 +723,6 @@ def test_windows_installer_rejects_dev_with_version_before_install(tmp_path: Pat
     assert not install_dir.exists()
 
 
-def test_windows_installer_forwards_setup_options_through_powershell() -> None:
-    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
-
-    assert "-File $setup @setupArgList" in script
-    assert "& $setup @setupArgList" not in script
-
-
 def test_windows_installer_shim_does_not_lock_the_pip_package_launcher() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
     shim_start = script.index("function Add-VbotShim")

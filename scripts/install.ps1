@@ -63,12 +63,79 @@ trap {
         # The original failure is more useful than a secondary logging failure.
     }
     [Console]::Error.WriteLine("")
-    [Console]::Error.WriteLine("vBot installation failed: $message")
+    [Console]::Error.WriteLine("[ERROR] vBot installation failed: $message")
     [Console]::Error.WriteLine("Technical details: $InstallLogPath")
     exit 1
 }
 
-function Write-Step { param([string]$Message) Write-Host "==> $Message" }
+function Write-Status {
+    param([string]$State, [string]$Message)
+    $color = "Cyan"
+    $symbol = [string][char]0x2026
+    switch ($State) {
+        "OK" { $color = "Green"; $symbol = [string][char]0x2713 }
+        "WARN" { $color = "Yellow"; $symbol = "!" }
+        "ERROR" { $color = "Red"; $symbol = [string][char]0x2717 }
+    }
+    if (-not [Console]::IsOutputRedirected -and $env:TERM -ne "dumb") {
+        if ([string]::IsNullOrEmpty($env:NO_COLOR)) {
+            Write-Host "$symbol $State" -ForegroundColor $color -NoNewline
+            Write-Host " $Message"
+        }
+        else { Write-Host "$symbol $State $Message" }
+    }
+    else { Write-Host "[$State] $Message" }
+}
+function Write-Step { param([string]$Message) Write-Status "WORK" $Message }
+
+function Invoke-SetupWithProgress {
+    param([string]$Executable, [string]$Setup, [string[]]$SetupArguments)
+    $job = Start-Job -ScriptBlock {
+        param($Executable, $Setup, $SetupArguments, $WorkingDirectory)
+        Set-Location -LiteralPath $WorkingDirectory
+        & $Executable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Setup @SetupArguments 2>&1
+        [pscustomobject]@{ VbotSetupExitCode = $LASTEXITCODE }
+    } -ArgumentList $Executable, $Setup, $SetupArguments, (Get-Location).ProviderPath
+    $phase = "Installing and configuring vBot"
+    $started = [DateTime]::UtcNow
+    $lastReport = $started
+    $setupResult = $null
+    try {
+        do {
+            $null = Wait-Job -Job $job -Timeout 1
+            $finished = $job.State -ne "Running"
+            foreach ($entry in @(Receive-Job -Job $job)) {
+                if ($null -ne $entry.PSObject.Properties["VbotSetupExitCode"]) {
+                    $setupResult = [int]$entry.VbotSetupExitCode
+                    continue
+                }
+                $line = $entry.ToString()
+                Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
+                if ($VerbosePreference -eq "Continue") { Write-Host $line }
+                elseif ($line.StartsWith("==> ")) {
+                    $phase = $line.Substring(4)
+                    $started = [DateTime]::UtcNow
+                    $lastReport = $started
+                    Write-Step $phase
+                }
+                elseif ($line.StartsWith("Warning:")) { Write-Status "WARN" $line }
+            }
+            $now = [DateTime]::UtcNow
+            if (($now - $lastReport).TotalSeconds -ge 10 -and $job.State -eq "Running") {
+                Write-Step ("{0} ({1}s elapsed)" -f $phase, [int]($now - $started).TotalSeconds)
+                $lastReport = $now
+            }
+        } while (-not $finished)
+        if ($null -eq $setupResult -or $job.State -ne "Completed") {
+            throw "The checkout setup process ended without a result."
+        }
+        return $setupResult
+    }
+    finally {
+        if ($job.State -eq "Running") { Stop-Job -Job $job }
+        Remove-Job -Job $job -Force
+    }
+}
 
 function Test-Have {
     param([string]$Name)
@@ -495,15 +562,7 @@ else {
 # Array splatting into another PowerShell script binds entries positionally, so
 # option names such as -SkipPathUpdate can become values for unrelated parameters.
 # A child PowerShell process parses the forwarded tokens as real named arguments.
-& $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $setup @setupArgList 2>&1 |
-    ForEach-Object {
-        $line = $_.ToString()
-        Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
-        if ($VerbosePreference -eq "Continue") {
-            Write-Host $line
-        }
-    }
-$setupExitCode = $LASTEXITCODE
+$setupExitCode = Invoke-SetupWithProgress -Executable $powerShellExecutable -Setup $setup -SetupArguments $setupArgList
 $setupReportedProblems = $setupSupportsRecoverableProblems -and $setupExitCode -eq 2
 if ($setupExitCode -ne 0 -and -not $setupReportedProblems) {
     throw "The vBot checkout setup failed with exit code $setupExitCode."
@@ -515,7 +574,7 @@ Write-Step "Verifying the installation"
 $vbotExe = Join-Path $venvDir "Scripts\vbot.exe"
 if ($DesktopClient) {
     Write-Host ""
-    Write-Host "vBot is ready."
+    Write-Status "OK" "vBot is ready."
     Write-Host "Open vBot Desktop from the Start menu, or open a new terminal and run: vbot desktop"
 }
 else {
@@ -585,21 +644,21 @@ else {
 
     Write-Host ""
     if ($problems.Count -eq 0 -and $serverRunning) {
-        Write-Host "vBot is ready."
+        Write-Status "OK" "vBot is ready."
         Write-Host "Open: http://${summaryHost}:$summaryPort/"
         if ($Desktop) {
             Write-Host "Desktop: open vBot Desktop from the Start menu."
         }
     }
     elseif ($problems.Count -eq 0 -and $NoAutostart -and -not $serverRunning) {
-        Write-Host "vBot is installed."
+        Write-Status "OK" "vBot is installed."
         Write-Host "Autostart was not requested, so the server was not started."
         Write-Host "Start it with:"
         Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
     }
     else {
         $PreserveInstallLog = $true
-        Write-Host "vBot was installed, but it needs attention."
+        Write-Status "WARN" "vBot was installed, but it needs attention."
         foreach ($problem in $problems) {
             Write-Host "- $problem"
         }

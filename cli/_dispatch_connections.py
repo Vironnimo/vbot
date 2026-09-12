@@ -163,7 +163,7 @@ def dispatch_provider_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    list_providers: Callable[[ServerInstance], CommandResult],
+    list_providers: Callable[..., CommandResult],
     provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
     provider_usage_fn: Callable[[ServerInstance, Sequence[str] | None], CommandResult],
     set_provider_key: Callable[
@@ -173,13 +173,13 @@ def dispatch_provider_command(
         [ServerInstance, str, str | None, str | None], CommandResult
     ] = provider_unset_key,
     connect_provider_fn: Callable[
-        [ServerInstance, str, str, str | None], CommandResult
+        [ServerInstance, str, str | None, str | None], CommandResult
     ] = provider_connect,
     disconnect_provider_fn: Callable[
-        [ServerInstance, str, str, str | None], CommandResult
+        [ServerInstance, str, str | None, str | None], CommandResult
     ] = provider_disconnect,
     connect_status_fn: Callable[
-        [ServerInstance, str, str, str | None], CommandResult
+        [ServerInstance, str, str | None, str | None], CommandResult
     ] = provider_connect_status,
     set_enabled_fn: Callable[
         [ServerInstance, str, bool, str | None], CommandResult
@@ -197,6 +197,8 @@ def dispatch_provider_command(
     """Dispatch one parsed provider command against the server RPC client."""
 
     if args.command == "list":
+        if args.details:
+            return list_providers(instance, details=True)
         return list_providers(instance)
     if args.command == "custom-list":
         return custom_list_fn(instance)

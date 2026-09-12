@@ -5,13 +5,24 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from cli._progress import Status
 from cli.server_management import (
     CommandResult,
     ServerInstance,
 )
 
 Restart = Callable[[ServerInstance], CommandResult]
+
+Progress = Callable[[Status, str], None]
+
+
+@dataclass(frozen=True)
+class UpdateResult(CommandResult):
+    """Update outcome with an explicit, observed restart state."""
+
+    restart_state: Literal["completed", "pending", "skipped", "not_applicable", "failed"] = "failed"
 
 
 ResolveInstance = Callable[..., ServerInstance]

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import Any
 
+from cli._progress import Status, status_line
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
 from cli.model_management import model_refresh
@@ -14,7 +15,7 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 
-def provider_list(instance: ServerInstance) -> CommandResult:
+def provider_list(instance: ServerInstance, *, details: bool = False) -> CommandResult:
     """Return formatted provider connection output from `connection.list` RPC."""
 
     payload = _rpc_call(instance, "connection.list", {})
@@ -27,7 +28,9 @@ def provider_list(instance: ServerInstance) -> CommandResult:
             message="RPC result missing connections list",
             instance=instance,
         )
-    return CommandResult(ok=True, message=_format_connection_rows(connections), instance=instance)
+    return CommandResult(
+        ok=True, message=_format_connection_rows(connections, details=details), instance=instance
+    )
 
 
 def provider_custom_list(instance: ServerInstance) -> CommandResult:
@@ -321,6 +324,8 @@ def provider_set_enabled(
 def _resolve_single_connection_id(
     instance: ServerInstance,
     provider_id: str,
+    *,
+    oauth_only: bool = False,
 ) -> tuple[str | None, CommandResult | None]:
     """Resolve a provider's single connection id, or explain which to pass."""
 
@@ -341,6 +346,23 @@ def _resolve_single_connection_id(
             message=_format_status_not_found(provider_id, None, connections),
             instance=instance,
         )
+    if oauth_only:
+        provider_connections = [
+            connection
+            for connection in provider_connections
+            if isinstance(connection, dict) and connection.get("type") == "oauth"
+        ]
+        if not provider_connections:
+            return None, CommandResult(
+                ok=False,
+                message=(
+                    f"Provider '{provider_id}' has no OAuth Connection. "
+                    f"Inspect authentication with: vbot provider status {provider_id}; "
+                    "API-key Connections use vbot provider set-key <provider-id> --stdin. "
+                    "Keep the same target options."
+                ),
+                instance=instance,
+            )
     if len(provider_connections) > 1:
         candidate_ids = _connection_ids(provider_connections)
         return None, CommandResult(
@@ -365,10 +387,15 @@ def _resolve_single_connection_id(
 def provider_connect(
     instance: ServerInstance,
     provider_id: str,
-    connection_id: str,
+    connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
     """Start the OAuth device flow via `provider.connect` RPC."""
+
+    if connection_id is None:
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        if error is not None:
+            return error
 
     params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
     if account is not None:
@@ -404,10 +431,15 @@ def provider_connect(
 def provider_disconnect(
     instance: ServerInstance,
     provider_id: str,
-    connection_id: str,
+    connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
     """Remove a stored OAuth token via `provider.disconnect` RPC."""
+
+    if connection_id is None:
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        if error is not None:
+            return error
 
     params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
     if account is not None:
@@ -426,10 +458,15 @@ def provider_disconnect(
 def provider_connect_status(
     instance: ServerInstance,
     provider_id: str,
-    connection_id: str,
+    connection_id: str | None = None,
     account: str | None = None,
 ) -> CommandResult:
     """Show OAuth connection state via `provider.connection_status` RPC."""
+
+    if connection_id is None:
+        connection_id, error = _resolve_single_connection_id(instance, provider_id, oauth_only=True)
+        if error is not None:
+            return error
 
     params: dict[str, Any] = {"provider_id": provider_id, "connection_id": connection_id}
     if account is not None:
@@ -538,13 +575,36 @@ def _format_usage_history(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_connection_rows(connections: Sequence[object]) -> str:
+def _format_connection_rows(connections: Sequence[object], *, details: bool = True) -> str:
     if not connections:
         return "no connections configured"
 
-    lines = ["connections:"]
+    providers = {
+        str(connection.get("provider_id", "?"))
+        for connection in connections
+        if isinstance(connection, dict)
+    }
+    lines = [f"Providers: {len(providers)} | Connections: {len(connections)}"]
+    lines.append("Configured means enabled with credentials; upstream access is not tested here.")
+    grouped: dict[str, list[object]] = {}
     for connection in connections:
-        lines.append(_format_connection_row(connection))
+        provider_id = (
+            str(connection.get("provider_id", "?")) if isinstance(connection, dict) else "?"
+        )
+        grouped.setdefault(provider_id, []).append(connection)
+    for provider_id, rows in grouped.items():
+        lines.extend(["", provider_id])
+        lines.extend(_format_connection_row(row, details=details) for row in rows)
+    lines.extend(
+        [
+            "",
+            "Details: vbot provider status <provider-id>",
+            "All details: vbot provider list --details",
+            "Subscription login: vbot provider connect <provider-id>",
+            "API key: vbot provider set-key <provider-id> --stdin",
+            "Keep the same --host/--port options on follow-up commands.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -650,7 +710,7 @@ def _connection_ids(connections: Sequence[object]) -> list[str]:
     return sorted(connection_ids)
 
 
-def _format_connection_row(connection: object) -> str:
+def _format_connection_row(connection: object, *, details: bool = True) -> str:
     if not isinstance(connection, dict):
         return "- invalid connection entry"
 
@@ -660,11 +720,35 @@ def _format_connection_row(connection: object) -> str:
     label = _string_or_default(connection.get("label"), "?")
     enabled = "yes" if connection.get("enabled") else "no"
     usable = "yes" if connection.get("usable") else "no"
+    state: Status
+    if connection.get("enabled") is False:
+        state, description = "info", "Disabled"
+    elif connection.get("usable") is True:
+        state, description = "success", "Configured"
+    else:
+        state, description = (
+            "info",
+            "Login required" if connection_type == "oauth" else "API key required",
+        )
+        if connection_type == "none":
+            description = "Not enabled"
+    if connection.get("reachable") is False:
+        state, description = "warning", f"{description} · local service unreachable"
+    elif "reachable" in connection and connection["reachable"] is None:
+        description += " · reachability not checked"
+    heading = status_line(state, f"{label} ({connection_id}) — {description}")
+    if not details:
+        accounts = connection.get("accounts")
+        account_ids = (
+            [str(account.get("id", "?")) for account in accounts if isinstance(account, dict)]
+            if isinstance(accounts, list)
+            else []
+        )
+        return heading + (f" | accounts: {', '.join(account_ids)}" if account_ids else "")
     header = (
-        f"- id: {connection_id}"
-        f"  provider_id: {provider_id}"
+        f"  id: {connection_id}"
         f"  type: {connection_type}"
-        f"  label: {label}"
+        f"\n  provider_id: {provider_id}"
         f"  enabled: {enabled}"
         f"  usable: {usable}"
     )
@@ -672,7 +756,7 @@ def _format_connection_row(connection: object) -> str:
         reachable = connection.get("reachable")
         reachable_text = "unknown" if reachable is None else ("yes" if reachable else "no")
         header = f"{header}  reachable: {reachable_text}"
-    return "\n".join([header, _format_account_rows(connection.get("accounts"))])
+    return "\n".join([heading, header, _format_account_rows(connection.get("accounts"))])
 
 
 def _format_account_rows(accounts: object) -> str:
