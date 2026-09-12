@@ -332,7 +332,11 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
 
         return await probe_cron_tolerance(adapter, args)
-    if args.tolerance_tool == "web_search":
+    if args.tolerance_tool == "write":
+        from scripts.provider_probe.workflow_file_tolerance import file_case, file_tolerance_cases
+
+        runner, cases = file_case, file_tolerance_cases()
+    elif args.tolerance_tool == "web_search":
         from scripts.provider_probe.workflow_search_tolerance import (
             search_case,
             search_tolerance_cases,

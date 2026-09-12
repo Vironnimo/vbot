@@ -339,6 +339,7 @@ def _parser() -> argparse.ArgumentParser:
             "ha_list_services",
             "status",
             "web_search",
+            "write",
         ),
         default="skill_manage",
     )
