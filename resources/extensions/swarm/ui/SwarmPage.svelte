@@ -1,1011 +1,45 @@
 <script>
-  import { onMount } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
-  import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+  import {
+    participantColor,
+    participantInitials,
+    canStop,
+    resumableParticipantState,
+    tokensUsed,
+    usageCount,
+  } from './pagePresentation.js';
+  import { t } from '../../../../webui/src/lib/i18n.js';
+  import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
+  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
+  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
+  import ProfileEditor from './ProfileEditor.svelte';
+  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
+  import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
+  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
+  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
-  import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
-  import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
-  import FormField from '../../../../webui/src/components/ui/FormField.svelte';
-  import TabList from '../../../../webui/src/components/ui/TabList.svelte';
-  import Banner from '../../../../webui/src/components/ui/Banner.svelte';
-  import EmptyState from '../../../../webui/src/components/ui/EmptyState.svelte';
-  import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
-  import { formatTokenUsageTooltip } from '../../../../webui/src/lib/tokenUsageTooltip.js';
-  import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
-  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
-  import { init, t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
-  import { visibleTimelineItemsForRender } from '../../../../webui/src/lib/chatTimeline.js';
-  import ProfileEditor from './ProfileEditor.svelte';
+  import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
+  import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import { createSwarmPageModel } from './pageModel.svelte.js';
+  import { createSwarmPageActivity } from './pageActivity.svelte.js';
+  import './swarmPage.css';
 
   let { bridgeClient = null } = $props();
-  let client = $state(null),
-    loading = $state(true),
-    error = $state(''),
-    profiles = $state([]),
-    swarms = $state([]),
-    catalog = $state({});
-  let selectedProfile = $state(null),
-    selectedSwarm = $state(null),
-    board = $state([]),
-    boardCursor = $state(null),
-    discussions = $state([]),
-    selectedDiscussion = $state(''),
-    discussionCursor = $state(null),
-    profilesCursor = $state(null),
-    swarmsCursor = $state(null),
-    eventsCursor = $state(null);
-  let events = $state([]),
-    usage = $state(null),
-    participantUsage = $state([]),
-    activeTab = $state('board'),
-    editor = $state(null),
-    deleteCandidate = $state(null),
-    swarmDeleteCandidate = $state(null),
-    deleteError = $state(''),
-    settingsOpen = $state(false),
-    deliveryDraft = $state(null),
-    profileSnapshotOpen = $state(false);
-  let goal = $state(''),
-    runDirectory = $state(''),
-    defaultDirectory = $state(''),
-    directoryLoading = $state(false),
-    postText = $state(''),
-    composeOpen = $state(false),
-    postRecipients = $state(''),
-    replyTo = $state(''),
-    posting = $state(false),
-    pending = $state(''),
-    history = $state(null),
-    live = $state([]),
-    context = $state({ locale: 'en', timezone: 'UTC', theme: {} });
-  let profileEditor = $state(null);
-  let editorKey = $state(0);
-  let currentSubscription = null;
-  let activityRequest = 0;
-  let selectionRequest = 0;
-  let overviewRequest = 0;
-  let boardRequest = 0;
-  let discussionsRequest = 0;
-  let usageRequest = 0;
-  let eventsRequest = 0;
-  let historyRequest = 0;
-  let historyPageCount = 1;
-  let directoryRequest = 0;
-  let historyLoading = $state(false);
-  let disposed = false;
-  function leaveActivity() {
-    activityRequest += 1;
-    historyRequest += 1;
-    historyPageCount = 1;
-    historyLoading = false;
-    currentSubscription?.();
-    currentSubscription = null;
-    history = null;
-    live = [];
-  }
-  function navigate(action) {
-    if (profileEditor) return profileEditor.requestTransition(action);
-    return action();
-  }
-  function newSwarm() {
-    return navigate(() => {
-      selectionRequest += 1;
-      editor = null;
-      selectedSwarm = null;
-      leaveActivity();
-      client.replaceRoute('');
-      void selectRunProfile(selectedProfile);
-    });
-  }
-  async function selectRunProfile(profile) {
-    const request = ++directoryRequest;
-    selectedProfile = profile;
-    runDirectory = '';
-    defaultDirectory = '';
-    directoryLoading = false;
-    if (!profile) return;
-    const directory = profile.working_directory;
-    if (directory.kind === 'directory') {
-      runDirectory = defaultDirectory = directory.path;
-      return;
-    }
-    directoryLoading = true;
-    try {
-      const nextCatalog = (await call('catalog')).catalog;
-      if (disposed || request !== directoryRequest) return;
-      const project = nextCatalog.projects?.find(
-        (item) => item.id === directory.project_id,
-      );
-      runDirectory = defaultDirectory = project?.cwd ?? '';
-    } catch (cause) {
-      if (!disposed && request === directoryRequest) error = cause.message;
-    } finally {
-      if (!disposed && request === directoryRequest) directoryLoading = false;
-    }
-  }
-  const requestId = () =>
-    crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  function participantColor(id) {
-    let hash = 2166136261;
-    for (const char of id ?? '')
-      hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
-    return `hsl(${(hash >>> 0) % 360} 60% 75%)`;
-  }
-  function participantInitials(name) {
-    const parts = (name ?? '').trim().split(/\s+/u).filter(Boolean);
-    if (!parts.length) return '?';
-    const last = parts.at(-1);
-    if (parts.length > 1 && /^\d+$/u.test(last))
-      return `${Array.from(parts[0])[0]}${last}`.toUpperCase();
-    return (
-      parts.length > 1
-        ? `${Array.from(parts[0])[0]}${Array.from(last)[0]}`
-        : Array.from(parts[0]).slice(0, 2).join('')
-    ).toUpperCase();
-  }
-  const page = (value) =>
-    Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
-  const call = (operation, arguments_ = {}) =>
-    client.operation(operation, arguments_);
-  const canStop = (state) =>
-    ['preparing', 'running', 'idle', 'needs_attention', 'stopping'].includes(
-      state,
-    );
-  const runGroups = $derived([
-    {
-      id: 'active',
-      label: t('swarm.runs.active', 'Active runs'),
-      entries: swarms.filter((swarm) =>
-        ['preparing', 'running', 'stopping'].includes(swarm.state),
-      ),
+  const model = createSwarmPageModel({
+    get bridgeClient() {
+      return bridgeClient;
     },
-    {
-      id: 'inactive',
-      label: t('swarm.runs.inactive', 'Inactive runs'),
-      entries: swarms.filter(
-        (swarm) => !['preparing', 'running', 'stopping'].includes(swarm.state),
-      ),
+    get activity() {
+      return activity;
     },
-  ]);
-  const resumableParticipantState = (state) =>
-    ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
-  const canResume = $derived(
-    selectedSwarm &&
-      !['stopping', 'preparing', 'deleting'].includes(selectedSwarm.state) &&
-      (selectedSwarm.participants ?? []).some(
-        (participant) =>
-          !participant.run_active &&
-          resumableParticipantState(participant.state),
-      ),
-  );
-  const tabs = $derived([
-    { id: 'board', label: t('swarm.tabs.board', 'Board') },
-    { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
-    { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
-    { id: 'audit', label: t('swarm.tabs.audit', 'Delivery audit') },
-  ]);
-  const date = (value) =>
-    value
-      ? new Intl.DateTimeFormat(activeLocaleTag(), {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-          timeZone: context.timezone || 'UTC',
-        }).format(new Date(value))
-      : '';
-  const discussionOptions = $derived(discussions);
-  function usageCount(value) {
-    if (!Number.isFinite(value))
-      return t('swarm.usage.unavailable', 'Unavailable');
-    const units = [
-      [1e9, t('swarm.usage.billion', 'mrd')],
-      [1e6, t('swarm.usage.million', 'mio')],
-      [1e3, t('swarm.usage.thousand', 'k')],
-    ];
-    const [scale, suffix] = units.find(
-      ([scale]) => Math.abs(value) >= scale,
-    ) ?? [1, ''];
-    const number = new Intl.NumberFormat(activeLocaleTag(), {
-      maximumFractionDigits: scale === 1 ? 0 : 1,
-    }).format(value / scale);
-    return suffix ? `${number} ${suffix}` : number;
-  }
-  const settingChanges = $derived(
-    deliveryDraft && selectedSwarm
-      ? [
-          ...['main', 'discussion', 'ping'].flatMap((route) =>
-            ['mode', 'wake_idle']
-              .filter(
-                (field) =>
-                  deliveryDraft[route]?.[field] !==
-                  selectedSwarm.delivery?.[route]?.[field],
-              )
-              .map((field) => ({
-                route,
-                field,
-                before: String(selectedSwarm.delivery?.[route]?.[field]),
-                after: String(deliveryDraft[route]?.[field]),
-              })),
-          ),
-          ...['coalesce_ms', 'batch_messages', 'batch_chars']
-            .filter(
-              (field) =>
-                deliveryDraft[field] !== selectedSwarm.delivery?.[field],
-            )
-            .map((field) => ({
-              route: t('swarm.communication.advanced', 'Advanced'),
-              field,
-              before: String(selectedSwarm.delivery?.[field]),
-              after: String(deliveryDraft[field]),
-            })),
-        ]
-      : [],
-  );
-
-  const activityTimeline = $derived(
-    history
-      ? visibleTimelineItemsForRender({
-          messages: history.data.messages ?? [],
-          runEvents: live,
-          streamingRunEvents: [],
-          status:
-            history.data.status ??
-            (history.participant.run_active ? 'running' : 'completed'),
-          currentRun: { runId: history.participant.lifecycle_run_id },
-        })
-      : [],
-  );
-  const selectedParticipant = $derived(
-    selectedSwarm?.participants?.find(
-      (item) => item.id === history?.participant.id,
-    ),
-  );
-  const contextWindow = $derived(
-    catalog.models?.find((model) => model.id === history?.participant.model)
-      ?.context_window,
-  );
-  const contextRatio = $derived(
-    Number.isFinite(contextWindow) &&
-      contextWindow > 0 &&
-      Number.isFinite(history?.data.context_usage?.tokens)
-      ? Math.min(1, history.data.context_usage.tokens / contextWindow)
-      : 0,
-  );
-  const contextTokens = $derived(
-    Number.isFinite(history?.data.context_usage?.tokens)
-      ? `${history.data.context_usage.estimated ? '~' : ''}${new Intl.NumberFormat(activeLocaleTag()).format(history.data.context_usage.tokens)}${contextWindow ? ` / ${new Intl.NumberFormat(activeLocaleTag()).format(contextWindow)}` : ''}`
-      : t('swarm.usage.unavailable', 'Unavailable'),
-  );
-  const activityContextTooltip = $derived(
-    formatTokenUsageTooltip(
-      history?.data.context_usage,
-      history?.data.usage,
-      history?.data.session_usage,
-      contextWindow,
-    ),
-  );
-  function tokensUsed(counts) {
-    return usageCount(
-      counts?.measured_input_tokens +
-        counts?.measured_output_tokens +
-        counts?.estimated_input_tokens +
-        counts?.estimated_output_tokens,
-    );
-  }
-  const usageRows = $derived(
-    participantUsage.flatMap(({ participant, report }) => {
-      const models = report?.usage?.usage?.models ?? [];
-      return (models.length ? models : [null]).map((model, index) => ({
-        id: `${participant.id}:${index}`,
-        participant: participant.display_name,
-        model,
-        modelName: model
-          ? `${model.provider}/${model.model}`
-          : participant.model,
-        participantRows: index === 0 ? Math.max(models.length, 1) : 0,
-        toolCalls: report?.usage?.tools?.total_calls,
-      }));
-    }),
-  );
-
-  function applyContext(next) {
-    context = next;
-    setApplicationTimeZone(next.timezone);
-    document.documentElement.lang = init(next.locale);
-    for (const [name, value] of Object.entries(next.theme ?? {}))
-      document.documentElement.style.setProperty(
-        name.startsWith('--') ? name : `--${name}`,
-        value,
-      );
-  }
-  async function refresh({ keepSelection = true } = {}) {
-    const request = ++overviewRequest;
-    const selection = selectionRequest;
-    // Invalidation must not unmount an active form or Run inspection.
-    loading = loading && !editor;
-    error = '';
-    try {
-      const [nextProfiles, nextSwarms] = await Promise.all([
-        call('profiles.list', { limit: 100 }),
-        call('swarms.list', { limit: 100 }),
-      ]);
-      if (disposed || request !== overviewRequest) return;
-      profiles = page(nextProfiles);
-      swarms = page(nextSwarms);
-      profilesCursor = nextProfiles.cursor ?? null;
-      swarmsCursor = nextSwarms.cursor ?? null;
-      const previousProfile = selectedProfile;
-      if (!keepSelection || !selectedProfile)
-        selectedProfile = profiles[0] ?? null;
-      if (selectedProfile)
-        selectedProfile =
-          profiles.find((item) => item.id === selectedProfile.id) ??
-          profiles[0] ??
-          null;
-      if (
-        previousProfile?.id !== selectedProfile?.id ||
-        (!editor &&
-          !selectedSwarm &&
-          runDirectory === defaultDirectory &&
-          JSON.stringify(previousProfile?.working_directory) !==
-            JSON.stringify(selectedProfile?.working_directory))
-      )
-        void selectRunProfile(selectedProfile);
-      if (
-        selection === selectionRequest &&
-        selectedSwarm &&
-        pending !== 'delete'
-      )
-        await selectSwarm(selectedSwarm.id, { silent: true });
-    } catch (cause) {
-      if (disposed || request !== overviewRequest) return;
-      error =
-        cause.message ?? t('swarm.loadError', 'The Swarm page could not load.');
-    } finally {
-      if (!disposed && request === overviewRequest) loading = false;
-    }
-  }
-  async function selectSwarm(id, { silent = false } = {}) {
-    const request = ++selectionRequest;
-    if (!silent) {
-      error = '';
-      leaveActivity();
-      composeOpen = false;
-    }
-    try {
-      const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
-      if (disposed || request !== selectionRequest) return;
-      if (selectedSwarm?.id !== id) {
-        selectedDiscussion = swarm.main_discussion_id;
-        discussions = [];
-        board = [];
-        boardCursor = null;
-        events = [];
-        usage = null;
-        participantUsage = [];
-      }
-      selectedSwarm = swarm;
-      if (!silent) editor = null;
-      const inspected = swarm.participants?.find(
-        (item) => item.id === history?.participant.id,
-      );
-      if (silent && inspected) {
-        void inspectParticipant(inspected, {
-          activate: false,
-          preserve:
-            inspected.lifecycle_run_id === history.participant.lifecycle_run_id,
-        });
-      }
-      await loadDiscussions(swarm);
-      if (disposed || request !== selectionRequest) return;
-      await Promise.all([
-        loadBoard(swarm, selectedDiscussion),
-        loadEvents(swarm),
-        loadUsage(swarm),
-      ]);
-      if (!disposed && request === selectionRequest && !silent)
-        await client.replaceRoute(`/swarms/${id}`);
-    } catch (cause) {
-      if (!disposed && request === selectionRequest) error = cause.message;
-    }
-  }
-  async function loadMoreProfiles() {
-    if (!profilesCursor) return;
-    const result = await call('profiles.list', {
-      limit: 100,
-      cursor: profilesCursor,
-    });
-    profiles = [...profiles, ...page(result)];
-    profilesCursor = result.cursor ?? null;
-  }
-  async function loadMoreSwarms() {
-    if (!swarmsCursor) return;
-    const result = await call('swarms.list', {
-      limit: 100,
-      cursor: swarmsCursor,
-    });
-    swarms = [...swarms, ...page(result)];
-    swarmsCursor = result.cursor ?? null;
-  }
-  async function loadDiscussions(swarm = selectedSwarm, cursor = null) {
-    if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++discussionsRequest;
-    const result = await call('board.list', {
-      swarm_id: swarm.id,
-      limit: 100,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== discussionsRequest ||
-      selectedSwarm?.id !== swarm.id
-    )
-      return;
-    const selected = discussions.find((item) => item.id === selectedDiscussion);
-    discussions = cursor
-      ? [
-          ...new Map(
-            [...discussions, ...page(result)].map((item) => [item.id, item]),
-          ).values(),
-        ]
-      : page(result);
-    if (selected && !discussions.some((item) => item.id === selected.id))
-      discussions = [...discussions, selected];
-    discussionCursor = result.cursor ?? null;
-  }
-  async function loadBoard(
-    swarm = selectedSwarm,
-    discussionId = selectedDiscussion,
-    cursor = null,
-  ) {
-    if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++boardRequest;
-    const result = await call('board.read', {
-      swarm_id: swarm.id,
-      discussion_id: discussionId,
-      limit: 100,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== boardRequest ||
-      selectedSwarm?.id !== swarm.id ||
-      selectedDiscussion !== discussionId
-    )
-      return;
-    const posts = [...page(result)].reverse();
-    board = cursor ? [...board, ...posts] : posts;
-    boardCursor = result.next_cursor ?? result.cursor ?? null;
-  }
-  async function chooseDiscussion(id) {
-    selectedDiscussion = id;
-    board = [];
-    boardCursor = null;
-    await loadBoard(selectedSwarm, id);
-  }
-  async function openDiscussion(announcement) {
-    if (!discussions.some((item) => item.id === announcement.discussion_id))
-      discussions = [
-        ...discussions,
-        { id: announcement.discussion_id, title: announcement.title },
-      ];
-    try {
-      await chooseDiscussion(announcement.discussion_id);
-    } catch (cause) {
-      error = cause.message;
-    }
-  }
-  async function loadEvents(swarm = selectedSwarm) {
-    if (swarm) {
-      const selection = selectionRequest;
-      const request = ++eventsRequest;
-      const result = await call('swarms.events', {
-        swarm_id: swarm.id,
-        limit: 100,
-      });
-      if (
-        disposed ||
-        selection !== selectionRequest ||
-        request !== eventsRequest ||
-        selectedSwarm?.id !== swarm.id
-      )
-        return;
-      events = page(result);
-      eventsCursor = result.cursor ?? null;
-    }
-  }
-  async function loadMoreEvents() {
-    if (!selectedSwarm || !eventsCursor) return;
-    const selection = selectionRequest;
-    const request = ++eventsRequest;
-    const result = await call('swarms.events', {
-      swarm_id: selectedSwarm.id,
-      limit: 100,
-      cursor: eventsCursor,
-    });
-    if (disposed || selection !== selectionRequest || request !== eventsRequest)
-      return;
-    events = [...events, ...page(result)];
-    eventsCursor = result.cursor ?? null;
-  }
-  async function loadUsage(swarm = selectedSwarm) {
-    if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++usageRequest;
-    const reports = await Promise.all([
-      call('swarms.usage', { swarm_id: swarm.id }),
-      ...(swarm.participants ?? []).map(async (participant) => ({
-        participant,
-        report: await call('swarms.usage', {
-          swarm_id: swarm.id,
-          participant_id: participant.id,
-        }),
-      })),
-    ]);
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== usageRequest ||
-      selectedSwarm?.id !== swarm.id
-    )
-      return;
-    usage = reports[0];
-    participantUsage = reports.slice(1);
-  }
-  async function saveProfile(profile) {
-    const saved = await call('profiles.save', {
-      profile,
-      expected_revision: profile.revision || null,
-    });
-    if (!profile.id) {
-      profiles = [...profiles, saved.profile];
-      selectedProfile = saved.profile;
-      editor = saved.profile;
-    } else {
-      profiles = profiles.map((item) =>
-        item.id === saved.profile.id ? saved.profile : item,
-      );
-    }
-    selectedProfile = saved.profile;
-    return saved.profile;
-  }
-  async function openProfile(profile = 'new') {
-    if (pending === 'profile') return;
-    pending = 'profile';
-    error = '';
-    try {
-      catalog = (await call('catalog'))?.catalog ?? {};
-      selectionRequest += 1;
-      leaveActivity();
-      selectedSwarm = null;
-      if (profile !== 'new') selectedProfile = profile;
-      editorKey += 1;
-      editor = profile;
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      pending = '';
-    }
-  }
-  async function deleteProfile() {
-    const profile = deleteCandidate;
-    if (!profile) return;
-    try {
-      await call('profiles.delete', {
-        profile_id: profile.id,
-        expected_revision: profile.revision,
-      });
-      if (selectedProfile?.id === profile.id) selectedProfile = null;
-      deleteCandidate = null;
-      await refresh();
-    } catch (cause) {
-      error = cause.message;
-    }
-  }
-  async function deleteSwarm() {
-    const candidate = swarmDeleteCandidate;
-    if (!candidate || pending) return;
-    pending = 'delete';
-    deleteError = '';
-    try {
-      await call('swarms.delete', { swarm_id: candidate.id });
-      if (selectedSwarm?.id === candidate.id) newSwarm();
-      swarmDeleteCandidate = null;
-      await refresh();
-    } catch (cause) {
-      deleteError = cause.message;
-    } finally {
-      pending = '';
-    }
-  }
-  async function startSwarm() {
-    error = '';
-    if (!selectedProfile || !goal.trim()) {
-      error = t('swarm.start.validation', 'Choose a Swarm and enter a goal.');
-      return;
-    }
-    if (directoryLoading || !runDirectory.trim()) {
-      error = t('swarm.start.directoryRequired', 'Choose a working directory.');
-      return;
-    }
-    pending = 'start';
-    try {
-      const result = await call('swarms.start', {
-        profile_id: selectedProfile.id,
-        expected_profile_revision: selectedProfile.revision,
-        prompt: goal,
-        request_id: requestId(),
-        ...(runDirectory !== defaultDirectory
-          ? { working_directory: runDirectory }
-          : {}),
-      });
-      goal = '';
-      await refresh();
-      await selectSwarm(result.swarm_id ?? result.id);
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      pending = '';
-    }
-  }
-  async function lifecycle(operation, participantId = null) {
-    if (!selectedSwarm) return;
-    pending = operation;
-    error = '';
-    try {
-      await call(`swarms.${operation}`, {
-        swarm_id: selectedSwarm.id,
-        ...(participantId ? { participant_id: participantId } : {}),
-        request_id: requestId(),
-      });
-      await refresh();
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      pending = '';
-    }
-  }
-  function openDelivery() {
-    deliveryDraft = JSON.parse(JSON.stringify(selectedSwarm.delivery));
-    settingsOpen = true;
-  }
-  function changeDelivery(route, field, value) {
-    deliveryDraft = {
-      ...deliveryDraft,
-      [route]: { ...deliveryDraft[route], [field]: value },
-    };
-  }
-  function changeDeliverySetting(field, value) {
-    deliveryDraft = { ...deliveryDraft, [field]: Number(value) };
-  }
-  async function applyDelivery() {
-    if (!selectedSwarm || !deliveryDraft) return;
-    pending = 'settings';
-    try {
-      const result = await call('swarms.settings', {
-        swarm_id: selectedSwarm.id,
-        delivery: JSON.parse(JSON.stringify(deliveryDraft)),
-        expected_revision: selectedSwarm.settings_revision,
-        request_id: requestId(),
-      });
-      selectedSwarm =
-        result.swarm ??
-        (await call('swarms.get', { swarm_id: selectedSwarm.id })).swarm;
-      settingsOpen = false;
-      await loadEvents();
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      pending = '';
-    }
-  }
-  async function post() {
-    if (!selectedSwarm || !postText.trim()) return;
-    posting = true;
-    error = '';
-    try {
-      await call('board.post', {
-        swarm_id: selectedSwarm.id,
-        discussion_id: selectedDiscussion,
-        text: postText,
-        ...(replyTo.trim() ? { reply_to: replyTo.trim() } : {}),
-        ...(postRecipients.trim()
-          ? {
-              recipients: postRecipients
-                .split(',')
-                .map((item) => item.trim())
-                .filter(Boolean),
-            }
-          : {}),
-        request_id: requestId(),
-      });
-      postText = '';
-      postRecipients = '';
-      replyTo = '';
-      composeOpen = false;
-      await loadBoard();
-      await loadEvents();
-    } catch (cause) {
-      error = cause.message;
-    } finally {
-      posting = false;
-    }
-  }
-  function contentLinks(node) {
-    node.addEventListener('click', openContentLink);
-    return {
-      destroy: () => node.removeEventListener('click', openContentLink),
-    };
-  }
-
-  function openContentLink(event) {
-    const link = event.target.closest('a[href]');
-    if (!link || !client) return;
-    event.preventDefault();
-    const url = link.href;
-    if (!url) return;
-    const isMedia =
-      Boolean(link.querySelector('img, video, audio')) ||
-      /\.(avif|gif|jpe?g|mp3|mp4|ogg|png|svg|webm)(?:$|[?#])/i.test(url);
-    void (isMedia ? client.openMedia(url) : client.openLink(url)).catch(
-      (cause) => (error = cause.message),
-    );
-  }
-
-  async function reconcileActivity(
-    request,
-    swarmId,
-    participant,
-    settled = false,
-  ) {
-    const read = ++historyRequest;
-    const pageCount = historyPageCount;
-    historyLoading = true;
-    try {
-      const data = await client.readHistory(swarmId, participant.id, {
-        limit: 100,
-      });
-      const pages = [data];
-      while (
-        pages.length < pageCount &&
-        pages.at(-1).has_more &&
-        pages.at(-1).next_before
-      ) {
-        if (disposed || request !== activityRequest || read !== historyRequest)
-          return;
-        pages.push(
-          await client.readHistory(swarmId, participant.id, {
-            limit: 100,
-            before: pages.at(-1).next_before,
-          }),
-        );
-      }
-      if (!disposed && request === activityRequest && read === historyRequest) {
-        const oldest = pages.at(-1);
-        historyPageCount = pages.length;
-        history = {
-          participant: settled
-            ? { ...participant, run_active: false }
-            : participant,
-          data: {
-            ...data,
-            messages: pages.toReversed().flatMap((page) => page.messages ?? []),
-            has_more: oldest.has_more,
-            next_before: oldest.next_before,
-          },
-        };
-        if (settled) live = [];
-      }
-    } catch (cause) {
-      if (!disposed && request === activityRequest && read === historyRequest)
-        error = cause.message;
-    } finally {
-      if (!disposed && request === activityRequest && read === historyRequest)
-        historyLoading = false;
-    }
-  }
-  async function loadEarlierActivity() {
-    if (!history?.data.has_more || !history.data.next_before || historyLoading)
-      return;
-    const request = activityRequest;
-    const read = ++historyRequest;
-    const selected = history;
-    historyLoading = true;
-    try {
-      const data = await client.readHistory(
-        selectedSwarm.id,
-        selected.participant.id,
-        {
-          limit: 100,
-          before: selected.data.next_before,
-        },
-      );
-      if (disposed || request !== activityRequest || read !== historyRequest)
-        return;
-      historyPageCount += 1;
-      history = {
-        ...selected,
-        data: {
-          ...history.data,
-          messages: [...(data.messages ?? []), ...selected.data.messages],
-          has_more: data.has_more,
-          next_before: data.next_before,
-        },
-      };
-    } catch (cause) {
-      if (!disposed && request === activityRequest && read === historyRequest)
-        error = cause.message;
-    } finally {
-      if (!disposed && request === activityRequest && read === historyRequest)
-        historyLoading = false;
-    }
-  }
-  async function inspectParticipant(
-    participant,
-    { activate = true, preserve = false } = {},
-  ) {
-    if (!selectedSwarm) return;
-    if (activate) activeTab = 'participants';
-    if (preserve) {
-      activityRequest += 1;
-      currentSubscription?.();
-      currentSubscription = null;
-    } else leaveActivity();
-    const request = activityRequest;
-    const swarmId = selectedSwarm.id;
-    await Promise.all([
-      reconcileActivity(
-        request,
-        swarmId,
-        participant,
-        participant.run_active === false,
-      ),
-      catalog.models
-        ? Promise.resolve()
-        : call('catalog')
-            .then((result) => {
-              catalog = result.catalog;
-            })
-            .catch((cause) => {
-              if (request === activityRequest) error = cause.message;
-            }),
-    ]);
-    if (
-      disposed ||
-      request !== activityRequest ||
-      !history ||
-      !participant.lifecycle_run_id ||
-      participant.run_active === false
-    )
-      return;
-    let key = null;
-    const buffered = [];
-    const sequences = new SvelteSet();
-    live = [];
-    const receive = (id, event) => {
-      if (
-        disposed ||
-        request !== activityRequest ||
-        id !== key ||
-        event.run_id !== participant.lifecycle_run_id ||
-        sequences.has(event.sequence)
-      )
-        return;
-      sequences.add(event.sequence);
-      live = [...live, event];
-      const payload = event.payload ?? {};
-      if (
-        history &&
-        (payload.context_usage || payload.session_usage || payload.usage)
-      ) {
-        history = {
-          ...history,
-          data: {
-            ...history.data,
-            ...(payload.context_usage
-              ? { context_usage: payload.context_usage }
-              : {}),
-            ...(payload.session_usage
-              ? { session_usage: payload.session_usage }
-              : {}),
-            ...(payload.usage ? { usage: payload.usage } : {}),
-          },
-        };
-      }
-      if (
-        [
-          'run_completed',
-          'run_cancelled',
-          'run_failed',
-          'run_interrupted',
-        ].includes(event.type)
-      ) {
-        currentSubscription?.();
-        currentSubscription = null;
-        void reconcileActivity(request, swarmId, participant, true);
-      }
-    };
-    const off = client.onRunEvent((id, event) => {
-      if (key === null) buffered.push([id, event]);
-      else receive(id, event);
-    });
-    const unsubscribe = (id) => {
-      void client.unsubscribeRun(id).catch((cause) => {
-        if (!disposed && request === activityRequest) error = cause.message;
-      });
-    };
-    currentSubscription = () => {
-      off();
-      if (key) unsubscribe(key);
-    };
-    try {
-      const subscription = await client.subscribeRun(
-        swarmId,
-        participant.lifecycle_run_id,
-      );
-      if (!subscription.subscription_id) {
-        off();
-        if (request === activityRequest) {
-          currentSubscription = null;
-          await reconcileActivity(request, swarmId, participant, true);
-        }
-        return;
-      }
-      key = subscription.subscription_id;
-      if (disposed || request !== activityRequest) {
-        off();
-        unsubscribe(key);
-        return;
-      }
-      for (const [id, event] of buffered) receive(id, event);
-    } catch (cause) {
-      off();
-      if (request === activityRequest) error = cause.message;
-    }
-  }
-  function routeSelection(route) {
-    const match = /^\/swarms\/([^/]+)$/.exec(route ?? '');
-    if (match && selectedSwarm?.id !== match[1]) selectSwarm(match[1]);
-  }
-  onMount(() => {
-    client ??= bridgeClient ?? createExtensionPageClient();
-    const startupTimeout = setTimeout(() => {
-      loading = false;
-      error = t(
-        'swarm.hostUnavailable',
-        'The Swarm page could not connect. Reopen Swarms to try again.',
-      );
-    }, 10_000);
-    let initialized = false;
-    const offContext = client.onContext((next) => {
-      clearTimeout(startupTimeout);
-      const previousRoute = context?.route;
-      applyContext(next);
-      if (!initialized) {
-        initialized = true;
-        routeSelection(next.route);
-        refresh();
-      } else if (next.route !== previousRoute) routeSelection(next.route);
-    });
-    const offInvalidation = client.onInvalidation(() => refresh());
-    return () => {
-      disposed = true;
-      selectionRequest += 1;
-      activityRequest += 1;
-      clearTimeout(startupTimeout);
-      currentSubscription?.();
-      offContext();
-      offInvalidation();
-      client.dispose();
-    };
+  });
+  const activity = createSwarmPageActivity({
+    get model() {
+      return model;
+    },
   });
 </script>
 
@@ -1063,19 +97,19 @@
         icon
         ariaLabel={t('swarm.newProfile', 'New Swarm')}
         tooltip={t('swarm.newProfile', 'New Swarm')}
-        loading={pending === 'profile'}
-        onClick={() => navigate(() => openProfile())}
+        loading={model.pending === 'profile'}
+        onClick={() => model.navigate(() => model.openProfile())}
         >{@render actionIcon('plus')}</Button
       >
     </div>
     <div class="secondary-pane__scroll">
       <nav class="secondary-list" aria-label={t('swarm.profiles', 'Swarms')}>
-        {#each profiles as profile (profile.id)}
+        {#each model.profiles as profile (profile.id)}
           <button
             class="secondary-list__item"
-            class:active={editor?.id === profile.id}
-            aria-current={editor?.id === profile.id ? 'page' : undefined}
-            onclick={() => navigate(() => openProfile(profile))}
+            class:active={model.editor?.id === profile.id}
+            aria-current={model.editor?.id === profile.id ? 'page' : undefined}
+            onclick={() => model.navigate(() => model.openProfile(profile))}
           >
             <span class="sidebar-title"
               >{profile.name} ({(profile.participants ?? []).reduce(
@@ -1092,13 +126,13 @@
               'Create a Swarm to start a Run.',
             )}
           />{/each}
-        {#if profilesCursor}<Button
+        {#if model.profilesCursor}<Button
             variant="tertiary"
-            onClick={loadMoreProfiles}
+            onClick={model.loadMoreProfiles}
             >{t('swarm.profiles.more', 'Load more Swarms')}</Button
           >{/if}
       </nav>
-      {#each runGroups as group (group.id)}
+      {#each model.runGroups as group (group.id)}
         <section class="run-group">
           <div class="secondary-pane__header swarms-head">
             <span class="secondary-pane__title">{group.label}</span>
@@ -1107,9 +141,11 @@
             {#each group.entries as swarm (swarm.id)}
               <button
                 class="secondary-list__item"
-                class:active={!editor && selectedSwarm?.id === swarm.id}
+                class:active={!model.editor &&
+                  model.selectedSwarm?.id === swarm.id}
                 use:tooltip={swarm.title || swarm.id}
-                onclick={() => navigate(() => selectSwarm(swarm.id))}
+                onclick={() =>
+                  model.navigate(() => model.selectSwarm(swarm.id))}
               >
                 <span class="sidebar-title"
                   >{swarm.title ||
@@ -1121,30 +157,33 @@
           </nav>
         </section>
       {/each}
-      {#if swarmsCursor}<Button variant="tertiary" onClick={loadMoreSwarms}
+      {#if model.swarmsCursor}<Button
+          variant="tertiary"
+          onClick={model.loadMoreSwarms}
           >{t('swarm.swarms.more', 'Load more runs')}</Button
         >{/if}
     </div>
     <div class="sidebar-footer">
-      <Button variant="secondary" onClick={newSwarm}
+      <Button variant="secondary" onClick={model.newSwarm}
         >{@render actionIcon('play')}{t('swarm.newRun', 'New run')}</Button
       >
     </div>
   </aside>
   <div class="workspace">
-    {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
-    {#if loading}<Banner variant="info" role="status"
+    {#if model.error}<Banner variant="error" role="alert">{model.error}</Banner
+      >{/if}
+    {#if model.loading}<Banner variant="info" role="status"
         >{t('swarm.loading', 'Loading Swarms…')}</Banner
       >{/if}
-    {#if editor}
-      {#key editorKey}
+    {#if model.editor}
+      {#key model.editorKey}
         <ProfileEditor
-          bind:this={profileEditor}
-          profile={editor === 'new' ? null : editor}
-          {catalog}
-          bridgeClient={client}
-          onSave={saveProfile}
-          onCancel={newSwarm}
+          bind:this={model.profileEditor}
+          profile={model.editor === 'new' ? null : model.editor}
+          catalog={model.catalog}
+          bridgeClient={model.client}
+          onSave={model.saveProfile}
+          onCancel={model.newSwarm}
         />
       {/key}
     {:else}
@@ -1156,50 +195,51 @@
             icon
             ariaLabel={t('common.refresh', 'Refresh')}
             tooltip={t('common.refresh', 'Refresh')}
-            disabled={loading}
-            onClick={() => refresh()}>{@render actionIcon('refresh')}</Button
+            disabled={model.loading}
+            onClick={() => model.refresh()}
+            >{@render actionIcon('refresh')}</Button
           >
         </div>
-        {#if selectedSwarm}<div class="swarm-head">
+        {#if model.selectedSwarm}<div class="swarm-head">
             <div>
               <h2>{t('swarm.userPrompt', 'User Prompt:')}</h2>
-              <p class="goal">{selectedSwarm.prompt}</p>
+              <p class="goal">{model.selectedSwarm.prompt}</p>
               <p class="muted">
-                {selectedSwarm.effective_configuration?.cwd ?? ''}
+                {model.selectedSwarm.effective_configuration?.cwd ?? ''}
               </p>
             </div>
             <div class="actions">
-              {#if canStop(selectedSwarm.state)}<Button
+              {#if canStop(model.selectedSwarm.state)}<Button
                   variant="danger"
-                  loading={pending === 'stop'}
-                  onClick={() => lifecycle('stop')}
-                  >{@render actionIcon('stop')}{pending === 'stop'
+                  loading={model.pending === 'stop'}
+                  onClick={() => model.lifecycle('stop')}
+                  >{@render actionIcon('stop')}{model.pending === 'stop'
                     ? t('swarm.stopping', 'Stopping...')
                     : t('swarm.stop', 'Stop')}</Button
-                >{/if}{#if canResume}<Button
+                >{/if}{#if model.canResume}<Button
                   variant="primary"
-                  loading={pending === 'resume'}
-                  disabled={pending === 'stop'}
-                  onClick={() => lifecycle('resume')}
-                  >{@render actionIcon('play')}{pending === 'resume'
+                  loading={model.pending === 'resume'}
+                  disabled={model.pending === 'stop'}
+                  onClick={() => model.lifecycle('resume')}
+                  >{@render actionIcon('play')}{model.pending === 'resume'
                     ? t('swarm.resuming', 'Resuming...')
                     : t('swarm.resume', 'Resume')}</Button
                 >{/if}<Button
                 variant="danger"
-                disabled={!!pending || canStop(selectedSwarm.state)}
-                tooltip={canStop(selectedSwarm.state)
+                disabled={!!model.pending || canStop(model.selectedSwarm.state)}
+                tooltip={canStop(model.selectedSwarm.state)
                   ? t(
                       'swarm.deleteRun.stopFirst',
                       'Stop the Swarm before deleting it.',
                     )
                   : t('swarm.deleteRun.title', 'Delete Run')}
                 onClick={() => {
-                  deleteError = '';
-                  swarmDeleteCandidate = selectedSwarm;
+                  model.deleteError = '';
+                  model.swarmDeleteCandidate = model.selectedSwarm;
                 }}>{t('swarm.deleteRun.title', 'Delete Run')}</Button
               ><Button
                 variant="secondary"
-                onClick={() => (profileSnapshotOpen = true)}
+                onClick={() => (model.profileSnapshotOpen = true)}
                 icon
                 ariaLabel={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
                 tooltip={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
@@ -1207,7 +247,7 @@
               ><Button
                 variant="tertiary"
                 icon
-                onClick={openDelivery}
+                onClick={model.openDelivery}
                 ariaLabel={t(
                   'swarm.changeCommunication',
                   'Change communication settings',
@@ -1221,22 +261,27 @@
           </div>
           <div class="swarm-tabs">
             <TabList
-              items={tabs}
-              value={activeTab}
+              items={model.tabs}
+              value={model.activeTab}
               ariaLabel={t('swarm.details', 'Swarm details')}
-              onChange={(next) => (activeTab = next)}
+              onChange={(next) => (model.activeTab = next)}
             /><StatusChip
-              variant={canStop(selectedSwarm.state) ? 'warn' : 'neutral'}
+              variant={canStop(model.selectedSwarm.state) ? 'warn' : 'neutral'}
               >{t(
-                `swarm.state.${selectedSwarm.state}`,
-                selectedSwarm.state,
+                `swarm.state.${model.selectedSwarm.state}`,
+                model.selectedSwarm.state,
               )}</StatusChip
             >
           </div>
-          {#if activeTab === 'board'}<section class="panel" role="tabpanel">
+          {#if model.activeTab === 'board'}<section
+              class="panel"
+              role="tabpanel"
+            >
               <div class="section-head">
                 <h3>{t('swarm.board.title', 'Board')}</h3>
-                <Button variant="secondary" onClick={() => (composeOpen = true)}
+                <Button
+                  variant="secondary"
+                  onClick={() => (model.composeOpen = true)}
                   >{t('swarm.board.openComposer', 'Write post')}</Button
                 >
                 <FormField
@@ -1245,10 +290,10 @@
                   ><select
                     class="s-input"
                     id="swarm-discussion"
-                    value={selectedDiscussion}
+                    value={model.selectedDiscussion}
                     onchange={(event) =>
-                      chooseDiscussion(event.currentTarget.value)}
-                    >{#each discussionOptions as discussion (discussion.id)}<option
+                      model.chooseDiscussion(event.currentTarget.value)}
+                    >{#each model.discussionOptions as discussion (discussion.id)}<option
                         value={discussion.id}
                         >{discussion.title ??
                           discussion.name ??
@@ -1256,10 +301,13 @@
                       >{/each}</select
                   ></FormField
                 >
-                {#if discussionCursor}<Button
+                {#if model.discussionCursor}<Button
                     variant="secondary"
                     onClick={() =>
-                      loadDiscussions(selectedSwarm, discussionCursor)}
+                      model.loadDiscussions(
+                        model.selectedSwarm,
+                        model.discussionCursor,
+                      )}
                     >{t(
                       'swarm.board.moreDiscussions',
                       'Load more discussions',
@@ -1274,9 +322,9 @@
                   {t('swarm.participants', 'Participants')}
                 </p>
                 <div class="participant-row">
-                  {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
+                  {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}<Button
                       variant="secondary"
-                      onClick={() => inspectParticipant(participant)}
+                      onClick={() => activity.inspectParticipant(participant)}
                       >{@render participantAvatar(
                         participant.id,
                         participant.display_name,
@@ -1292,11 +340,11 @@
                     >{/each}
                 </div>
               </section>
-              {#if board.length === 0}<EmptyState
+              {#if model.board.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty', 'No Board messages yet.')}
-                />{:else}<ol class="board" use:contentLinks>
-                  {#each board as post (post.id)}<li>
+                />{:else}<ol class="board" use:model.contentLinks>
+                  {#each model.board as post (post.id)}<li>
                       <div class="post-header">
                         <div class="post-author">
                           {@render participantAvatar(
@@ -1311,7 +359,7 @@
                           >
                         </div>
                         <time datetime={post.created_at}
-                          >{date(post.created_at)}</time
+                          >{model.date(post.created_at)}</time
                         >
                       </div>
                       {#if post.discussion_announcement}
@@ -1326,7 +374,9 @@
                           <Button
                             variant="secondary"
                             onClick={() =>
-                              openDiscussion(post.discussion_announcement)}
+                              model.openDiscussion(
+                                post.discussion_announcement,
+                              )}
                           >
                             {post.discussion_announcement.title}
                           </Button>
@@ -1346,23 +396,28 @@
                         >{/if}
                     </li>{/each}
                 </ol>
-                {#if boardCursor}<Button
+                {#if model.boardCursor}<Button
                     variant="secondary"
                     onClick={() =>
-                      loadBoard(selectedSwarm, selectedDiscussion, boardCursor)}
+                      model.loadBoard(
+                        model.selectedSwarm,
+                        model.selectedDiscussion,
+                        model.boardCursor,
+                      )}
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
                   >{/if}{/if}
             </section>
-          {:else if activeTab === 'participants'}<section
+          {:else if model.activeTab === 'participants'}<section
               class="panel"
               role="tabpanel"
             >
               <h3>{t('swarm.participants', 'Participants')}</h3>
               <div class="participants">
-                {#each selectedSwarm.participants ?? [] as participant (participant.id)}<Button
+                {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}<Button
                     variant="secondary"
-                    aria-pressed={history?.participant.id === participant.id}
-                    onClick={() => inspectParticipant(participant)}
+                    aria-pressed={activity.history?.participant.id ===
+                      participant.id}
+                    onClick={() => activity.inspectParticipant(participant)}
                     >{@render participantAvatar(
                       participant.id,
                       participant.display_name,
@@ -1378,10 +433,13 @@
                     ></Button
                   >{/each}
               </div>
-              {#if history}<article class="history" use:contentLinks>
+              {#if activity.history}<article
+                  class="history"
+                  use:model.contentLinks
+                >
                   <div class="section-head">
                     <h3>
-                      {history.participant.display_name}
+                      {activity.history.participant.display_name}
                       {t('swarm.activity', 'activity')}
                     </h3>
                     <div class="actions">
@@ -1391,7 +449,7 @@
                           'chat.contextRingLabel',
                           'Context window usage',
                         )}
-                        use:tooltip={activityContextTooltip}
+                        use:tooltip={activity.activityContextTooltip}
                       >
                         <svg
                           width="18"
@@ -1413,18 +471,21 @@
                             stroke="currentColor"
                             stroke-width="2"
                             pathLength="1"
-                            stroke-dasharray={`${contextRatio} 1`}
+                            stroke-dasharray={`${activity.contextRatio} 1`}
                             transform="rotate(-90 9 9)"
                           /></svg
                         >
-                        {t('swarm.context', 'Context')}: {contextTokens}
+                        {t('swarm.context', 'Context')}: {activity.contextTokens}
                       </button>
-                      {#if canResume && selectedParticipant && !selectedParticipant.run_active && resumableParticipantState(selectedParticipant.state)}
+                      {#if model.canResume && activity.selectedParticipant && !activity.selectedParticipant.run_active && resumableParticipantState(activity.selectedParticipant.state)}
                         <Button
                           variant="primary"
-                          disabled={Boolean(pending)}
+                          disabled={Boolean(model.pending)}
                           onClick={() =>
-                            lifecycle('resume', selectedParticipant.id)}
+                            model.lifecycle(
+                              'resume',
+                              activity.selectedParticipant.id,
+                            )}
                           >{t(
                             'swarm.resumeParticipant',
                             'Resume participant',
@@ -1436,27 +497,27 @@
                         icon
                         ariaLabel={t('common.close', 'Close')}
                         tooltip={t('common.close', 'Close')}
-                        onClick={leaveActivity}
+                        onClick={activity.leaveActivity}
                         >{@render actionIcon('close')}</Button
                       >
                     </div>
                   </div>
-                  {#if history.data.has_more && history.data.next_before}
+                  {#if activity.history.data.has_more && activity.history.data.next_before}
                     <Button
                       variant="secondary"
-                      disabled={historyLoading}
-                      onClick={loadEarlierActivity}
+                      disabled={activity.historyLoading}
+                      onClick={activity.loadEarlierActivity}
                     >
                       {t('chat.loadOlderMessages', 'Load older messages')}
                     </Button>
                   {/if}
-                  {#each activityTimeline as item (item.id)}
+                  {#each activity.activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
                         {item}
-                        agentName={history.participant.display_name}
+                        agentName={activity.history.participant.display_name}
                       />{:else}<ChatTimelineEntry
                         {item}
-                        agentName={history.participant.display_name}
+                        agentName={activity.history.participant.display_name}
                         messageEditingDisabled
                       />{/if}
                   {:else}<EmptyState
@@ -1465,30 +526,30 @@
                     />{/each}
                 </article>{/if}
             </section>
-          {:else if activeTab === 'usage'}<section
+          {:else if model.activeTab === 'usage'}<section
               class="panel"
               role="tabpanel"
             >
               <h3>{t('swarm.usage', 'Usage')}</h3>
               <dl class="swarm-identity">
                 <dt>{t('swarm.id', 'Swarm ID')}</dt>
-                <dd>{selectedSwarm.id}</dd>
+                <dd>{model.selectedSwarm.id}</dd>
               </dl>
-              {#if usage?.usage}<dl class="usage-summary">
+              {#if model.usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
                       {t('swarm.usage.tokensUsed', 'Tokens used')}
                     </dt>
-                    <dd>{tokensUsed(usage.usage.usage?.totals)}</dd>
+                    <dd>{tokensUsed(model.usage.usage.usage?.totals)}</dd>
                   </div>
                   <div>
                     <dt>{t('swarm.usage.toolCalls', 'Tool Calls')}</dt>
                     <dd>
-                      {usageCount(usage.usage.tools?.total_calls)}
+                      {usageCount(model.usage.usage.tools?.total_calls)}
                     </dd>
                   </div>
                 </dl>
-                {#if usageRows.length}<div class="table-wrap">
+                {#if model.usageRows.length}<div class="table-wrap">
                     <table>
                       <thead>
                         <tr>
@@ -1500,7 +561,7 @@
                         </tr>
                       </thead>
                       <tbody>
-                        {#each usageRows as row (row.id)}
+                        {#each model.usageRows as row (row.id)}
                           <tr>
                             {#if row.participantRows}
                               <td rowspan={row.participantRows}
@@ -1530,9 +591,9 @@
           {:else}<section class="panel" role="tabpanel">
               <h3>{t('swarm.audit', 'Delivery audit')}</h3>
               <ol class="audit">
-                {#each events as event (event.id)}<li>
+                {#each model.events as event (event.id)}<li>
                     <strong>{event.kind}</strong><span
-                      >{event.actor} / {date(event.created_at)}</span
+                      >{event.actor} / {model.date(event.created_at)}</span
                     >
                     {#if event.old || event.new}<dl class="audit-change">
                         {#if event.old}<div>
@@ -1554,9 +615,9 @@
                     />
                   </li>{/each}
               </ol>
-              {#if eventsCursor}<Button
+              {#if model.eventsCursor}<Button
                   variant="secondary"
-                  onClick={loadMoreEvents}
+                  onClick={model.loadMoreEvents}
                   >{t('swarm.audit.more', 'Load more events')}</Button
                 >{/if}
             </section>{/if}
@@ -1577,14 +638,14 @@
                 <Dropdown
                   id="swarm-start-profile"
                   ariaLabel={t('swarm.profile', 'Swarm')}
-                  value={selectedProfile?.id ?? ''}
-                  options={profiles.map((profile) => ({
+                  value={model.selectedProfile?.id ?? ''}
+                  options={model.profiles.map((profile) => ({
                     value: profile.id,
                     label: profile.name,
                   }))}
                   onValueChange={(id) =>
-                    selectRunProfile(
-                      profiles.find((profile) => profile.id === id),
+                    model.selectRunProfile(
+                      model.profiles.find((profile) => profile.id === id),
                     )}
                 />
               </FormField>
@@ -1593,8 +654,8 @@
                 icon
                 ariaLabel={t('common.edit', 'Edit')}
                 tooltip={t('swarm.editProfile', 'Edit Swarm')}
-                disabled={!selectedProfile}
-                onClick={() => openProfile(selectedProfile)}
+                disabled={!model.selectedProfile}
+                onClick={() => model.openProfile(model.selectedProfile)}
                 >{@render actionIcon('edit')}</Button
               >
               <Button
@@ -1602,8 +663,8 @@
                 icon
                 ariaLabel={t('common.delete', 'Delete')}
                 tooltip={t('swarm.delete.title', 'Delete Swarm')}
-                disabled={!selectedProfile}
-                onClick={() => (deleteCandidate = selectedProfile)}
+                disabled={!model.selectedProfile}
+                onClick={() => (model.deleteCandidate = model.selectedProfile)}
                 >{@render actionIcon('trash')}</Button
               >
             </div>
@@ -1613,18 +674,18 @@
             >
               <TextField
                 id="swarm-start-directory"
-                value={runDirectory}
-                disabled={!selectedProfile ||
-                  directoryLoading ||
-                  pending === 'start'}
-                onInput={(value) => (runDirectory = value)}
+                value={model.runDirectory}
+                disabled={!model.selectedProfile ||
+                  model.directoryLoading ||
+                  model.pending === 'start'}
+                onInput={(value) => (model.runDirectory = value)}
               />
             </FormField>
             <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}>
               <TextArea
                 id="swarm-goal"
-                value={goal}
-                onInput={(value) => (goal = value)}
+                value={model.goal}
+                onInput={(value) => (model.goal = value)}
                 rows="6"
                 placeholder={t(
                   'swarm.goalPlaceholder',
@@ -1633,12 +694,12 @@
               />
             </FormField><Button
               variant="primary"
-              loading={pending === 'start'}
-              disabled={!selectedProfile ||
-                directoryLoading ||
-                !runDirectory.trim()}
-              onClick={startSwarm}
-              >{@render actionIcon('play')}{pending === 'start'
+              loading={model.pending === 'start'}
+              disabled={!model.selectedProfile ||
+                model.directoryLoading ||
+                !model.runDirectory.trim()}
+              onClick={model.startSwarm}
+              >{@render actionIcon('play')}{model.pending === 'start'
                 ? t('swarm.starting', 'Starting…')
                 : t('swarm.startButton', 'Start Run')}</Button
             >
@@ -1648,20 +709,22 @@
   </div>
 </main>
 
-{#if composeOpen && selectedSwarm}<Modal
+{#if model.composeOpen && model.selectedSwarm}<Modal
     title={t('swarm.board.openComposer', 'Write post')}
-    closeDisabled={posting}
-    onClose={() => (composeOpen = false)}
+    closeDisabled={model.posting}
+    onClose={() => (model.composeOpen = false)}
   >
-    {#snippet body()}<div class="modal-copy">
-        {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
+    {#snippet body()}<div class="modal-copy swarm-page-modal-copy">
+        {#if model.error}<Banner variant="error" role="alert"
+            >{model.error}</Banner
+          >{/if}
         <FormField
           controlId="swarm-post"
           label={t('swarm.board.post', 'Post to the Board')}
           ><textarea
             class="text-area text-area--default"
             id="swarm-post"
-            bind:value={postText}
+            bind:value={model.postText}
             rows="3"
             placeholder={t(
               'swarm.board.placeholder',
@@ -1675,7 +738,7 @@
             ><input
               class="s-input"
               id="swarm-reply"
-              bind:value={replyTo}
+              bind:value={model.replyTo}
             /></FormField
           ><FormField
             controlId="swarm-pings"
@@ -1686,71 +749,73 @@
             ><input
               class="s-input"
               id="swarm-pings"
-              bind:value={postRecipients}
+              bind:value={model.postRecipients}
             /></FormField
           >
         </div>
       </div>{/snippet}
     {#snippet footer()}<Button
         variant="secondary"
-        disabled={posting}
-        onClick={() => (composeOpen = false)}
+        disabled={model.posting}
+        onClick={() => (model.composeOpen = false)}
         >{t('common.cancel', 'Cancel')}</Button
       ><Button
         variant="primary"
-        loading={posting}
-        disabled={!postText.trim()}
-        onClick={post}>{t('swarm.board.submit', 'Post')}</Button
+        loading={model.posting}
+        disabled={!model.postText.trim()}
+        onClick={model.post}>{t('swarm.board.submit', 'Post')}</Button
       >{/snippet}
   </Modal>{/if}
-{#if swarmDeleteCandidate}<Modal
+{#if model.swarmDeleteCandidate}<Modal
     title={t('swarm.deleteRun.title', 'Delete Run')}
-    closeDisabled={pending === 'delete'}
-    onClose={() => (swarmDeleteCandidate = null)}
-    >{#snippet body()}<div class="modal-copy">
-        <p>{swarmDeleteCandidate.prompt}</p>
+    closeDisabled={model.pending === 'delete'}
+    onClose={() => (model.swarmDeleteCandidate = null)}
+    >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
+        <p>{model.swarmDeleteCandidate.prompt}</p>
         <p>
           {t(
             'swarm.deleteRun.body',
             'Permanently delete this Run, its Board and participant Sessions? The Swarm will be kept. This cannot be undone.',
           )}
         </p>
-        {#if deleteError}<Banner variant="error">{deleteError}</Banner>{/if}
+        {#if model.deleteError}<Banner variant="error"
+            >{model.deleteError}</Banner
+          >{/if}
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
-        disabled={pending === 'delete'}
-        onClick={() => (swarmDeleteCandidate = null)}
+        disabled={model.pending === 'delete'}
+        onClick={() => (model.swarmDeleteCandidate = null)}
         >{t('common.cancel', 'Cancel')}</Button
       ><Button
         variant="danger"
-        loading={pending === 'delete'}
-        onClick={deleteSwarm}>{t('common.delete', 'Delete')}</Button
+        loading={model.pending === 'delete'}
+        onClick={model.deleteSwarm}>{t('common.delete', 'Delete')}</Button
       >{/snippet}</Modal
   >{/if}
-{#if deleteCandidate}<Modal
+{#if model.deleteCandidate}<Modal
     title={t('swarm.delete.title', 'Delete Swarm')}
-    onClose={() => (deleteCandidate = null)}
-    >{#snippet body()}<div class="modal-copy">
+    onClose={() => (model.deleteCandidate = null)}
+    >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <p>
           {t(
             'swarm.delete.body',
             'Delete {name}? Existing Runs remain available.',
-            { name: deleteCandidate.name },
+            { name: model.deleteCandidate.name },
           )}
         </p>
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
-        onClick={() => (deleteCandidate = null)}
+        onClick={() => (model.deleteCandidate = null)}
         >{t('common.cancel', 'Cancel')}</Button
-      ><Button variant="danger" onClick={deleteProfile}
+      ><Button variant="danger" onClick={model.deleteProfile}
         >{t('common.delete', 'Delete')}</Button
       >{/snippet}</Modal
   >{/if}
-{#if settingsOpen}<Modal
+{#if model.settingsOpen}<Modal
     title={t('swarm.communication.title', 'Change communication settings')}
-    closeDisabled={pending === 'settings'}
-    onClose={() => (settingsOpen = false)}
-    >{#snippet body()}<div class="communication">
+    closeDisabled={model.pending === 'settings'}
+    onClose={() => (model.settingsOpen = false)}
+    >{#snippet body()}<div class="communication swarm-page-communication">
         {#each ['main', 'discussion', 'ping'] as route (route)}<section>
             <h3>{t(`swarm.delivery.${route}`, route)}</h3>
             <FormField
@@ -1758,9 +823,13 @@
               label={t('swarm.delivery.mode', 'Mode')}
               ><select
                 class="s-input"
-                value={deliveryDraft[route].mode}
+                value={model.deliveryDraft[route].mode}
                 onchange={(event) =>
-                  changeDelivery(route, 'mode', event.currentTarget.value)}
+                  model.changeDelivery(
+                    route,
+                    'mode',
+                    event.currentTarget.value,
+                  )}
                 ><option value="all"
                   >{t('swarm.delivery.all', 'All messages')}</option
                 ><option value="idle"
@@ -1775,9 +844,9 @@
             ><label class="check"
               ><input
                 type="checkbox"
-                checked={deliveryDraft[route].wake_idle}
+                checked={model.deliveryDraft[route].wake_idle}
                 onchange={(event) =>
-                  changeDelivery(
+                  model.changeDelivery(
                     route,
                     'wake_idle',
                     event.currentTarget.checked,
@@ -1798,9 +867,9 @@
                 type="number"
                 min="0"
                 max="5000"
-                value={deliveryDraft.coalesce_ms}
+                value={model.deliveryDraft.coalesce_ms}
                 onchange={(event) =>
-                  changeDeliverySetting(
+                  model.changeDeliverySetting(
                     'coalesce_ms',
                     event.currentTarget.value,
                   )}
@@ -1815,9 +884,9 @@
                 type="number"
                 min="1"
                 max="100"
-                value={deliveryDraft.batch_messages}
+                value={model.deliveryDraft.batch_messages}
                 onchange={(event) =>
-                  changeDeliverySetting(
+                  model.changeDeliverySetting(
                     'batch_messages',
                     event.currentTarget.value,
                   )}
@@ -1832,9 +901,9 @@
                 type="number"
                 min="16000"
                 max="128000"
-                value={deliveryDraft.batch_chars}
+                value={model.deliveryDraft.batch_chars}
                 onchange={(event) =>
-                  changeDeliverySetting(
+                  model.changeDeliverySetting(
                     'batch_chars',
                     event.currentTarget.value,
                   )}
@@ -1844,8 +913,8 @@
         </section>
         <section>
           <h3>{t('swarm.communication.proposed', 'Proposed changes')}</h3>
-          {#if settingChanges.length}<ul>
-              {#each settingChanges as change (`${change.route}-${change.field}`)}<li
+          {#if model.settingChanges.length}<ul>
+              {#each model.settingChanges as change (`${change.route}-${change.field}`)}<li
                 >
                   {change.route} · {change.field}: <s>{change.before}</s> → {change.after}
                 </li>{/each}
@@ -1861,505 +930,33 @@
         </section>
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
-        disabled={pending === 'settings'}
-        onClick={() => (settingsOpen = false)}
+        disabled={model.pending === 'settings'}
+        onClick={() => (model.settingsOpen = false)}
         >{t('common.cancel', 'Cancel')}</Button
       ><Button
         variant="primary"
-        loading={pending === 'settings'}
-        disabled={settingChanges.length === 0}
-        onClick={applyDelivery}
-        >{pending === 'settings'
+        loading={model.pending === 'settings'}
+        disabled={model.settingChanges.length === 0}
+        onClick={model.applyDelivery}
+        >{model.pending === 'settings'
           ? t('swarm.applying', 'Applying…')
           : t('swarm.apply', 'Apply changes')}</Button
       >{/snippet}</Modal
   >{/if}
-{#if profileSnapshotOpen}<Modal
+{#if model.profileSnapshotOpen}<Modal
     title={t('swarm.profileSnapshot', 'Swarm snapshot')}
-    onClose={() => (profileSnapshotOpen = false)}
-    >{#snippet body()}<div class="modal-copy">
+    onClose={() => (model.profileSnapshotOpen = false)}
+    >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <pre>{JSON.stringify(
-            selectedSwarm.profile_snapshot ?? selectedSwarm.profile ?? {},
+            model.selectedSwarm.profile_snapshot ??
+              model.selectedSwarm.profile ??
+              {},
             null,
             2,
           )}</pre>
       </div>{/snippet}{#snippet footer()}<Button
         variant="primary"
-        onClick={() => (profileSnapshotOpen = false)}
+        onClick={() => (model.profileSnapshotOpen = false)}
         >{t('common.close', 'Close')}</Button
       >{/snippet}</Modal
   >{/if}
-
-<style>
-  :global(body) {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-  }
-  .swarm-page {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .secondary-pane {
-    flex-shrink: 0;
-  }
-  .secondary-pane__header {
-    align-items: center;
-  }
-  .secondary-pane__title {
-    color: var(--text-med);
-  }
-  .secondary-list__item {
-    width: 100%;
-    text-align: left;
-    padding: 10px 12px;
-    color: var(--text-hi);
-    display: grid;
-    gap: 6px;
-  }
-  .secondary-list__item.active {
-    color: var(--accent);
-  }
-  .sidebar-title {
-    min-width: 0;
-    font-weight: 400;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .swarms-head {
-    margin-top: 16px;
-  }
-  .sidebar-footer {
-    padding: 12px;
-    border-top: 1px solid var(--border);
-  }
-  .sidebar-footer :global(button) {
-    width: 100%;
-  }
-  .workspace {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .workspace > :global(.banner) {
-    margin: 14px 28px 0;
-  }
-  .workspace-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 20px;
-  }
-  .content {
-    flex: 1;
-    min-width: 0;
-    overflow: auto;
-    padding: 20px 28px;
-  }
-  .eyebrow {
-    margin: 0;
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-  }
-  .swarm-head,
-  .section-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-  }
-  .swarm-head {
-    margin-bottom: 20px;
-  }
-  .swarm-head h2 {
-    font-size: var(--fs-body-md);
-    margin: 0 0 8px;
-  }
-  .goal {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    margin: 0;
-  }
-  .swarm-head > div:first-child {
-    min-width: 0;
-    flex: 1;
-  }
-  .swarm-head {
-    align-items: start;
-  }
-  .swarm-tabs {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-  .swarm-tabs :global(.tab-list) {
-    flex: 1;
-    min-width: 0;
-  }
-  .context-usage {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-    background: transparent;
-    border: 0;
-  }
-  .swarm-identity {
-    margin: 0;
-  }
-  .swarm-identity dt {
-    color: var(--text-med);
-  }
-  .swarm-identity dd {
-    margin: 6px 0 0;
-    font-family: var(--font-mono);
-    overflow-wrap: anywhere;
-  }
-  .muted,
-  .section-head p {
-    color: var(--text-med);
-    margin: 4px 0;
-    overflow-wrap: anywhere;
-  }
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .panel {
-    display: grid;
-    gap: 16px;
-    padding-block: 20px;
-  }
-  .panel h3 {
-    margin: 0;
-    font-size: var(--fs-heading-sm);
-  }
-  .start {
-    display: grid;
-    gap: 20px;
-    max-width: 760px;
-    margin-inline: auto;
-    padding-block: 20px;
-  }
-  .start h2 {
-    font-size: var(--fs-display);
-    margin: 0;
-  }
-  .start > p {
-    margin: 0;
-    color: var(--text-med);
-  }
-  .start > :global(button) {
-    justify-self: start;
-  }
-  .start-profile {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    align-items: end;
-    gap: 8px;
-  }
-  .board,
-  .audit {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 8px;
-  }
-  .board > li,
-  .history {
-    min-width: 0;
-    padding: 12px;
-    border-left: 2px solid var(--border-2);
-    background: var(--surface-2);
-  }
-  .board .post-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .board time,
-  .board small {
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  .post-header {
-    align-items: center;
-    flex-wrap: wrap;
-    border-bottom: 1px solid var(--border-2);
-    padding-bottom: 10px;
-    margin-bottom: 10px;
-  }
-  .post-header strong {
-    font-size: var(--fs-body-md);
-    color: var(--text-hi);
-    overflow-wrap: anywhere;
-  }
-  .post-author {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .participant-avatar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    min-width: 32px;
-    height: 32px;
-    padding-inline: 4px;
-    box-sizing: border-box;
-    border-radius: var(--r-sm);
-    color: var(--participant-color);
-    background: var(--bg);
-    border: 1px solid currentColor;
-    font: 600 var(--fs-label-sm) var(--font-ui);
-    white-space: nowrap;
-  }
-  .participant-row strong {
-    color: var(--text-hi);
-    font-weight: 600;
-  }
-  .board time {
-    white-space: nowrap;
-  }
-  .board :global(.msg-markdown) {
-    overflow-wrap: anywhere;
-    overflow-x: auto;
-  }
-  .discussion-announcement p {
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-    margin: 7px 0 0;
-  }
-  .discussion-announcement {
-    display: grid;
-    justify-items: start;
-    gap: 8px;
-  }
-  .discussion-announcement :global(button) {
-    max-width: 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    text-align: left;
-  }
-  .audit-change {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin: 8px 0 0;
-  }
-  .audit-change dt {
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  .audit-change dd {
-    margin: 3px 0 0;
-    overflow-wrap: anywhere;
-    color: var(--text-hi);
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  .participant-pane {
-    display: grid;
-    gap: 10px;
-  }
-  .participant-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .participant-row :global(button) {
-    text-align: left;
-    min-width: 0;
-    max-width: 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .participant-pane small,
-  .run-indicator {
-    display: block;
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  .run-indicator {
-    color: var(--amber);
-  }
-  .post-options {
-    display: grid;
-    align-items: end;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .participants {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 8px;
-  }
-  .participants strong,
-  .participants small {
-    display: block;
-  }
-  .participants strong {
-    margin-bottom: 5px;
-  }
-  .participants :global(button[aria-pressed='true']) {
-    border-color: var(--accent-40);
-    background: var(--accent-06);
-  }
-  .history {
-    margin-top: 4px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-  }
-  .history > .section-head {
-    flex-wrap: wrap;
-    margin-bottom: 16px;
-  }
-  .participants :global(button) {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid var(--border-2);
-    text-align: left;
-  }
-  .history pre,
-  .panel pre {
-    overflow: auto;
-    max-height: 420px;
-    white-space: pre-wrap;
-    background: var(--bg);
-    padding: 10px;
-    color: var(--text-hi);
-  }
-  .audit li {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 8px;
-    border-bottom: 1px solid var(--border-2);
-  }
-  .modal-copy,
-  .communication {
-    display: grid;
-    gap: 16px;
-    padding: 0 18px 18px;
-  }
-  .communication section {
-    display: grid;
-    gap: 8px;
-  }
-  .communication h3 {
-    margin: 0;
-  }
-  .communication p {
-    margin: 0;
-    color: var(--text-med);
-  }
-  .communication ul {
-    margin: 0;
-    padding-left: 18px;
-  }
-  .advanced-settings {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .usage-summary {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
-    margin: 0;
-  }
-  .usage-summary div {
-    padding: 12px;
-    border-left: 2px solid var(--border-2);
-    background: var(--surface-2);
-  }
-  .usage-summary dt {
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  .usage-summary dd {
-    margin: 5px 0 0;
-    color: var(--text-hi);
-  }
-  .table-wrap {
-    overflow-x: auto;
-    margin-top: 16px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font: var(--fs-mono-xs) var(--font-mono);
-  }
-  th,
-  td {
-    padding: 9px 8px;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-  }
-  th {
-    color: var(--text-med);
-  }
-  td {
-    color: var(--text-hi);
-  }
-  .check {
-    display: flex;
-    gap: 7px;
-    align-items: center;
-    color: var(--text-med);
-  }
-  @media (max-width: 960px) {
-    .swarm-page {
-      flex-direction: column;
-    }
-    .secondary-pane {
-      width: 100%;
-      max-height: 220px;
-      border-right: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .secondary-list {
-      padding-block: 6px;
-    }
-    .secondary-list__item {
-      min-width: 160px;
-    }
-    .content {
-      padding: 16px;
-    }
-  }
-  @media (max-width: 640px) {
-    .post-options {
-      grid-template-columns: 1fr;
-    }
-    .advanced-settings {
-      grid-template-columns: 1fr;
-    }
-    .usage-summary {
-      grid-template-columns: 1fr;
-    }
-    .content {
-      padding: 15px;
-    }
-    .swarm-head,
-    .audit li {
-      display: grid;
-    }
-  }
-</style>

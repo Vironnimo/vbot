@@ -1,0 +1,595 @@
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+}
+.swarm-page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-pane {
+  flex-shrink: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-pane__header {
+  align-items: center;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-pane__title {
+  color: var(--text-med);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-list__item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  color: var(--text-hi);
+  display: grid;
+  gap: 6px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .secondary-list__item.active {
+  color: var(--accent);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .sidebar-title {
+  min-width: 0;
+  font-weight: 400;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarms-head {
+  margin-top: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .sidebar-footer
+  button {
+  width: 100%;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .workspace
+  > .banner {
+  margin: 14px 28px 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .workspace-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 20px 28px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .eyebrow {
+  margin: 0;
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head {
+  margin-bottom: 20px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head
+  h2 {
+  font-size: var(--fs-body-md);
+  margin: 0 0 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .goal {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head
+  > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-head {
+  align-items: start;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-tabs {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-tabs
+  .tab-list {
+  flex: 1;
+  min-width: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .context-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+  background: transparent;
+  border: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity {
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity
+  dt {
+  color: var(--text-med);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .swarm-identity
+  dd {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .muted,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .section-head
+  p {
+  color: var(--text-med);
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .panel {
+  display: grid;
+  gap: 16px;
+  padding-block: 20px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .panel
+  h3 {
+  margin: 0;
+  font-size: var(--fs-heading-sm);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .start {
+  display: grid;
+  gap: 20px;
+  max-width: 760px;
+  margin-inline: auto;
+  padding-block: 20px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .start
+  h2 {
+  font-size: var(--fs-display);
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .start
+  > p {
+  margin: 0;
+  color: var(--text-med);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .start
+  > button {
+  justify-self: start;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .start-profile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .board,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .audit {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  > li,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history {
+  min-width: 0;
+  padding: 12px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface-2);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  .post-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  time,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  small {
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-header {
+  align-items: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-2);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-header
+  strong {
+  font-size: var(--fs-body-md);
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 32px;
+  height: 32px;
+  padding-inline: 4px;
+  box-sizing: border-box;
+  border-radius: var(--r-sm);
+  color: var(--participant-color);
+  background: var(--bg);
+  border: 1px solid currentColor;
+  font: 600 var(--fs-label-sm) var(--font-ui);
+  white-space: nowrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row
+  strong {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  time {
+  white-space: nowrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .board
+  .msg-markdown {
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement
+  p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 7px 0 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .discussion-announcement
+  button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .audit-change {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .audit-change
+  dt {
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .audit-change
+  dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-pane {
+  display: grid;
+  gap: 10px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-row
+  button {
+  text-align: left;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participant-pane
+  small,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .run-indicator {
+  display: block;
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .run-indicator {
+  color: var(--amber);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .post-options {
+  display: grid;
+  align-items: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants
+  strong,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants
+  small {
+  display: block;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants
+  strong {
+  margin-bottom: 5px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants
+  button[aria-pressed='true'] {
+  border-color: var(--accent-40);
+  background: var(--accent-06);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history
+  > .section-head {
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .participants
+  button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-2);
+  text-align: left;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .history
+  pre,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .panel
+  pre {
+  overflow: auto;
+  max-height: 420px;
+  white-space: pre-wrap;
+  background: var(--bg);
+  padding: 10px;
+  color: var(--text-hi);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .audit
+  li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-2);
+}
+.swarm-page-modal-copy,
+.swarm-page-communication {
+  display: grid;
+  gap: 16px;
+  padding: 0 18px 18px;
+}
+.swarm-page-communication section {
+  display: grid;
+  gap: 8px;
+}
+.swarm-page-communication h3 {
+  margin: 0;
+}
+.swarm-page-communication p {
+  margin: 0;
+  color: var(--text-med);
+}
+.swarm-page-communication ul {
+  margin: 0;
+  padding-left: 18px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .advanced-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  div {
+  padding: 12px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface-2);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  dt {
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .usage-summary
+  dd {
+  margin: 5px 0 0;
+  color: var(--text-hi);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+  .table-wrap {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th,
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
+  padding: 9px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th {
+  color: var(--text-med);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
+  color: var(--text-hi);
+}
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .check {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--text-med);
+}
+@media (max-width: 960px) {
+  .swarm-page {
+    flex-direction: column;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .secondary-pane {
+    width: 100%;
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .secondary-list {
+    padding-block: 6px;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .secondary-list__item {
+    min-width: 160px;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .content {
+    padding: 16px;
+  }
+}
+@media (max-width: 640px) {
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .post-options {
+    grid-template-columns: 1fr;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .advanced-settings {
+    grid-template-columns: 1fr;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .usage-summary {
+    grid-template-columns: 1fr;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .content {
+    padding: 15px;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .swarm-head,
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .audit
+    li {
+    display: grid;
+  }
+}
