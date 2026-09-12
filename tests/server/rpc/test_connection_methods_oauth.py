@@ -29,7 +29,7 @@ from server.events import (
     RESOURCE_CHANGED_EVENT,
     ServerEventBus,
 )
-from server.rpc import connection_methods
+from server.rpc import model_methods
 from server.rpc.methods import dispatch_rpc
 
 
@@ -732,8 +732,8 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
         }
 
     monkeypatch.setattr("server.rpc.provider_access.OAuthTokenGetter", StubOAuthTokenGetter)
-    monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
-    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
+    monkeypatch.setattr("server.rpc.model_methods.refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "fetch_catalog", no_models_dev_catalog)
 
     response = await dispatch_rpc(
         state,
@@ -794,7 +794,7 @@ async def test_model_refresh_continues_after_oauth_credential_failure(
         raise error
 
     monkeypatch.setattr("core.providers.token_getter.OAuthTokenGetter.__call__", failing_getter)
-    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
+    monkeypatch.setattr(model_methods, "fetch_catalog", no_models_dev_catalog)
     catalog_route = respx.get("https://api.githubcopilot.com/models").mock(
         return_value=httpx.Response(200, json={"data": [{"id": "fresh-model"}]}),
     )
@@ -844,8 +844,8 @@ async def test_model_refresh_db_preserves_api_key_credential_path(
             "fetched_at": "2026-05-12T00:00:00+00:00",
         }
 
-    monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
-    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
+    monkeypatch.setattr("server.rpc.model_methods.refresh_models", fake_refresh_models)
+    monkeypatch.setattr(model_methods, "fetch_catalog", no_models_dev_catalog)
 
     response = await dispatch_rpc(
         state,

@@ -209,3 +209,9 @@ def _ensure_model_connection_supported(models: Any, label: str, model_string: st
         f"params.{label}: model {provider_id}/{model_id} is not available on "
         f"connection '{connection_id}' (allowed connections: {allowed})",
     )
+
+
+def _validate_string_list(key: str, value: Any) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of strings")
+    return list(value)
