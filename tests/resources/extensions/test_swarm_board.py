@@ -279,13 +279,11 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
         {},
         {"action": "other"},
         {"action": "list", "limit": True},
-        {"action": "list", "limit": "1"},
         {"action": "list", "limit": 0},
         {"action": "list", "limit": 101},
         {"action": "list", "swarm_id": "foreign"},
         {"action": "read", "message_id": "foreign", "limit": 20},
         {"action": "read", "text": "wrong"},
-        {"action": "read", "cursor": None},
         {"action": "post", "text": "x"},
         {"action": "post", "text": "", "request_id": "id"},
         {"action": "post", "text": "x" * 16001, "request_id": "id"},
@@ -465,7 +463,7 @@ async def test_board_validation_identifies_the_field_before_any_effect(board):
         ({"action": "post", "text": "missing request"}, "request_id"),
         ({"action": "list", "text": "inapplicable"}, "text"),
         ({"action": "join"}, "discussion_id"),
-        ({"action": "list", "limti": 1}, "limti"),
+        ({"action": "list", "unavailable_feature": 1}, "unavailable_feature"),
     ]:
         with pytest.raises(SwarmStoreError) as error:
             _validate_board(arguments)
@@ -558,7 +556,6 @@ async def test_resume_admits_all_inactive_participants(board, monkeypatch):
         {"state": "idle"},
         {"action": "name", "name": "Changed"},
         {"name": "Changed"},
-        {"action": "status"},
         {"include_summaries": True},
     ],
 )
@@ -747,3 +744,30 @@ async def test_resume_waits_for_delete_and_cannot_recreate_sessions(board, monke
     with pytest.raises(ValueError, match="swarm_not_found"):
         await resume
     assert not any(board.sessions.exists(item.address) for item in board.bindings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("swarm_board", {"request": {"operation": "LIST", "limti": "1"}}),
+        ("swarm_inbox", {"receive": {"limit": "1"}}),
+        ("swarm_state", {"operation": "STATUS", "limit": "1.0"}),
+    ],
+)
+async def test_scoped_tools_repair_arguments_and_accept_matching_identity(board, name, arguments):
+    context = replace(board.contexts[0], tool_name=name, session_tool_grants=(name,))
+    result = await board.tools.dispatch(
+        context,
+        {
+            **arguments,
+            "swarm_id": board.swarm["id"],
+            "participant_id": board.bindings[0].participant_id,
+        },
+        allowed_tools=[name],
+    )
+    assert result["ok"], result
+    rejected = await board.tools.dispatch(
+        context, {**arguments, "swarm_id": "foreign"}, allowed_tools=[name]
+    )
+    assert not rejected["ok"]

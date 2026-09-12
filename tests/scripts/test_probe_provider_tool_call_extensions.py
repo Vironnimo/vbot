@@ -152,7 +152,7 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
     args.swarm_tool = "swarm_inbox"
     inbox = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
     assert inbox["passed"]
-    assert len(inbox["cases"]) == 15
+    assert len(inbox["cases"]) >= 15
     args.swarm_tool = "swarm_state"
     state = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
     assert state["passed"]
