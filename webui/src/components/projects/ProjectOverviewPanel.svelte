@@ -21,7 +21,7 @@
   } from '$lib/modelSelection.js';
   import { formatLabel } from './projectLabels.js';
   let {
-    projectsState,
+    projectsState = $bindable(),
     projectsController,
     activeDetail,
     onNavigateToSettingsPanel,

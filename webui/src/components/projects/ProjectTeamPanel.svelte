@@ -28,7 +28,7 @@
     reasoningForModelValue,
   } from '$lib/agentForm.js';
   let {
-    projectsState,
+    projectsState = $bindable(),
     projectsController,
     activeDetail,
     findingsExpanded = $bindable(false),
@@ -295,7 +295,7 @@
 
       {#if projectsState.scanLoading}
         <p class="projects-scan-loading" role="status">
-          {t('projects.loading', 'Loading projectsState.projects…')}
+          {t('projects.loading', 'Loading projects…')}
         </p>
       {:else if projectsState.activeTeam.length === 0}
         <EmptyState
@@ -313,7 +313,7 @@
             {@const summary = effectiveDisplay(member, 'model')}
             <li
               class="projects-team-member"
-              class:projectsState.projects-team-member--expanded={expanded}
+              class:projects-team-member--expanded={expanded}
               data-testid={`project-team-member-${member.agent_id}`}
             >
               <button
@@ -325,7 +325,7 @@
               >
                 <svg
                   class="projects-team-chevron"
-                  class:projectsState.projects-team-chevron--open={expanded}
+                  class:projects-team-chevron--open={expanded}
                   viewBox="0 0 12 12"
                   width="11"
                   height="11"
@@ -359,7 +359,7 @@
                         </span>
                         <span
                           class="projects-effective-value"
-                          class:projectsState.projects-effective-value--muted={display.isEmpty}
+                          class:projects-effective-value--muted={display.isEmpty}
                         >
                           {display.value}
                         </span>
@@ -526,7 +526,7 @@
                     </div>
 
                     <div
-                      class="projects-override-row projectsState.projects-override-row--policy"
+                      class="projects-override-row projects-override-row--policy"
                     >
                       <span class="projects-label">
                         {t(

@@ -1072,6 +1072,19 @@ describe('ProjectsView', () => {
         ).length === 3,
     );
 
+    const expandedMember = document.querySelector(
+      '[data-testid="project-team-member-builder"]',
+    );
+    expect(
+      expandedMember.classList.contains('projects-team-member--expanded'),
+    ).toBe(true);
+    expect(
+      expandedMember.querySelector('.projects-team-chevron--open'),
+    ).toBeTruthy();
+    expect(
+      expandedMember.querySelector('.projects-override-row--policy'),
+    ).toBeTruthy();
+
     const builderDetail = document.querySelector(
       '[data-testid="project-team-member-builder"] .projects-team-detail',
     );
@@ -1120,6 +1133,9 @@ describe('ProjectsView', () => {
 
     const rows = document.querySelectorAll('.projects-effective-row');
     expect(rows).toHaveLength(3);
+    expect(
+      document.querySelectorAll('.projects-effective-value--muted'),
+    ).toHaveLength(2);
     expect(
       document.querySelectorAll('.projects-effective-source'),
     ).toHaveLength(1);

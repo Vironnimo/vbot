@@ -12,7 +12,7 @@
   import StatusChip from './ui/StatusChip.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import TabList from './ui/TabList.svelte';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import {
     createAutosaveParticipant,
     useAutosaveContext,
@@ -34,9 +34,9 @@
     projectsRefreshToken = 0,
   } = $props();
 
-  const projectsState = $state(createProjectsState());
+  let projectsState = $state(createProjectsState());
   const projectsController = createProjectsController({
-    state: projectsState,
+    state: untrack(() => projectsState),
     translate: t,
     onProjectSelected: (projectId) => onProjectSelected(projectId),
     onToast: (toast) => onToast(toast),
@@ -236,11 +236,11 @@
 
         {#if projectsState.loadingProjects}
           <p class="project-list-state" role="status">
-            {t('projects.loading', 'Loading projectsState.projects…')}
+            {t('projects.loading', 'Loading projects…')}
           </p>
         {:else if !hasProjects}
           <EmptyState
-            title={t('projects.emptyTitle', 'No projectsState.projects yet')}
+            title={t('projects.emptyTitle', 'No projects yet')}
             description={t(
               'projects.emptySubtitle',
               'Choose Add to connect your first repository.',
@@ -358,7 +358,7 @@
             {/if}
 
             <ProjectOverviewPanel
-              {projectsState}
+              bind:projectsState
               {projectsController}
               {activeDetail}
               {onNavigateToSettingsPanel}
@@ -367,7 +367,7 @@
             />
             <ProjectTeamPanel
               bind:findingsExpanded
-              {projectsState}
+              bind:projectsState
               {projectsController}
               {activeDetail}
               {trackModelDropdownOpen}
@@ -375,7 +375,7 @@
               {navigateToExtensions}
             />
             <ProjectContextPanel
-              {projectsState}
+              bind:projectsState
               {projectsController}
               {activeDetail}
             />
@@ -403,5 +403,5 @@
     {/if}
   </div>
 
-  <ProjectDialogs {projectsState} {projectsController} />
+  <ProjectDialogs bind:projectsState {projectsController} />
 </section>

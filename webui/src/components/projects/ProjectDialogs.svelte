@@ -12,7 +12,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import { formatLabel } from './projectLabels.js';
-  let { projectsState, projectsController } = $props();
+  let { projectsState = $bindable(), projectsController } = $props();
 
   const addFormatsPresent = $derived(
     projectsState.addDetect ? presentFormats(projectsState.addDetect) : [],
@@ -135,7 +135,7 @@
                   <button
                     type="button"
                     class="projects-format-option"
-                    class:projectsState.projects-format-option--selected={projectsState
+                    class:projects-format-option--selected={projectsState
                       .addForm.source_format === formatKey}
                     role="radio"
                     aria-checked={projectsState.addForm.source_format ===
