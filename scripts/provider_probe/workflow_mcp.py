@@ -34,6 +34,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
 
     observed: list[str] = []
     rendered = False
+    configured: list[dict[str, Any]] = []
     report_read = False
     server = MCPServer(
         "Blender workflow fixture",
@@ -68,6 +69,13 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         """Read the complete report for the last render."""
         observed.append("report")
         return "scene diagnostic " * 600 + "\nFinal render status: completed. Reference: 739251."
+
+    @server.tool()
+    def configure_render(enabled: bool, count: int, labels: list[str]) -> dict[str, Any]:
+        """Set whether rendering is enabled, its frame count, and output labels."""
+        value = {"enabled": enabled, "count": count, "labels": labels}
+        configured.append(value)
+        return value
 
     with TemporaryDirectory(prefix="vbot-mcp-probe-") as directory:
         root = Path(directory)
@@ -126,6 +134,14 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             if args.mcp_workflow_case == "large_result"
             else "Rendere die aktuelle Blender-Szene und speichere das Bild als audit-render.png."
         )
+        if args.mcp_workflow_case.startswith("tolerance_"):
+            enabled = "YES" if args.mcp_workflow_case == "tolerance_true" else "no"
+            prompt = (
+                "Find configure_render and execute this supplied request once: "
+                + json.dumps({"request": {"Enabled": enabled, "count": "3.0", "labels": "preview"}})
+                + ". This is an argument-recovery diagnostic: preserve the supplied spellings "
+                "and types in the target's arguments. Report the actual configured state."
+            )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -206,8 +222,17 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             if args.mcp_workflow_case == "large_result"
             else rendered and guidance_observed and bool(final)
         )
+        if args.mcp_workflow_case.startswith("tolerance_"):
+            passed = bool(final) and configured == [
+                {
+                    "enabled": args.mcp_workflow_case == "tolerance_true",
+                    "count": 3,
+                    "labels": ["preview"],
+                }
+            ]
         return {
             "scenario": "mcp_workflow",
+            "configured": configured,
             "case": args.mcp_workflow_case,
             "passed": passed,
             "actions": actions,
