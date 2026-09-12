@@ -792,12 +792,6 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
         public_connection_id = compose_connection_id(provider_id, connection.id)
         engine = _device_flow_engine(state)
         oauth_config = connection.oauth
-        session = await engine.start_device_flow(
-            provider_id,
-            connection.id,
-            oauth_config,
-            account_id=account_id,
-        )
 
         async def on_complete(*, success: bool) -> None:
             _publish_provider_auth_completed_event(
@@ -813,20 +807,13 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
             if success:
                 publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
 
-        poll_task = asyncio.create_task(
-            engine._poll_for_token(
-                provider_id,
-                connection.id,
-                oauth_config,
-                session.device_code,
-                session.interval,
-                session.expires_in,
-                on_complete,
-                user_code=session.user_code,
-                account_id=account_id,
-            )
+        session = await engine.connect(
+            provider_id,
+            connection.id,
+            oauth_config,
+            on_complete,
+            account_id=account_id,
         )
-        poll_task.add_done_callback(_on_device_flow_poll_done)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -836,15 +823,6 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
         "expires_in": session.expires_in,
         "account": account_id,
     }
-
-
-def _on_device_flow_poll_done(task: asyncio.Task[None]) -> None:
-    if task.cancelled():
-        return
-    try:
-        task.result()
-    except Exception:
-        _LOGGER.warning("OAuth device flow polling task failed", exc_info=True)
 
 
 def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:

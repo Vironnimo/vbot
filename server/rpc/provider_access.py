@@ -170,9 +170,7 @@ def _device_flow_active(
 ) -> bool:
     if engine is None:
         return False
-    active_flows = getattr(engine, "_active_flows", {})
-    task = active_flows.get((provider_id, local_connection_id, account_id))
-    return bool(task is not None and not task.done())
+    return bool(engine.is_flow_active(provider_id, local_connection_id, account_id))
 
 
 def _connection_accounts_response(

@@ -36,19 +36,22 @@ from server.rpc.methods import dispatch_rpc
 class StubDeviceFlowEngine:
     def __init__(self) -> None:
         self.started: list[tuple[str, str, OAuthConfig, str]] = []
-        self.polls: list[tuple[str, str, OAuthConfig, str, int, int, Any, str, str]] = []
+        self.completions: list[Any] = []
         self.cancelled: list[tuple[str, str, str]] = []
-        self._active_flows: dict[tuple[str, str, str], asyncio.Task[None]] = {}
+        self.active: set[tuple[str, str, str]] = set()
 
-    async def start_device_flow(
+    async def connect(
         self,
         provider_id: str,
         local_connection_id: str,
         oauth_config: OAuthConfig,
+        on_complete: Any,
         *,
         account_id: str = "default",
     ) -> DeviceFlowSession:
         self.started.append((provider_id, local_connection_id, oauth_config, account_id))
+        self.completions.append(on_complete)
+        self.active.add((provider_id, local_connection_id, account_id))
         return DeviceFlowSession(
             device_code="device-code",
             user_code="ABCD-1234",
@@ -57,31 +60,8 @@ class StubDeviceFlowEngine:
             interval=5,
         )
 
-    async def _poll_for_token(
-        self,
-        provider_id: str,
-        local_connection_id: str,
-        oauth_config: OAuthConfig,
-        device_code: str,
-        interval: int,
-        expires_in: int,
-        on_complete: Any,
-        user_code: str = "",
-        account_id: str = "default",
-    ) -> None:
-        self.polls.append(
-            (
-                provider_id,
-                local_connection_id,
-                oauth_config,
-                device_code,
-                interval,
-                expires_in,
-                on_complete,
-                user_code,
-                account_id,
-            )
-        )
+    def is_flow_active(self, provider_id: str, connection_id: str, account_id: str) -> bool:
+        return (provider_id, connection_id, account_id) in self.active
 
     def cancel_flow(
         self,
@@ -90,33 +70,7 @@ class StubDeviceFlowEngine:
         account_id: str = "default",
     ) -> None:
         self.cancelled.append((provider_id, local_connection_id, account_id))
-
-
-class FailingPollDeviceFlowEngine(StubDeviceFlowEngine):
-    async def _poll_for_token(
-        self,
-        provider_id: str,
-        local_connection_id: str,
-        oauth_config: OAuthConfig,
-        device_code: str,
-        interval: int,
-        expires_in: int,
-        on_complete: Any,
-        user_code: str = "",
-        account_id: str = "default",
-    ) -> None:
-        await super()._poll_for_token(
-            provider_id,
-            local_connection_id,
-            oauth_config,
-            device_code,
-            interval,
-            expires_in,
-            on_complete,
-            user_code=user_code,
-            account_id=account_id,
-        )
-        raise RuntimeError("poll crashed")
+        self.active.discard((provider_id, local_connection_id, account_id))
 
 
 class StubProviderRegistry:
@@ -278,10 +232,8 @@ async def test_provider_connect_starts_device_flow_and_polling(tmp_path: Any) ->
         },
     }
     assert engine.started == [("github-copilot", "oauth", oauth_config(), "default")]
-    assert len(engine.polls) == 1
-    poll = engine.polls[0]
-    assert poll[:6] == ("github-copilot", "oauth", oauth_config(), "device-code", 5, 900)
-    assert poll[8] == "default"
+    assert len(engine.completions) == 1
+    assert engine.is_flow_active("github-copilot", "oauth", "default")
 
 
 @pytest.mark.asyncio
@@ -306,7 +258,7 @@ async def test_provider_connect_threads_account_into_device_flow(tmp_path: Any) 
     assert response["ok"] is True
     assert response["result"]["account"] == "work"
     assert engine.started == [("github-copilot", "oauth", oauth_config(), "work")]
-    assert engine.polls[0][8] == "work"
+    assert engine.is_flow_active("github-copilot", "oauth", "work")
 
 
 @pytest.mark.asyncio
@@ -333,41 +285,6 @@ async def test_provider_connect_rejects_invalid_account_id(tmp_path: Any) -> Non
 
 
 @pytest.mark.asyncio
-async def test_provider_connect_logs_polling_task_crashes(
-    tmp_path: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
-    engine = FailingPollDeviceFlowEngine()
-    state.device_flow_engine = engine
-    warnings: list[str] = []
-
-    def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
-        warnings.append(message)
-
-    monkeypatch.setattr(connection_methods._LOGGER, "warning", record_warning)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "provider.connect",
-            "params": {
-                "provider_id": "github-copilot",
-                "connection_id": "github-copilot:oauth",
-            },
-        },
-    )
-    for _ in range(10):
-        await asyncio.sleep(0)
-        if warnings:
-            break
-
-    assert response["ok"] is True
-    assert engine.polls
-    assert warnings
-
-
-@pytest.mark.asyncio
 async def test_provider_connect_completion_callback_publishes_event(tmp_path: Any) -> None:
     state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
     engine = StubDeviceFlowEngine()
@@ -384,7 +301,7 @@ async def test_provider_connect_completion_callback_publishes_event(tmp_path: An
         },
     )
     await asyncio.sleep(0)
-    on_complete = engine.polls[0][6]
+    on_complete = engine.completions[0]
 
     await on_complete(success=True)
 
@@ -421,7 +338,7 @@ async def test_provider_connect_completion_event_carries_named_account(tmp_path:
         },
     )
     await asyncio.sleep(0)
-    on_complete = engine.polls[0][6]
+    on_complete = engine.completions[0]
 
     await on_complete(success=False)
 
@@ -480,7 +397,7 @@ async def test_provider_connect_completion_publishes_resource_changed_on_success
         },
     )
     await asyncio.sleep(0)
-    on_complete = engine.polls[0][6]
+    on_complete = engine.completions[0]
 
     await on_complete(success=True)
 
@@ -511,7 +428,7 @@ async def test_provider_connect_completion_skips_resource_changed_on_failure(
         },
     )
     await asyncio.sleep(0)
-    on_complete = engine.polls[0][6]
+    on_complete = engine.completions[0]
 
     await on_complete(success=False)
 
@@ -661,22 +578,18 @@ async def test_provider_connection_status_reports_token_and_active_flow(tmp_path
         "oauth",
         OAuthToken(access_token="stored-token"),
     )
-    task = asyncio.create_task(asyncio.sleep(60))
-    engine._active_flows[("github-copilot", "oauth", "default")] = task
+    engine.active.add(("github-copilot", "oauth", "default"))
 
-    try:
-        response = await dispatch_rpc(
-            state,
-            {
-                "method": "provider.connection_status",
-                "params": {
-                    "provider_id": "github-copilot",
-                    "connection_id": "github-copilot:oauth",
-                },
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connection_status",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
             },
-        )
-    finally:
-        task.cancel()
+        },
+    )
 
     assert response == {
         "ok": True,
@@ -701,33 +614,29 @@ async def test_provider_connection_status_reports_per_account_state(tmp_path: An
         OAuthToken(access_token="work-token"),
         account_id="work",
     )
-    task = asyncio.create_task(asyncio.sleep(60))
-    engine._active_flows[("github-copilot", "oauth", "work")] = task
+    engine.active.add(("github-copilot", "oauth", "work"))
 
-    try:
-        work_response = await dispatch_rpc(
-            state,
-            {
-                "method": "provider.connection_status",
-                "params": {
-                    "provider_id": "github-copilot",
-                    "connection_id": "github-copilot:oauth",
-                    "account": "work",
-                },
+    work_response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connection_status",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+                "account": "work",
             },
-        )
-        default_response = await dispatch_rpc(
-            state,
-            {
-                "method": "provider.connection_status",
-                "params": {
-                    "provider_id": "github-copilot",
-                    "connection_id": "github-copilot:oauth",
-                },
+        },
+    )
+    default_response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connection_status",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
             },
-        )
-    finally:
-        task.cancel()
+        },
+    )
 
     assert work_response == {
         "ok": True,
