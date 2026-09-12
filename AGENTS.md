@@ -37,6 +37,8 @@ After a detour, briefly state what was done and remind the user where the main t
 
 Before declaring completion, check the full agreed scope across the conversation, not just the latest subtask. Respect explicit pauses, cancellations, and changes of direction.
 
+Always state what comes next in a separate paragraph, even if it is only one sentence. Keep that paragraph separate from completion summaries, verification results, and housekeeping updates.
+
 ### State the expected outcome before implementation
 
 Before implementation, briefly state the concrete, observable outcome you understand the user wants. One sentence is enough for a small change; use a short list when several outcomes need tracking. Base it on the request and established context; do not invent requirements, numerical targets, or scope.
