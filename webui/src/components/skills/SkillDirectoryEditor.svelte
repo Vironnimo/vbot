@@ -31,6 +31,11 @@
   let skillDirectories = $state(untrack(() => getSkillDirectories(settings)));
   let newSkillDirectory = $state('');
   let saving = $state(false);
+  let addElement = $state();
+
+  export function focusNewDirectory() {
+    addElement?.querySelector('input')?.focus();
+  }
 
   let defaultSkillDirectoryValue = $derived(
     getDefaultSkillDirectoryValue(settings, t),
@@ -161,7 +166,7 @@
     </div>
   </div>
 
-  <div class="skills-directory-add">
+  <div class="skills-directory-add" bind:this={addElement}>
     <TextField
       value={newSkillDirectory}
       onInput={(next) => (newSkillDirectory = next)}
