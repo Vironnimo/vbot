@@ -4,6 +4,8 @@ Read this reference only for the WebUI Projects management view, Project discove
 
 Before adding or changing Project fields, Team overrides, or editor transitions, read `webui/autosave.md` for the common saving and input-continuity contract.
 
+The `projectsView.js` public surface delegates internally to `lib/projectsView/controller.js` for editor reconciliation, `dialogs.js` for add/remove/re-point workflows under the same lifecycle, and `presentation.js` for pure form, Team and scan projections.
+
 ## Ownership and selection
 
 `ProjectsView.svelte` renders the master-detail management surface; `createProjectsState()` provides its reactive state and `createProjectsController()` owns loading, selection, form drafts, catalogs, scans, mutation reconciliation, and removal/re-point workflows. The Project selected here is management state and is intentionally independent of Chat's selected Project context.
