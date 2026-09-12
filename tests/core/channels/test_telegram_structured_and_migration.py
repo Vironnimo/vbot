@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import core.channels._conversation_routing as routing_module
 import core.channels._telegram_messages as telegram_messages
-import core.channels.engine as engine_module
 from core.sessions import SessionAddress
 from tests.core.channels.telegram_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -300,7 +300,7 @@ async def test_chat_migration_swaps_allowlist_bridges_session_and_confirms(
     new_anchor_metadata = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant--100500")
     )
-    assert new_anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == old_anchor
+    assert new_anchor_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY] == old_anchor
 
     # The live session's channel sidecar targets the new chat id.
     session_metadata = chat_sessions.get_metadata(

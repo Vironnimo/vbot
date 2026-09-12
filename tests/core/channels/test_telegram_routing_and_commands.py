@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.channels._conversation_routing as routing_module
 import core.channels._telegram_inbound as telegram_inbound
 import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
@@ -511,7 +512,7 @@ async def test_new_command_starts_fresh_session(
     anchor_metadata = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
     )
-    new_session_id = anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY]
+    new_session_id = anchor_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY]
     assert new_session_id.startswith("ses_")
     assert chat_sessions.exists(
         SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
