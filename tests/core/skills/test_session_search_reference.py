@@ -24,7 +24,7 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
     user = ChatMessage.user([TextBlock(type="text", text="Unicode Grüße")])
     assistant = ChatMessage.assistant(model="test", content="answer")
     result = ChatMessage.tool(
-        tool_call_id="call", name="bash", content="exact fragment\n" + "x" * 3000
+        tool_call_id="call", name="bash", content="prefix " * 500 + "exact fragment\n" + "x" * 3000
     )
     session.append_many([obsolete, ChatMessage.history_edit(obsolete.id), user, assistant, result])
     sessions.create("agent-id", session_id="session-id", project_id="other").append(
@@ -52,6 +52,8 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
         hits = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
         assert [item["message_id"] for item in hits] == [result.id]
         assert len(hits[0]["preview"]) == 2000
+        assert "exact fragment" in hits[0]["preview"]
+        assert hits[0]["generation_id"] == transcript[0]["generation_id"]
         exact = (
             blocks[3]
             .replace("sequence = 123", f"sequence = {hits[0]['seq']}")

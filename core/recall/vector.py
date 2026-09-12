@@ -64,9 +64,7 @@ _SEMANTIC_SEARCH_GUIDANCE = (
     "occurrences may be missed. Matches are ranked by semantic "
     "relevance."
 )
-_SEMANTIC_TOOL_SUMMARY = (
-    "Find persisted Sessions and semantically related passages from past conversations."
-)
+_SEMANTIC_TOOL_SUMMARY = "Find past conversations about a topic, ranked by similarity in meaning."
 # Sentinel stored for the identity/global scope (``project_id is None``) in the
 # chunk-key tuple. An empty string keeps the store's UNIQUE constraint reliable —
 # SQLite treats NULLs as distinct, which would break per-scope uniqueness.

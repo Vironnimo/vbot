@@ -41,11 +41,13 @@ _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 _FTS_FALLBACK_REASON = (
-    "SQLite full-text search was unavailable; results came from the bounded canonical fallback."
+    "Keyword search used a fallback scan with substring matching and newest-first order. "
+    "Relevance ranking was unavailable."
 )
 _FTS_PARTIAL_FALLBACK_REASON = (
-    "SQLite full-text search was unavailable, and the bounded canonical fallback reached "
-    "its scan limit; results are partial."
+    "Keyword search used a fallback scan and could not check all eligible Messages. "
+    "Results are incomplete and newest-first. Narrow period or session_id; an empty result "
+    "does not establish that no matching text exists."
 )
 
 
@@ -193,17 +195,15 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     @staticmethod
     def search_capabilities() -> RecallSearchCapabilities:
         query_description = (
-            "Literal terms to find. Every whitespace-separated term must occur. One- or "
+            "Distinctive words to find, ignoring case. Every "
+            "whitespace-separated term must occur. One- or "
             "two-character terms require whole-token matching for the query; otherwise terms "
             "also match inside words. Matches are ranked by text relevance."
         )
         return RecallSearchCapabilities(
             result_type="message",
             guidance=query_description,
-            tool_summary=(
-                "Find persisted Sessions and relevance-ranked literal matches in past "
-                "conversations."
-            ),
+            tool_summary=("Find text from past conversations, ranked by relevance."),
             query_description=query_description,
             match_argument="match",
             match_modes=("all_terms", "any_term", "phrase"),

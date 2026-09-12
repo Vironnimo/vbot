@@ -967,7 +967,7 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
                 == canonical_parameters["properties"][field]
             )
         assert "session_read" not in [tool.name for tool in runtime.tools.list_tools()]
-        assert "semantically related passages" in vector_tool.description
+        assert vector_tool.description != canonical_tool.description
     finally:
         runtime.stop()
 
