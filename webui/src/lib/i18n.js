@@ -1181,6 +1181,9 @@ export const englishCatalog = Object.freeze({
   'projects.manage.autoLoadPlaceholder': 'Add a file path…',
   'projects.manage.autoLoadAdd': 'Add',
   'projects.manage.autoLoadRemove': 'Remove {file}',
+  'projects.manage.autoLoadReorder': 'Reorder {file} (drag or use arrow keys)',
+  'projects.manage.autoLoadMoved':
+    'Moved {file} to position {position} of {total}',
   'projects.manage.autoLoadEmpty': 'No auto-load files',
   'projects.manage.allowedTools': 'Tool whitelist',
   'projects.manage.allowedToolsHelp':

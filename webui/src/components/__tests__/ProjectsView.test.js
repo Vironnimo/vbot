@@ -779,6 +779,152 @@ describe('ProjectsView', () => {
     });
   });
 
+  it.each([
+    [0, 2, ['docs/guide.md', 'NOTES.md', 'AGENTS.md']],
+    [2, 0, ['NOTES.md', 'AGENTS.md', 'docs/guide.md']],
+  ])(
+    'drags auto-load file %i to %i and auto-saves its order',
+    async (from, to, expected) => {
+      const original = project({
+        project_id: 'demo',
+        auto_load: ['AGENTS.md', 'docs/guide.md', 'NOTES.md'],
+      });
+      const saved = { ...original, auto_load: expected };
+      listProjectsMock.mockResolvedValue({ projects: [original] });
+      setProjectMock.mockImplementation(async () => {
+        listProjectsMock.mockResolvedValue({ projects: [saved] });
+        return {
+          project: saved,
+          scan: { team: [], report: { clean: true, findings: [] } },
+        };
+      });
+      mountedComponent = mount(ProjectsView, { target: document.body });
+      flushSync();
+      await selectDemo();
+      const handle = document.querySelector(
+        `[data-auto-load-handle="${from}"]`,
+      );
+      const row = document.querySelectorAll('.projects-file-row')[to];
+      const dataTransfer = {
+        setData: vi.fn(),
+        effectAllowed: '',
+        dropEffect: '',
+      };
+      const start = new Event('dragstart', { bubbles: true });
+      Object.defineProperty(start, 'dataTransfer', { value: dataTransfer });
+      handle.dispatchEvent(start);
+      const over = new Event('dragover', { bubbles: true, cancelable: true });
+      row.dispatchEvent(over);
+      flushSync();
+      expect(over.defaultPrevented).toBe(true);
+      expect(row.classList.contains('projects-file-row--drop')).toBe(true);
+      expect(dataTransfer.effectAllowed).toBe('move');
+      row.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+      flushSync();
+      expect(
+        [...document.querySelectorAll('.projects-file-name')].map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(expected);
+      expect(document.querySelector('.projects-file-row--drop')).toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, AUTO_SAVE_WAIT_MS));
+      await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+      expect(setProjectMock).toHaveBeenCalledWith('demo', {
+        auto_load: expected,
+      });
+      flushSync();
+      expect(
+        [...document.querySelectorAll('.projects-file-name')].map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(expected);
+    },
+  );
+
+  it('reorders auto-load files by keyboard, retains focus, and respects list boundaries', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          auto_load: ['AGENTS.md', 'docs/guide.md', 'NOTES.md'],
+        }),
+      ],
+    });
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    const handle = (index) =>
+      document.querySelector(`[data-auto-load-handle="${index}"]`);
+    const press = (index, key) => {
+      handle(index).focus();
+      handle(index).dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      );
+      flushSync();
+    };
+    press(0, 'ArrowUp');
+    press(2, 'ArrowDown');
+    expect(setProjectMock).not.toHaveBeenCalled();
+    press(0, 'ArrowDown');
+    await waitForCondition(() => document.activeElement === handle(1));
+    expect(
+      [...document.querySelectorAll('.projects-file-name')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['docs/guide.md', 'AGENTS.md', 'NOTES.md']);
+    expect(
+      document.querySelector('[aria-live="polite"]').textContent,
+    ).toContain('AGENTS.md');
+    press(1, 'ArrowUp');
+    await waitForCondition(() => document.activeElement === handle(0));
+    expect(
+      [...document.querySelectorAll('.projects-file-name')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['AGENTS.md', 'docs/guide.md', 'NOTES.md']);
+  });
+
+  it('ignores external, canceled, same-row, and stale auto-load drops', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          auto_load: ['AGENTS.md', 'docs/guide.md', 'NOTES.md'],
+        }),
+      ],
+    });
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    const handle = document.querySelector('[data-auto-load-handle="0"]');
+    const drop = (index) => {
+      const row = document.querySelectorAll('.projects-file-row')[index];
+      row.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+      flushSync();
+    };
+    drop(2);
+    handle.dispatchEvent(new Event('dragstart', { bubbles: true }));
+    handle.dispatchEvent(new Event('dragend', { bubbles: true }));
+    drop(2);
+    handle.dispatchEvent(new Event('dragstart', { bubbles: true }));
+    drop(0);
+    expect(
+      [...document.querySelectorAll('.projects-file-name')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['AGENTS.md', 'docs/guide.md', 'NOTES.md']);
+    expect(setProjectMock).not.toHaveBeenCalled();
+    handle.dispatchEvent(new Event('dragstart', { bubbles: true }));
+    buttonByTestId('project-auto-load-remove-1').click();
+    flushSync();
+    drop(1);
+    expect(
+      [...document.querySelectorAll('.projects-file-name')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(['AGENTS.md', 'NOTES.md']);
+  });
+
   it('auto-saves edited fields after the debounce without a Save click', async () => {
     listProjectsMock
       .mockResolvedValueOnce({

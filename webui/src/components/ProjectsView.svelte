@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
@@ -174,6 +174,10 @@
 
   let selectedProject = $derived(projectsController.selectedProject());
   let activeDetail = $state('overview');
+  let autoLoadDrag = $state(null);
+  let autoLoadDropIndex = $state(null);
+  let autoLoadAnnouncement = $state('');
+  let autoLoadList = $state(null);
   let detailScroll = $state(null);
   let detailTabs = $derived([
     { id: 'overview', label: t('management.overview', 'Overview') },
@@ -725,6 +729,75 @@
       event.preventDefault();
       addAutoLoadEntry();
     }
+  }
+
+  function startAutoLoadDrag(index, event) {
+    if (projectsState.editSaving) {
+      event.preventDefault();
+      return;
+    }
+    autoLoadDrag = {
+      index,
+      projectId: projectsState.selectedProjectId,
+      files: [...projectsState.editForm.auto_load],
+    };
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+    }
+  }
+
+  function validAutoLoadDrag() {
+    return (
+      autoLoadDrag !== null &&
+      !projectsState.editSaving &&
+      autoLoadDrag.projectId === projectsState.selectedProjectId &&
+      autoLoadDrag.files.length === projectsState.editForm.auto_load.length &&
+      autoLoadDrag.files.every(
+        (file, index) => file === projectsState.editForm.auto_load[index],
+      )
+    );
+  }
+
+  function endAutoLoadDrag() {
+    autoLoadDrag = null;
+    autoLoadDropIndex = null;
+  }
+
+  function dragOverAutoLoad(index, event) {
+    if (!validAutoLoadDrag()) return;
+    event.preventDefault();
+    autoLoadDropIndex = index;
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  }
+
+  function dropAutoLoad(index, event) {
+    event.preventDefault();
+    if (validAutoLoadDrag()) {
+      void moveAutoLoadEntry(autoLoadDrag.index, index);
+    }
+    endAutoLoadDrag();
+  }
+
+  async function moveAutoLoadEntry(from, to) {
+    if (!projectsController.moveAutoLoadEntry(from, to)) return;
+    autoLoadAnnouncement = t(
+      'projects.manage.autoLoadMoved',
+      'Moved {file} to position {position} of {total}',
+      {
+        file: projectsState.editForm.auto_load[to],
+        position: to + 1,
+        total: projectsState.editForm.auto_load.length,
+      },
+    );
+    await tick();
+    autoLoadList?.querySelector(`[data-auto-load-handle="${to}"]`)?.focus();
+  }
+
+  function reorderAutoLoadKeydown(index, event) {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    void moveAutoLoadEntry(index, index + (event.key === 'ArrowUp' ? -1 : 1));
   }
 </script>
 
@@ -1779,9 +1852,88 @@
                 <div class="detail-section-body">
                   <div class="projects-field">
                     {#if projectsState.editForm.auto_load.length > 0}
-                      <ul class="projects-file-list">
+                      <ul class="projects-file-list" bind:this={autoLoadList}>
                         {#each projectsState.editForm.auto_load as filePath, index (index)}
-                          <li class="projects-file-row">
+                          <li
+                            class="projects-file-row"
+                            class:projects-file-row--drop={autoLoadDropIndex ===
+                              index && autoLoadDrag?.index !== index}
+                            ondragover={(event) =>
+                              dragOverAutoLoad(index, event)}
+                            ondragleave={() => {
+                              autoLoadDropIndex = null;
+                            }}
+                            ondrop={(event) => dropAutoLoad(index, event)}
+                          >
+                            <Button
+                              variant="tertiary"
+                              icon
+                              class="projects-file-handle"
+                              draggable={!projectsState.editSaving}
+                              disabled={projectsState.editSaving ||
+                                projectsState.editForm.auto_load.length < 2}
+                              data-auto-load-handle={index}
+                              ariaLabel={t(
+                                'projects.manage.autoLoadReorder',
+                                'Reorder {file} (drag or use arrow keys)',
+                                { file: filePath },
+                              )}
+                              tooltip={t(
+                                'projects.manage.autoLoadReorder',
+                                'Reorder {file} (drag or use arrow keys)',
+                                { file: filePath },
+                              )}
+                              ondragstart={(event) =>
+                                startAutoLoadDrag(index, event)}
+                              ondragend={endAutoLoadDrag}
+                              onkeydown={(event) =>
+                                reorderAutoLoadKeydown(index, event)}
+                            >
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 12 12"
+                                aria-hidden="true"
+                                focusable="false"
+                              >
+                                <circle
+                                  cx="3.5"
+                                  cy="2.5"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                                <circle
+                                  cx="8.5"
+                                  cy="2.5"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                                <circle
+                                  cx="3.5"
+                                  cy="6"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                                <circle
+                                  cx="8.5"
+                                  cy="6"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                                <circle
+                                  cx="3.5"
+                                  cy="9.5"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                                <circle
+                                  cx="8.5"
+                                  cy="9.5"
+                                  r="1.1"
+                                  fill="currentColor"
+                                />
+                              </svg>
+                            </Button>
                             <span class="projects-file-name">{filePath}</span>
                             <button
                               type="button"
@@ -1809,6 +1961,11 @@
                         )}
                       />
                     {/if}
+                    <span
+                      class="projects-file-announcement"
+                      aria-live="polite"
+                      aria-atomic="true">{autoLoadAnnouncement}</span
+                    >
                     <div class="projects-file-add">
                       <TextField
                         id="project-edit-auto-load"

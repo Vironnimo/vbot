@@ -643,6 +643,27 @@ export function createProjectsController({
     state.editError = '';
   }
 
+  function moveAutoLoadEntry(from, to) {
+    const files = state.editForm.auto_load;
+    if (
+      state.editSaving ||
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      from < 0 ||
+      to < 0 ||
+      from >= files.length ||
+      to >= files.length ||
+      from === to
+    ) {
+      return false;
+    }
+    const next = [...files];
+    const [file] = next.splice(from, 1);
+    next.splice(to, 0, file);
+    updateEditField('auto_load', next);
+    return true;
+  }
+
   function updateListField(field, name, enabled) {
     state.editForm[field] = setListMembership(
       state.editForm[field],
@@ -1100,6 +1121,7 @@ export function createProjectsController({
     trackModelDropdownOpen,
     updateAddField,
     updateEditField,
+    moveAutoLoadEntry,
     updateListField,
     updateModelsRefreshToken,
     updateProjectsRefreshToken,
