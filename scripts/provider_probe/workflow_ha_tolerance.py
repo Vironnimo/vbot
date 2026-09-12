@@ -18,6 +18,15 @@ from scripts.provider_probe.scenario_extensions import _ha_call_service_scenario
 
 
 def ha_tolerance_cases(tool: str = "ha_call_service") -> list[dict[str, Any]]:
+    if tool == "ha_list_entities":
+        return [
+            {"id": "default", "arguments": {}},
+            {"id": "domain", "arguments": {"domain": "light"}},
+            {"id": "area", "arguments": {"area": "Living Room"}},
+            {"id": "all", "arguments": {"domain": "climate", "area": "Upstairs"}},
+            {"id": "case", "arguments": {"domain": " LIGHT "}},
+            {"id": "invalid", "arguments": {"domain": "light/../sensor"}, "success": False},
+        ]
     if tool == "ha_get_state":
         return [
             {"id": "light", "arguments": {"entity_id": "light.living_room"}},
@@ -111,6 +120,19 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
         calls = adapter.normalize_response(raw, model_id=args.model).get("tool_calls") or []
         received = []
 
+        entities: list[dict[str, Any]] = [
+            {
+                "entity_id": "light.living_room",
+                "state": "on",
+                "attributes": {"friendly_name": "Living Room Light"},
+            },
+            {
+                "entity_id": "climate.upstairs",
+                "state": "heat",
+                "attributes": {"friendly_name": "Upstairs Heating"},
+            },
+        ]
+
         def receive(request: httpx.Request) -> httpx.Response:
             received.append(
                 {
@@ -118,6 +140,8 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                     "body": json.loads(request.content) if request.content else None,
                 }
             )
+            if name == "ha_list_entities":
+                return httpx.Response(200, json=entities)
             if name == "ha_get_state":
                 return httpx.Response(
                     200,
@@ -151,7 +175,26 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                 except ValueError as error:
                     results.append(tool_failure("invalid_arguments", str(error)))
         checks = {"one_call": len(calls) == len(results) == 1}
-        if name == "ha_get_state" and case.get("success", True):
+        if name == "ha_list_entities" and case.get("success", True):
+            request = case["arguments"]
+            expected = [
+                {
+                    "entity_id": e["entity_id"],
+                    "state": e["state"],
+                    "friendly_name": e["attributes"]["friendly_name"],
+                }
+                for e in entities
+                if (
+                    not request.get("domain")
+                    or e["entity_id"].startswith(request["domain"].strip().lower() + ".")
+                )
+                and request.get("area", "").lower() in e["attributes"]["friendly_name"].lower()
+            ]
+            checks["receiver"] = received == [{"path": "/api/states", "body": None}]
+            checks["result"] = (
+                bool(results) and results[0].get("data", {}).get("entities") == expected
+            )
+        elif name == "ha_get_state" and case.get("success", True):
             request = case["arguments"]
             entity = request.get("entity_id", request.get("entityId")).strip().lower()
             checks["receiver"] = received == [{"path": "/api/states/" + entity, "body": None}]
