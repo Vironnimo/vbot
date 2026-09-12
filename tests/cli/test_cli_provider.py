@@ -44,6 +44,56 @@ def test_provider_list_posts_connection_list_rpc(
     ]
 
 
+def test_provider_overview_keeps_ids_and_offers_full_detail(tmp_path, monkeypatch):
+    instance = make_instance(tmp_path)
+    connections = [
+        {
+            "id": "sample:oauth",
+            "provider_id": "sample",
+            "type": "oauth",
+            "label": "Subscription",
+            "enabled": True,
+            "usable": True,
+            "accounts": [{"id": "work", "usable": True, "source": "test-owned-source"}],
+        },
+        {
+            "id": "local:server",
+            "provider_id": "local",
+            "type": "none",
+            "label": "Local",
+            "enabled": True,
+            "usable": True,
+            "reachable": False,
+            "accounts": [],
+        },
+        {
+            "id": "sample:key",
+            "provider_id": "sample",
+            "type": "api_key",
+            "label": "API",
+            "enabled": False,
+            "usable": False,
+            "accounts": [],
+        },
+    ]
+
+    def fake_post(url, **kwargs):
+        return httpx.Response(200, json={"ok": True, "result": {"connections": connections}})
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+    brief = provider_management.provider_list(instance).message
+    full = provider_management.provider_list(instance, details=True).message
+    for connection in connections:
+        assert connection["id"] in brief
+        assert connection["id"] in full
+    assert "work" in brief and "work" in full
+    assert "test-owned-source" not in brief and "test-owned-source" in full
+    assert "vbot provider list --details" in brief
+    assert "[WARN]" in next(line for line in brief.splitlines() if "local:server" in line)
+    assert brief.index("sample:key") < brief.index("local:server")
+    assert len(brief) < len(full)
+
+
 def test_provider_list_formats_connection_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -98,7 +148,7 @@ def test_provider_list_formats_connection_rows(
 
     monkeypatch.setattr(provider_management.httpx, "post", fake_post)
 
-    result = provider_management.provider_list(instance)
+    result = provider_management.provider_list(instance, details=True)
 
     assert result.ok is True
     assert "openai:default" in result.message

@@ -136,7 +136,7 @@ Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Po
 
 </details>
 
-The public Installers show only high-level progress during a normal installation. Technical setup output is written to a temporary log and discarded after a clean installation; when installation or verification needs attention, the log is preserved and its exact path is printed. The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths; the Start-menu entry uses the bundled vBot icon. For server installations, both public Installers verify Autostart and server health before printing `vBot is ready`; a live URL appears only when the server is running. If Autostart registration fails, the application remains installed and the summary prints the exact normal-user recovery command.
+The public Installers show readable setup phases and elapsed time during long setup steps. Status labels and terminal colors distinguish work, success, warnings, and errors; set `NO_COLOR=1` to disable color. Technical setup output is written to a temporary log and discarded after a clean installation; when installation or verification needs attention, the log is preserved and its exact path is printed. The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths; the Start-menu entry uses the bundled vBot icon. For server installations, both public Installers verify Autostart and server health before printing `vBot is ready`; a live URL appears only when the server is running. If Autostart registration fails, the application remains installed and the summary prints the exact normal-user recovery command.
 
 ### Install the current checkout
 
@@ -179,6 +179,8 @@ Close every vBot Desktop window on Windows, then run:
 ```bash
 vbot update
 ```
+
+The updater reports each phase as it runs, including elapsed time during long steps. Its final summary distinguishes a verified server restart from a pending or skipped restart; failure details include recovery guidance. Output remains plain text when redirected, and `NO_COLOR=1` disables terminal color.
 
 The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates or verifies a compatible Session snapshot; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
 
@@ -920,6 +922,16 @@ Home Assistant ships as a bundled Extension. In Settings → Extensions → Home
 `ha_call_service` blocks `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, and `rest_command` because those domains can execute arbitrary code or make outbound requests. Entity, domain, and service identifiers are validated before a request is sent.
 
 ## CLI reference
+
+Commands read as `vbot <area> <command> [target] [options]`, with deeper subcommands where needed. Start with `vbot --help`, then `vbot <area> --help`. Collection names accept singular and plural forms, such as `vbot provider list` and `vbot providers list`.
+
+```bash
+vbot server restart
+vbot providers list
+vbot provider connect openai
+```
+
+The last command starts OpenAI Subscription sign-in. OAuth commands select the only OAuth Connection automatically; when there are multiple candidates, specify `--connection` using an id from the displayed list. `vbot provider list --details` preserves all Connection and Account fields; `provider status <provider-id>` narrows those details to one Provider. The Provider overview distinguishes configured, disabled, missing-credential and local reachability states; configured does not establish live upstream access.
 
 Installed commands use `vbot`. From a source checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `session-store` offline maintenance include local work and do not merely proxy management RPC.
 

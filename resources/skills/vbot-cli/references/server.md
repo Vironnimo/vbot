@@ -47,6 +47,8 @@ vbot update
 
 `--current-session` works only inside a vBot Run Bash command. It binds both the current Agent address and Session without guessing from an Agent's default Session. The created job is armed for the next startup and cannot fire in the current process. Use `vbot bootstrap show <returned-job-id>` to confirm its `mode=once`, `status=active`, and Session before running the update. If the user requested `--no-restart`, do not create this Bootstrap unless a later startup check is explicitly wanted.
 
+The updater reports phases and elapsed time while running. Its final status distinguishes completed restart, pending restart, and an explicitly skipped restart. Read the reported state and recovery instructions; color and symbols are only presentation.
+
 The update invocation itself stays `vbot update`. In vBot Run context the CLI internally hands the restart to a short-lived detached helper, allowing the update command and its Bash launcher to finish before the old server enters normal Runtime shutdown. Do not find PIDs, stop the server first, or invoke an internal helper manually. The Bootstrap remains required because it resumes verification after the intentional process restart; it is not process-cleanup machinery.
 
 Updates the installation from its git checkout and requests a server restart unless suppressed. In the current Run, restart is scheduled; the command’s success does not establish post-restart health. Let the saved Bootstrap verify startup. Preserves runtime data and creates a verified Session snapshot before changing code when a current Session database exists. A snapshot failure stops the update.

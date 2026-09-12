@@ -196,7 +196,12 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     )
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
 
-    _add_command_parser(provider_subparsers, "list", PROVIDER_HELP["list"], example="provider list")
+    list_parser = _add_command_parser(
+        provider_subparsers, "list", PROVIDER_HELP["list"], example="provider list"
+    )
+    list_parser.add_argument(
+        "--details", action="store_true", help="Include all Connection and Account state fields"
+    )
 
     _add_command_parser(
         provider_subparsers,
@@ -392,16 +397,18 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             provider_subparsers,
             command,
             PROVIDER_HELP[command],
-            example=f"provider {command} openai --connection openai:subscription",
+            example=f"provider {command} openai",
         )
         command_parser.add_argument(
             "provider", metavar="<provider-id>", help="Provider id of the OAuth connection"
         )
         command_parser.add_argument(
             "--connection",
-            required=True,
             metavar="<provider:connection-id>",
-            help="Compositional OAuth connection id, for example openai:subscription",
+            help=(
+                "Choose an OAuth Connection when more than one exists; "
+                "otherwise selected automatically"
+            ),
         )
         command_parser.add_argument(
             "--account",
