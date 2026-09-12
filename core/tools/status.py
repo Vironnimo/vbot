@@ -24,6 +24,7 @@ from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.arguments import optional_string
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -50,7 +51,10 @@ _STATUS_SESSION_ID_PARAMETER: JsonObject = {
 _STATUS_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Agent that owns the target Session. Requires session_id; omit for this Agent.",
+    "description": (
+        "Agent that owns the target Session. "
+        "Omit for this Agent; another Agent requires session_id."
+    ),
 }
 
 STATUS_TOOL_PARAMETERS: JsonObject = {
@@ -61,6 +65,23 @@ STATUS_TOOL_PARAMETERS: JsonObject = {
     },
     "required": [],
 }
+
+
+_STATUS_RUNTIME_CONTRACT = compile_tool_contract(
+    name=STATUS_TOOL_NAME,
+    input_schema={
+        **STATUS_TOOL_PARAMETERS,
+        "properties": {**STATUS_TOOL_PARAMETERS["properties"], "action": {"enum": ["current"]}},
+    },
+    require_closed_input=False,
+)
+
+
+def _normalize_status_arguments(arguments: Any) -> Any:
+    repaired = _STATUS_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    if isinstance(repaired, dict) and repaired.pop("action", "current") != "current":
+        raise ValueError("status reads Session status; action must be current or omitted.")
+    return repaired
 
 
 def make_status_handler(
@@ -99,7 +120,7 @@ def make_status_handler(
             )
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
-        if requested_agent_id is not None and requested_session_id is None:
+        if requested_agent_id not in (None, context.agent_id) and requested_session_id is None:
             return tool_failure(
                 "invalid_arguments",
                 "agent_id requires session_id; provide no target, session_id, "
@@ -213,6 +234,7 @@ def register_status_tool(
             )
         ),
         open_input_schema=True,
+        argument_normalizer=_normalize_status_arguments,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
         display=ToolDisplay(),
         parallel_safe=True,

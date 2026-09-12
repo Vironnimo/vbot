@@ -224,3 +224,20 @@ def test_ha_probe_checks_actual_service_target_and_payload() -> None:
         for case in ha_tolerance_cases(name):
             row = asyncio.run(ha_case(Adapter(), args, case))
             assert row["passed"], row
+
+
+def test_status_probe_verifies_resolved_session_targets() -> None:
+    from scripts.provider_probe.workflow_status_tolerance import status_case, status_tolerance_cases
+
+    class Adapter:
+        async def send(self, messages, **kwargs):
+            arguments = json.loads(messages[-1]["content"].removeprefix("Arguments: "))
+            return {"tool_calls": [{"id": "fixture", "name": "status", "arguments": arguments}]}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    args = PROBE._parser().parse_args([])
+    for case in status_tolerance_cases():
+        row = asyncio.run(status_case(Adapter(), args, case))
+        assert row["passed"], row

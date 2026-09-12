@@ -6,12 +6,12 @@ Reports current or targeted agent/session/runtime status through the same status
 
 - Tool name: `status`
 - Registration: `register_status_tool(registry, agent_resolver, sessions, models, chat_runs, started_at, providers=None, projects=None)` - resolves the target agent through the run-path `AgentResolver` seam (so a project session reports the resolved config agent), and uses the optional `ProjectStore` to label the session's project.
-- The model-facing schema is one flat object with optional `session_id` and `agent_id`, `required: []`, and no `additionalProperties` keyword. Descriptions explain all three targeting forms; the handler rejects unknown or malformed arguments and enforces that `agent_id` requires `session_id`.
+- The model-facing schema is one flat object with optional `session_id` and `agent_id`, `required: []`, and no `additionalProperties` keyword. Descriptions explain all three targeting forms; the handler rejects unknown or malformed arguments and requires `session_id` when selecting another Agent.
 - Targeting rules:
   - No arguments checks the calling Agent's current Tool Context Session.
   - `session_id` checks that Session for the calling Agent.
   - `agent_id` plus `session_id` checks that exact Agent/Session pair.
-  - Retired nested `request.operation`, operation-key, and `action` shapes are rejected.
+  - Recognizable `current` action/wrapper forms are repaired before validation. Repeating the calling Agent without a Session uses the current Session. Unsupported actions and another Agent without a Session fail without lookup.
 - Success data contains the status text built from Agent, Session, project, model, runtime, run activity state, context usage, and cache usage, plus machine-readable `agent_id` and `session_id`. All report content, including run activity and cache details, is text-only: the tool does not add machine-readable activity or cache fields.
 - The status text carries a `Project:` line: `<display name> (<id>)` for a project session, the placeholder for an identity session (and the bare id when the project can't be loaded). Resolved by the shared `resolve_status_project_label(projects, project_id)` helper, so the `/status` command and the tool agree.
 - The status text carries `Last request cache:` and `Session cache:` lines. They render provider-reported cache read/write tokens and hit rate only when cache fields are present on measured assistant usage; otherwise they render the placeholder, so providers without cache reporting do not look like a 0% hit.

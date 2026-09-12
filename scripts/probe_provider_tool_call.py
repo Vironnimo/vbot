@@ -337,6 +337,7 @@ def _parser() -> argparse.ArgumentParser:
             "ha_get_state",
             "ha_list_entities",
             "ha_list_services",
+            "status",
         ),
         default="skill_manage",
     )
