@@ -228,7 +228,7 @@ class IntegrationStorage:
         }
 
     def load_recall_settings(self) -> JsonObject:
-        return {"backend": "canonical_scan"}
+        return {"backend": "sqlite_fts"}
 
     def load_web_search_settings(self) -> JsonObject:
         return {

@@ -61,7 +61,7 @@ _EMBED_BATCH_SIZE = 64
 # availability is surfaced per-call in the error result.
 _SEMANTIC_SEARCH_GUIDANCE = (
     "Short topic description to find by meaning. Bare keywords anchor poorly and exact "
-    "occurrences may be missed. Omit to list recent Sessions. Matches are ranked by semantic "
+    "occurrences may be missed. Matches are ranked by semantic "
     "relevance."
 )
 _SEMANTIC_TOOL_SUMMARY = (

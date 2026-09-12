@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skills, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself and for investigating its current configuration or health."
+description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skills, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, and extended Session search and transcript retrieval."
 ---
 
 # vBot CLI
@@ -17,6 +17,7 @@ Use `vbot` through Bash to inspect and configure the application. The server run
 | Task | Read |
 |---|---|
 | Agents, Project membership, permissions, Sessions | `references/agents-projects.md` |
+| Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
 | Create or change an Extension, its Tools, hooks, Commands or pages | `references/extensions.md` |

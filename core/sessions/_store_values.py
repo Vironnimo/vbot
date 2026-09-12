@@ -97,7 +97,6 @@ _RECALL_REFLECTION_RUN_KINDS = (
     "skill_reflection",
 )
 _RECALL_USER_FACING_RUN_KINDS = ("user", "channel", "cron", "calendar")
-_RECALL_PERIOD_ROLES = ("user", "assistant", "error", "compaction_checkpoint")
 _SUMMARY_METADATA_COLUMNS = {"seen_skills": "$.seen_skills"}
 _LIST_VISIBILITY_SUBAGENT_SESSION = 1 << 0
 _LIST_VISIBILITY_BACKGROUND = 1 << 1

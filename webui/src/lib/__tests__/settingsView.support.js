@@ -78,8 +78,8 @@ export function createSettingsPayload(overrides = {}) {
       subagent_timeout_minutes: 60,
     },
     recall: {
-      backend: 'canonical_scan',
-      available_backends: ['canonical_scan', 'sqlite_fts'],
+      backend: 'sqlite_fts',
+      available_backends: ['sqlite_fts', 'vector', 'hybrid'],
     },
     web_search: {
       provider: 'brave',
@@ -134,8 +134,9 @@ export function translate(key, fallback, values) {
     'settings.providers.description.modelCount': '{count} models available.',
     'settings.providers.description.none':
       'Provider metadata is not available yet.',
-    'settings.recall.backends.canonical_scan': 'Canonical scan',
     'settings.recall.backends.sqlite_fts': 'SQLite FTS',
+    'settings.recall.backends.vector': 'Vector',
+    'settings.recall.backends.hybrid': 'Hybrid',
     'settings.webSearch.providers.brave': 'Brave Search',
     'settings.webSearch.providers.duckduckgo': 'DuckDuckGo',
     'settings.webSearch.providers.tavily': 'Tavily',

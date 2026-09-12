@@ -53,7 +53,7 @@ Reload methods refresh already-wired consumers without restart. Provider/Model r
 - `maybe_refresh_local_catalogs(force=False)` - staged copy refresh for auto-refresh Connections, published atomically after validation; failures never raise and leave the last database untouched.
 - `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers use it instead of the synchronous variant.
 - `reload_skills()` - asks `core/skills/runtime.py::SkillRuntime` for a replacement global registry, then re-registers Skill Tools and updates prompts. `SkillRuntime` owns scan-layer resolution, Project/Agent/shared scoping, inventory, and both scoped registry caches; Runtime preserves the existing public facade methods.
-- `reload_recall_backend()` re-registers both Recall Tools from settings without restart. `_recall.py::RecallIntegration` owns the live backend/registry, Extension fallback, and best-effort deleted-Session index cleanup; Runtime retains the public readiness boundary.
+- `reload_recall_backend()` re-registers `session_search` from settings without restart. `_recall.py::RecallIntegration` owns the live backend/registry, Extension fallback, and best-effort deleted-Session index cleanup; Runtime retains the public readiness boundary.
 - `reload_keep_awake()` holds/releases the Windows power request per persisted setting (no-op elsewhere).
 - `reload_channel_tool()` syncs `channel_send` registration with enabled-Channel existence.
 - `reload_environment_credentials()` refreshes the `.env` fallback inside the same resolver instance so every startup-injected consumer sees key/secret/token writes immediately.

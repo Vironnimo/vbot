@@ -122,11 +122,11 @@ class StubStorage:
     def load_recall_settings(self) -> JsonObject:
         stored = self._settings.get("recall")
         if not isinstance(stored, dict):
-            return {"backend": "canonical_scan"}
+            return {"backend": "sqlite_fts"}
 
         backend = stored.get("backend")
         if not isinstance(backend, str) or not backend.strip():
-            return {"backend": "canonical_scan"}
+            return {"backend": "sqlite_fts"}
         return {"backend": backend.strip()}
 
     def load_web_search_settings(self) -> JsonObject:

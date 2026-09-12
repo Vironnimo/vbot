@@ -61,7 +61,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     PROBE_SCENARIOS,
     PROCESS_CASES,
     READ_CASES,
-    SESSION_READ_CASES,
     SESSION_SEARCH_CASES,
     SKILL_CASES,
     SKILL_MANAGE_CASES,
@@ -228,15 +227,9 @@ def _parser() -> argparse.ArgumentParser:
         help="Exact read argument shape requested by the read scenario.",
     )
     parser.add_argument(
-        "--session-read-case",
-        choices=SESSION_READ_CASES,
-        default="whole",
-        help="Exact session_read argument shape requested by the scenario.",
-    )
-    parser.add_argument(
         "--session-search-case",
         choices=SESSION_SEARCH_CASES,
-        default="list",
+        default="query",
         help="Exact session_search argument shape requested by the scenario.",
     )
     parser.add_argument(
@@ -458,9 +451,6 @@ async def _run(args: argparse.Namespace) -> int:
             "memory_case": args.memory_case if scenario.name == "memory" else None,
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
-            "session_read_case": (
-                args.session_read_case if scenario.name == "session_read" else None
-            ),
             "session_search_case": (
                 args.session_search_case if scenario.name == "session_search" else None
             ),

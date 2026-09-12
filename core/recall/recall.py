@@ -22,7 +22,6 @@ RECALL_BACKEND_HYBRID = "hybrid"
 DEFAULT_RECALL_BACKEND = RECALL_BACKEND_SQLITE_FTS
 FIRST_PARTY_RECALL_BACKENDS = frozenset(
     {
-        RECALL_BACKEND_CANONICAL_SCAN,
         RECALL_BACKEND_SQLITE_FTS,
         RECALL_BACKEND_VECTOR,
         RECALL_BACKEND_HYBRID,
@@ -160,16 +159,11 @@ class RecallBackendRegistry:
 
     @classmethod
     def with_builtins(cls) -> RecallBackendRegistry:
-        from core.recall.canonical import CanonicalSessionRecallBackend
         from core.recall.hybrid import HybridRecallBackend
         from core.recall.sqlite_fts import SqliteFtsRecallBackend
         from core.recall.vector import VectorRecallBackend
 
         registry = cls()
-        registry.register(
-            RECALL_BACKEND_CANONICAL_SCAN,
-            lambda context: CanonicalSessionRecallBackend(context.sessions),
-        )
         registry.register(RECALL_BACKEND_SQLITE_FTS, SqliteFtsRecallBackend)
         registry.register(RECALL_BACKEND_VECTOR, VectorRecallBackend)
         registry.register(RECALL_BACKEND_HYBRID, HybridRecallBackend)
@@ -179,6 +173,8 @@ class RecallBackendRegistry:
         normalized_name = name.strip()
         if not normalized_name or normalized_name != normalized_name.lower():
             raise ValueError("recall backend names must use lowercase snake_case")
+        if normalized_name == RECALL_BACKEND_CANONICAL_SCAN:
+            raise ValueError("canonical_scan is reserved for the internal fallback")
         if normalized_name in self._factories:
             raise ValueError(f"recall backend already registered: {normalized_name}")
         self._factories[normalized_name] = factory

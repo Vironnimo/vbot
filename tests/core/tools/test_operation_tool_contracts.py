@@ -24,7 +24,6 @@ from core.tools.process import PROCESS_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_PARAMETERS
 from core.tools.session_search import (
-    SESSION_READ_TOOL_PARAMETERS,
     SESSION_SEARCH_TOOL_PARAMETERS,
 )
 from core.tools.skill import SKILL_TOOL_PARAMETERS
@@ -53,7 +52,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("process", PROCESS_TOOL_PARAMETERS),
     ("project", PROJECT_TOOL_PARAMETERS),
     ("read", READ_TOOL_PARAMETERS),
-    ("session_read", SESSION_READ_TOOL_PARAMETERS),
     ("session_search", SESSION_SEARCH_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
@@ -116,7 +114,6 @@ def test_direct_tool_schema_is_flat_and_declares_required_properties(
         "process",
         "project",
         "read",
-        "session_read",
         "session_search",
         "skill",
         "skill_manage",
