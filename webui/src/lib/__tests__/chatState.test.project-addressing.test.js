@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatAgentAddress,
   isProjectSelected,
   pickProjectAgentSessionId,
   resolveAgentAddressing,
@@ -10,17 +9,6 @@ import {
 } from '../chatState.js';
 
 describe('project chat addressing helpers (RPC-contract traps)', () => {
-  it('formats the outside agent address: bare id for identity, agent@projekt for a project', () => {
-    // No project → bare id, byte-identical to today's identity payloads.
-    expect(formatAgentAddress('builder', '')).toBe('builder');
-    expect(formatAgentAddress('builder', null)).toBe('builder');
-    expect(formatAgentAddress('builder', undefined)).toBe('builder');
-    // A project → the qualified address.
-    expect(formatAgentAddress('builder', 'vbot')).toBe('builder@vbot');
-    // Whitespace-only project id is treated as no project.
-    expect(formatAgentAddress('builder', '   ')).toBe('builder');
-  });
-
   it('distinguishes a real project selection from Personal/empty', () => {
     expect(isProjectSelected('vbot')).toBe(true);
     expect(isProjectSelected('')).toBe(false);

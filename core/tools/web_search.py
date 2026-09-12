@@ -6,7 +6,7 @@ import html
 import re
 from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import httpx
@@ -213,15 +213,23 @@ def _declared_response_size(headers: Mapping[str, str]) -> int | None:
     return size if size >= 0 else None
 
 
-async def _bounded_get(
+async def _read_bounded_response(
     client: httpx.AsyncClient,
+    method: Literal["GET", "POST"],
     url: str,
     *,
-    params: Mapping[str, Any],
+    params: Mapping[str, Any] | None = None,
+    payload: Mapping[str, Any] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> httpx.Response:
-    """Stream one GET into a bounded buffer before exposing JSON helpers."""
-    async with client.stream("GET", url, params=params, headers=headers) as response:
+    """Read one search response without exceeding the in-memory body limit."""
+    async with client.stream(
+        method,
+        url,
+        params=params,
+        json=dict(payload) if payload is not None else None,
+        headers=headers,
+    ) as response:
         declared_size = _declared_response_size(response.headers)
         if declared_size is not None and declared_size > _MAX_RESPONSE_BYTES:
             raise _ResponseTooLargeError(
@@ -245,57 +253,33 @@ async def _bounded_get(
         )
 
 
-async def _bounded_post(
-    client: httpx.AsyncClient,
+async def _request_bounded(
+    method: Literal["GET", "POST"],
     url: str,
     *,
-    payload: Mapping[str, Any],
-    headers: Mapping[str, str] | None = None,
-) -> httpx.Response:
-    """Stream one JSON POST into a bounded buffer before exposing JSON helpers."""
-    async with client.stream("POST", url, json=dict(payload), headers=headers) as response:
-        declared_size = _declared_response_size(response.headers)
-        if declared_size is not None and declared_size > _MAX_RESPONSE_BYTES:
-            raise _ResponseTooLargeError(
-                f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
-            )
-
-        body = bytearray()
-        async for chunk in response.aiter_bytes():
-            if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
-                raise _ResponseTooLargeError(
-                    f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
-                )
-            body.extend(chunk)
-
-        return httpx.Response(
-            response.status_code,
-            headers=response.headers,
-            content=bytes(body),
-            request=response.request,
-            extensions=response.extensions,
-        )
-
-
-async def _post_json_bounded(
-    url: str,
-    *,
-    payload: Mapping[str, Any],
-    headers: Mapping[str, str],
     provider_label: str,
-    auth_key_hint: str | None = None,
+    params: Mapping[str, Any] | None = None,
+    payload: Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+    status_hints: Mapping[int, str] | None = None,
     extra_retryable_statuses: Collection[int] | None = None,
-) -> tuple[Any | None, HttpRequestFailure | None]:
-    """POST one JSON search body and decode the response through shared policy.
+) -> tuple[httpx.Response | None, HttpRequestFailure | None]:
+    """Own bounded search requests, retry timing, and terminal HTTP failures.
 
-    Search POSTs are side-effect-free but billed per attempt, so only the
-    shared transient set (429/502/503/504, never 500) is retried — the same
-    rule ``is_retryable_status`` encodes for non-idempotent requests.
+    GET retries include 500. Search POSTs are billed per attempt, so use the
+    narrower transient set (429/502/503/504) plus explicit vendor exceptions.
     """
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await _bounded_post(client, url, payload=payload, headers=headers)
+                response = await _read_bounded_response(
+                    client,
+                    method,
+                    url,
+                    params=params,
+                    payload=payload,
+                    headers=headers,
+                )
             except httpx.RequestError as error:
                 if attempt >= MAX_RETRIES:
                     _LOGGER.warning("%s web search request failed: %s", provider_label, error)
@@ -308,29 +292,22 @@ async def _post_json_bounded(
                 continue
 
             if response.status_code >= 400:
-                if (
-                    is_retryable_status(
-                        response.status_code,
-                        idempotent=False,
-                        extra=extra_retryable_statuses,
-                    )
-                    and attempt < MAX_RETRIES
-                ):
+                retryable = is_retryable_status(
+                    response.status_code,
+                    idempotent=method == "GET",
+                    extra=extra_retryable_statuses,
+                )
+                if retryable and attempt < MAX_RETRIES:
                     await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = _extract_error_detail(response)
-                if response.status_code in {401, 403} and auth_key_hint:
-                    detail = f"{detail}; check {auth_key_hint}"
+                if hint := (status_hints or {}).get(response.status_code):
+                    detail = f"{detail}; {hint}"
                 _LOGGER.warning(
                     "%s web search request failed: HTTP %s: %s",
                     provider_label,
                     response.status_code,
                     detail,
-                )
-                retryable = is_retryable_status(
-                    response.status_code,
-                    idempotent=False,
-                    extra=extra_retryable_statuses,
                 )
                 return None, HttpRequestFailure(
                     f"HTTP {response.status_code}: {detail}",
@@ -338,12 +315,39 @@ async def _post_json_bounded(
                     attempts_made=(MAX_RETRIES + 1) if retryable else None,
                 )
 
-            try:
-                return response.json(), None
-            except ValueError:
-                return None, HttpRequestFailure("provider returned invalid JSON")
+            return response, None
 
     return None, HttpRequestFailure("request failed")
+
+
+async def _request_json(
+    method: Literal["GET", "POST"],
+    url: str,
+    *,
+    provider_label: str,
+    params: Mapping[str, Any] | None = None,
+    payload: Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+    status_hints: Mapping[int, str] | None = None,
+    extra_retryable_statuses: Collection[int] | None = None,
+) -> tuple[Any | None, HttpRequestFailure | None]:
+    """Decode JSON only after bounded transport and HTTP failure handling."""
+    response, failure = await _request_bounded(
+        method,
+        url,
+        provider_label=provider_label,
+        params=params,
+        payload=payload,
+        headers=headers,
+        status_hints=status_hints,
+        extra_retryable_statuses=extra_retryable_statuses,
+    )
+    if failure is not None or response is None:
+        return None, failure
+    try:
+        return response.json(), None
+    except ValueError:
+        return None, HttpRequestFailure("provider returned invalid JSON")
 
 
 def _normalize_text(raw: Any) -> str:
@@ -608,86 +612,47 @@ async def _search_brave(
     if recency:
         params["freshness"] = _BRAVE_RECENCY_MAP[recency]
 
-    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                response = await _bounded_get(
-                    client,
-                    _BRAVE_ENDPOINT,
-                    params=params,
-                    headers={"X-Subscription-Token": api_key},
-                )
-            except httpx.RequestError as error:
-                if attempt >= MAX_RETRIES:
-                    _LOGGER.warning("Brave web search request failed: %s", error)
-                    return None, HttpRequestFailure(
-                        f"request failed: {error}",
-                        retryable=True,
-                        attempts_made=MAX_RETRIES + 1,
-                    )
-                await sleep_for_retry(attempt)
-                continue
+    payload, failure = await _request_json(
+        "GET",
+        _BRAVE_ENDPOINT,
+        params=params,
+        headers={"X-Subscription-Token": api_key},
+        provider_label="Brave",
+    )
+    if failure is not None:
+        return None, failure
 
-            if response.status_code >= 400:
-                # GET is idempotent — safe to repeat (includes a transient 500).
-                if (
-                    is_retryable_status(response.status_code, idempotent=True)
-                    and attempt < MAX_RETRIES
-                ):
-                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
-                    continue
-                detail = _extract_error_detail(response)
-                _LOGGER.warning(
-                    "Brave web search request failed: HTTP %s: %s",
-                    response.status_code,
-                    detail,
-                )
-                # A retryable status only reaches here after retries were exhausted.
-                retryable = is_retryable_status(response.status_code, idempotent=True)
-                return None, HttpRequestFailure(
-                    f"HTTP {response.status_code}: {detail}",
-                    retryable=retryable,
-                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
-                )
+    raw_results = None
+    if isinstance(payload, dict):
+        web_payload = payload.get("web")
+        if isinstance(web_payload, dict):
+            raw_results = web_payload.get("results")
 
-            try:
-                payload = response.json()
-            except ValueError:
-                return None, HttpRequestFailure("provider returned invalid JSON")
+    results = _restrict_results_to_domains(
+        _standardize_results(raw_results),
+        domains,
+        count,
+    )
+    normalized_payload: dict[str, Any] = {
+        "provider": "brave",
+        "results": results,
+    }
+    if domains:
+        normalized_payload["applied_domains"] = domains
+    if recency:
+        normalized_payload["recency"] = recency
+    # more_results_available reflects Brave's unfiltered result space.
+    # With domain filters applied, result_count can be 0 while
+    # more_results_available is true, luring the agent into paging
+    # through empty results. Suppress it and warn instead.
+    if domains:
+        normalized_payload["warnings"] = [_BRAVE_DOMAIN_PAGING_WARNING]
+    elif isinstance(payload, dict) and isinstance(payload.get("query"), dict):
+        more_results = payload.get("query", {}).get("more_results_available")
+        if isinstance(more_results, bool):
+            normalized_payload["more_results_available"] = more_results
 
-            raw_results = None
-            if isinstance(payload, dict):
-                web_payload = payload.get("web")
-                if isinstance(web_payload, dict):
-                    raw_results = web_payload.get("results")
-
-            results = _restrict_results_to_domains(
-                _standardize_results(raw_results),
-                domains,
-                count,
-            )
-            normalized_payload: dict[str, Any] = {
-                "provider": "brave",
-                "results": results,
-            }
-            if domains:
-                normalized_payload["applied_domains"] = domains
-            if recency:
-                normalized_payload["recency"] = recency
-            # more_results_available reflects Brave's unfiltered result space.
-            # With domain filters applied, result_count can be 0 while
-            # more_results_available is true, luring the agent into paging
-            # through empty results. Suppress it and warn instead.
-            if domains:
-                normalized_payload["warnings"] = [_BRAVE_DOMAIN_PAGING_WARNING]
-            elif isinstance(payload, dict) and isinstance(payload.get("query"), dict):
-                more_results = payload.get("query", {}).get("more_results_available")
-                if isinstance(more_results, bool):
-                    normalized_payload["more_results_available"] = more_results
-
-            return normalized_payload, None
-
-    return None, HttpRequestFailure("request failed")
+    return normalized_payload, None
 
 
 def _build_searxng_endpoint(base_url: str) -> tuple[str | None, str | None]:
@@ -727,126 +692,40 @@ async def _search_searxng(
     if recency:
         params["time_range"] = recency
 
-    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                response = await _bounded_get(client, endpoint, params=params)
-            except httpx.RequestError as error:
-                if attempt >= MAX_RETRIES:
-                    _LOGGER.warning("SearXNG web search request failed: %s", error)
-                    return None, HttpRequestFailure(
-                        f"request failed: {error}",
-                        retryable=True,
-                        attempts_made=MAX_RETRIES + 1,
-                    )
-                await sleep_for_retry(attempt)
-                continue
+    payload, failure = await _request_json(
+        "GET",
+        endpoint,
+        params=params,
+        provider_label="SearXNG",
+        status_hints={403: "ensure SearXNG search formats include json"},
+    )
+    if failure is not None:
+        return None, failure
 
-            if response.status_code >= 400:
-                # GET is idempotent — safe to repeat (includes a transient 500).
-                if (
-                    is_retryable_status(response.status_code, idempotent=True)
-                    and attempt < MAX_RETRIES
-                ):
-                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
-                    continue
-                detail = _extract_error_detail(response)
-                if response.status_code == 403:
-                    detail = f"{detail}; ensure SearXNG search formats include json"
-                _LOGGER.warning(
-                    "SearXNG web search request failed: HTTP %s: %s",
-                    response.status_code,
-                    detail,
-                )
-                # A retryable status only reaches here after retries were exhausted.
-                retryable = is_retryable_status(response.status_code, idempotent=True)
-                return None, HttpRequestFailure(
-                    f"HTTP {response.status_code}: {detail}",
-                    retryable=retryable,
-                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
-                )
-
-            try:
-                payload = response.json()
-            except ValueError:
-                return None, HttpRequestFailure("provider returned invalid JSON")
-
-            raw_results = payload.get("results") if isinstance(payload, dict) else None
-            results = _restrict_results_to_domains(
-                _standardize_searxng_results(raw_results),
-                domains,
-                count,
-            )
-            normalized_payload: dict[str, Any] = {
-                "provider": WEB_SEARCH_PROVIDER_SEARXNG,
-                "results": results,
-            }
-            if domains:
-                normalized_payload["applied_domains"] = domains
-            if recency:
-                normalized_payload["recency"] = recency
-            warnings: list[str] = []
-            if domains:
-                warnings.append(_SEARXNG_DOMAIN_WARNING)
-            if recency:
-                warnings.append(_SEARXNG_RECENCY_WARNING)
-            if page > 1:
-                warnings.append(_SEARXNG_PAGINATION_WARNING)
-            if warnings:
-                normalized_payload["warnings"] = warnings
-            return normalized_payload, None
-
-    return None, HttpRequestFailure("request failed")
-
-
-async def _get_bounded_with_retry(
-    url: str,
-    *,
-    params: Mapping[str, Any],
-    provider_label: str,
-) -> tuple[httpx.Response | None, HttpRequestFailure | None]:
-    """GET one bounded response through the shared idempotent retry policy."""
-    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                response = await _bounded_get(client, url, params=params)
-            except httpx.RequestError as error:
-                if attempt >= MAX_RETRIES:
-                    _LOGGER.warning("%s web search request failed: %s", provider_label, error)
-                    return None, HttpRequestFailure(
-                        f"request failed: {error}",
-                        retryable=True,
-                        attempts_made=MAX_RETRIES + 1,
-                    )
-                await sleep_for_retry(attempt)
-                continue
-
-            if response.status_code >= 400:
-                # GET is idempotent — safe to repeat (includes a transient 500).
-                if (
-                    is_retryable_status(response.status_code, idempotent=True)
-                    and attempt < MAX_RETRIES
-                ):
-                    await sleep_for_retry(attempt, parse_retry_after(response.headers))
-                    continue
-                detail = _extract_error_detail(response)
-                _LOGGER.warning(
-                    "%s web search request failed: HTTP %s: %s",
-                    provider_label,
-                    response.status_code,
-                    detail,
-                )
-                # A retryable status only reaches here after retries were exhausted.
-                retryable = is_retryable_status(response.status_code, idempotent=True)
-                return None, HttpRequestFailure(
-                    f"HTTP {response.status_code}: {detail}",
-                    retryable=retryable,
-                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
-                )
-
-            return response, None
-
-    return None, HttpRequestFailure("request failed")
+    raw_results = payload.get("results") if isinstance(payload, dict) else None
+    results = _restrict_results_to_domains(
+        _standardize_searxng_results(raw_results),
+        domains,
+        count,
+    )
+    normalized_payload: dict[str, Any] = {
+        "provider": WEB_SEARCH_PROVIDER_SEARXNG,
+        "results": results,
+    }
+    if domains:
+        normalized_payload["applied_domains"] = domains
+    if recency:
+        normalized_payload["recency"] = recency
+    warnings: list[str] = []
+    if domains:
+        warnings.append(_SEARXNG_DOMAIN_WARNING)
+    if recency:
+        warnings.append(_SEARXNG_RECENCY_WARNING)
+    if page > 1:
+        warnings.append(_SEARXNG_PAGINATION_WARNING)
+    if warnings:
+        normalized_payload["warnings"] = warnings
+    return normalized_payload, None
 
 
 async def _search_duckduckgo(
@@ -862,7 +741,8 @@ async def _search_duckduckgo(
     # scoping rides on the site: operator with a post-filter guarantee.
     search_query = _build_search_query(query, domains)
     params: dict[str, Any] = {"q": search_query, "kp": _DUCKDUCKGO_SAFE_SEARCH}
-    response, failure = await _get_bounded_with_retry(
+    response, failure = await _request_bounded(
+        "GET",
         _DUCKDUCKGO_ENDPOINT,
         params=params,
         provider_label="DuckDuckGo",
@@ -1028,12 +908,13 @@ async def _search_exa(
     if recency:
         payload["startPublishedDate"] = _exa_start_published_date(recency)
 
-    response_payload, failure = await _post_json_bounded(
+    response_payload, failure = await _request_json(
+        "POST",
         _EXA_ENDPOINT,
         payload=payload,
         headers={"x-api-key": api_key},
         provider_label="Exa",
-        auth_key_hint="EXA_API_KEY",
+        status_hints={401: "check EXA_API_KEY", 403: "check EXA_API_KEY"},
     )
     if failure is not None:
         return None, failure
@@ -1137,12 +1018,13 @@ async def _search_firecrawl(
     if recency:
         payload["tbs"] = _FIRECRAWL_RECENCY_MAP[recency]
 
-    response_payload, failure = await _post_json_bounded(
+    response_payload, failure = await _request_json(
+        "POST",
         _FIRECRAWL_ENDPOINT,
         payload=payload,
         headers={"Authorization": f"Bearer {api_key}"},
         provider_label="Firecrawl",
-        auth_key_hint="FIRECRAWL_API_KEY",
+        status_hints={401: "check FIRECRAWL_API_KEY", 403: "check FIRECRAWL_API_KEY"},
         extra_retryable_statuses={408},
     )
     if failure is not None:
@@ -1232,12 +1114,13 @@ async def _search_serper(
         }
         if recency:
             payload["tbs"] = _SERPER_RECENCY_MAP[recency]
-        response_payload, failure = await _post_json_bounded(
+        response_payload, failure = await _request_json(
+            "POST",
             _SERPER_ENDPOINT,
             payload=payload,
             headers=headers,
             provider_label="Serper",
-            auth_key_hint="SERPER_API_KEY",
+            status_hints={401: "check SERPER_API_KEY", 403: "check SERPER_API_KEY"},
         )
         if failure is not None:
             return None, failure
@@ -1319,12 +1202,13 @@ async def _search_tavily(
         payload["include_domains"] = domains
         payload["include_domains_mode"] = "filter"
 
-    response_payload, failure = await _post_json_bounded(
+    response_payload, failure = await _request_json(
+        "POST",
         _TAVILY_ENDPOINT,
         payload=payload,
         headers={"Authorization": f"Bearer {api_key}"},
         provider_label="Tavily",
-        auth_key_hint="TAVILY_API_KEY",
+        status_hints={401: "check TAVILY_API_KEY", 403: "check TAVILY_API_KEY"},
     )
     if failure is not None:
         return None, failure
@@ -1390,12 +1274,13 @@ async def _search_perplexity(
     if recency:
         payload["search_recency_filter"] = recency
 
-    response_payload, failure = await _post_json_bounded(
+    response_payload, failure = await _request_json(
+        "POST",
         _PERPLEXITY_ENDPOINT,
         payload=payload,
         headers={"Authorization": f"Bearer {api_key}"},
         provider_label="Perplexity",
-        auth_key_hint="PERPLEXITY_API_KEY",
+        status_hints={401: "check PERPLEXITY_API_KEY", 403: "check PERPLEXITY_API_KEY"},
     )
     if failure is not None:
         return None, failure
