@@ -710,6 +710,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                     "sample_rate_hz": 16_000,
                 }
             },
+            "live_voice": {"enabled": False},
             "model_tasks": {},
             "session_titles": {"enabled": False, "model": ""},
             "local_models": {"context_windows": {}},
