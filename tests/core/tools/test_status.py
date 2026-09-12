@@ -18,7 +18,9 @@ from core.chat import (
     CommandExecutionContext,
     ReplySurface,
 )
-from core.chat.chat import ChatMessage
+from core.chat.messages import (
+    ChatMessage,
+)
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningIntent,

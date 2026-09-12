@@ -304,7 +304,7 @@ async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
     assert sub_loop._attachment_resolver is resolver
     assert sub_loop._compaction_service is compaction_service
     assert sub_loop._streaming is True
-    assert sub_loop._nesting_depth == 3
+    assert sub_loop._requests.nesting_depth == 3
 
 
 async def test_subagent_completion_tracker_logs_unexpected_failures(

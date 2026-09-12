@@ -12,7 +12,7 @@ import pytest
 from core.chat import (
     ChatMessage,
 )
-from core.chat.chat import (
+from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,

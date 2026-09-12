@@ -14,7 +14,12 @@ import pytest
 from PIL import Image
 
 from core.chat import ChatMessage, wire_shaping
-from core.chat.chat import RequestBuildInputs, _restore_in_run_tool_result_content
+from core.chat._request_history import (
+    _restore_in_run_tool_result_content,
+)
+from core.chat._run_state import (
+    RequestBuildInputs,
+)
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ImageBudgetExceededError
 from core.prompts import SkillPromptRegistry
@@ -918,7 +923,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 rebuilt_requests.append(
                     _restore_in_run_tool_result_content(
                         (
-                            await loop.build_request_state(
+                            await loop._requests.build_request_state(
                                 agent,
                                 session,
                                 inputs=RequestBuildInputs(
@@ -971,14 +976,14 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     try:
         # Exercise the exact shared artifact contract used by MCP binary results,
         # alternating with the real read Tool; no external Blender process needed.
-        original_build = loop.build_request_state
+        original_build = loop._requests.build_request_state
 
         async def capture_budget(agent: Any, session: Any, *, inputs: RequestBuildInputs) -> Any:
             if inputs.image_budget is not None and not live_budgets:
                 live_budgets.append(inputs.image_budget)
             return await original_build(agent, session, inputs=inputs)
 
-        monkeypatch.setattr(loop, "build_request_state", capture_budget)
+        monkeypatch.setattr(loop._requests, "build_request_state", capture_budget)
 
         def capture(_context: Any, arguments: JsonObject) -> JsonObject:
             index = arguments["index"]

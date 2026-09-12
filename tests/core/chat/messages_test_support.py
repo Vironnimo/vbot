@@ -24,7 +24,9 @@ from core.chat._message_history import (
     reply_surface_from_note,
     should_append_reply_surface_note,
 )
-from core.chat.chat import (
+from core.chat.content_blocks import FileBlock, TextBlock
+from core.chat.messages import (
+    COMPACTION_SUMMARY_END_MARKER,
     ERROR_KIND_AUTH,
     ERROR_KIND_CONFIG,
     ERROR_KIND_PROVIDER_ERROR,
@@ -33,10 +35,9 @@ from core.chat.chat import (
     ERROR_KIND_RATE_LIMIT,
     ERROR_KIND_TIMEOUT,
     ERROR_KIND_TOOL_ITERATIONS,
+    HISTORY_COMPACTION_GUIDANCE,
     error_kind_llm_visible,
 )
-from core.chat.content_blocks import FileBlock, TextBlock
-from core.chat.messages import COMPACTION_SUMMARY_END_MARKER, HISTORY_COMPACTION_GUIDANCE
 from core.chat.wire_shaping import (
     INTERRUPTED_TOOL_RESULT_CODE,
     INTERRUPTED_TOOL_RESULT_MESSAGE,
