@@ -2,13 +2,8 @@
 //
 // This mirrors `core/projects/address.py` (the single server-side seam): the
 // outside spelling of a project agent is `agent@projekt`; a bare `agent` (no
-// `@`) is an identity agent. Cron and Statistics consume this so neither
-// re-derives the `@` grammar per call site.
-//
-// `chatState.js` keeps its own `formatAgentAddress` (Phase 2) intentionally: the
-// chat path is byte-identical to today and re-pointing it at this seam risks the
-// Phase-2 tests for no behavioral gain. The two stay in lockstep by sharing the
-// same single separator literal documented below.
+// `@`) is an identity agent. Chat, Cron, Statistics, and target pickers
+// consume this shared grammar.
 
 // The separator between the agent id and the project id in the outside address
 // form. Mirrors `core/projects/address.py` `_ADDRESS_SEPARATOR`.

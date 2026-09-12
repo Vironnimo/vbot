@@ -28,7 +28,7 @@ import {
   updateQueueItem as requestUpdateQueueItem,
 } from './api.js';
 
-import { parseAgentAddress } from './agentAddress.js';
+import { formatAgentAddress, parseAgentAddress } from './agentAddress.js';
 import {
   mergeBoundedEntries,
   replaceActiveSubAgentStatuses,
@@ -2657,26 +2657,6 @@ function discardStreamingAttempt(sessionState, runId) {
 // an identity agent's outside address equals its bare id (no `@projekt`), so
 // every RPC payload is byte-identical to today. The trap discipline only kicks
 // in once a project agent is in play.
-
-// The separator between agent id and project id in the outside address form.
-// Mirrors `core/projects/address.py` `_ADDRESS_SEPARATOR` (the one server-side
-// parse/format seam) — kept in sync, never re-derived per call site.
-const AGENT_ADDRESS_SEPARATOR = '@';
-
-// Build the outside `agent@projekt` address. A null/empty project id yields the
-// bare agent id (identity spelling — what every identity-agent RPC sends today,
-// unchanged); a set project id yields `agent@projekt`. Inverse of the server's
-// `parse_agent_address`. This is the address sent to the RPCs that parse an
-// agent address: session.create / session.list / chat.history / chat.send /
-// chat.stream (RPC-contract trap 2).
-export function formatAgentAddress(agentId, projectId) {
-  const bareId = typeof agentId === 'string' ? agentId : '';
-  const project = typeof projectId === 'string' ? projectId.trim() : '';
-  if (!project) {
-    return bareId;
-  }
-  return `${bareId}${AGENT_ADDRESS_SEPARATOR}${project}`;
-}
 
 // Whether a selected project id means "a real project" (vs. Personal/empty).
 export function isProjectSelected(projectId) {

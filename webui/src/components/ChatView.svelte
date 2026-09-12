@@ -10,7 +10,7 @@
   import { t } from '$lib/i18n.js';
   import { parseModelSelectionValue } from '$lib/modelSelection.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
-  import { parseAgentAddress } from '$lib/agentAddress.js';
+  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import { tooltip } from '$lib/tooltip.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
@@ -19,7 +19,6 @@
     createChatState,
     currentSessionState,
     ensureSessionState,
-    formatAgentAddress,
     isProjectSelected,
     isRunActive,
     isSessionEmpty,
