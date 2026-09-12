@@ -34,7 +34,13 @@ const COMPONENT_SOURCE_PATH = join(
 );
 
 function componentSource() {
-  return readFileSync(COMPONENT_SOURCE_PATH, 'utf-8');
+  return [
+    COMPONENT_SOURCE_PATH,
+    join(dirname(COMPONENT_SOURCE_PATH), 'prompt/scope.svelte.js'),
+    join(dirname(COMPONENT_SOURCE_PATH), 'prompt/editor.svelte.js'),
+  ]
+    .map((path) => readFileSync(path, 'utf-8'))
+    .join('\n');
 }
 
 describe('SystemPromptView', () => {
