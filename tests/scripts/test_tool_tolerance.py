@@ -210,13 +210,17 @@ def test_ha_probe_checks_actual_service_target_and_payload() -> None:
         async def send(self, messages, **kwargs):
             arguments = json.loads(messages[-1]["content"].removeprefix("Arguments: "))
             return {
-                "tool_calls": [{"id": "fixture", "name": "ha_call_service", "arguments": arguments}]
+                "tool_calls": [
+                    {"id": "fixture", "name": kwargs["tools"][0]["name"], "arguments": arguments}
+                ]
             }
 
         def normalize_response(self, raw, **kwargs):
             return raw
 
     args = PROBE._parser().parse_args([])
-    for case in ha_tolerance_cases():
-        row = asyncio.run(ha_case(Adapter(), args, case))
-        assert row["passed"], row
+    for name in ("ha_call_service", "ha_get_state"):
+        args.tolerance_tool = name
+        for case in ha_tolerance_cases(name):
+            row = asyncio.run(ha_case(Adapter(), args, case))
+            assert row["passed"], row
