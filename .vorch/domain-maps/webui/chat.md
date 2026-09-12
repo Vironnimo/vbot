@@ -47,6 +47,8 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 - Cancelling a Run and cancelling a cancellable tool call are distinct operations - preserve that in labels, availability, and error handling.
 - `sendMessage()` and `editMessage()` resolve semantic outcomes after reconciling Session/Run/Queue state; the View snapshots display key and UI generation before awaiting either, then applies navigation/toasts/transient cards and scroll updates only while that generation is current. Edit admission calls `chat.edit`; only after success does the controller remove the targeted User message and later active suffix locally, attach the new Run stream, and clear Current Context Usage until the server refreshes it. Failure preserves the visible lineage unchanged.
 
+`ChatComposer.svelte` keeps draft/History navigation, submission admission and input/keyboard coordination. Internal `components/composer/media.svelte.js` owns per-draft attachments, upload/recording lifetimes and transient feedback; `picker.svelte.js` owns Skill/file/Model triggers, catalogs and picker selection. Both consume current values through local getters; the component retains its public props and the existing admission snapshot semantics. `composer.css` contains the namespaced presentation rules.
+
 ## Timeline and Queue
 
 - `visibleTimelineItemsForRender()` is the render boundary; item components display derived items and never reconstruct ordering from raw arrays.
