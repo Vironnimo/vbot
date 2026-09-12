@@ -917,7 +917,7 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
         terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
     )
     callbacks.pop()()
-    terminal_manager._set_attention(
+    terminal_manager._io._set_attention(
         session,
         kind="output_settled",
         summary="Output is quiet.",

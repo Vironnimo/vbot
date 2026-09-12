@@ -20,6 +20,10 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+import core.tools._terminal_input as terminal_input
+import core.tools._terminal_io as terminal_io
+import core.tools._terminal_state as terminal_state
+import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.runs import RunExecutionOwner
 from core.tools.terminal_manager import (
@@ -192,7 +196,7 @@ async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_tr
 ):
     manager, _factory = terminal_manager
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
+        terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
     )
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
     owned = await manager.spawn(
@@ -233,7 +237,7 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path, mon
         return factory(*args)
 
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
+        terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
     )
     manager = TerminalManager(adapter_factory=blocked_factory)
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
@@ -463,7 +467,7 @@ async def test_guarded_input_cannot_be_replayed_before_echo(
 async def test_headless_queries_do_not_cancel_queued_initial_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory()
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -483,7 +487,7 @@ async def test_headless_queries_do_not_cancel_queued_initial_input(
 async def test_initial_task_waits_for_tui_and_sends_enter_separately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("READY> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -502,7 +506,7 @@ async def test_manual_command_runs_inside_the_default_shell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("PS C:\\work> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -532,7 +536,7 @@ async def test_manual_command_quotes_arguments_with_spaces(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("PS C:\\work> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -554,8 +558,8 @@ async def test_manual_command_is_not_written_without_a_shell_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    monkeypatch.setattr(terminal_module, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_input, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.01)
     factory = AdapterFactory()
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -578,7 +582,7 @@ async def test_manual_command_is_not_written_when_shell_ends_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory()
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -610,7 +614,7 @@ async def test_manual_command_survives_early_operator_input(
     operator input waits briefly for it instead of cancelling it.
     """
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("PS C:\\work> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -634,9 +638,9 @@ async def test_manual_command_survives_early_operator_input(
 
 def test_shell_command_renders_exact_typed_shell_input() -> None:
     for command, arguments in [(None, []), ("", ["arg"]), ("codex", [""])]:
-        assert terminal_module._shell_command(command, arguments, shell="sh") is None
+        assert terminal_input._shell_command(command, arguments, shell="sh") is None
     arguments = ["--profile", "work space", "$null", "$(echo BAD)", "a'b", 'a"b', "C:\\Tools\\"]
-    rendered = terminal_module._shell_command("/path with spaces/tool", arguments, shell="bash")
+    rendered = terminal_input._shell_command("/path with spaces/tool", arguments, shell="bash")
     assert rendered is not None
     assert shlex.split(rendered) == ["/path with spaces/tool", *arguments]
 
@@ -664,7 +668,7 @@ def test_manual_launch_preserves_arguments_through_real_shell(shell: str) -> Non
         "(arg)",
         "bang!",
     ]
-    line = terminal_module._shell_command(
+    line = terminal_input._shell_command(
         sys.executable,
         ["-c", "import sys; print(repr(sys.argv[1:]))", *arguments],
         shell=executable,
@@ -699,7 +703,7 @@ def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
     program = shutil.which("pwsh.exe")
     if os.name != "nt" or shell_path is None or program is None or " " not in program:
         pytest.skip("A Windows executable with a spaced path is required")
-    line = terminal_module._shell_command(program, ["-NoProfile", "-Version"], shell=shell_path)
+    line = terminal_input._shell_command(program, ["-NoProfile", "-Version"], shell=shell_path)
     assert line is not None
     if shell == "cmd.exe":
         result = subprocess.run(
@@ -721,16 +725,16 @@ def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
 
 
 def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
-    assert terminal_module._screen_has_prompt_marker("PS C:\\work> ") is True
-    assert terminal_module._screen_has_prompt_marker("PS C:\\work>") is True
-    assert terminal_module._screen_has_prompt_marker("C:\\work>") is True
-    assert terminal_module._screen_has_prompt_marker("user@host:~/project$") is True
-    assert terminal_module._screen_has_prompt_marker("$ ") is True
-    assert terminal_module._screen_has_prompt_marker("> ") is True
-    assert terminal_module._screen_has_prompt_marker("❯ ") is True
-    assert terminal_module._screen_has_prompt_marker("") is False
-    assert terminal_module._screen_has_prompt_marker("hello world") is False
-    assert terminal_module._screen_has_prompt_marker("PS") is False
+    assert terminal_input._screen_has_prompt_marker("PS C:\\work> ") is True
+    assert terminal_input._screen_has_prompt_marker("PS C:\\work>") is True
+    assert terminal_input._screen_has_prompt_marker("C:\\work>") is True
+    assert terminal_input._screen_has_prompt_marker("user@host:~/project$") is True
+    assert terminal_input._screen_has_prompt_marker("$ ") is True
+    assert terminal_input._screen_has_prompt_marker("> ") is True
+    assert terminal_input._screen_has_prompt_marker("❯ ") is True
+    assert terminal_input._screen_has_prompt_marker("") is False
+    assert terminal_input._screen_has_prompt_marker("hello world") is False
+    assert terminal_input._screen_has_prompt_marker("PS") is False
 
 
 @pytest.mark.asyncio
@@ -801,7 +805,7 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(tmp_path, monk
     with ThreadPoolExecutor(max_workers=1) as executor:
         monkeypatch.setattr(loop, "_default_executor", executor)
         monkeypatch.setattr(
-            terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+            terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
         )
         try:
             session = await spawn(manager, tmp_path)
@@ -831,7 +835,7 @@ async def test_cancelled_start_waits_for_child_cleanup(tmp_path, monkeypatch) ->
         return adapter
 
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+        terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
     )
     manager = TerminalManager(adapter_factory=factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
@@ -868,7 +872,7 @@ async def test_pending_starts_reserve_owner_and_global_capacity(tmp_path, monkey
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+        terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
     )
     manager = TerminalManager(adapter_factory=factory)
     tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
@@ -910,7 +914,7 @@ async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path, m
         return adapter
 
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+        terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
     )
     manager = TerminalManager(adapter_factory=factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
@@ -944,7 +948,7 @@ async def test_failed_start_releases_its_capacity_reservation(tmp_path, monkeypa
 
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 1)
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+        terminal_backend, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
     )
     manager = TerminalManager(adapter_factory=factory)
     try:
@@ -1039,7 +1043,7 @@ async def test_operator_resize_burst_without_output_does_not_wake_agent(tmp_path
         revision = session.attention_revision
         for columns, rows in [(70, 20), (160, 48), (100, 30)]:
             await manager.resize_for_operator(session.terminal_id, columns=columns, rows=rows)
-        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS + 1)
+        await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS + 1)
         assert len(trigger.submissions) == 1
         assert session.attention_revision == revision
         assert session.state == "ready"
@@ -1082,7 +1086,7 @@ async def test_resize_hard_deadline_caps_repaint_suppression(tmp_path: Path) -> 
         )
         assert len(trigger.submissions) == 1
 
-        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
         await eventually(lambda: len(trigger.submissions) == 2)
         generation = session.activity_generation
         factory.adapters[0].emit("work after grace cap")
@@ -1336,7 +1340,7 @@ async def test_repeated_resize_output_is_deferred_without_losing_final_content(
         )
         assert len(trigger.submissions) == 1
 
-        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
         await eventually(lambda: len(trigger.submissions) == 2)
         generation = session.activity_generation
         factory.adapters[0].emit("\rMENU> status\nnew work output line")
@@ -1395,7 +1399,7 @@ async def test_resize_final_output_is_delivered_without_another_pty_event(
         assert len(trigger.submissions) == 1
         if acknowledge:
             manager.acknowledge_attention(session.terminal_id, owner(), session.attention_revision)
-        await clock.advance(terminal_module.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
+        await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
         await eventually(lambda: session.settle_task is not None and session.settle_task.done())
         if not acknowledge:
             await eventually(lambda: len(trigger.submissions) == 2)
@@ -1852,7 +1856,7 @@ async def test_finished_operator_history_expires_with_a_catalog_change(
     session = await spawn(manager, tmp_path)
     await manager.kill_for_operator(session.terminal_id)
     session.finished_at = (
-        terminal_module._utc_now() - terminal_module.TERMINAL_FINISHED_TTL - timedelta(seconds=1)
+        terminal_state._utc_now() - terminal_module.TERMINAL_FINISHED_TTL - timedelta(seconds=1)
     )
     changed.clear()
 
@@ -2278,7 +2282,7 @@ async def test_spawned_terminals_join_explicit_and_automatic_groups(
 async def test_killed_terminal_moves_to_finished_group_only_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("READY> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -2345,7 +2349,7 @@ async def test_group_order_is_persisted_and_new_terminals_append(
 async def test_deleting_a_group_kills_every_terminal_in_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     factory = AdapterFactory("READY> ")
     manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
     manager.start()
@@ -2390,7 +2394,7 @@ async def test_parallel_terminal_ids_skip_collisions(terminal_manager, tmp_path,
 @pytest.mark.asyncio
 async def test_kill_closes_reader_even_without_tree_eof(terminal_manager, tmp_path, monkeypatch):
     manager, factory = terminal_manager
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: None)
+    monkeypatch.setattr(terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: None)
     for _ in range(35):
         session = await manager.spawn(
             owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run"
@@ -2448,15 +2452,15 @@ async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(tmp_path
 async def test_terminal_snapshots_obey_byte_budget_and_reconnect(
     terminal_manager, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(terminal_module, "TERMINAL_STREAM_BYTE_LIMIT", 50_000)
+    monkeypatch.setattr(terminal_state, "TERMINAL_STREAM_BYTE_LIMIT", 50_000)
     manager, _ = terminal_manager
     session = await manager.spawn(owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run")
     session.renderer.feed("".join("x" * 70 + "\r\n" for _ in range(250)))
     for _ in range(20):
-        manager._publish_snapshot(session)
+        manager._events._publish_snapshot(session)
     events = session.stream.events
     assert len(events) < 20
-    assert sum(terminal_module._stream_event_size(event) for event in events) <= 50_000
+    assert sum(terminal_state._stream_event_size(event) for event in events) <= 50_000
     stream = manager.watch_for_operator(session.terminal_id)
     snapshot = await anext(stream)
     assert snapshot["sequence"] == session.stream_sequence

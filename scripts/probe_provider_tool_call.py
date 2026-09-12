@@ -5518,8 +5518,10 @@ async def _probe_terminal_case(
 ) -> dict[str, Any]:
     # Reuse the existing disposable PTY fixture; Model output never launches a host program.
     from core.projects import ProjectStore
+    from core.tools._terminal_events import _attention_body
+    from core.tools._terminal_input import _input_chunks
     from core.tools.terminal import register_terminal_tool
-    from core.tools.terminal_manager import TerminalManager, _attention_body, _input_chunks
+    from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
     from core.utils.tokens import estimate_json_tokens
     from tests.core.tools.test_terminal import make_context
