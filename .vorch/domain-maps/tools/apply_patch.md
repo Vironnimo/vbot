@@ -1,8 +1,7 @@
 # Apply Patch Tool
 
 Applies ordered V4A file operations while retaining the existing `edit` Tool.
-The parser, in-memory plan, filesystem execution, results, and display metadata
-are owned together by `core/tools/apply_patch.py`.
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values.
 
 ## Contract
 
