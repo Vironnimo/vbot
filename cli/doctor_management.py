@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+from cli._progress import status_line
 from cli.server_management import CommandResult, ServerInstance
 from core.settings import (
     JsonDiagnostic,
@@ -24,7 +25,9 @@ def doctor_settings(data_dir: str | Path | None = None) -> CommandResult:
     report = validate_settings_file(resolved_data_dir / "settings.json")
     return CommandResult(
         ok=report.ok,
-        message=_format_settings_report(resolved_data_dir, report),
+        message=_format_settings_report(resolved_data_dir, report)
+        + "\n"
+        + _summary(report.ok, report.warning_count),
         instance=instance,
     )
 
@@ -38,9 +41,19 @@ def doctor_config(data_dir: str | Path | None = None) -> CommandResult:
     ok = all(report.ok for report in reports)
     return CommandResult(
         ok=ok,
-        message=_format_config_report(resolved_data_dir, reports),
+        message=_format_config_report(resolved_data_dir, reports)
+        + "\n"
+        + _summary(ok, sum(report.warning_count for report in reports)),
         instance=instance,
     )
+
+
+def _summary(ok: bool, warnings: int) -> str:
+    if not ok:
+        return status_line("error", "Configuration checks failed. Correct the reported errors.")
+    if warnings:
+        return status_line("warning", f"Configuration checks passed with {warnings} warning(s).")
+    return status_line("success", "Configuration checks passed.")
 
 
 def _resolve_data_dir_without_loading_settings(data_dir: str | Path | None) -> Path:

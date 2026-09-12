@@ -10,7 +10,7 @@ vbot provider usage-history [--since <iso>] [--until <iso>]
 vbot provider usage-history-clear --yes
 ```
 
-`provider list` shows every connection with its enabled/usable state, accounts, credential source, and — for local endpoints — reachability. Use it when selecting a Connection or diagnosing missing Models.
+`provider list` (also `providers list`) groups Connections by Provider and shows a readable state alongside exact ids, Account names, and local endpoint reachability. Use `vbot provider list --details` for all enabled/usable fields and credential sources, or `provider status <provider-id>` for one Provider. Configured means enabled with credentials; this listing does not test upstream access. Use it when selecting a Connection or diagnosing missing Models.
 
 `provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider usage-history [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider usage-history-clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token totals.
 
@@ -53,12 +53,14 @@ vbot provider unset-key <provider-id> [--connection <provider:connection-id>] [-
 
 ## OAuth device flow
 
+`vbot provider connect openai` starts the Subscription sign-in. When `--connection` is omitted, connect, connect-status, and disconnect select the Provider's only OAuth Connection. Multiple candidates require an explicit `--connection`; API-key Connections are never selected for OAuth. The response names the exact Connection and Account for subsequent checks.
+
 OAuth/subscription connections use the device flow instead of `set-key` (`set-key` rejects OAuth connections, `connect` rejects API-key connections):
 
 ```bash
-vbot provider connect <provider-id> --connection <provider:connection-id> [--account <account-id>]
-vbot provider connect-status <provider-id> --connection <provider:connection-id> [--account <account-id>]
-vbot provider disconnect <provider-id> --connection <provider:connection-id> [--account <account-id>]
+vbot provider connect <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+vbot provider connect-status <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
+vbot provider disconnect <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
 `connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connect-status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
