@@ -17,6 +17,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+import core.tools._bash_environment as bash_environment
+import core.tools._bash_results as bash_results
 import core.tools.bash as bash_module
 from core.chat import ChatMessage
 from core.storage import TemporaryFileManager
@@ -63,13 +65,13 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     delivered = asyncio.Event()
     notices = []
     handoffs = []
-    original_handoff_note = bash_module._handoff_note
+    original_handoff_note = bash_results._handoff_note
 
     def record_handoff(mode, elapsed, *, requested_by_user=False):
         handoffs.append((mode, elapsed, requested_by_user))
         return original_handoff_note(mode, elapsed, requested_by_user=requested_by_user)
 
-    monkeypatch.setattr(bash_module, "_handoff_note", record_handoff)
+    monkeypatch.setattr(bash_results, "_handoff_note", record_handoff)
 
     def register(callback):
         run.register_tool_background("call-a", callback)
@@ -126,9 +128,9 @@ async def test_subagent_foreground_never_exposes_user_handoff(manager, tmp_path,
 
 @pytest.fixture(autouse=True)
 def shell_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "original-path"})
-    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
-    monkeypatch.setattr(bash_module, "_shell_env_probe_task", None)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", {"PATH": "original-path"})
+    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", time.monotonic())
+    monkeypatch.setattr(bash_environment, "_shell_env_probe_task", None)
 
 
 @pytest_asyncio.fixture
@@ -359,7 +361,7 @@ async def test_granted_env_key_is_resolved_into_only_the_spawned_process(
     assert result["ok"] is True
     assert result["data"]["output"].strip() == "hidden-token"
     assert resolved == ["TEST_API_TOKEN"]
-    assert bash_module._cached_shell_env == {"PATH": "original-path"}
+    assert bash_environment._cached_shell_env == {"PATH": "original-path"}
 
 
 @pytest.mark.asyncio
@@ -394,7 +396,7 @@ async def test_identity_bash_removes_host_project_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        bash_module,
+        bash_environment,
         "_cached_shell_env",
         {"PATH": "original-path", "VBOT_RUN_PROJECT_ID": "host-value"},
     )
@@ -1680,7 +1682,7 @@ async def test_windows_unknown_pipeline_command_exits_non_interactively(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(bash_module, "_cached_shell_env", dict(os.environ))
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", dict(os.environ))
     context = make_context(tmp_path, nesting_depth=1)
 
     result = await asyncio.wait_for(
@@ -1710,9 +1712,9 @@ def test_shell_env_probe_requests_windowless_process_group(
         calls.append(new_process_group)
         return 123
 
-    monkeypatch.setattr(bash_module, "subprocess_creation_flags", creation_flags)
+    monkeypatch.setattr(bash_environment, "subprocess_creation_flags", creation_flags)
 
-    assert bash_module._probe_creationflags() == 123
+    assert bash_environment._probe_creationflags() == 123
     assert calls == [True]
 
 
@@ -1788,8 +1790,8 @@ async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
         return probe
 
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
-    monkeypatch.setattr(bash_module.signal, "SIGKILL", 9, raising=False)
-    monkeypatch.setattr(bash_module, "SHELL_ENV_PROBE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bash_environment.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(bash_environment, "SHELL_ENV_PROBE_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(bash_module.asyncio, "create_subprocess_exec", create_probe)
     monkeypatch.setattr(
         bash_module.os,
@@ -1801,7 +1803,7 @@ async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
     )
     monkeypatch.setenv("VBOT_PROBE_FALLBACK", "fallback")
 
-    env = await bash_module._probe_shell_env()
+    env = await bash_environment._probe_shell_env()
 
     assert env["VBOT_PROBE_FALLBACK"] == "fallback"
     assert killed_process_groups == [(12345, 9)]
@@ -1823,8 +1825,8 @@ async def test_concurrent_shell_env_requests_share_one_probe(
         await release_probe.wait()
         return {"PATH": "probed-path"}
 
-    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe_shell_env)
 
     first = asyncio.create_task(bash_module.get_shell_env())
     second = asyncio.create_task(bash_module.get_shell_env())
@@ -1839,8 +1841,8 @@ async def test_concurrent_shell_env_requests_share_one_probe(
     assert first_env == {"PATH": "probed-path"}
     assert second_env == {"PATH": "probed-path"}
     assert first_env is not second_env
-    assert bash_module._cached_shell_env == {"PATH": "probed-path"}
-    assert bash_module._shell_env_probe_task is None
+    assert bash_environment._cached_shell_env == {"PATH": "probed-path"}
+    assert bash_environment._shell_env_probe_task is None
 
 
 @pytest.mark.asyncio
@@ -1858,8 +1860,8 @@ async def test_cancelling_shell_env_waiter_keeps_shared_probe_running(
         await release_probe.wait()
         return {"PATH": "probed-path"}
 
-    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe_shell_env)
 
     cancelled_waiter = asyncio.create_task(bash_module.get_shell_env())
     await asyncio.wait_for(probe_started.wait(), timeout=1)
@@ -1871,14 +1873,14 @@ async def test_cancelling_shell_env_waiter_keeps_shared_probe_running(
         await cancelled_waiter
 
     assert probe_calls == 1
-    assert bash_module._shell_env_probe_task is not None
-    assert not bash_module._shell_env_probe_task.cancelled()
+    assert bash_environment._shell_env_probe_task is not None
+    assert not bash_environment._shell_env_probe_task.cancelled()
 
     release_probe.set()
 
     assert await surviving_waiter == {"PATH": "probed-path"}
-    assert bash_module._cached_shell_env == {"PATH": "probed-path"}
-    assert bash_module._shell_env_probe_task is None
+    assert bash_environment._cached_shell_env == {"PATH": "probed-path"}
+    assert bash_environment._shell_env_probe_task is None
 
 
 @pytest.mark.asyncio
@@ -1891,12 +1893,12 @@ async def test_shell_env_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch
         probe_calls += 1
         return {"PATH": f"probe-{probe_calls}"}
 
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
-    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 0.01)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_environment, "SHELL_ENV_CACHE_TTL_SECONDS", 0.01)
 
     # Seed the cache with a pre-existing value and a fresh timestamp.
-    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "old"})
-    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", {"PATH": "old"})
+    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", time.monotonic())
 
     env_first = await bash_module.get_shell_env()
     assert env_first == {"PATH": "old"}
@@ -1919,10 +1921,10 @@ async def test_shell_env_cache_ttl_zero_never_expires(monkeypatch: pytest.Monkey
         probe_calls += 1
         return {"PATH": "fresh"}
 
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
-    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 0)
-    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "cached"})
-    monkeypatch.setattr(bash_module, "_shell_env_cache_time", 0.0)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_environment, "SHELL_ENV_CACHE_TTL_SECONDS", 0)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", {"PATH": "cached"})
+    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", 0.0)
 
     env = await bash_module.get_shell_env()
     assert env == {"PATH": "cached"}
@@ -1931,13 +1933,13 @@ async def test_shell_env_cache_ttl_zero_never_expires(monkeypatch: pytest.Monkey
 
 def test_reset_shell_env_cache_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """reset_shell_env_cache sets the cache to None so the next call re-probes."""
-    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "stale"})
-    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", {"PATH": "stale"})
+    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", time.monotonic())
 
     bash_module.reset_shell_env_cache()
 
-    assert bash_module._cached_shell_env is None
-    assert bash_module._shell_env_cache_time == 0.0
+    assert bash_environment._cached_shell_env is None
+    assert bash_environment._shell_env_cache_time == 0.0
 
 
 @pytest.mark.asyncio
@@ -1952,9 +1954,9 @@ async def test_reset_shell_env_cache_forces_reprobe_on_next_call(
         probe_calls += 1
         return {"PATH": f"probe-{probe_calls}"}
 
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
-    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 999.0)
-    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_environment, "SHELL_ENV_CACHE_TTL_SECONDS", 999.0)
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
 
     env_first = await bash_module.get_shell_env()
     assert env_first == {"PATH": "probe-1"}
@@ -1976,10 +1978,10 @@ def test_overlay_registry_path_overwrites_path_on_windows(
 ) -> None:
     """_overlay_registry_path replaces PATH with the registry value when available."""
     monkeypatch.setattr(bash_module.sys, "platform", "win32")
-    monkeypatch.setattr(bash_module, "_read_registry_path", lambda: "C:\\new;C:\\fresh")
+    monkeypatch.setattr(bash_environment, "_read_registry_path", lambda: "C:\\new;C:\\fresh")
 
     env = {"PATH": "C:\\old", "OTHER": "keep"}
-    result = bash_module._overlay_registry_path(env)
+    result = bash_environment._overlay_registry_path(env)
 
     assert result["PATH"] == "C:\\new;C:\\fresh"
     assert result["OTHER"] == "keep"
@@ -1990,10 +1992,10 @@ def test_overlay_registry_path_preserves_path_when_registry_unavailable(
 ) -> None:
     """When the registry read returns None, the existing PATH is kept."""
     monkeypatch.setattr(bash_module.sys, "platform", "win32")
-    monkeypatch.setattr(bash_module, "_read_registry_path", lambda: None)
+    monkeypatch.setattr(bash_environment, "_read_registry_path", lambda: None)
 
     env = {"PATH": "C:\\original"}
-    result = bash_module._overlay_registry_path(env)
+    result = bash_environment._overlay_registry_path(env)
 
     assert result["PATH"] == "C:\\original"
 
@@ -2003,7 +2005,7 @@ def test_overlay_registry_path_is_noop_on_posix(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
 
     env = {"PATH": "/usr/bin:/bin", "HOME": "/home/user"}
-    result = bash_module._overlay_registry_path(env)
+    result = bash_environment._overlay_registry_path(env)
 
     assert result == env
 
@@ -2011,7 +2013,7 @@ def test_overlay_registry_path_is_noop_on_posix(monkeypatch: pytest.MonkeyPatch)
 def test_read_registry_path_returns_none_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     """_read_registry_path returns None on non-Windows without importing winreg."""
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
-    assert bash_module._read_registry_path() is None
+    assert bash_environment._read_registry_path() is None
 
 
 def test_read_registry_path_combines_machine_and_user(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2048,7 +2050,7 @@ def test_read_registry_path_combines_machine_and_user(monkeypatch: pytest.Monkey
     fake_winreg.QueryValueEx = fake_query_value_ex
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
 
-    result = bash_module._read_registry_path()
+    result = bash_environment._read_registry_path()
     assert result == "C:\\system32;C:\\windows;C:\\user\\bin"
     assert len(open_key_calls) == 2
 
@@ -2080,7 +2082,7 @@ def test_read_registry_path_returns_none_when_both_empty(
     fake_winreg.QueryValueEx = fake_query_value_ex
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
 
-    assert bash_module._read_registry_path() is None
+    assert bash_environment._read_registry_path() is None
 
 
 def test_read_registry_path_returns_none_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2098,7 +2100,7 @@ def test_read_registry_path_returns_none_on_oserror(monkeypatch: pytest.MonkeyPa
     fake_winreg.QueryValueEx = lambda *_args: ("", 2)
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
 
-    assert bash_module._read_registry_path() is None
+    assert bash_environment._read_registry_path() is None
 
 
 @pytest.mark.asyncio
@@ -2336,7 +2338,7 @@ async def test_two_bash_calls_can_run_concurrently_by_default(
 )
 def test_format_elapsed_duration_renders_compact_durations(seconds: float, expected: str) -> None:
     """Elapsed abort times render as compact h/m/s strings."""
-    assert bash_module._format_elapsed_duration(seconds) == expected
+    assert bash_results._format_elapsed_duration(seconds) == expected
 
 
 @pytest.mark.asyncio
@@ -2706,7 +2708,7 @@ def test_handoff_snapshot_keeps_twenty_newest_lines(tmp_path, newline, has_log):
         log_file=tmp_path / "command.log" if has_log else None, truncated=False
     )
     lines = [f"line-{index}{newline}" for index in range(40)]
-    fields = bash_module._shape_output_fields(tracked, "".join(lines), handoff=True)
+    fields = bash_results._shape_output_fields(tracked, "".join(lines), handoff=True)
     assert fields["truncated"] is True
     assert fields["output"].split("\n", 1)[1] == "".join(lines[-20:])
     assert len(fields["output"]) <= 4000
@@ -2718,7 +2720,7 @@ def test_handoff_snapshot_keeps_twenty_newest_lines(tmp_path, newline, has_log):
 @pytest.mark.parametrize("already_truncated", [False, True])
 def test_handoff_snapshot_character_budget_and_upstream_truncation(output, already_truncated):
     tracked = types.SimpleNamespace(log_file=None, truncated=already_truncated)
-    fields = bash_module._shape_output_fields(tracked, output, handoff=True)
+    fields = bash_results._shape_output_fields(tracked, output, handoff=True)
     truncated = already_truncated or len(output) > 4000
     assert fields["truncated"] is truncated
     assert len(fields["output"]) <= 4000
@@ -2738,7 +2740,7 @@ async def test_every_handoff_mode_uses_snapshot(manager, tmp_path, monkeypatch, 
     async def captured_output(*args):
         return output
 
-    monkeypatch.setattr(bash_module, "_combined_output", captured_output)
+    monkeypatch.setattr(bash_results, "_combined_output", captured_output)
     context = make_context(tmp_path)
     if mode == "foreground":
         context = replace(context, background_registration_hook=lambda callback: callback())
@@ -2959,7 +2961,7 @@ async def test_subagent_kill_failure_carries_output_tail(
 
 
 def test_spawn_failure_message_names_missing_shell() -> None:
-    message = bash_module._spawn_failure_message(
+    message = bash_results._spawn_failure_message(
         ["missing-vbot-shell", "-c", "x"], FileNotFoundError("no such file")
     )
 
@@ -2967,7 +2969,7 @@ def test_spawn_failure_message_names_missing_shell() -> None:
 
 
 def test_spawn_failure_message_explains_pwsh_requirement() -> None:
-    message = bash_module._spawn_failure_message(
+    message = bash_results._spawn_failure_message(
         ["pwsh", "-Command", "x"], FileNotFoundError("no such file")
     )
 
@@ -2980,24 +2982,48 @@ async def test_real_timeout_kill_during_reader_drain_keeps_exit(
     manager, tmp_path, monkeypatch, code
 ):
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    original = manager._await_reader_tasks
+    original_readers = manager._await_reader_tasks
+    original_spawn = manager.spawn
+    original_kill = manager.kill
+    kill_entered = asyncio.Event()
 
     async def delayed_readers(tracked):
-        # The real timeout task must reach ProcessManager.kill while the OS
-        # process is dead but the watcher still reports running.
-        await asyncio.sleep(0.3)
-        await original(tracked)
+        # Hold the watcher after OS exit until the real timeout invokes kill.
+        await kill_entered.wait()
+        await original_readers(tracked)
+
+    async def spawn_exited(scope_key, agent_id, argv, **kwargs):
+        process_id = await original_spawn(scope_key, agent_id, argv, **kwargs)
+        tracked = manager.get_process(process_id, agent_id, project_id=kwargs.get("project_id"))
+        await tracked.proc.wait()
+        return process_id
+
+    async def observe_kill(process_id, agent_id, **kwargs):
+        tracked = manager.get_process(process_id, agent_id, **kwargs)
+        assert tracked.proc.returncode == code
+        assert tracked.status == "running"
+        kill_entered.set()
+        await original_kill(process_id, agent_id, **kwargs)
 
     monkeypatch.setattr(manager, "_await_reader_tasks", delayed_readers)
-    result = await bash_handler(
-        make_context(tmp_path),
-        {
-            "command": f"print('test-owned output'); raise SystemExit({code})",
-            "mode": "foreground",
-            "timeout": 0.2,
-        },
-        manager,
-    )
+    monkeypatch.setattr(manager, "spawn", spawn_exited)
+    monkeypatch.setattr(manager, "kill", observe_kill)
+    try:
+        result = await asyncio.wait_for(
+            bash_handler(
+                make_context(tmp_path),
+                {
+                    "command": f"print('test-owned output'); raise SystemExit({code})",
+                    "mode": "foreground",
+                    "timeout": 0.01,
+                },
+                manager,
+            ),
+            5,
+        )
+    finally:
+        kill_entered.set()
+    assert kill_entered.is_set()
     assert result["ok"] is True
     assert result["data"]["exit_code"] == code
     assert result["data"]["status"] == "completed"

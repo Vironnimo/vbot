@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+import core.tools._bash_environment as bash_environment
 import core.tools._terminal_input as terminal_input
 import core.tools._terminal_io as terminal_io
 import core.tools._terminal_state as terminal_state
@@ -2433,7 +2434,7 @@ async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(tmp_path
             raise FileNotFoundError("test-owned absent executable")
         return factory(argv, cwd, env, rows, columns)
 
-    monkeypatch.setattr(bash_module, "_probe_shell_env", probe)
+    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
     bash_module.reset_shell_env_cache()
     manager = TerminalManager(adapter_factory=launch)
     try:
