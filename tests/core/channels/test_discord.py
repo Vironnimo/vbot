@@ -13,8 +13,8 @@ import pytest
 
 import core.channels.discord as discord_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
+from core.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.adapter import ConversationFacts, FileData
-from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.discord import (
     DISCORD_MESSAGE_LIMIT,
     DiscordChannelAdapter,

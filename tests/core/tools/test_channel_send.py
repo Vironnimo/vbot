@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from core.channels import ChannelNotFoundError
 from core.channels.adapter import FileData, RouteFacts
-from core.channels.channels import ChannelNotFoundError
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.tools.channel import (
