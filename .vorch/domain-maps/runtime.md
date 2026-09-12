@@ -26,6 +26,8 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 - `stop()` stops producers (Channels/Cron/Bootstrap), usage collector, Process/Terminal managers (killing every tracked process and Terminal tree), the temp-file sweeper, clears service references, closes logging. Safe pre-start.
 - `aclose()` is the async variant accessors in event loops should prefer: producers stop first, then Trigger completion delivery, Reflection, titles, and ChatRunManager close - rejecting new work, cancelling queued work, waiting active Runs plus cancellation cleanup - before the snapshot worker joins, Provider usage, Process/Terminal managers, and temporary files close; the final shutdown snapshot runs before canonical Sessions close. No Runtime-owned background task may outlive its services.
 
+Terminal tree termination failures remain visible to the shutdown caller after Runtime closes Keep Awake, temporary files, canonical Sessions, and logging and clears service references.
+
 SpeechService's local model and worker are closed in synchronous stop, async
 close (after active Chat Runs drain), and failed-startup cleanup. Coverage:
 `tests/core/runtime/test_runtime.py::test_runtime_registers_local_speech_and_closes_its_executor`.

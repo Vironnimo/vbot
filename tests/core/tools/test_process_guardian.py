@@ -28,7 +28,7 @@ def test_guardian_kills_child_group_when_server_pipe_closes(tmp_path: Path) -> N
         [
             sys.executable,
             "-m",
-            "core.tools.process_guardian",
+            "core.utils.process_guardian",
             "--lifetime-fd",
             str(read_fd),
             "--",

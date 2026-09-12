@@ -25,8 +25,6 @@ from core.tools.process_manager import (
     ProcessTerminationError,
     TrackedProcess,
     log_background_task_result,
-    subprocess_creation_flags,
-    windows_taskkill_tree,
 )
 from core.tools.tools import (
     JsonObject,
@@ -40,6 +38,7 @@ from core.tools.tools import (
 )
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.processes import subprocess_creation_flags, windows_taskkill_tree
 
 BASH_TOOL_NAME = "bash"
 BASH_COMPLETION_STATUS_PREFIX = "### Bash process — "

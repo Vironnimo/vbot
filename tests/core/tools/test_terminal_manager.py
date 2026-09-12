@@ -77,6 +77,7 @@ class FakeTerminalAdapter:
         self.finish(-1)
 
     def close(self) -> None:
+        self.finish(-1)
         self._output.put(None)
 
     def emit(self, text: str) -> None:
@@ -191,7 +192,7 @@ async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_tr
 ):
     manager, _factory = terminal_manager
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda adapter: adapter.terminate()
+        terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
     )
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
     owned = await manager.spawn(
@@ -232,7 +233,7 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path, mon
         return factory(*args)
 
     monkeypatch.setattr(
-        terminal_module, "terminate_process_tree", lambda adapter: adapter.terminate()
+        terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: adapter.terminate()
     )
     manager = TerminalManager(adapter_factory=blocked_factory)
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
@@ -800,7 +801,7 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(tmp_path, monk
     with ThreadPoolExecutor(max_workers=1) as executor:
         monkeypatch.setattr(loop, "_default_executor", executor)
         monkeypatch.setattr(
-            terminal_module, "terminate_process_tree", lambda child: child.terminate()
+            terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
         )
         try:
             session = await spawn(manager, tmp_path)
@@ -829,7 +830,9 @@ async def test_cancelled_start_waits_for_child_cleanup(tmp_path, monkeypatch) ->
         assert release.wait(5)
         return adapter
 
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+    )
     manager = TerminalManager(adapter_factory=factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
     try:
@@ -864,7 +867,9 @@ async def test_pending_starts_reserve_owner_and_global_capacity(tmp_path, monkey
 
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+    )
     manager = TerminalManager(adapter_factory=factory)
     tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
     try:
@@ -904,7 +909,9 @@ async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path, m
         assert release.wait(5)
         return adapter
 
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+    )
     manager = TerminalManager(adapter_factory=factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
     try:
@@ -936,7 +943,9 @@ async def test_failed_start_releases_its_capacity_reservation(tmp_path, monkeypa
         return adapter
 
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 1)
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda child: child.terminate())
+    monkeypatch.setattr(
+        terminal_module, "terminate_process_tree", lambda child, **_kwargs: child.terminate()
+    )
     manager = TerminalManager(adapter_factory=factory)
     try:
         with pytest.raises(terminal_module.TerminalLaunchError):
@@ -2381,7 +2390,7 @@ async def test_parallel_terminal_ids_skip_collisions(terminal_manager, tmp_path,
 @pytest.mark.asyncio
 async def test_kill_closes_reader_even_without_tree_eof(terminal_manager, tmp_path, monkeypatch):
     manager, factory = terminal_manager
-    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda adapter: None)
+    monkeypatch.setattr(terminal_module, "terminate_process_tree", lambda adapter, **_kwargs: None)
     for _ in range(35):
         session = await manager.spawn(
             owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run"
@@ -2553,3 +2562,67 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(tmp_pa
         assert factory.adapters[0].writes == writes
     finally:
         await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_tree_kill_retains_orphan_after_root_eof_for_retry(
+    terminal_manager, tmp_path, monkeypatch
+):
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    orphan = object()
+    attempts = []
+
+    def kill_tree(child, *, targets):
+        assert child is adapter
+        attempts.append(targets)
+        if len(attempts) == 1:
+            targets.append(orphan)
+            adapter.finish(-1)
+            raise PermissionError("descendant still running")
+        assert targets == [orphan]
+        assert not adapter.is_alive()
+
+    monkeypatch.setattr("core.tools.terminal_backend.kill_process_tree", kill_tree)
+    with pytest.raises(TerminalManagerError, match="Retry the kill operation"):
+        await manager.kill(session.terminal_id, owner())
+    await asyncio.wait_for(asyncio.shield(session.reader_task), 2)
+    assert session.termination_pending
+    assert session.state not in {"exited", "error"}
+    assert session.finished_at is None
+
+    await manager.kill(session.terminal_id, owner())
+    assert attempts[0] is attempts[1]
+    assert session.state == "exited"
+    assert not session.termination_pending
+
+
+@pytest.mark.asyncio
+async def test_shutdown_attempts_other_terminals_and_retains_failed_tree_for_retry(
+    terminal_manager, tmp_path, monkeypatch
+):
+    manager, factory = terminal_manager
+    first = await spawn(manager, tmp_path)
+    second = await spawn(manager, tmp_path)
+    denied = True
+
+    def kill_tree(child, *, targets):
+        if child is factory.adapters[0] and denied:
+            raise PermissionError("descendant still running")
+        child.terminate()
+
+    monkeypatch.setattr("core.tools.terminal_backend.kill_process_tree", kill_tree)
+    sweeper = manager._sweeper_task
+    with pytest.raises(TerminalManagerError, match=first.terminal_id):
+        await manager.aclose()
+    assert sweeper.done()
+    assert second.reader_task.done()
+    assert first.termination_pending
+    assert factory.adapters[0].alive
+    assert not factory.adapters[1].alive
+    assert not second.termination_pending
+    denied = False
+    manager.stop()
+    assert not factory.adapters[0].alive
+    assert not first.termination_pending

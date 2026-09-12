@@ -29,9 +29,9 @@ from core.tools.process_manager import (
     PROCESS_TERMINAL_OUTPUT_CAP_CHARS,
     ProcessManager,
     ProcessNotFoundError,
-    guarded_process_launch,
-    subprocess_creation_flags,
 )
+from core.utils import processes as process_utils
+from core.utils.processes import guarded_process_launch, subprocess_creation_flags
 
 PollResult = dict[str, object]
 
@@ -733,14 +733,14 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
 def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(process_manager_module, "_POSIX_LIFETIME_READ_FD", 41)
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", 41)
 
     launch = guarded_process_launch(["bash", "-c", "echo exact"], platform_name="posix")
 
     assert launch.argv == (
         sys.executable,
         "-m",
-        "core.tools.process_guardian",
+        "core.utils.process_guardian",
         "--lifetime-fd",
         "41",
         "--",
@@ -756,7 +756,7 @@ def test_windows_job_kills_descendant_when_containment_owner_crashes(tmp_path: P
     pid_path = tmp_path / "child.pid"
     owner_code = (
         "import os,pathlib,subprocess,sys,time; "
-        "from core.tools.process_manager import activate_process_containment; "
+        "from core.utils.processes import activate_process_containment; "
         "activate_process_containment(); "
         "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
         "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
@@ -784,7 +784,7 @@ def test_unix_process_tree_kill_uses_sigkill(monkeypatch: pytest.MonkeyPatch) ->
             raise AssertionError("proc.kill should not be used when killpg succeeds")
 
     monkeypatch.setattr(
-        process_manager_module,
+        process_utils,
         "os",
         SimpleNamespace(
             name="posix",
@@ -812,13 +812,13 @@ def test_windows_tree_fallback_kills_and_verifies_captured_descendants(monkeypat
     monkeypatch.setattr(
         psutil, "wait_procs", lambda processes, timeout: ([], [child] if survives else [])
     )
-    monkeypatch.setattr(process_manager_module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(process_utils, "os", SimpleNamespace(name="nt"))
 
     def timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired("taskkill", 5)
 
     monkeypatch.setattr(subprocess, "run", timeout)
-    assert process_manager_module.windows_taskkill_tree(12345) is (not survives)
+    assert process_utils.windows_taskkill_tree(12345) is (not survives)
     assert set(killed) == {"child", "root"}
 
 
@@ -846,13 +846,13 @@ def test_windows_process_tree_kill_runs_taskkill_windowless(
         return subprocess.CompletedProcess(args, 0)
 
     expected_creation_flags = 0x08000000
-    monkeypatch.setattr(process_manager_module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(process_utils, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(
-        process_manager_module,
+        process_utils,
         "subprocess_creation_flags",
         lambda: expected_creation_flags,
     )
-    monkeypatch.setattr("core.tools.process_manager.subprocess.run", successful_taskkill)
+    monkeypatch.setattr("core.utils.processes.subprocess.run", successful_taskkill)
 
     ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
 
@@ -983,7 +983,7 @@ async def test_kill_process_keeps_event_loop_responsive_during_windows_taskkill(
         terminate_pid_forcibly(pid)
         return True
 
-    monkeypatch.setattr(process_manager_module, "windows_taskkill_tree", slow_taskkill)
+    monkeypatch.setattr(process_utils, "windows_taskkill_tree", slow_taskkill)
 
     heartbeat_ticks = 0
     heartbeat_done = asyncio.Event()
@@ -1045,7 +1045,7 @@ async def test_cancel_scope_async_kills_only_its_own_scope(
         terminate_pid_forcibly(pid)
         return True
 
-    monkeypatch.setattr(process_manager_module, "windows_taskkill_tree", fake_taskkill)
+    monkeypatch.setattr(process_utils, "windows_taskkill_tree", fake_taskkill)
 
     await manager.cancel_scope_async(SCOPE_A)
 
@@ -1327,7 +1327,7 @@ def test_posix_tree_failure_does_not_hide_failure_by_killing_only_parent(monkeyp
     def forbidden():
         pytest.fail("direct-child fallback loses tree ownership")
 
-    monkeypatch.setattr(process_manager_module, "os", SimpleNamespace(name="posix", killpg=fail))
+    monkeypatch.setattr(process_utils, "os", SimpleNamespace(name="posix", killpg=fail))
     with pytest.raises(PermissionError):
         ProcessManager._kill_process_tree(SimpleNamespace(pid=123, kill=forbidden))
 
@@ -1357,10 +1357,10 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch):
     )
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
     targets = []
-    assert not process_manager_module.windows_taskkill_tree(1, targets=targets)
+    assert not process_utils.windows_taskkill_tree(1, targets=targets)
     assert not root_alive and child_alive
     deny_child = False
-    assert process_manager_module.windows_taskkill_tree(1, targets=targets)
+    assert process_utils.windows_taskkill_tree(1, targets=targets)
     assert not child_alive
 
 

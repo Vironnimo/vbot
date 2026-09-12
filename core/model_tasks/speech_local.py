@@ -675,7 +675,7 @@ class _TtsEngine:
     """A cached SDK process with fixed entry point and parent-owned output paths."""
 
     def __init__(self, setup: LocalSpeechSetup, options: Mapping[str, Any]) -> None:
-        from core.tools.process_manager import subprocess_creation_flags
+        from core.utils.processes import subprocess_creation_flags
 
         self._process = subprocess.Popen(
             [
@@ -727,7 +727,7 @@ class _TtsEngine:
             timer.cancel()
 
     def close(self) -> None:
-        from core.tools.process_manager import windows_taskkill_tree
+        from core.utils.processes import windows_taskkill_tree
 
         process = self._process
         if process.poll() is None:

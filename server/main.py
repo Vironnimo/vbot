@@ -7,7 +7,6 @@ import asyncio
 import os
 from pathlib import Path
 
-from core.tools.process_manager import activate_process_containment
 from core.utils.config import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -18,6 +17,7 @@ from core.utils.config import (
     resolve_server_bind,
 )
 from core.utils.logging import build_uvicorn_log_config
+from core.utils.processes import activate_process_containment
 from core.utils.server_control import create_server_control, remove_server_control
 from server.app import create_app
 

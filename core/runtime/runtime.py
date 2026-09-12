@@ -146,7 +146,7 @@ from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.config import VBOT_ROOT
 from core.utils.errors import ConfigError, StorageError
@@ -1362,8 +1362,12 @@ class Runtime:
             self._provider_usage.stop()
         if self._process_manager is not None:
             self._process_manager.stop()
+        terminal_error: TerminalManagerError | None = None
         if self._terminal_manager is not None:
-            self._terminal_manager.stop()
+            try:
+                self._terminal_manager.stop()
+            except TerminalManagerError as error:
+                terminal_error = error
         if self._keep_awake is not None:
             self._keep_awake.close()
         if self._storage is not None:
@@ -1375,6 +1379,8 @@ class Runtime:
             self._speech.close()
         self._clear_service_references()
         self._log_manager.close()
+        if terminal_error is not None:
+            raise terminal_error
 
     async def aclose(self) -> None:
         """Gracefully shut down the runtime and await async service cleanup."""
@@ -1405,8 +1411,12 @@ class Runtime:
             await self._provider_usage.aclose()
         if self._process_manager is not None:
             await self._process_manager.aclose()
+        terminal_error: TerminalManagerError | None = None
         if self._terminal_manager is not None:
-            await self._terminal_manager.aclose()
+            try:
+                await self._terminal_manager.aclose()
+            except TerminalManagerError as error:
+                terminal_error = error
         if self._keep_awake is not None:
             self._keep_awake.close()
         if self._storage is not None:
@@ -1416,6 +1426,8 @@ class Runtime:
 
         self._clear_service_references()
         self._log_manager.close()
+        if terminal_error is not None:
+            raise terminal_error
 
     def _log_shutdown(self) -> None:
         if self.logger is not None:

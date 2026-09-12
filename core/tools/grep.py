@@ -18,7 +18,6 @@ from core.tools.arguments import (
     optional_string,
     required_int,
 )
-from core.tools.process_manager import subprocess_creation_flags
 from core.tools.search import (
     MAX_OUTPUT_BYTES,
     OUTPUT_TRUNCATED_MARKER,
@@ -46,6 +45,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.processes import subprocess_creation_flags
 
 DEFAULT_LIMIT = 100
 MAX_LINE_CHARS = 500
