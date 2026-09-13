@@ -158,6 +158,7 @@ def smoke(package: Path, *, speech: bool = False) -> None:
         "TEMP",
         "TMP",
         "USERPROFILE",
+        "USERNAME",  # Python getpass (and Torch cache discovery) needs this on Windows.
         "HOMEDRIVE",
         "HOMEPATH",
         "LOCALAPPDATA",
