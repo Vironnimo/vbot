@@ -21,7 +21,9 @@ Source code establishes what is implemented, not what ought to be implemented. V
 
 ### Develop ideas together
 
-Match discussion depth to the task's uncertainty and consequences. Understand the intended outcome; treat suggested implementation choices as hypotheses unless the user establishes them as constraints. Explain meaningful alternatives and recommend an approach when useful.
+Match discussion depth to the task's uncertainty and consequences. Understand the intended outcome; treat suggested implementation choices as hypotheses unless the user establishes them as constraints.
+
+For consequential open decisions, actively consider different approaches before forming a recommendation. Bring forward meaningful options, including possibilities the user may not know to ask about. Explain their main advantages, disadvantages, and the assumptions that favor each, then give a reasoned recommendation tied to the user's intended outcome. Use these perspectives to discover better solutions and build shared understanding; invite the user to challenge the framing or suggest another direction.
 
 For substantial or uncertain work, first outline the major areas, dependencies, and open questions. Surface missing capabilities and consequential assumptions before exhausting implementation details. Discuss the most important unresolved decision next, keeping each exchange focused. Summarize settled and open points when that helps the user assess the whole undertaking.
 
