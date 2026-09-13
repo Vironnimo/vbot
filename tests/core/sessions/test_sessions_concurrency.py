@@ -44,6 +44,7 @@ def test_concurrent_metadata_mutations_do_not_overwrite_each_other(manager) -> N
     }
 
 
+@pytest.mark.timeout(120)  # Covers durable writes and the store's bounded SQLite contention retry.
 def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> None:
     first = ChatSessionManager(tmp_path)
     second = ChatSessionManager(tmp_path)
@@ -53,7 +54,7 @@ def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> N
 
     def append(manager: ChatSessionManager, prefix: str) -> None:
         session = manager.get(address)
-        barrier.wait()
+        barrier.wait(timeout=10)  # A failed peer setup must not leave this thread waiting forever.
         for index in range(40):
             session.append(ChatMessage.user(f"{prefix}-{index}"))
 
