@@ -152,7 +152,7 @@
       return onProjectAgentSelected;
     },
     get onAgentSelected() {
-      return onAgentSelected;
+      return reportAgentSelected;
     },
     get chatState() {
       return chatState;
@@ -205,7 +205,7 @@
       return chatState;
     },
     get onAgentSelected() {
-      return onAgentSelected;
+      return reportAgentSelected;
     },
     get chatController() {
       return chatController;
@@ -339,6 +339,16 @@
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
 
+  // Chat stays mounted while another primary view is visible so Runs and
+  // history can keep reconciling. Only the visible Chat surface may publish
+  // navigation into App's shared selection; an async navigation that finishes
+  // after Chat is hidden must not overwrite the active view's choice.
+  function reportAgentSelected(agentId) {
+    if (active) {
+      onAgentSelected?.(agentId);
+    }
+  }
+
   $effect(() => {
     if (sharedAgents.length > 0 && sharedAgents !== lastSharedAgents) {
       lastSharedAgents = sharedAgents;
@@ -348,11 +358,13 @@
 
   let initialSharedAgentSyncDone = false;
   $effect(() => {
+    if (!active) {
+      return;
+    }
     const firstSync = !initialSharedAgentSyncDone;
     initialSharedAgentSyncDone = true;
     if (
       sharedSelectedAgentId &&
-      sharedSelectedAgentId !== lastSharedSelectedAgentId &&
       sharedSelectedAgentId !== chatState.selectedAgentId &&
       chatState.agents.some((agent) => agent.id === sharedSelectedAgentId)
     ) {
@@ -534,7 +546,7 @@
     shouldLoadCurrentHistory: () =>
       !navigation.viewingSessionId && !target.projectAgentActive,
     onAgentsChanged: (agents) => onAgentsChanged?.(agents),
-    onAgentSelected: (agentId) => onAgentSelected?.(agentId),
+    onAgentSelected: reportAgentSelected,
     onRestartQueueDiscarded: (count) => {
       actions.showChatToast(
         count === 1

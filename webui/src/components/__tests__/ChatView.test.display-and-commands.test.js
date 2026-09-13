@@ -10,9 +10,11 @@ import {
   it,
   listSessionActivityMock,
   rpcMock,
+  sendComposerMessage,
   setupChatViewTestSuite,
   testChatStateRefs,
   testRunStreamRefs,
+  vi,
   waitForCondition,
 } from './ChatView.support.js';
 import { reactiveProps } from './reactiveProps.svelte.js';
@@ -103,6 +105,80 @@ describe('ChatView', () => {
       rpcMock.mock.calls.filter(([method]) => method === 'chat.history'),
     ).toHaveLength(historyLoads);
     expect(listSessionActivityMock).toHaveBeenCalledTimes(activityLoads);
+  });
+
+  it('does not publish delayed Agent navigation after Chat becomes inactive', async () => {
+    const beta = createAgent({ id: 'beta', name: 'Beta' });
+    let resolveMove;
+    const moveDeferred = new Promise((resolve) => {
+      resolveMove = resolve;
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents: [createAgent(), beta],
+        streamHandler: ({ content }) => {
+          if (content === '/agent beta') {
+            return moveDeferred;
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+    const onAgentSelected = vi.fn();
+    const props = reactiveProps({
+      active: true,
+      sharedAgents: [createAgent(), beta],
+      sharedSelectedAgentId: 'alpha',
+      onAgentSelected,
+    });
+
+    chatViewTest.mount({ target: document.body, props });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    onAgentSelected.mockClear();
+
+    sendComposerMessage('/agent beta');
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' && params?.content === '/agent beta',
+        ),
+      100,
+    );
+
+    props.active = false;
+    flushSync();
+    resolveMove({
+      command_handled: true,
+      reply: 'Moved to beta.',
+      output: 'action',
+      data: {
+        command: 'agent',
+        session_id: 'session-1',
+        agent_id: 'beta',
+      },
+    });
+    await waitForCondition(
+      () => activeAgentTab()?.textContent?.includes('Beta'),
+      100,
+    );
+
+    expect(onAgentSelected).not.toHaveBeenCalled();
+
+    props.active = true;
+    flushSync();
+    await waitForCondition(
+      () => activeAgentTab()?.textContent?.includes('Alpha'),
+      100,
+    );
+
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(onAgentSelected).toHaveBeenCalledTimes(1);
+    expect(onAgentSelected).toHaveBeenCalledWith('alpha');
   });
 
   it('requests command suggestions scoped to the active agent address', async () => {
