@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import gc
+import importlib
 import io
 import json
 import os
@@ -898,8 +899,8 @@ class _TransformersEngine:
     default_model = ""
 
     def __init__(self, options: Mapping[str, Any]) -> None:
-        import torch
-        import transformers
+        torch = importlib.import_module("torch")
+        transformers = importlib.import_module("transformers")
 
         self._torch = torch
         self._model: Any = None

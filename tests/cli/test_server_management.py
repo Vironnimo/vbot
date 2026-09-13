@@ -21,6 +21,7 @@ from cli.server_management import (
     start_server_process,
     stop_server,
 )
+from core.utils import processes as process_utils
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, resolve_daily_log_path
 from tests.cli.server_management_test_support import (
     make_instance,
@@ -82,6 +83,7 @@ def test_start_server_process_is_durable_and_windowless_on_windows(
 
     monkeypatch.setattr(server_management.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(server_management.sys, "platform", "win32")
+    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: True)
     monkeypatch.setattr(
         server_management.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False
     )
