@@ -86,7 +86,9 @@ microphone Sessions.
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
 The shared STT job and individual TTS jobs serialize package operations. In a packaged release,
 STT and TTS use managed data-directory environments and child processes; the immutable release
-runtime is not changed. Managed STT installs both the declared core dependencies and the
+runtime is not changed. Managed verification and execution workers use `-I -B`:
+isolated mode alone ignores `PYTHONDONTWRITEBYTECODE` and would allow STT imports
+to create bytecode inside the release. Managed STT installs both the declared core dependencies and the
 local-speech extra because its worker imports vBot source; both lists enter its verification
 marker. The source-install STT path retains its legacy server-interpreter pip
 recipe. Fixed recipes preserve compatible Torch or install the selected CUDA/CPU build and verify

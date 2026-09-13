@@ -151,7 +151,8 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
     if host_installs:
         assert "uv==0.12.11" in host_installs[0]
     assert any(cmd[:3] == [sys.executable, "-m", "uv"] for cmd in commands)
-    assert commands[-1][0] == str(setup.python) and "--verify" in commands[-1]
+    assert commands[-1][:3] == [str(setup.python), "-I", "-B"]
+    assert "--verify" in commands[-1]
     for cmd in commands:
         if "install" in cmd and "uv" in cmd:
             assert cmd[cmd.index("--python") + 1] == str(setup.python)
@@ -402,5 +403,6 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
     finally:
         _PROGRESS.reset(token)
         engine.close()
+    assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
     assert kill_tree.call_count == 1
     process.wait.assert_called_once()

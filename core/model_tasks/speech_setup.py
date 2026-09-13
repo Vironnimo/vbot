@@ -277,6 +277,7 @@ class LocalSpeechSetup:
                 [
                     str(self.python),
                     "-I",
+                    "-B",
                     str(worker),
                     "--verify",
                     self.engine,
@@ -348,7 +349,9 @@ class LocalSpeechSetup:
                 app = candidate
                 break
         if (
-            await self._command([str(self.python), "-I", str(worker), "--verify-stt", str(app)])
+            await self._command(
+                [str(self.python), "-I", "-B", str(worker), "--verify-stt", str(app)]
+            )
             != 0
         ):
             self._fail("verification_failed")

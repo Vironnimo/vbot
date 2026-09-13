@@ -704,6 +704,7 @@ class _TtsEngine:
             [
                 str(setup.python),
                 "-I",
+                "-B",
                 str(Path(__file__).with_name("speech_worker.py")),
                 setup.engine,
             ],
@@ -796,6 +797,7 @@ class _ManagedSttEngine:
             [
                 str(setup.python),
                 "-I",
+                "-B",
                 str(Path(__file__).with_name("speech_worker.py")),
                 "--stt",
                 engine,
