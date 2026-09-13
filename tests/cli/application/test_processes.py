@@ -6,6 +6,7 @@ import pytest
 
 from cli.application import processes
 from cli.application.state import Installation
+from cli.server_management import HealthProbeResult, WebUIProbeResult
 
 
 def _install(root: Path) -> Installation:
@@ -108,9 +109,26 @@ def test_server_start_detaches_only_when_parent_is_not_already_independent(
 
     monkeypatch.setattr(processes, "subprocess_creation_flags", flags)
     monkeypatch.setattr(processes.subprocess, "Popen", spawn)
+    monkeypatch.setattr(
+        processes, "probe_webui", lambda _instance: WebUIProbeResult(available=True)
+    )
     result = (
         processes.start(install, breakaway=False)
         if independent_parent
         else processes.start(install)
     )
     assert result.ok
+
+
+def test_already_running_result_preserves_health_for_cli_output(tmp_path, monkeypatch):
+    from cli._output import print_command_result
+
+    install = _install(tmp_path)
+    health = HealthProbeResult(reachable=True, is_vbot=True)
+    monkeypatch.setattr(processes, "probe_health", lambda _: health)
+    monkeypatch.setattr(processes, "probe_webui", lambda _: WebUIProbeResult(available=True))
+    monkeypatch.setattr(processes, "running_server_matches", lambda *a, **kw: True)
+    result = processes.start(install)
+    assert result.ok and result.health is health
+    assert result.webui.available
+    print_command_result("start", result)

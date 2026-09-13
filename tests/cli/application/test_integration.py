@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 
+from cli.application import integration
 from cli.application.integration import (
     autostart,
     prepare_checkout_transition,
@@ -300,3 +301,22 @@ def test_checkout_transition_refuses_dirty_source_before_stop(tmp_path: Path) ->
             stop=lambda instance: stopped.append(instance),
         )
     assert stopped == []
+
+
+def test_checkout_status_runs_windowless_and_retains_captured_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    options: dict[str, object] = {}
+
+    def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        options.update(kwargs)
+        return subprocess.CompletedProcess(arguments, 0, " M retained.py\n", "")
+
+    monkeypatch.setattr(integration, "subprocess_creation_flags", lambda: 456)
+    monkeypatch.setattr(integration.subprocess, "run", run)
+
+    result = integration._git_status(tmp_path)
+
+    assert options["creationflags"] == 456
+    assert options["capture_output"] is True
+    assert result.stdout == " M retained.py\n"

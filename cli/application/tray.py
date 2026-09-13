@@ -56,6 +56,10 @@ class TrayActions(Protocol):
 
     def open_logs(self) -> None: ...
 
+    def open_server_logs(self) -> None: ...
+
+    def show_update(self) -> None: ...
+
     def quit(self) -> None: ...
 
 
@@ -67,6 +71,7 @@ class TrayMenuItem:
     action: str | None = None
     enabled: bool = True
     default: bool = False
+    separator: bool = False
 
 
 class TrayController:
@@ -115,7 +120,8 @@ class TrayController:
 
         update_active = self._update_active(state)
         status = self._status_label(state)
-        items: list[TrayMenuItem] = [TrayMenuItem(status, enabled=False)]
+        separator = TrayMenuItem("", enabled=False, separator=True)
+        items: list[TrayMenuItem] = [TrayMenuItem(status, enabled=False), separator]
         if state.install_shape in _DESKTOP_SHAPES:
             items.append(TrayMenuItem("Open Desktop", "open_desktop", default=True))
         if state.install_shape in _SERVER_SHAPES:
@@ -123,6 +129,7 @@ class TrayController:
                 items.extend(
                     (
                         TrayMenuItem("Open in browser", "open_browser"),
+                        separator,
                         TrayMenuItem("Restart server", "restart_server", enabled=not update_active),
                         TrayMenuItem("Stop server", "stop_server", enabled=not update_active),
                     )
@@ -133,11 +140,16 @@ class TrayController:
                 )
         items.extend(
             (
+                separator,
                 TrayMenuItem("Update", "start_update", enabled=not update_active),
-                TrayMenuItem("Open logs", "open_logs"),
-                TrayMenuItem("Quit vBot", "quit", enabled=not update_active),
             )
         )
+        if state.update_phase:
+            items.append(TrayMenuItem("Update details…", "show_update"))
+        items.append(TrayMenuItem("Application logs", "open_logs"))
+        if state.install_shape in _SERVER_SHAPES:
+            items.append(TrayMenuItem("Server logs", "open_server_logs"))
+        items.extend((separator, TrayMenuItem("Quit vBot", "quit", enabled=not update_active)))
         return tuple(items)
 
     def invoke(self, action: str) -> None:
@@ -187,6 +199,9 @@ class TrayController:
         try:
             callback()
         except Exception as error:  # no facade exception may leave the worker unusable
+            if action == "start_update":
+                with self._state_lock:
+                    self._update_requested = False
             self._record_error(f"Could not {action.replace('_', ' ')}", error)
         else:
             with self._state_lock:
@@ -198,8 +213,6 @@ class TrayController:
         _LOGGER.exception("%s", message, exc_info=error)
         with self._state_lock:
             self._status_error = f"{message}: {error}"
-            if message.endswith("start update"):
-                self._update_requested = False
         self._refresh_native_menu()
 
     def _current_state(self) -> TrayState | None:
@@ -215,18 +228,24 @@ class TrayController:
     def _status_label(self, state: TrayState) -> str:
         with self._state_lock:
             error = self._status_error
+        title = f"vBot  {state.version}" if state.version else "vBot"
         if error or state.error:
-            return "vBot · action needs attention"
-        parts = ["vBot"]
-        if state.version:
-            parts.append(state.version)
+            return f"{title}\nAction failed · see Application logs"
+        if state.update_phase in {"failed", "rolled_back", "needs_attention"}:
+            return f"{title}\nUpdate failed · see Application logs"
+        if self._update_active(state):
+            return f"{title}\nUpdating…"
+        if state.update_phase == "prepared":
+            return f"{title}\nUpdate prepared · not active"
         if state.install_shape in _SERVER_SHAPES:
-            parts.append(f"server {state.server_state}")
+            status = {
+                "running": "Server running",
+                "stopped": "Server stopped",
+                "conflict": "Server port is occupied",
+            }.get(state.server_state, "Server status unavailable")
         else:
-            parts.append("Desktop Client")
-        if state.update_phase is not None and state.update_phase not in _FINISHED_UPDATE_PHASES:
-            parts.append("updating")
-        return " · ".join(parts)
+            status = "Desktop Client"
+        return f"{title}\n{status}"
 
     def _refresh_native_menu(self, *, force: bool = False) -> None:
         icon = self._icon
@@ -283,7 +302,9 @@ def _native_menu(
 
     entries = []
     for item in items if items is not None else controller.menu_items():
-        if item.action is None:
+        if item.separator:
+            entries.append(pystray.Menu.SEPARATOR)
+        elif item.action is None:
             entries.append(pystray.MenuItem(item.label, None, enabled=False))
         else:
             entries.append(

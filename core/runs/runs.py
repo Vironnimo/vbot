@@ -454,7 +454,11 @@ class ChatRunManager:
             if self._closed:
                 item.future.cancel()
                 raise RunAdmissionBlockedError("run manager is shutting down")
-            if self._maintenance_operation_id is not None:
+            if self._maintenance_operation_id is not None and (
+                waiting_work_admission is None
+                or self._waiting_work_admissions.get(waiting_work_admission.id)
+                != waiting_work_admission
+            ):
                 item.future.cancel()
                 raise RunAdmissionBlockedError("run manager is draining for maintenance")
             try:
