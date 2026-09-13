@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
 import re
 import subprocess
 import sys
+from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -116,6 +118,82 @@ def test_host_exit_validates_exact_process_and_writes_bounded_request(
     assert request["schema_version"] == 1
     assert len(request["nonce"]) == 32
     assert result == {"ok": True, "running": False, "changed": True}
+
+
+def test_host_exit_accepts_short_path_alias_for_owned_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path / "application with spaces")
+    launcher = install.root / "vBot.exe"
+    buffer = ctypes.create_unicode_buffer(32768)
+    if sys.platform == "win32":
+        short_path = ctypes.windll.kernel32.GetShortPathNameW
+        short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        short_path.restype = wintypes.DWORD
+        length = short_path(str(launcher), buffer, len(buffer))
+    else:
+        pytest.skip("Windows short-path behavior")
+    if not length or length >= len(buffer) or Path(buffer.value) == launcher:
+        pytest.skip("8.3 aliases are unavailable for this test directory")
+    (install.root / "host.json").write_text(
+        json.dumps({"schema_version": 1, "pid": 42, "process_created": 12.5}),
+        encoding="utf-8",
+    )
+
+    class Process:
+        def __init__(self, pid: int) -> None:
+            assert pid == 42
+
+        def create_time(self) -> float:
+            return 12.5
+
+        def exe(self) -> str:
+            return buffer.value
+
+        def is_running(self) -> bool:
+            return False
+
+        def status(self) -> str:
+            return "stopped"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(Process=Process, NoSuchProcess=RuntimeError, STATUS_ZOMBIE="zombie"),
+    )
+
+    assert request_host_exit(install)["changed"] is True
+
+
+def test_host_exit_refuses_existing_foreign_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path / "app")
+    foreign = tmp_path / "foreign.exe"
+    foreign.write_bytes(b"foreign")
+    (install.root / "host.json").write_text(
+        json.dumps({"schema_version": 1, "pid": 42, "process_created": 12.5}),
+        encoding="utf-8",
+    )
+
+    class Process:
+        def __init__(self, pid: int) -> None:
+            assert pid == 42
+
+        def create_time(self) -> float:
+            return 12.5
+
+        def exe(self) -> str:
+            return str(foreign)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(Process=Process, NoSuchProcess=RuntimeError, STATUS_ZOMBIE="zombie"),
+    )
+
+    with pytest.raises(ApplicationError, match="targets another executable"):
+        request_host_exit(install)
 
 
 def test_uninstall_stops_exact_server_and_preserves_data_by_default(tmp_path: Path) -> None:
