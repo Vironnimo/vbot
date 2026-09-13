@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 from ctypes import wintypes
 
-from pystray import _win32  # type: ignore[import-untyped]
+assert sys.platform == "win32"
+
+from pystray import _win32  # type: ignore[import-untyped]  # noqa: E402
 
 _user32 = ctypes.windll.user32
 _gdi32 = ctypes.windll.gdi32
