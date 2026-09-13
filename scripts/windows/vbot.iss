@@ -142,7 +142,7 @@ begin
 #else
   ServerHost := ExpandConstant('{param:VBOTHOST|127.0.0.1}');
   ServerPort := ExpandConstant('{param:VBOTPORT|8420}');
-  ServerData := ExpandConstant('{param:VBOTDATA|{userprofile}\.vbot}');
+  ServerData := ExpandConstant('{param:VBOTDATA|{%USERPROFILE}\.vbot}');
   if (Pos('"', ServerHost) > 0) or (Pos(#13, ServerHost) > 0) or
     (Pos(#10, ServerHost) > 0) or (Pos('"', ServerPort) > 0) or
     (Pos(#13, ServerPort) > 0) or (Pos(#10, ServerPort) > 0) or
