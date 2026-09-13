@@ -92,7 +92,9 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
 
 
 def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
-    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda fd, blocking: None)
+    monkeypatch.setattr(
+        terminal_backend.os, "set_blocking", lambda fd, blocking: None, raising=False
+    )
     inherited: list[int] = []
     spawned: dict[str, object] = {}
     workdir = Path("/work")
@@ -404,7 +406,7 @@ def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name):
 
 
 def test_posix_nonblocking_write_preserves_partial_unicode_input(monkeypatch):
-    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda *args: None)
+    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda *args: None, raising=False)
     monkeypatch.setattr(terminal_backend.select, "select", lambda *args: ([], [99], []))
     adapter = terminal_backend._PosixTerminalAdapter(SimpleNamespace(fd=99))
     written = bytearray()
