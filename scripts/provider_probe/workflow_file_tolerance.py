@@ -39,7 +39,7 @@ async def file_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]
             return target
 
     with TemporaryDirectory(prefix="vbot-file-tolerance-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         target = root / "folder" / "note.txt"
         if case.get("existing"):
             target.parent.mkdir()

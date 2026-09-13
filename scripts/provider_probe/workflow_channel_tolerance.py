@@ -61,7 +61,7 @@ async def channel_case(
             return target
 
     with TemporaryDirectory(prefix="vbot-channel-tolerance-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         write_bootstrap_marker(root)
         sessions = ChatSessionManager(root)
         sessions.create("probe-agent", session_id="source")

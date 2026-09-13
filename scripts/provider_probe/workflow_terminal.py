@@ -152,7 +152,7 @@ async def _probe_terminal_case(
     )
 
     with TemporaryDirectory(prefix="vbot-terminal-probe-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         factory = AdapterFactory()
         trigger = PendingTriggerService()
         manager = TerminalManager(trigger, adapter_factory=factory, activity_quiet_seconds=0.03)
