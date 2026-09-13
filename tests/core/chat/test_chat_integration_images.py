@@ -429,7 +429,9 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         runtime.stop()
 
 
+# Sixteen durable iterations repeatedly encode and inspect multi-megabyte images.
 @pytest.mark.asyncio
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "budget_kind,streaming",
     [("none", False), ("harness", False), ("provider", False), ("provider", True)],
