@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.projects import format_agent_address, parse_agent_address
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string, required_string
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
@@ -143,7 +144,7 @@ _CRON_RUNTIME_CONTRACT = compile_tool_contract(
 
 
 def _normalize_cron_arguments(arguments: JsonObject) -> JsonObject:
-    arguments = _CRON_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    arguments = normalize_call_arguments(_CRON_RUNTIME_CONTRACT, arguments, enum_fields=("action",))
     if "agent_id" in arguments:
         target = arguments.pop("agent_id")
         if "target" in arguments and parse_agent_address(
@@ -171,6 +172,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         CRON_TOOL_PARAMETERS,
         handler,
         open_input_schema=True,
+        argument_normalizer=_normalize_cron_arguments,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_cron_display_parts,

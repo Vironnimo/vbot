@@ -6,8 +6,10 @@ import threading
 from collections import OrderedDict
 
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import required_int
 from core.tools.availability import MEMORY_TOOL_NAME
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -283,6 +285,9 @@ def _memory_scope(scope: str) -> MemoryScope:
 
 def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) -> None:
     """Register the memory tool with a vBot tool registry."""
+    runtime_contract = compile_tool_contract(
+        name="memory", input_schema=MEMORY_TOOL_PARAMETERS, require_closed_input=False
+    )
     registry.register(
         MEMORY_TOOL_NAME,
         MEMORY_TOOL_DESCRIPTION,
@@ -291,6 +296,9 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         activation="memory_mode",
         constraints=("identity_agent",),
         open_input_schema=True,
+        argument_normalizer=lambda arguments: normalize_call_arguments(
+            runtime_contract, arguments, enum_fields=("action", "scope")
+        ),
         result_schema={"type": "object", "required": ["scope", "entries"]},
         display=ToolDisplay(
             parts_builder=_memory_display_parts,

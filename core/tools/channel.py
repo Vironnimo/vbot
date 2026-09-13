@@ -18,6 +18,7 @@ from core.channels import (
 from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string, required_string
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
@@ -176,7 +177,9 @@ _CHANNEL_SEND_RUNTIME_CONTRACT = compile_tool_contract(
 
 
 def _normalize_channel_send_arguments(arguments: Any) -> Any:
-    arguments = _CHANNEL_SEND_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    arguments = normalize_call_arguments(
+        _CHANNEL_SEND_RUNTIME_CONTRACT, arguments, enum_fields=("action",)
+    )
     if not isinstance(arguments, dict):
         return arguments
     action = arguments.pop("action", "send")

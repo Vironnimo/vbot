@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_DESCRIPTION,
@@ -13,6 +15,7 @@ from core.tools.channel import (
     CHANNEL_SEND_TOOL_PARAMETERS,
     register_channel_send_tool,
 )
+from core.tools.contracts import ToolContractError
 from core.tools.tools import (
     ToolDefinitionProfileContext,
     ToolRegistry,
@@ -167,3 +170,34 @@ def test_channel_send_profile_hides_tool_without_enabled_owned_channel() -> None
         )
         == []
     )
+
+
+@pytest.mark.parametrize("requested", ["tg-team-b", "TG-TEAM-A", "tg_team_a"])
+def test_profile_does_not_redirect_a_different_channel_id(tmp_path: Path, requested: str) -> None:
+    service = Mock()
+    service.send = AsyncMock()
+    service.list_channels.return_value = [make_channel_config(channel_id="tg-team-a")]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    definitions = registry.provider_definitions(
+        [CHANNEL_SEND_TOOL_NAME], profile_context=ToolDefinitionProfileContext(agent_id="agent-1")
+    )
+    contract = registry.contracts_for_provider_definitions(definitions)[CHANNEL_SEND_TOOL_NAME]
+    with pytest.raises(ToolContractError):
+        asyncio.run(
+            registry.dispatch(
+                replace(make_context(tmp_path), input_contract=contract),
+                {
+                    "channel_id": requested,
+                    "message": "fixture",
+                    "platform_target": "123",
+                },
+                [CHANNEL_SEND_TOOL_NAME],
+            )
+        )
+    service.send.assert_not_awaited()

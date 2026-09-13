@@ -13,6 +13,7 @@ from core.sessions import (
     SessionHistoryRecord,
     SessionHistorySnapshot,
 )
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools._history_protocol import (
     HISTORY_ACTIONS as HISTORY_ACTIONS,
 )
@@ -42,6 +43,7 @@ from core.tools._history_protocol import (
     _Snapshot,
     _validate_history_action_arguments,
 )
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -161,6 +163,9 @@ class _SourceItem:
 
 def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) -> None:
     """Register the Session-scoped History tool bound to canonical Session storage."""
+    runtime_contract = compile_tool_contract(
+        name="history", input_schema=HISTORY_TOOL_PARAMETERS, require_closed_input=False
+    )
     registry.register(
         name=HISTORY_TOOL_NAME,
         description=HISTORY_TOOL_DESCRIPTION,
@@ -175,6 +180,9 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         session_scoped=True,
         parallel_safe=True,
         open_input_schema=True,
+        argument_normalizer=lambda arguments: normalize_call_arguments(
+            runtime_contract, arguments, enum_fields=("action", "match", "direction")
+        ),
         display=ToolDisplay(
             parts_builder=_history_display_parts,
             fact_builder=result_count_fact_builder("items", at_least_field="has_more"),

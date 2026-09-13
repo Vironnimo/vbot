@@ -292,7 +292,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 [
                     ("recovered_count", {"action": "list", "limit": "1"}, True),
                     ("recovered_scope", {"action": "list", "swarm_id": sid, "sender": pid}, True),
-                    ("recovered_cursor", {"action": "read", "cursor": None}, True),
+                    ("invalid_null_cursor", {"action": "read", "cursor": None}, False),
                     ("recovered_wrapper", {"request": {"operation": "LIST", "limti": "1.0"}}, True),
                 ]
             )
@@ -344,7 +344,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("receive_max", {"limit": 100}, True),
                     ("receive_empty", {}, True),
                     ("recovered_count", {"limit": "1"}, True),
-                    ("recovered_default", {"limit": None}, True),
+                    ("invalid_null_limit", {"limit": None}, False),
                     ("recovered_action", {"action": "receive"}, True),
                     ("recovered_wrapper", {"receive": {"limti": "1"}}, True),
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
@@ -369,7 +369,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 cases = [
                     ("status_default", {}, True),
                     ("recovered_count", {"limit": "1"}, True),
-                    ("recovered_cursor", {"cursor": None}, True),
+                    ("invalid_null_cursor", {"cursor": None}, False),
                     ("recovered_action", {"action": "status"}, True),
                     ("recovered_wrapper", {"request": {"operation": "STATUS", "limit": "1"}}, True),
                     ("recovered_scope", {"swarm_id": sid, "participant_id": pid}, True),
@@ -477,22 +477,11 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 calls = response.get("tool_calls") or []
                 valid_call = len(calls) == 1 and calls[0].get("name") == tool_name
                 if valid_call:
-                    from resources.extensions.swarm.extension import _RUNTIME_CONTRACTS
-
-                    contract = _RUNTIME_CONTRACTS[tool_name]
-                    try:
-                        actual = contract.normalize_arguments(calls[0].get("arguments"))
-                        wanted = contract.normalize_arguments(expected)
-                        # These redundant action labels select the only available operation.
-                        if tool_name in {"swarm_inbox", "swarm_state"}:
-                            for values in (actual, wanted):
-                                if isinstance(values, dict) and values.get("action") in {
-                                    "receive" if tool_name == "swarm_inbox" else "status"
-                                }:
-                                    values.pop("action")
-                        valid_call = actual == wanted
-                    except ToolContractError:
-                        valid_call = calls[0].get("arguments") == expected
+                    # Conformance input is independently prescribed, including invalid
+                    # values. Do not derive the oracle through runtime repair.
+                    valid_call = json.dumps(
+                        calls[0].get("arguments"), sort_keys=True
+                    ) == json.dumps(expected, sort_keys=True)
                 success = False
                 actual_code = None
                 durable = True

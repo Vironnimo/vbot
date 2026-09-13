@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,12 +18,25 @@ def file_tolerance_cases() -> list[dict[str, Any]]:
     return [
         {"id": "plain", "path": "folder/note.txt", "content": "false"},
         {"id": "empty", "path": "folder/note.txt", "content": ""},
-        {"id": "quoted", "path": ' "folder/note.txt" ', "content": "new"},
-        {"id": "backslash", "path": "folder\\note.txt", "content": "new"},
-        {"id": "read_existing", "path": "'folder\\note.txt'", "content": "new", "existing": True},
+        {
+            "id": "quoted",
+            "path": ' "folder/note.txt" ' if os.name == "nt" else "folder/note.txt",
+            "content": "new",
+        },
+        {
+            "id": "backslash",
+            "path": "folder\\note.txt" if os.name == "nt" else "folder/note.txt",
+            "content": "new",
+        },
+        {
+            "id": "read_existing",
+            "path": '"folder/note.txt"' if os.name == "nt" else "folder/note.txt",
+            "content": "new",
+            "existing": True,
+        },
         {
             "id": "unread_existing",
-            "path": '"folder/note.txt"',
+            "path": '"folder/note.txt"' if os.name == "nt" else "folder/note.txt",
             "content": "new",
             "existing": True,
             "success": False,

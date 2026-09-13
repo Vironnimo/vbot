@@ -14,6 +14,8 @@ The bundled `home-assistant` Skill under `resources/skills/home-assistant/` is t
 
 Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.
 
+The owner opts into call-field formatting and known argument wrappers. Identifier case/whitespace normalization below follows Home Assistant identifier grammar; it never chooses a similar existing entity or service. Nested service `data` keeps its supplied keys and values except the explicitly supported `entity_id` lift. Empty or null targets cannot disappear into a broader request.
+
 ### `ha_list_entities`
 
 - `GET /api/states`. Model-facing schema: open flat object with optional non-empty string `domain` and optional non-empty string `area`; omission includes every domain or area, and the handler rejects unknown fields and invalid values.

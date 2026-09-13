@@ -14,6 +14,18 @@ from core.tools._tool_display import _normalize_display_fact
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
+
+def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
+    """Remove only quoting that cannot be a legal literal in the host path grammar."""
+    if windows and isinstance(path, str):
+        text = path.strip()
+        if len(text) >= 2 and text[0] == text[-1] == '"':
+            return text[1:-1]
+    # Single quotes are legal on Windows. POSIX also permits double quotes and
+    # backslashes. Existence must not redirect a missing literal to another file.
+    return path
+
+
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
 ToolCancellationHook = Callable[[], bool]
 ToolCancelRegistrationHook = Callable[[Callable[[], None]], None]
@@ -138,20 +150,8 @@ class ToolContext:
     def resolve_path(self, path: str | Path) -> Path:
         """Resolve one user-supplied path against this call's working directory."""
 
-        candidate = Path(path).expanduser()
+        candidate = Path(_path_argument(path, windows=os.name == "nt")).expanduser()
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
-        # Existing literal names win, including quotes/backslashes on POSIX.
-        # Otherwise recognize shell-style enclosing quotes and path separators.
-        text = path.strip() if isinstance(path, str) else ""
-        quoted = len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"')
-        foreign_separators = os.name != "nt" and "\\" in text
-        if (quoted or foreign_separators) and not (target.exists() or target.is_symlink()):
-            text = text[1:-1] if quoted else str(path)
-            candidate = Path(text).expanduser()
-            target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
-            if not (target.exists() or target.is_symlink()) and "\\" in text:
-                candidate = Path(text.replace("\\", "/")).expanduser()
-                target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
         return target.resolve()
 
     def add_display_count(self, value: int, unit: str, *, at_least: bool = False) -> None:

@@ -66,7 +66,8 @@ async def skill_read_case(
                     "role": "system",
                     "content": "Make one diagnostic Tool Call with all supplied "
                     "fields. Preserve parsed JSON values, including quotes and backslashes inside "
-                    "path values. Omit fields not supplied. Only the fixture Skill is in scope.",
+                    "path values. Omit fields not supplied; "
+                    "an empty argument object must stay empty.",
                 },
                 {"role": "user", "content": "Arguments: " + json.dumps(case["arguments"])},
             ],
