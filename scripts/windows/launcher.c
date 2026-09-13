@@ -129,7 +129,7 @@ static int run_python(const wchar_t *runtime, const wchar_t *app, int argc, wcha
         else if (wcscmp(VBOT_ROLE, L"update") == 0) module = L"cli.application.worker";
         else if (wcscmp(VBOT_ROLE, L"host") == 0) module = argc == 1 ? L"cli.application.host" : L"cli.main";
     }
-    int extra = (module != NULL ? 2 : 0) + 3;
+    int extra = (module != NULL ? 2 : 0) + 5;
     char **bytes = (char **)calloc((size_t)argc + (size_t)extra + 1, sizeof(char *));
     if (bytes == NULL) return 111;
     bytes[0] = utf8(argv[0]);
@@ -137,6 +137,8 @@ static int run_python(const wchar_t *runtime, const wchar_t *app, int argc, wcha
     bytes[target++] = _strdup("-I");
     bytes[target++] = _strdup("-S");
     bytes[target++] = _strdup("-B");
+    bytes[target++] = _strdup("-X");
+    bytes[target++] = _strdup("utf8");
     if (module != NULL) { bytes[target++] = _strdup("-m"); bytes[target++] = utf8(module); }
     int first_argument = payload_install ? 3 : 1;
     for (int i = first_argument; i < argc; ++i) bytes[target++] = utf8(argv[i]);
