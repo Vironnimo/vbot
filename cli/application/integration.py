@@ -65,6 +65,14 @@ def _task_lookup(run: Runner, name: str) -> tuple[bool, str, str]:
 
 
 def _same_path(left: str | Path, right: str | Path) -> bool:
+    try:
+        # Windows process APIs may report an existing executable through its
+        # 8.3 alias even when the installation record uses the long path.
+        return os.path.samefile(left, right)
+    except OSError:
+        # Registry and Task Scheduler ownership checks also compare targets
+        # that may not exist. Retain a stable lexical comparison for those.
+        pass
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
 
 
