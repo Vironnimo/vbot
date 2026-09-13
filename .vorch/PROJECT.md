@@ -10,7 +10,7 @@ The runtime and shared state live on the server. WebUI, Desktop, CLI, and Channe
 
 **Stack:** Python 3.11+ (hatchling), FastAPI + WebSocket + SSE, Svelte (JS, no TypeScript), pywebview. Kernel uses asyncio; threads only where native libraries require them.
 
-**Windows application:** `cli/application/` owns per-user packaged versions, independent durable updates, the native `vBot.exe` tray facade and local development candidates. Desktop remains an independent accessor; no Windows service. `scripts/build_windows.py` and `scripts/windows/` assemble private CPython 3.13 for all Windows shapes, readable runtime sources and built assets. Source-checkout/Linux lifecycle stays in its existing owners. Read `cli.md` and its Windows application reference before changing this boundary.
+**Windows application:** `cli/application/` owns per-user packaged versions, independent durable updates, the native `vBot.exe` tray facade and local development candidates. Release and main (`-Dev`) installations share that lifecycle; main uses a recorded Git source to prepare immutable runtime versions. Desktop remains an independent accessor; no Windows service. `scripts/build_windows.py` and `scripts/windows/` assemble private CPython 3.13 for all Windows shapes, readable runtime sources and built assets. Source-only/Linux lifecycle stays in its existing owners. Read `cli.md` and its Windows application reference before changing this boundary.
 
 **Layers:**
 ```

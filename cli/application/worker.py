@@ -159,10 +159,16 @@ def execute(install: Installation, operation: Operation) -> None:
     if recover_interrupted(install, operation):
         return
     operation.transition(install, "preparing", "Preparing and verifying the application package")
-    archive = (
-        Path(operation.package) if operation.package else download_release(install, operation.id)
-    )
-    candidate = stage_package(install, archive, local=operation.local_package)
+    if operation.package:
+        candidate = stage_package(install, Path(operation.package), local=operation.local_package)
+    else:
+        from cli.application.source_updates import prepare_update, read_binding
+
+        binding = read_binding(install)
+        if binding is None:
+            candidate = stage_package(install, download_release(install, operation.id), local=False)
+        else:
+            candidate = prepare_update(install, operation.id)
     operation.candidate_version = candidate
     operation.save(install)
     # Local changes are reconciled before touching the running installation.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -148,3 +149,76 @@ def test_discovery_ignores_an_installation_ancestor_of_development_source(
     monkeypatch.delenv("VBOT_INSTALL_ROOT", raising=False)
 
     assert state.discover() is None
+
+
+def test_source_discovery_ignores_inherited_native_install_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_root = tmp_path / "packaged"
+    _server_install(install_root).save()
+    source_module = tmp_path / "checkout" / "cli" / "application" / "state.py"
+    source_module.parent.mkdir(parents=True)
+    source_module.write_text("", encoding="utf-8")
+    monkeypatch.setattr(state, "__file__", str(source_module))
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(install_root))
+
+    assert state.discover() is None
+
+
+def test_packaged_module_uses_its_recorded_install_over_foreign_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    own_root = tmp_path / "own"
+    foreign_root = tmp_path / "foreign"
+    _server_install(own_root).save()
+    _server_install(foreign_root).save()
+    source_module = (
+        own_root / "versions" / "rel_current" / "app" / "cli" / "application" / "state.py"
+    )
+    source_module.parent.mkdir(parents=True)
+    source_module.write_text("", encoding="utf-8")
+    monkeypatch.setattr(state, "__file__", str(source_module))
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(foreign_root))
+
+    discovered = state.discover()
+
+    assert discovered is not None
+    assert discovered.root == own_root
+
+
+def test_native_bootstrap_uses_its_recorded_install_over_foreign_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    own_root = tmp_path / "own"
+    foreign_root = tmp_path / "foreign"
+    _server_install(own_root).save()
+    _server_install(foreign_root).save()
+    monkeypatch.setattr(
+        state, "__file__", str(tmp_path / "source" / "cli" / "application" / "state.py")
+    )
+    monkeypatch.setattr(sys, "executable", str(own_root / "vBot.exe"))
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(foreign_root))
+
+    discovered = state.discover()
+
+    assert discovered is not None
+    assert discovered.root == own_root
+
+
+def test_temporary_native_payload_accepts_explicit_install_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_root = tmp_path / "destination"
+    _server_install(install_root).save()
+    monkeypatch.setattr(
+        state, "__file__", str(tmp_path / "payload" / "app" / "cli" / "application" / "state.py")
+    )
+    monkeypatch.setattr(
+        sys, "executable", str(tmp_path / "payload" / "runtime" / "vBot.Python.exe")
+    )
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(install_root))
+
+    discovered = state.discover()
+
+    assert discovered is not None
+    assert discovered.root == install_root

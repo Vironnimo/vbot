@@ -110,6 +110,32 @@ def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
     assert install.version().name == "rel_old"
 
 
+def test_bound_source_update_replaces_download_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    operation = Operation(id="upd_source", previous_version="rel_old", restart=False)
+    _patch_carry_forward(monkeypatch)
+    monkeypatch.setattr(
+        "cli.application.source_updates.read_binding", lambda _install: {"checkout": "source"}
+    )
+    monkeypatch.setattr(
+        "cli.application.source_updates.prepare_update",
+        lambda _install, operation_id: "rel_new" if operation_id == "upd_source" else "wrong",
+    )
+    monkeypatch.setattr(worker, "download_release", lambda *_args: pytest.fail("must not download"))
+    monkeypatch.setattr(
+        worker, "stage_package", lambda *_args, **_kwargs: pytest.fail("must not stage")
+    )
+    monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
+
+    worker.execute(install, operation)
+
+    assert operation.phase == "prepared"
+    assert operation.candidate_version == "rel_new"
+    assert install.version().name == "rel_old"
+
+
 def test_stage_failure_leaves_the_prior_active_version_and_marks_the_operation_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

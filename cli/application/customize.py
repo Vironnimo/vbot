@@ -193,6 +193,33 @@ def _checked_command(
         raise ApplicationError(f"Customization validation failed. Inspect {log}")
 
 
+def _ensure_candidate_environment(install: Installation, source: Path) -> Path:
+    """Create the private build environment without validating or changing source."""
+
+    dev = contained(install.root, "development/environment")
+    python = dev / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not python.is_file():
+        from cli.application.dependencies import environment_creation_command
+
+        command, environment = environment_creation_command(install, dev)
+        _checked_command(
+            source,
+            command,
+            contained(install.root, "development/source-update.log"),
+            environment_override=environment,
+        )
+    return python
+
+
+def _build_web_assets(install: Installation, source: Path) -> None:
+    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
+    if npm is None:
+        raise ApplicationError("Source updates require Node.js/npm to build the WebUI")
+    log = contained(install.root, "development/source-update.log")
+    _checked_command(source / "webui", [npm, "ci"], log)
+    _checked_command(source / "webui", [npm, "run", "build"], log)
+
+
 def _working_tree_digest(working: Path) -> str:
     result = hashlib.sha256()
     names = _git(working, "ls-files", "--cached", "--others", "--exclude-standard", "-z").split(
@@ -248,7 +275,16 @@ def _validate(install: Installation, working: Path, *, intent: str) -> str:
     return _git(working, "rev-parse", "HEAD")
 
 
-def _candidate(install: Installation, source: Path, base_version: str, revision: str) -> str:
+def _candidate(
+    install: Installation,
+    source: Path,
+    base_version: str,
+    revision: str,
+    *,
+    rebuild_native_hosts: bool = False,
+    source_version: str | None = None,
+    native_source_digest: str | None = None,
+) -> str:
     """Build application sources over a fresh copy of the exact selected runtime."""
     from cli.application.payload import copy_application
 
@@ -305,8 +341,40 @@ def _candidate(install: Installation, source: Path, base_version: str, revision:
             candidate / "runtime" / "vbot-runtime-inventory.json",
             {"schema_version": 1, "packages": inventory},
         )
+        if rebuild_native_hosts:
+            if source_version is None:
+                raise ApplicationError("Native source candidates require a source version")
+            native_script = (
+                "import sys\n"
+                "from pathlib import Path\n"
+                "from scripts.build_windows import HOSTS, compile_host\n"
+                "source, runtime, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\n"
+                "for filename, role in HOSTS.items():\n"
+                "    compile_host(source, runtime / filename, role=role, version=version, "
+                "stable=filename == 'vBot.exe')\n"
+            )
+            _checked_command(
+                source,
+                [
+                    str(python),
+                    "-c",
+                    native_script,
+                    str(source),
+                    str(candidate / "runtime"),
+                    source_version,
+                ],
+                contained(install.root, "development/source-update.log"),
+            )
         manifest = {key: value for key, value in old.items() if key != "files"}
         manifest.update(version_id=candidate_id, revision=revision, official_base=base_version)
+        if source_version is not None:
+            manifest["version"] = source_version
+        if native_source_digest is not None:
+            if len(native_source_digest) != 64 or any(
+                character not in "0123456789abcdef" for character in native_source_digest
+            ):
+                raise ApplicationError("Invalid native source digest")
+            manifest["native_source_digest"] = native_source_digest
         manifest["files"] = {
             path.relative_to(candidate).as_posix(): digest(path)
             for path in candidate.rglob("*")
