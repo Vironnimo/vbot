@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,34 @@ def test_source_checkout_update_dispatch_remains_unclaimed(monkeypatch: pytest.M
     monkeypatch.setattr(command, "discover", lambda: None)
 
     assert command.dispatch(parse_args(["update", "--no-restart"])) is None
+
+
+def test_source_selection_records_mode_without_starting_or_updating(tmp_path, monkeypatch, capsys):
+    install = _install(tmp_path)
+    monkeypatch.setattr(command, "discover", lambda: install)
+    selected = []
+
+    def select(candidate, mode, *, from_checkout):
+        selected.append((candidate.root, mode, from_checkout))
+        return {"source_track": mode}
+
+    monkeypatch.setattr("cli.application.source_updates.select_source", select)
+    monkeypatch.setattr(operations, "request_update", lambda *a, **kw: pytest.fail("not an update"))
+    assert command.dispatch(parse_args(["application", "source", "main"])) == 0
+    assert selected == [(install.root, "main", None)]
+    assert json.loads(capsys.readouterr().out)["next_command"] == "vbot update"
+
+
+def test_source_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
+    install = _install(tmp_path)
+    Operation(id="upd_pending", phase="queued").save(install)
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.setattr(
+        "cli.application.source_updates.select_source",
+        lambda *a, **kw: pytest.fail("must not change"),
+    )
+    with pytest.raises(ApplicationError):
+        command.dispatch(parse_args(["application", "source", "release"]))
 
 
 def test_packaged_lifecycle_refuses_a_target_other_than_its_recorded_server(

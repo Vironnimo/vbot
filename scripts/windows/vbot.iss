@@ -53,6 +53,7 @@ Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.exe"; Parameters: "desktop"
 [UninstallDelete]
 Type: files; Name: "{app}\application.json"
 Type: files; Name: "{app}\active-version"
+Type: files; Name: "{app}\source-update.json"
 Type: files; Name: "{app}\.operation.lock"
 Type: files; Name: "{app}\host.json"
 Type: files; Name: "{app}\host-exit-request.json"

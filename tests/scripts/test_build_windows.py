@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from cli.application.payload import NATIVE_SOURCE_FILES
 from scripts import build_windows
 
 
@@ -22,6 +23,11 @@ def _source(tmp_path: Path) -> Path:
         path.mkdir(parents=True)
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
+    for relative in NATIVE_SOURCE_FILES:
+        native_path = source / relative
+        if not native_path.exists():
+            native_path.parent.mkdir(parents=True, exist_ok=True)
+            native_path.write_text(relative, encoding="utf-8")
     (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
@@ -42,6 +48,17 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "python.exe").write_bytes(b"python")
     (runtime / "python313.dll").write_bytes(b"dll")
     return runtime
+
+
+def test_native_source_fingerprint_ignores_checkout_line_endings_but_detects_changes(tmp_path):
+    source = _source(tmp_path)
+    launcher = source / "scripts/windows/launcher.c"
+    launcher.write_bytes(b"int main(void) {\n return 0;\n}\n")
+    expected = build_windows.native_source_digest(source)
+    launcher.write_bytes(launcher.read_bytes().replace(b"\n", b"\r\n"))
+    assert build_windows.native_source_digest(source) == expected
+    launcher.write_bytes(b"int main(void) { return 1; }\n")
+    assert build_windows.native_source_digest(source) != expected
 
 
 @pytest.mark.parametrize(
@@ -158,7 +175,7 @@ def test_runtime_provisioning_uses_shape_lock_with_hashes(
 ) -> None:
     source = _source(tmp_path)
     lock = source / "scripts" / "windows" / "requirements-server.lock"
-    lock.parent.mkdir(parents=True)
+    lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text("example==1.0 --hash=sha256:abc\n", encoding="utf-8")
     commands: list[list[str]] = []
     monkeypatch.setattr(build_windows, "_run", lambda command: commands.append(command))
@@ -302,6 +319,8 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
     )
 
     assert "application install --root" in script
+    assert "DefaultDirName={localappdata}\\Programs\\vBot" in script
+    assert "{param:VBOTDATA|{%USERPROFILE}\\.vbot}" in script
     assert "ExpandConstant('{tmp}\\vbot-payload')" in script
     assert "--shape {#InstallShape}" in script
     assert "function PrepareToInstall(var NeedsRestart: Boolean): String;" in script
@@ -331,14 +350,11 @@ def test_native_host_manifest_matches_role(tmp_path: Path, monkeypatch, role: st
     long_paths = manifest.find(f".//{settings}longPathAware")
     assert long_paths is not None and long_paths.text == "true"
     dpi = manifest.find(f".//{settings}dpiAwareness")
-    if role == "desktop":
-        assert dpi is not None and dpi.text == "PerMonitorV2"
-        compatibility = "{urn:schemas-microsoft-com:compatibility.v1}"
-        os_entry = manifest.find(f".//{compatibility}supportedOS")
-        assert os_entry is not None
-        assert os_entry.attrib["Id"] == "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"
-    else:
-        assert dpi is None
+    assert dpi is not None and dpi.text == "PerMonitorV2"
+    compatibility = "{urn:schemas-microsoft-com:compatibility.v1}"
+    os_entry = manifest.find(f".//{compatibility}supportedOS")
+    assert os_entry is not None
+    assert os_entry.attrib["Id"] == "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"
 
 
 def test_compile_host_constructs_msvc_abi_commands(

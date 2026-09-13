@@ -26,6 +26,13 @@ def add_parsers(subparsers) -> None:
     install.add_argument("--public-key", default="")
     install.add_argument("--from-checkout", type=Path)
     commands.add_parser("status", help="Show the installed version and latest update")
+    source = commands.add_parser(
+        "source", help="Select release or main updates for this installation"
+    )
+    source.add_argument("source_track", choices=("main", "release"))
+    source.add_argument(
+        "--from-checkout", type=Path, help="Retain an existing Git branch as the update source"
+    )
     commands.add_parser("tray", help="Run the vBot tray application")
     commands.add_parser("exit", help="Stop the owned tray application cleanly")
     commands.add_parser("removal-begin", help="Guard the native uninstaller's removal phase")
@@ -104,6 +111,18 @@ def dispatch(args: argparse.Namespace) -> int | None:
     from cli.application import operations, processes
 
     if args.area == "application":
+        if args.command == "source":
+            from cli.application.source_updates import select_source
+            from cli.application.state import operations as saved_operations
+
+            with exclusive(install.root, "dispatch"), exclusive(install.root):
+                if any(not item.terminal for item in saved_operations(install)):
+                    raise ApplicationError("Wait for the pending update before changing its source")
+                selected = select_source(
+                    install, args.source_track, from_checkout=args.from_checkout
+                )
+                _print({**selected, "next_command": "vbot update"})
+            return 0
         if args.command in {"removal-begin", "removal-reset"}:
             from cli.application.integration import begin_removal, reset_removal
 
@@ -144,11 +163,15 @@ def dispatch(args: argparse.Namespace) -> int | None:
             main()
             return 0
         operation = operations.status(install)
+        from cli.application.source_updates import read_binding
+
+        source = read_binding(install)
         _print(
             {
                 "root": str(install.root),
                 "version": install.version().name,
                 "shape": install.install_shape,
+                "update_source": {"kind": "checkout", **source} if source else {"kind": "release"},
                 "update": operations.public_result(operation) if operation else None,
             }
         )

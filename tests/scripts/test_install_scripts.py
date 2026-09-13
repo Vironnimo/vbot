@@ -742,6 +742,30 @@ def test_windows_installer_refuses_accidental_elevation_before_install_mutation(
     assert guard < script.index("$cloneOutput = @(git clone", guard)
 
 
+def test_windows_installer_keeps_explicit_directory_and_existing_target_guard() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    assert '$installDirWasProvided = $PSBoundParameters.ContainsKey("InstallDir")' in script
+    existing_target_guard = script.index("elseif (Test-Path -LiteralPath $InstallDir)")
+    existing_target_section = script[existing_target_guard:]
+    assert "already exists" in existing_target_section
+    assert "pass -InstallDir to choose another location" in existing_target_section
+
+
+def test_windows_dev_installer_routes_fresh_installs_to_native_main() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    existing_checkout = script[
+        script.index("$useExistingCheckout = (") : script.index(
+            "$useNativeInstaller =", script.index("$useExistingCheckout = (")
+        )
+    ]
+    assert "-not $Dev" in existing_checkout
+    assert "$useNativeInstaller = -not $useExistingCheckout -and -not $SourceCheckout" in script
+    assert "if ($DesktopClient -and $Dev)" not in script
+    assert "-Dev selects the native main installation" in script
+
+
 def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
@@ -758,7 +782,20 @@ def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None
     assert ready_guard < summary.index("http://${summaryHost}:$summaryPort/")
 
 
-@pytest.mark.parametrize("mode", ["success", "missing", "digest", "signature"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "success",
+        "missing",
+        "digest",
+        "signature",
+        "dev-success",
+        "dev-source-failure",
+        "dev-update-failure",
+        "dev-no-autostart",
+        "dev-desktop-client",
+    ],
+)
 def test_windows_native_installer_release_routing_is_verified(tmp_path: Path, mode: str) -> None:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
@@ -774,14 +811,26 @@ $InstallDir = $Root
 $DataDir = Join-Path $Root "data"
 $HostName = "127.0.0.1"
 $Port = 9134
-$NoAutostart = $false
+$Dev = $Mode -like "dev-*"
+$NoAutostart = $Mode -eq "dev-no-autostart"
+$Shape = if ($Mode -eq "dev-desktop-client") { "desktop-client" } else { "server" }
 $ProgressPreference = "SilentlyContinue"
 $calls = @()
+$nativeCommands = @()
+$statuses = @()
+$healthCalls = 0
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $Source, [ref]$tokens, [ref]$errors
 )
-foreach ($name in @("Write-Status", "Write-Step", "Get-OfficialRelease", "Install-NativeRelease")) {
+$functions = @(
+    "Write-Status",
+    "Write-Step",
+    "Get-OfficialRelease",
+    "Invoke-NativeCommand",
+    "Install-NativeRelease"
+)
+foreach ($name in $functions) {
     $node = $ast.FindAll({
         param($item)
         $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -789,15 +838,37 @@ foreach ($name in @("Write-Status", "Write-Step", "Get-OfficialRelease", "Instal
     }, $false) | Select-Object -First 1
     . ([scriptblock]::Create($node.Extent.Text))
 }
+function Write-Status {
+    param($State, $Message)
+    $script:statuses += "${State}:$Message"
+}
+function Write-Step { param($Message) }
+function Invoke-NativeCommand {
+    param([string[]]$Arguments)
+    $command = $Arguments -join " "
+    $script:nativeCommands += $command
+    if (
+        ($Mode -eq "dev-source-failure" -and $command -eq "application source main") -or
+        ($Mode -eq "dev-update-failure" -and $command -eq "update")
+    ) {
+        throw (
+            "The native application command failed. The installation and logs were retained; " +
+            "inspect the error before retrying vbot update."
+        )
+    }
+}
 $bytes = [System.Text.Encoding]::UTF8.GetBytes("verified package")
 $hasher = New-Object System.Security.Cryptography.SHA256Managed
 $sha = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
 $hasher.Dispose()
 function Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
-    if ($Uri -like "*/health") { return [pscustomobject]@{status="ok"} }
+    if ($Uri -like "*/health") {
+        $script:healthCalls++
+        return [pscustomobject]@{status="ok"}
+    }
     $assets = if ($Mode -eq "missing") { @() } else { @([pscustomobject]@{
-        name="vBot-1.2.3-windows-x86_64-server.exe"
+        name=("vBot-1.2.3-windows-x86_64-{0}.exe" -f $Shape)
         digest="sha256:$sha"
         browser_download_url=(
             "https://github.com/Vironnimo/vbot/releases/download/v1.2.3/vbot.exe"
@@ -826,7 +897,7 @@ function Start-Process {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $state = @{
         schema_version=1
-        install_shape="server"
+        install_shape=$Shape
         server_host=$HostName
         server_port=$Port
         server_data_directory=$DataDir
@@ -836,11 +907,30 @@ function Start-Process {
     return [pscustomobject]@{ExitCode=0}
 }
 try {
-    Install-NativeRelease -Tag "v1.2.3" -Shape "server"
-    @{ok=$true; calls=$calls} | ConvertTo-Json -Compress
+    Install-NativeRelease -Tag "v1.2.3" -Shape $Shape
+    $result = @{
+        ok = $true
+        calls = $calls
+        nativeCommands = $nativeCommands
+        statuses = $statuses
+        healthCalls = $healthCalls
+        installationRetained = (Test-Path (Join-Path $InstallDir "application.json")) -and
+            (Test-Path (Join-Path $InstallDir "active-version"))
+    }
+    $result | ConvertTo-Json -Compress
 }
 catch {
-    @{ok=$false; error=$_.Exception.Message; calls=$calls} | ConvertTo-Json -Compress
+    $result = @{
+        ok = $false
+        error = $_.Exception.Message
+        calls = $calls
+        nativeCommands = $nativeCommands
+        statuses = $statuses
+        healthCalls = $healthCalls
+        installationRetained = (Test-Path (Join-Path $InstallDir "application.json")) -and
+            (Test-Path (Join-Path $InstallDir "active-version"))
+    }
+    $result | ConvertTo-Json -Compress
 }
 """,
         encoding="utf-8",
@@ -874,6 +964,33 @@ catch {
             "/VBOTPORT=9134",
             "/TASKS=startup",
         ]
+        assert payload["nativeCommands"] == []
+        assert payload["healthCalls"] == 1
+    elif mode == "dev-success":
+        assert payload["ok"] is True
+        assert payload["calls"][-1] == "/TASKS="
+        assert payload["nativeCommands"] == [
+            "application source main",
+            "update",
+            "autostart enable",
+        ]
+        assert payload["statuses"] == ["OK:vBot is installed and follows main."]
+        assert payload["healthCalls"] == 1
+    elif mode in {"dev-source-failure", "dev-update-failure"}:
+        assert payload["ok"] is False
+        assert "installation and logs were retained" in payload["error"]
+        assert payload["installationRetained"] is True
+        assert payload["statuses"] == []
+        assert payload["healthCalls"] == 0
+        expected = ["application source main"]
+        if mode == "dev-update-failure":
+            expected.append("update")
+        assert payload["nativeCommands"] == expected
+    elif mode == "dev-no-autostart" or mode == "dev-desktop-client":
+        assert payload["ok"] is True
+        assert payload["calls"][-1] == "/TASKS="
+        assert payload["nativeCommands"] == ["application source main", "update"]
+        assert payload["healthCalls"] == 0
     elif mode == "missing":
         assert "not yet published" in payload["error"]
         assert "-SourceCheckout" in payload["error"]
