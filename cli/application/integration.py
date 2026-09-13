@@ -437,10 +437,12 @@ def begin_removal(install: Installation) -> dict[str, Any]:
         exempt = {os.getpid(), parent.pid, first_phase.pid}
         for process in psutil.process_iter(["pid", "exe"]):
             executable = process.info.get("exe")
+            executable_path = Path(executable) if executable else None
             if (
                 process.pid not in exempt
-                and executable
-                and Path(executable).resolve().is_relative_to(install.root.resolve())
+                and executable_path is not None
+                and executable_path.is_absolute()
+                and executable_path.resolve().is_relative_to(install.root.resolve())
             ):
                 raise ApplicationError(
                     "Close remaining vBot Desktop windows and commands before removal: "
