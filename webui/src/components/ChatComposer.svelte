@@ -29,9 +29,6 @@
     cancelling = false,
     availableSkills = [],
     contextUsage = null,
-    compactionState = 'unavailable',
-    compactionSubmitting = false,
-    onForceCompaction = () => {},
     contextWindow = null,
     usage = null,
     sessionUsage = null,
@@ -788,51 +785,38 @@
       )}
       rows="1"></textarea>
     {#if contextFillRatio !== null}
-      <span class="context-ring">
-        <button
-          type="button"
-          class="context-ring-trigger"
-          aria-label={t('chat.contextRingLabel', 'Context window usage')}
-        >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-            <circle
-              class="context-ring__track"
-              cx="8"
-              cy="8"
-              r={CONTEXT_RING_RADIUS}
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-            />
-            <circle
-              class="context-ring__fill"
-              cx="8"
-              cy="8"
-              r={CONTEXT_RING_RADIUS}
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
-              stroke-dashoffset={contextRingOffset}
-              transform="rotate(-90 8 8)"
-            />
-          </svg>
-        </button>
-        <div class="context-hover-card" use:floatingHoverCard>
-          <div class="context-hover-details">{contextTooltip}</div>
-          <Button
-            variant="secondary"
-            disabled={compactionState !== 'idle' || compactionSubmitting}
-            onClick={onForceCompaction}
-          >
-            {compactionState === 'pending'
-              ? t('chat.compactionPending', 'Compaction requested…')
-              : compactionState === 'running'
-                ? t('chat.compactionRunning', 'Compacting…')
-                : t('chat.forceCompaction', 'Force compaction')}
-          </Button>
-        </div>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard access to the usage tooltip) -->
+      <span
+        class="context-ring"
+        use:tooltip={contextTooltip}
+        tabindex="0"
+        role="img"
+        aria-label={t('chat.contextRingLabel', 'Context window usage')}
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <circle
+            class="context-ring__track"
+            cx="8"
+            cy="8"
+            r={CONTEXT_RING_RADIUS}
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          />
+          <circle
+            class="context-ring__fill"
+            cx="8"
+            cy="8"
+            r={CONTEXT_RING_RADIUS}
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
+            stroke-dashoffset={contextRingOffset}
+            transform="rotate(-90 8 8)"
+          />
+        </svg>
       </span>
     {/if}
     <div class="input-btns">

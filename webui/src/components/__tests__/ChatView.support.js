@@ -402,9 +402,9 @@ export async function hoveredContextRingTooltip(expectedText) {
   anchor.dispatchEvent(new Event('pointerenter'));
   await vi.advanceTimersByTimeAsync(200);
   flushSync();
-  const card = document.body.querySelector('.context-hover-card');
-  expect(card.dataset.floatingOpen).toBe('true');
-  const text = card.querySelector('.context-hover-details').textContent;
+  const tooltip = document.getElementById('app-tooltip');
+  expect(tooltip.classList.contains('app-tooltip--visible')).toBe(true);
+  const text = tooltip.textContent;
   expect(text).toBe(expectedText);
   anchor.dispatchEvent(new Event('pointerleave'));
   return text;

@@ -37,6 +37,8 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 
 ## Extensions, Skills, Agents, and channels
 
+- `components/settings/mcp.css` scopes paragraph and heading typography to the MCP panel and its portaled dialogs. Bare element selectors would override Chat prose globally; `SettingsMcpPanel.test.js` covers this boundary.
+
 - MCP connection rows show discovered capability counts and backend-reported Agent policy blocks. Their Capabilities & access dialog reads the Extension's cached `inspect` projection, supports Tool search and paging, and exposes server guidance and Prompts. Grant, effective Tool policy, and connection health remain separate facts; inspecting never calls an application Tool. The controller versions searches independently from connection refresh and invalidates pending inspection responses on close/disposal.
 
 - The dedicated Skills management surface moved out of Settings into the Configure -> Skills view (`webui/src/components/skills/`, see the WebUI map's Interfaces); Settings keeps no Skill section. Agent editors still use Skill *selectors* (below) for per-Agent allowlists and authoring entry points.
