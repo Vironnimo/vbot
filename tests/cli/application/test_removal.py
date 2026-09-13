@@ -88,13 +88,9 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
         parent=lambda: first_phase,
     )
 
-    class Process:
-        def __init__(self, pid: int) -> None:
-            assert pid == os.getppid()
-            self.pid = parent.pid
-
-        def create_time(self) -> float:
-            return 42.25
+    def process(pid: int) -> SimpleNamespace:
+        assert pid == os.getppid()
+        return parent
 
     monkeypatch.setattr(integration, "exclusive", tracked_lock)
     monkeypatch.setattr(integration, "operations", lambda _install: [])
@@ -107,7 +103,7 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
         "psutil",
         SimpleNamespace(
             Error=OSError,
-            Process=Process,
+            Process=process,
             process_iter=lambda _attrs: [first_phase],
         ),
     )
