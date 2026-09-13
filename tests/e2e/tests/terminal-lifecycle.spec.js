@@ -47,6 +47,7 @@ async function startTerminal(page, { command, arguments: args = [] } = {}) {
   await page
     .getByRole("region", { name: "Terminals" })
     .getByRole("button", { exact: true, name: "New terminal" })
+    .first()
     .click();
   const dialog = page.getByRole("dialog", { name: "New terminal" });
   await expect(dialog).toBeVisible();
