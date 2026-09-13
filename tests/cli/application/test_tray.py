@@ -168,7 +168,7 @@ def test_facade_startup_error_is_visible_without_removing_recovery_actions():
     assert menu["Open logs"].enabled is True
 
 
-def test_unchanged_poll_does_not_replace_the_native_menu():
+def test_unchanged_poll_does_not_replace_the_native_menu(monkeypatch):
     class Icon:
         menu = None
         updates = 0
@@ -179,6 +179,7 @@ def test_unchanged_poll_does_not_replace_the_native_menu():
     actions = Actions(TrayState("running", "server", version="0.4.2"))
     controller = TrayController(actions)
     icon = Icon()
+    monkeypatch.setattr("cli.application.tray._native_menu", lambda *_args, **_kwargs: object())
     controller.attach_icon(icon)
     initial_updates = icon.updates
 
