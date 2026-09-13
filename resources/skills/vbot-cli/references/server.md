@@ -33,6 +33,20 @@ Prints the absolute `vbot_root` of the running checkout/install and the resolved
 
 ## Update
 
+First inspect `vbot home`. An `application_root` field identifies a packaged installation; its `vbot_root` is the readable active version, not a development checkout. Use the packaged workflow below when that field is present. Otherwise use the source-checkout workflow that follows.
+
+### Packaged installation
+
+Run `vbot update` directly. It returns a saved operation id before this Run's server stops and automatically arranges a continuation in the same Session. After acceptance, end this Run; the updater may cancel it once this Tool batch is saved. Do not create an additional Bootstrap. The continuation must inspect `vbot update status <operation-id>` before reporting success; acceptance is not completion.
+
+Human terminal callers normally wait for the final outcome. `--detach` returns after acceptance. Closing the terminal or the originating Bash does not cancel the independent update. Tray updates use the same operation and do not create an Agent. The updater waits for accepted work to drain; do not stop the server manually to bypass that wait.
+
+`vbot update --no-restart` prepares a version without changing the active one. Activate it later with `vbot update activate <operation-id>`. `--package <path>` deliberately selects a local package; official downloads require the installation's trusted signing key. `--stash` and `--discard` apply only to source checkouts. A Desktop Client update has no local server target. Open Desktop windows retain their current version until reopened.
+
+Inspect the saved phase and error after a failure. `rolled_back` means the previous code was verified and retained; `needs_attention` means versions and data were preserved for inspection. Never restore a data snapshot automatically or discard local features to make an update pass.
+
+### Source-checkout installation
+
 ```bash
 vbot update [--discard | --stash] [--no-restart] [--service-name <unit>]
 ```
@@ -59,7 +73,21 @@ Updates the installation from its git checkout and requests a server restart unl
 - `--no-restart` updates the code without restarting. A Desktop Client installation updates only its local client and has no server to restart.
 - On a failed update, read the checkout version and completed steps before recovery. Code may already have changed even though dependency installation, WebUI build, stash reapplication or restart failed.
 
+## Local application changes in packaged installations
+
+Use `vbot customize prepare` and edit only the returned development source. Add tests for the intended behavior, run `vbot customize check --intent <description>`, then activate the checked candidate with `vbot customize activate`. If the source changes after checking, check it again before activation.
+
+The development copy starts at the exact installed source revision. Preparing and checking changes requires Git and Node.js/npm on the development machine; ordinary use and official updates do not. `customize status` reports the official base, local revision and any pending reconciliation. Tests run in a separate development environment; the release runtime is never edited in place.
+
+`vbot customize test` runs the checked candidate with fresh data and a free local port. It suppresses Extensions and automatic Channels, Cron, Calendar and Bootstrap activity before startup; it does not copy production credentials or Sessions. Stop this foreground test before activating. Test needed external capabilities separately in a deliberately configured disposable context.
+
+Official updates rebase local commits in a separate worktree and validate the result. When conflicts remain, inspect the saved reconciliation source, resolve and stage the changes there, then run `vbot customize rebase --intent <description>` followed by `vbot customize activate`. Do not discard a change merely because it began as a bug fix: it may express a lasting user feature.
+
+User Extensions remain in the server data directory and keep their existing reload workflow. For additional Python packages, provide a complete requirements file to `vbot application dependencies install --requirements <path>`, inspect `vbot application dependencies status`, then restart the server. This replaces the managed dependency recipe and checks compatibility with the base runtime; never run pip into an installed version. Official updates prepare that recipe for their new runtime before stopping the current server.
+
 ## Uninstall
+
+Packaged Windows installs use their recorded target and per-user uninstaller. The default is application removal with data preserved; `--data-only` resets data while keeping the application, and `--all` removes both. Explicit target overrides must match the recorded installation. The CLI may report only that the independent uninstaller was launched; wait for removal before claiming completion. Local development copies are preserved. The following checkout-specific elevation and target-override behavior does not apply to packaged installs.
 
 ```bash
 vbot uninstall
@@ -72,6 +100,8 @@ The target defaults to the Installer-recorded server host, port, and data direct
 
 ## Autostart
 
+Packaged Windows installations register the root `vBot.exe` as a per-user logon task. It opens the tray and starts the owned server; a Desktop Client has no server. `enable` registers future logon startup; launch `vBot.exe` or use `vbot server start` to start now. The task name is installation-owned, so custom task/service names are rejected. There is no Windows service. The bullets below describe source-checkout installations.
+
 ```bash
 vbot autostart enable|disable|status [--task-name <name>] [--service-name <name>]
 ```
@@ -81,6 +111,8 @@ vbot autostart enable|disable|status [--task-name <name>] [--service-name <name>
 - `disable` removes the entry but leaves a running server untouched.
 
 ## Desktop
+
+In a packaged installation, this launches the separate Desktop process and returns. A server-with-Desktop installation opens its recorded local server by default; a Desktop Client retains the last-used-server behavior. Explicit host/port options are forwarded. Closing Desktop leaves the server and tray running. The blocking behavior below applies to source-checkout launches.
 
 ```bash
 vbot desktop [--host <host>] [--port <port>]

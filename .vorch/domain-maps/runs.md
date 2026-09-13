@@ -22,6 +22,10 @@ Core term Run lives in `.vorch/GLOSSARY.md`.
 
 **Not:** A cancellation mechanism or persistence lock. It prevents new Run admission; the owning workflow still performs Session, Agent, or Project storage changes through its own domain APIs.
 
+### Maintenance Admission
+
+`ChatRunManager.maintenance_begin(operation_id, origin=...)` blocks new `start()` and `enqueue()` work while already accepted active Runs, queued items, and waiting-work reservations drain. The optional origin binds one exact `(SessionAddress, run_id)` handoff Run for the server-owned cancellation step; it remains blocking and is reported as `origin_pending` until its cancellation cleanup finishes. Status and end require the exact operation id; ending clears admission and the origin together.
+
 ## Data Model
 
 - `RunStatus` - `running`, `completed`, `failed`, `cancelled`, or `interrupted`. `interrupted` is a terminal unsuccessful outcome for a Run whose execution ended without a trustworthy completion after bounded recovery; it is distinct from both an ordinary failure and user cancellation.

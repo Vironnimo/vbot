@@ -28,9 +28,11 @@ vBot is self-hosted. Connect it to hosted AI services or local Models—you choo
 
 ## Get started
 
-The public Installer selects the latest release, creates an isolated environment, downloads the prebuilt WebUI, adds the `vbot` command, enables Autostart, and starts the server. Runtime data stays separate under `~/.vbot`, and a normal release installation does not require Node.js.
+The public Installer selects the latest release, adds the `vbot` command, configures Autostart, and starts the server. Windows uses a per-user native application package with private Python, readable application code and the built WebUI; ordinary installation does not clone the repository. Runtime data stays separate under `~/.vbot`. Normal release installations do not require Node.js.
 
 ### Windows
+
+`vBot.exe` owns the background application and tray. Desktop is an optional separate window; closing it leaves the server running. Fresh installs require a release containing the matching Windows installer. Releases without native assets fail clearly; `-SourceCheckout` explicitly selects the older source-install workflow.
 
 Open a normal, non-elevated PowerShell and run:
 

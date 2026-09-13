@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
@@ -107,9 +107,17 @@ class Runtime:
         runtime.stop()
     """
 
-    def __init__(self, config: ConfigProtocol) -> None:
+    def __init__(
+        self,
+        config: ConfigProtocol,
+        *,
+        safe_startup_mode: Literal["verification", "test"] | None = None,
+    ) -> None:
         """Prepare logging and empty service state from the injected configuration."""
+        if safe_startup_mode not in {None, "verification", "test"}:
+            raise ValueError("safe_startup_mode must be verification, test, or None")
         self._config = config
+        self.safe_startup_mode = safe_startup_mode
         self._data_dir = _resolve_data_dir(config)
         self._log_manager = LogManager(
             level=config.get("LOG_LEVEL", "INFO"), data_dir=self._data_dir
@@ -305,7 +313,8 @@ class Runtime:
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""
-        self.bootstrap_service.activate()
+        if self.safe_startup_mode is None:
+            self.bootstrap_service.activate()
 
     def stop(self) -> None:
         """Gracefully shut down the runtime.
