@@ -66,7 +66,9 @@ async def test_windows_unknown_pipeline_command_exits_non_interactively(
             },
             manager,
         ),
-        timeout=5,
+        # Bound an interactive hang without making cold PowerShell startup on
+        # a shared Windows runner a five-second performance requirement.
+        timeout=30,
     )
 
     assert result["ok"] is True
