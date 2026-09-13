@@ -244,7 +244,9 @@ function Invoke-NativeCommand {
             $line = $_.ToString()
             Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
             if ($VerbosePreference -eq "Continue") { Write-Host $line }
-            elseif ($line -match '^[a-z_]+: (.+)$') { Write-Step $Matches[1] }
+            elseif ($line -match '^\[(WORK|OK|WARN|ERROR|INFO)\] (.+)$') {
+                Write-Status -State $Matches[1] -Message $Matches[2]
+            }
         }
         $commandExitCode = $LASTEXITCODE
     }
@@ -252,7 +254,7 @@ function Invoke-NativeCommand {
         [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $previousHandoff, "Process")
     }
     if ($commandExitCode -ne 0) {
-        throw "The native application command failed. The installation and logs were retained; inspect the error before retrying vbot update."
+        throw "vbot $($Arguments -join ' ') failed. The installation and logs were retained; inspect $InstallLogPath and the current application status before retrying the failed step."
     }
 }
 
