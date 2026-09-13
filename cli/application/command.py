@@ -220,9 +220,12 @@ def dispatch(args: argparse.Namespace) -> int | None:
         return 0
     if args.area == "server":
         if args.command == "status":
+            from cli._output import exit_code_for, print_command_result
             from cli.server_management import get_status
 
             result = get_status(processes.target(install))
+            print_command_result("status", result)
+            return exit_code_for("status", result)
         else:
             with exclusive(install.root, allow_removal=args.command == "stop"):
                 if args.command in {"stop", "restart"}:
