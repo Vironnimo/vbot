@@ -126,6 +126,7 @@ def test_host_exit_accepts_short_path_alias_for_owned_executable(
     install = _install(tmp_path / "application with spaces")
     launcher = install.root / "vBot.exe"
     buffer = ctypes.create_unicode_buffer(32768)
+    length = 0
     if sys.platform == "win32":
         short_path = ctypes.windll.kernel32.GetShortPathNameW
         short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
