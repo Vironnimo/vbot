@@ -151,5 +151,5 @@ Playwright `tests/e2e/` is excluded from both quality gates; release CI requires
 
 Only strategic decisions or global constraints an Agent might otherwise misread belong here.
 
-- **Linux deployment, Windows development:** Headless server on a 64-bit Raspberry Pi; Desktop/CLI on Windows. Keep core/server/cli platform-neutral: Windows-specific assumptions need POSIX branches; process management branches on `os.name`/`sys.platform`; path validation handles both path flavors on every host.
+- **Platforms:** vBot targets Windows and Linux, with Windows currently prioritized. Keep shared components portable and platform-specific integration isolated. Server and accessors may run on the same machine or separate hosts.
 - **Kernel-to-Model notifications:** Only sanctioned channels from `model-communication.md`: persisted notes rendered as System Reminders, System Prompt blocks, Tool definitions/results. Every domain (including Extensions, Channels, Tools, automation) must use these; never invent a channel.
