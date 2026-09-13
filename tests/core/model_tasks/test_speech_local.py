@@ -493,6 +493,12 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
     installs = [command for command in commands if "install" in command]
     assert installs
     assert all(command[command.index("--python") + 1] == str(setup.python) for command in installs)
+    config = setup._config()
+    requirements = [
+        *config["project"]["dependencies"],
+        *config["project"]["optional-dependencies"]["local-speech"],
+    ]
+    assert installs[-1][-len(requirements) :] == requirements
     assert commands[-1][0] == str(setup.python) and "--verify-stt" in commands[-1]
     assert commands[0][:7] == [
         str(install.interpreter()),
@@ -504,6 +510,26 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
         "--seed",
     ]
     await setup.aclose()
+
+
+def test_managed_stt_marker_invalidates_when_base_requirements_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup = LocalSpeechSetup(directory=tmp_path / "speech-engines" / "stt")
+    config = {
+        "project": {
+            "dependencies": ["base-package==1.0"],
+            "optional-dependencies": {"local-speech": ["speech-package==1.0"]},
+        }
+    }
+    monkeypatch.setattr(setup, "_config", lambda: config)
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    (setup.directory / "verified.json").write_text(setup._recipe_key(), encoding="utf-8")
+
+    assert setup.available()
+    config["project"]["dependencies"] = ["base-package==2.0"]
+    assert not setup.available()
 
 
 def test_managed_stt_worker_returns_typed_result_and_forwards_progress(

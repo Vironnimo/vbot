@@ -84,7 +84,14 @@ jobs:
           python scripts/build_windows.py @arguments
       - name: Smoke packaged lifecycle
         shell: pwsh
-        run: python scripts/windows/smoke.py --package "build/windows/windows-x86_64/${{ matrix.shape }}"
+        run: |
+          $arguments = @(
+            "--package", "build/windows/windows-x86_64/${{ matrix.shape }}"
+          )
+          if ("${{ matrix.shape }}" -eq "server") {
+            $arguments += "--speech"
+          }
+          python scripts/windows/smoke.py @arguments
       - name: Upload packaged smoke evidence
         if: failure()
         uses: actions/upload-artifact@v4

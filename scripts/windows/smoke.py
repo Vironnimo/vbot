@@ -20,7 +20,14 @@ def _output_text(value: str | bytes | None) -> str:
     return value or ""
 
 
-def _run(command: list[str], environment: dict[str, str], cwd: Path, transcript: list[str]) -> str:
+def _run(
+    command: list[str],
+    environment: dict[str, str],
+    cwd: Path,
+    transcript: list[str],
+    *,
+    timeout: float = 300,
+) -> str:
     try:
         result = subprocess.run(
             command,
@@ -30,14 +37,14 @@ def _run(command: list[str], environment: dict[str, str], cwd: Path, transcript:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as error:
         transcript.append(
             "\n".join(
                 (
                     f"$ {subprocess.list2cmdline(command)}",
-                    "timed out after 300 seconds",
+                    f"timed out after {timeout:g} seconds",
                     "stdout:",
                     _output_text(error.stdout),
                     "stderr:",
@@ -129,7 +136,7 @@ def _write_failure_evidence(temporary: Path, evidence: Path, transcript: list[st
         _copy_evidence_entry(source, evidence / relative)
 
 
-def smoke(package: Path) -> None:
+def smoke(package: Path, *, speech: bool = False) -> None:
     if os.name != "nt":
         raise RuntimeError("Native Windows payload smoke requires Windows")
     package = package.resolve()
@@ -214,6 +221,21 @@ def smoke(package: Path) -> None:
                 environment,
                 temporary,
                 transcript,
+            )
+        if speech:
+            if shape != "server":
+                raise RuntimeError("Native speech smoke requires the server package shape")
+            _run(
+                [
+                    str(python),
+                    str(Path(__file__).with_name("smoke_speech.py")),
+                    "--data-dir",
+                    str(data),
+                ],
+                environment,
+                temporary,
+                transcript,
+                timeout=1800,
             )
         if shape != "desktop-client":
             _run([str(cli), "server", "start"], environment, temporary, transcript)
@@ -304,4 +326,6 @@ def smoke(package: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
-    smoke(parser.parse_args().package)
+    parser.add_argument("--speech", action="store_true")
+    arguments = parser.parse_args()
+    smoke(arguments.package, speech=arguments.speech)

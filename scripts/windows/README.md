@@ -68,6 +68,9 @@ then attaches each shape's installer, archive and matching signature together
 with the tested WebUI. Before upload, each compiled installer also runs through
 silent installation and native uninstall in a disposable CI runner, checking its
 recorded target, startup selection, server shutdown and preserved user data.
+The minimal server package also provisions real managed STT and both TTS recipes,
+including repeated Chatterbox setup, through `smoke.py --speech`. This required
+check uses disposable data and verifies imports without model weights or inference.
 A missing signing key blocks publication. The release tag
 must match the application version. The public PowerShell
 installer selects the exact installer name and verifies GitHub's release-asset

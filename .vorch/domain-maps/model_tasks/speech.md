@@ -86,7 +86,9 @@ microphone Sessions.
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
 The shared STT job and individual TTS jobs serialize package operations. In a packaged release,
 STT and TTS use managed data-directory environments and child processes; the immutable release
-runtime is not changed. The source-install STT path retains its legacy server-interpreter pip
+runtime is not changed. Managed STT installs both the declared core dependencies and the
+local-speech extra because its worker imports vBot source; both lists enter its verification
+marker. The source-install STT path retains its legacy server-interpreter pip
 recipe. Fixed recipes preserve compatible Torch or install the selected CUDA/CPU build and verify
 imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
 navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
@@ -121,6 +123,9 @@ matched Torch/audio packages inside the managed environment. Verification writes
 and makes TTS immediately available without restarting the server. A changed
 recipe or missing interpreter requires setup again. Fixed upstream revisions
 avoid accidentally selecting Chatterbox's older PyPI V2 implementation.
+Repeated Chatterbox setup explicitly reinstalls the PyPI distribution for dependency resolution
+before restoring the pinned source without dependencies. This avoids resolving transitive Git
+requirements from an already installed, same-version source distribution.
 
 `speech_worker.py` starts without importing vBot, loads SDKs only inside its
 child environment, reports actual download/load/generation phases and writes

@@ -155,8 +155,19 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
     for cmd in commands:
         if "install" in cmd and "uv" in cmd:
             assert cmd[cmd.index("--python") + 1] == str(setup.python)
+    recipe = setup._config()["tool"]["vbot"]["local-tts"][engine]
+    package_stage = next(
+        cmd for cmd in commands if "--only-binary=:all:" in cmd and recipe["packages"][0] in cmd
+    )
     if engine == "chatterbox":
-        assert any("5de7a54" in " ".join(cmd) and "--no-deps" in cmd for cmd in commands)
+        reinstall = package_stage.index("--reinstall-package")
+        assert package_stage[reinstall : reinstall + 2] == ["--reinstall-package", "chatterbox-tts"]
+        assert reinstall < package_stage.index(recipe["packages"][0])
+        source_stage = next(cmd for cmd in commands if recipe["source"] in cmd)
+        assert "--no-deps" in source_stage
+        assert source_stage[source_stage.index("--reinstall-package") + 1] == "chatterbox-tts"
+    else:
+        assert "--reinstall-package" not in package_stage
     # Stale recipes and failed verification must not publish availability.
     (setup.directory / "verified.json").write_text("stale")
     fresh = LocalSpeechSetup(engine=engine, directory=setup.directory)
