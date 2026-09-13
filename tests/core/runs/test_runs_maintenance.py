@@ -103,3 +103,41 @@ async def test_origin_cancellation_allows_same_session_accepted_queue_to_drain()
 
     assert queued_finished.is_set()
     assert (await manager.maintenance_status("operation-one"))["safe_to_stop"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy", [False, True])
+async def test_maintenance_drains_previously_reserved_work(busy):
+    from dataclasses import replace
+
+    manager = ChatRunManager()
+    address = SessionAddress(project_id=None, agent_id="main", session_id="reserved-work")
+    release = asyncio.Event()
+
+    async def active(_run):
+        await release.wait()
+
+    async def incoming(_run):
+        return "reserved-work-completed"
+
+    first = await manager.start(address, active) if busy else None
+    reservation = manager.reserve_waiting_work(scope="channel:test", scope_limit=4)
+    await manager.maintenance_begin("update-one")
+    assert (await manager.maintenance_status("update-one"))["safe_to_stop"] is False
+    with pytest.raises(RunAdmissionBlockedError):
+        manager.reserve_waiting_work(scope="channel:test", scope_limit=4)
+    with pytest.raises(RunAdmissionBlockedError):
+        await manager.enqueue(
+            address, incoming, waiting_work_admission=replace(reservation, id="invalid")
+        )
+    accepted = await manager.enqueue(address, incoming, waiting_work_admission=reservation)
+    assert manager.waiting_work_count() == (1 if busy else 0)
+    with pytest.raises(RunAdmissionBlockedError):
+        await manager.enqueue(address, incoming, waiting_work_admission=reservation)
+    release.set()
+    if first:
+        await first.wait()
+    run = await accepted.future
+    assert await run.wait() == "reserved-work-completed"
+    assert (await manager.maintenance_status("update-one"))["safe_to_stop"] is True
+    await manager.aclose()
