@@ -1,8 +1,7 @@
 # vBot installer for Windows.
 #
-# Installs the official native release by default. -SourceCheckout and -Dev keep
-# the source installation workflow, which creates an isolated virtual environment
-# and hands off to the internal scripts/setup.ps1.
+# Installs the native application. -Dev selects main updates; -SourceCheckout
+# and current-checkout setup retain the separate Python development workflow.
 #   irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 # To pass options, download and run as a file, or:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
@@ -31,13 +30,10 @@ if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
     throw "-Version selects a specific release tag and cannot be combined with -Dev."
 }
 if ($Dev -and $SourceCheckout) {
-    throw "-Dev already selects the source checkout path and cannot be combined with -SourceCheckout."
+    throw "-Dev selects the native main installation; -SourceCheckout selects source-only installation. Choose one."
 }
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive."
-}
-if ($DesktopClient -and $Dev) {
-    throw "-DesktopClient and -Dev are mutually exclusive."
 }
 # Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
 if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
@@ -237,6 +233,29 @@ function Get-OfficialRelease {
     }
 }
 
+function Invoke-NativeCommand {
+    param([string[]]$Arguments)
+    $application = Join-Path $InstallDir "vBot.exe"
+    $previousHandoff = [Environment]::GetEnvironmentVariable("VBOT_UPDATE_HANDOFF", "Process")
+    try {
+        # Initial installation cannot resume a Run belonging to another instance.
+        [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $null, "Process")
+        & $application @Arguments 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
+            if ($VerbosePreference -eq "Continue") { Write-Host $line }
+            elseif ($line -match '^[a-z_]+: (.+)$') { Write-Step $Matches[1] }
+        }
+        $commandExitCode = $LASTEXITCODE
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $previousHandoff, "Process")
+    }
+    if ($commandExitCode -ne 0) {
+        throw "The native application command failed. The installation and logs were retained; inspect the error before retrying vbot update."
+    }
+}
+
 function Install-NativeRelease {
     param([string]$Tag, [string]$Shape)
     $release = Get-OfficialRelease -Tag $Tag
@@ -286,7 +305,7 @@ function Install-NativeRelease {
                 throw "Native installer paths and host names cannot contain quotes or newlines."
             }
         }
-        $tasks = if ($NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
+        $tasks = if ($Dev -or $NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
         $arguments = @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -314,6 +333,14 @@ function Install-NativeRelease {
     if ([string]$state.install_shape -cne $Shape) {
         throw "The installed vBot shape does not match the requested native package."
     }
+    if ($Dev) {
+        Write-Step "Preparing the main installation"
+        Invoke-NativeCommand -Arguments @("application", "source", "main")
+        Invoke-NativeCommand -Arguments @("update")
+        if ($Shape -ne "desktop-client" -and -not $NoAutostart) {
+            Invoke-NativeCommand -Arguments @("autostart", "enable")
+        }
+    }
     if ($Shape -ne "desktop-client" -and -not $NoAutostart) {
         $ready = $false
         for ($attempt = 0; $attempt -lt 30 -and -not $ready; $attempt++) {
@@ -329,7 +356,8 @@ function Install-NativeRelease {
             throw "vBot was installed, but its requested server startup could not be verified."
         }
     }
-    Write-Status "OK" "vBot $releaseVersion is installed."
+    if ($Dev) { Write-Status "OK" "vBot is installed and follows main." }
+    else { Write-Status "OK" "vBot $releaseVersion is installed." }
 }
 
 function Get-WebuiAssetUrl {
@@ -501,9 +529,10 @@ if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
 $useExistingCheckout = (
     $null -ne $localCheckout -and
     -not $installDirWasProvided -and
+    -not $Dev -and
     [string]::IsNullOrWhiteSpace($Version)
 )
-$useNativeInstaller = -not $useExistingCheckout -and -not $Dev -and -not $SourceCheckout
+$useNativeInstaller = -not $useExistingCheckout -and -not $SourceCheckout
 if ($useExistingCheckout) {
     $InstallDir = $localCheckout
 }
@@ -543,6 +572,11 @@ if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
 }
 
 if ($useNativeInstaller) {
+    if ($Dev) {
+        Write-Step "Checking main build requirements"
+        Confirm-Git
+        if (-not $DesktopClient) { Confirm-Node }
+    }
     $shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
     Install-NativeRelease -Tag $Version -Shape $shape
     if (-not $PreserveInstallLog) {
