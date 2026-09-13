@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -167,7 +168,7 @@ def _identifier_normalizer(name: str, schema: JsonObject):
     contract = compile_tool_contract(name=name, input_schema=schema, require_closed_input=False)
 
     def normalize(arguments: Any) -> Any:
-        repaired = contract.normalize_arguments(arguments)
+        repaired = normalize_call_arguments(contract, arguments)
         if isinstance(repaired, dict):
             for field in ("domain", "entity_id"):
                 if isinstance(repaired.get(field), str):
@@ -178,7 +179,7 @@ def _identifier_normalizer(name: str, schema: JsonObject):
 
 
 def _normalize_call_service_arguments(arguments: Any) -> Any:
-    repaired = _CALL_SERVICE_CONTRACT.normalize_arguments(arguments)
+    repaired = normalize_call_arguments(_CALL_SERVICE_CONTRACT, arguments)
     if not isinstance(repaired, dict):
         return repaired
     for field in ("domain", "service", "entity_id"):

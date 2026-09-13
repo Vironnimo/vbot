@@ -17,6 +17,7 @@ from jsonschema import Draft202012Validator
 from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
 from core.projects.address import format_agent_address, parse_agent_address
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.availability import resolve_tool_access
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
@@ -496,7 +497,11 @@ class MCPService:
             contract = compile_tool_contract(
                 name="mcp_target", input_schema=schema, require_closed_input=False
             )
-            inputs = contract.normalize_arguments(inputs)
+            inputs = (
+                normalize_call_arguments(contract, inputs, enum_fields=("level",))
+                if entry["kind"] == "operation" and entry["name"] == "logging/setLevel"
+                else contract.normalize_arguments(inputs)
+            )
         except ToolContractError as repair_error:
             return tool_failure(
                 "mcp_invalid_arguments",

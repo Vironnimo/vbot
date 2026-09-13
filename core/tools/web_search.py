@@ -21,6 +21,7 @@ from core.search_config import (
     WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
 )
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools._web_search_common import (
     _MAX_DOMAIN_FILTERS,
     _normalize_domains,
@@ -134,7 +135,9 @@ _WEB_SEARCH_RUNTIME_CONTRACT = compile_tool_contract(
 
 
 def _normalize_web_search_arguments(arguments: Any) -> Any:
-    repaired = _WEB_SEARCH_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    repaired = normalize_call_arguments(
+        _WEB_SEARCH_RUNTIME_CONTRACT, arguments, enum_fields=("recency", "freshness")
+    )
     if not isinstance(repaired, dict) or "freshness" not in repaired:
         return repaired
     freshness = repaired.pop("freshness")
