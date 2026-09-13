@@ -6,7 +6,7 @@ import json
 import math
 import os
 import secrets
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,67 @@ CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_TOKEN_BYTES = 32
 # The control record carries the shutdown authority token; only the owner reads it.
 CONTROL_RECORD_MODE = 0o600
+
+
+@contextmanager
+def server_control_claim(data_dir: str | Path, port: int):
+    """Hold the OS-owned lifetime claim for one data-directory/port authority."""
+    record_path = control_record_path(data_dir, port)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = record_path.with_suffix(".lock")
+    handle = lock_path.open("a+b")
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(  # type: ignore[attr-defined]
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+            )
+        locked = True
+        existing = read_server_control(data_dir, port)
+        if existing is not None and existing.pid != os.getpid():
+            try:
+                process = psutil.Process(existing.pid)
+                alive = (
+                    abs(process.create_time() - existing.process_create_time) < 0.001
+                    and process.is_running()
+                )
+            except (OSError, psutil.Error):
+                alive = False
+            if alive:
+                raise RuntimeError("Another live server owns this control authority")
+        yield
+    except OSError as exc:
+        if not locked:
+            raise RuntimeError("Another server process holds this control authority") from exc
+        raise
+    finally:
+        if locked:
+            with suppress(OSError):
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(  # type: ignore[attr-defined]
+                        handle.fileno(),
+                        fcntl.LOCK_UN,  # type: ignore[attr-defined]
+                    )
+        handle.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,4 +222,5 @@ __all__ = [
     "is_authorized_control_token",
     "read_server_control",
     "remove_server_control",
+    "server_control_claim",
 ]

@@ -1,0 +1,128 @@
+name: Windows package
+
+on:
+  workflow_call:
+    inputs:
+      release_mode:
+        description: Sign update archives with the configured release key
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      VBOT_RELEASE_SIGNING_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: Sign update archives with the configured release key
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - "core/**"
+      - "server/**"
+      - "cli/**"
+      - "desktop/**"
+      - "resources/**"
+      - "webui/**"
+      - "scripts/build_windows.py"
+      - "scripts/windows/**"
+      - "pyproject.toml"
+      - ".github/workflows/windows-package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shape: [server, server-desktop, desktop-client]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Build WebUI assets
+        if: matrix.shape != 'desktop-client'
+        shell: pwsh
+        run: |
+          npm ci --prefix webui
+          npm run build --prefix webui
+      - name: Ensure native compilers
+        shell: pwsh
+        run: choco install llvm innosetup --no-progress -y
+      - name: Build package and dependency inventory
+        shell: pwsh
+        env:
+          VBOT_RELEASE_SIGNING_KEY: ${{ secrets.VBOT_RELEASE_SIGNING_KEY }}
+        run: |
+          $revision = git rev-parse HEAD
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $arguments = @(
+            "--source", ".",
+            "--runtime", $env:pythonLocation,
+            "--output", "build/windows",
+            "--shape", "${{ matrix.shape }}",
+            "--version", $version,
+            "--revision", $revision,
+            "--provision-dependencies"
+          )
+          if ("${{ inputs.release_mode }}" -eq "true") {
+            $arguments += "--release-mode"
+          }
+          python scripts/build_windows.py @arguments
+      - name: Smoke packaged lifecycle
+        shell: pwsh
+        run: python scripts/windows/smoke.py --package "build/windows/windows-x86_64/${{ matrix.shape }}"
+      - name: Compile per-user installer
+        shell: pwsh
+        run: |
+          $revision = git rev-parse HEAD
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $shortRevision = $revision.Substring(0, 12)
+          $safeVersion = $version -replace '[^a-z0-9]+', '_'
+          $versionId = "v${safeVersion}_$shortRevision"
+          $publicKey = (Get-Content build/windows/artifacts/release-public-key.txt -Raw).Trim()
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc `
+            "/DPayloadDir=$pwd\build\windows\windows-x86_64\${{ matrix.shape }}" `
+            "/DBuildOutputDir=$pwd\build\windows\installers" `
+            "/DAppVersion=$version" `
+            "/DInstallShape=${{ matrix.shape }}" `
+            "/DVersionId=$versionId" `
+            "/DReleasePublicKey=$publicKey" `
+            scripts/windows/vbot.iss
+      - name: Smoke native installer and uninstall
+        shell: pwsh
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          & scripts/windows/smoke_installer.ps1 `
+            -Installer "build/windows/installers/vBot-$version-windows-x86_64-${{ matrix.shape }}.exe" `
+            -Shape "${{ matrix.shape }}" `
+            -Version $version
+      - name: Stage flat release assets
+        shell: pwsh
+        run: |
+          $releaseFiles = "build/windows/release-files"
+          New-Item -ItemType Directory -Force $releaseFiles | Out-Null
+          Copy-Item "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}.zip" $releaseFiles
+          Copy-Item "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}-runtime-inventory.json" $releaseFiles
+          Copy-Item "build/windows/installers/vBot-*-windows-x86_64-${{ matrix.shape }}.exe" $releaseFiles
+          $signature = "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}.zip.sig"
+          if (Test-Path $signature) { Copy-Item $signature $releaseFiles }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vbot-windows-${{ matrix.shape }}
+          path: build/windows/release-files/*
+          if-no-files-found: error

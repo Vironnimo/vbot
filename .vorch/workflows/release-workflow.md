@@ -1,6 +1,6 @@
 # Release Workflow
 
-How to cut a tagged GitHub release of vBot. Releases are how end users install: the public `install.sh`/`install.ps1` entrypoints and `vbot update` consume the release tag **and** its prebuilt WebUI asset. Follow these steps exactly — the notes format and the attached asset are not optional.
+How to cut a tagged GitHub release of vBot. Releases are how end users install: Linux/source installations consume the release tag and prebuilt WebUI; native Windows installations consume their shape's installer and signed update archive. Follow these steps exactly - the notes format and attached assets are not optional.
 
 ## Steps
 
@@ -59,6 +59,8 @@ gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
 `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
+The Release workflow also calls `windows-package.yml` in signed mode. It builds all three native shapes with locked CPython dependencies, exercises disposable payload installation/update/lifecycle, and compiles the per-user Inno installers. Before publication, `scripts/windows/smoke_installer.ps1` also runs each compiled installer and uninstaller in a disposable CI runner, checking its target, startup selection, server shutdown and preserved data. Configure `VBOT_RELEASE_SIGNING_KEY` as a release secret containing a base64 raw Ed25519 private key; the build emits only its public key into installers. A missing key or package failure blocks publication. The publish job attaches the existing WebUI and all native installers, update archives, signatures and inventories together. See `scripts/windows/README.md` for the native build contract. No local source installation is migrated by this release operation.
+
 ### 6. Verify the workflow ran and the asset attached
 
 Wait for the dispatched workflow and confirm the release and asset landed. The Installer and `vbot update` fail without the asset:
@@ -69,7 +71,7 @@ gh run watch <run-id> --exit-status                      # wait until it succeed
 gh release view vX.Y.Z --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
 ```
 
-Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz`; and `releases/latest` resolves to `vX.Y.Z`.
+Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, Windows Package, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz` and, for each `server`, `server-desktop`, and `desktop-client` shape, `vBot-X.Y.Z-windows-x86_64-<shape>.exe`, `vbot-windows-x86_64-<shape>.zip` and its `.zip.sig`; and `releases/latest` resolves to `vX.Y.Z`. The Windows public canary checks a native installation rather than a Git checkout, then verifies that uninstall preserves its data.
 
 ## Fixing notes after the fact
 
@@ -85,10 +87,10 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 
 - **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
-- **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
+- **Assets are mandatory**: Linux/source requires `webui-dist.tar.gz`; native Windows requires the shape-specific installer and signed update archive. Never skip step 6.
 - **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
 - **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and asset cannot be acquired before publication. Candidate behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
 - **Remote state first**: fetch tags and confirm GitHub's latest release before choosing the version; a stale local tag set is not release evidence.
 - **Model DB is separate**: never refresh or stage `resources/models/` as part of a release.
-- **Publication is last**: never create the tag or GitHub Release manually. The workflow publishes both only after the full CI gate and WebUI packaging succeed.
+- **Publication is last**: never create the tag or GitHub Release manually. The workflow publishes both only after the full CI gate, WebUI packaging and signed Windows packages succeed.

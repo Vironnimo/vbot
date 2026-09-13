@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
+import os
+import sys
 import threading
 import wave
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -443,6 +447,110 @@ async def test_setup_installs_only_shipped_dependencies_and_verifies_before_rest
     assert ("https://download.pytorch.org/whl/cu128" in pip_commands[0]) is gpu
     assert "AutoModelForTDT" in commands[-1][-1]
     await setup.aclose()
+
+
+@pytest.mark.asyncio
+async def test_packaged_stt_setup_installs_only_in_managed_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.model_tasks import speech_setup
+
+    setup = LocalSpeechSetup(directory=tmp_path / "speech-engines" / "stt")
+    from cli.application.state import Installation
+
+    install = Installation(
+        tmp_path / "install",
+        "server",
+        "127.0.0.1",
+        8420,
+        str((tmp_path / "data").resolve()),
+    )
+    runtime = install.root / "versions" / "rel_base" / "runtime"
+    runtime.mkdir(parents=True)
+    (install.root / "active-version").write_text("rel_base\n", encoding="ascii")
+    interpreter = runtime / ("vBot.Python.exe" if os.name == "nt" else "bin/python3")
+    interpreter.parent.mkdir(parents=True, exist_ok=True)
+    interpreter.touch()
+    if os.name == "nt":
+        (runtime / "python.exe").touch()
+    commands: list[list[str]] = []
+
+    async def command(arguments: Any, **_kwargs: Any) -> int:
+        commands.append(list(arguments))
+        if "venv" in arguments:
+            setup.python.parent.mkdir(parents=True)
+            setup.python.touch()
+        return 0
+
+    monkeypatch.setattr(setup, "_command", command)
+    monkeypatch.setattr(setup, "_packaged_installation", lambda: install)
+    monkeypatch.setattr(speech_setup.shutil, "which", lambda _name: None)
+    setup.install()
+    assert setup._task is not None
+    await setup._task
+    assert setup.available()
+    assert not any(command[:3] == [sys.executable, "-m", "pip"] for command in commands)
+    installs = [command for command in commands if "install" in command]
+    assert installs
+    assert all(command[command.index("--python") + 1] == str(setup.python) for command in installs)
+    assert commands[-1][0] == str(setup.python) and "--verify-stt" in commands[-1]
+    assert commands[0][:7] == [
+        str(install.interpreter()),
+        "-m",
+        "uv",
+        "venv",
+        "--python",
+        str(runtime / ("python.exe" if os.name == "nt" else "bin/python3")),
+        "--seed",
+    ]
+    await setup.aclose()
+
+
+def test_managed_stt_worker_returns_typed_result_and_forwards_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.model_tasks.speech_local import _PROGRESS, _ManagedSttEngine
+
+    process = MagicMock()
+    process.stdin = io.StringIO()
+    process.stdout = io.StringIO(
+        json.dumps({"phase": "transcribing"})
+        + "\n"
+        + json.dumps({"result": {"text": "hello", "language": "en"}})
+        + "\n"
+    )
+    monkeypatch.setattr("core.model_tasks.speech_local.subprocess.Popen", lambda *_a, **_k: process)
+    setup = LocalSpeechSetup(directory=tmp_path)
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    engine = _ManagedSttEngine(setup, tmp_path / "app", "qwen3-asr", {})
+    progress = SpeechProgress()
+    token = _PROGRESS.set(progress)
+    try:
+        result = engine.transcribe(np.asarray([0.25, -0.5], dtype=np.float32), {"language": "en"})
+    finally:
+        _PROGRESS.reset(token)
+    assert isinstance(result, SpeechTranscriptionResult)
+    assert (result.text, result.language) == ("hello", "en")
+    assert progress.snapshot()["phase"] == "transcribing"
+    request = json.loads(process.stdin.getvalue())
+    assert request["options"] == {"language": "en"}
+
+
+def test_packaged_detection_requires_release_and_shipped_app_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.model_tasks import speech_local
+
+    installed = tmp_path / "roles" / "Server" / "Lib" / "site-packages" / "core" / "model_tasks"
+    installed.mkdir(parents=True)
+    monkeypatch.setattr(speech_local, "__file__", str(installed / "speech_local.py"))
+    assert speech_local._packaged_app_root() is None
+    (tmp_path / "release.json").write_text("{}", encoding="utf-8")
+    shipped = tmp_path / "app" / "core" / "model_tasks"
+    shipped.mkdir(parents=True)
+    (shipped / "speech_local.py").touch()
+    assert speech_local._packaged_app_root() == tmp_path / "app"
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -55,7 +56,7 @@ class LocalSpeechSetup:
         return self.directory / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
     def available(self) -> bool:
-        if not self.engine:
+        if not self.engine and self.directory is None:
             return _dependencies_available()
         if self.directory is None or not self.python.is_file():
             return False
@@ -65,11 +66,29 @@ class LocalSpeechSetup:
             return False
 
     def _config(self) -> dict[str, Any]:
-        project = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        source = Path(__file__).resolve()
+        project = source.parents[2] / "pyproject.toml"
+        if not project.is_file():
+            project = next(
+                parent / "app" / "pyproject.toml"
+                for parent in source.parents
+                if (parent / "release.json").is_file()
+                and (parent / "app" / "pyproject.toml").is_file()
+            )
         return tomllib.loads(project.read_text(encoding="utf-8"))
 
     def _recipe_key(self) -> str:
-        return json.dumps(self._config()["tool"]["vbot"]["local-tts"][self.engine], sort_keys=True)
+        config = self._config()
+        recipe = (
+            config["tool"]["vbot"]["local-tts"][self.engine]
+            if self.engine
+            else config["project"]["optional-dependencies"]["local-speech"]
+        )
+        sources = {}
+        for name in ("speech_local.py", "speech_worker.py"):
+            path = Path(__file__).with_name(name)
+            sources[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return json.dumps({"recipe": recipe, "sources": sources}, sort_keys=True)
 
     def install(self) -> dict[str, Any]:
         if self._closed or self._state in {"installing", "restart_required"}:
@@ -95,6 +114,9 @@ class LocalSpeechSetup:
             async with asyncio.timeout(3600):
                 if self.engine:
                     await self._install_tts()
+                    return
+                if self.directory is not None:
+                    await self._install_stt()
                     return
                 # Only the shipped extra is installable, never packages or paths
                 # supplied by an RPC caller. Install dependencies, not vBot's
@@ -178,9 +200,12 @@ class LocalSpeechSetup:
         assert self.directory is not None
         config = self._config()
         recipe = config["tool"]["vbot"]["local-tts"][self.engine]
-        # The bootstrap is the only package installed into the server. No ML
-        # dependency from a TTS SDK can replace the live STT stack.
-        if await self._pip(config["project"]["optional-dependencies"]["local-tts"]) != 0:
+        # Packaged roles ship uv. Source installations retain their existing
+        # fixed bootstrap recipe, while immutable packaged roles are untouched.
+        if (
+            not self._packaged()
+            and await self._pip(config["project"]["optional-dependencies"]["local-tts"]) != 0
+        ):
             self._fail("install_failed")
             return
         uv = [sys.executable, "-m", "uv"]
@@ -254,10 +279,86 @@ class LocalSpeechSetup:
         ):
             self._fail("verification_failed")
             return
-        marker.write_text(self._recipe_key())
+        self._write_marker(marker)
         # Only a child environment changed; the server can use it immediately.
         self._state = "ready"
         _LOGGER.info("Local TTS support installed (engine=%s)", self.engine)
+
+    async def _install_stt(self) -> None:
+        """Install the shipped STT recipe only inside its managed environment."""
+        assert self.directory is not None
+        requirements = self._config()["project"]["optional-dependencies"]["local-speech"]
+        uv = [sys.executable, "-m", "uv"]
+        self._phase = "python"
+        if not self.python.exists():
+            install = self._packaged_installation()
+            if install is None:
+                self._fail("setup_unavailable")
+                return
+            from cli.application.dependencies import environment_creation_command
+
+            command, environment = environment_creation_command(install, self.directory)
+            if await self._command(command, environment=environment) != 0:
+                self._fail("install_failed")
+                return
+        marker = self.directory / "verified.json"
+        marker.unlink(missing_ok=True)
+        gpu_tool = shutil.which("nvidia-smi")
+        use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
+        self._phase = "gpu" if use_cuda else "downloading"
+        torch_requirement = next(item for item in requirements if item.startswith("torch"))
+        index = (
+            "https://download.pytorch.org/whl/cu128"
+            if use_cuda
+            else "https://download.pytorch.org/whl/cpu"
+        )
+        if sys.platform == "darwin":
+            index = "https://pypi.org/simple"
+        pip = [*uv, "pip", "install", "--python", str(self.python), "--only-binary=:all:"]
+        if await self._command([*pip, torch_requirement, "--index-url", index], progress=True) != 0:
+            self._fail("install_failed")
+            return
+        if await self._command([*pip, *requirements], progress=True) != 0:
+            self._fail("install_failed")
+            return
+        self._phase = "verifying"
+        worker = Path(__file__).with_name("speech_worker.py")
+        source = Path(__file__).resolve()
+        app = source.parents[2]
+        for parent in source.parents:
+            candidate = parent / "app"
+            if (parent / "release.json").is_file() and (
+                candidate / "core" / "model_tasks" / "speech_local.py"
+            ).is_file():
+                app = candidate
+                break
+        if (
+            await self._command([str(self.python), "-I", str(worker), "--verify-stt", str(app)])
+            != 0
+        ):
+            self._fail("verification_failed")
+            return
+        self._write_marker(marker)
+        self._state = "ready"
+        _LOGGER.info("Local STT support installed in its managed environment")
+
+    def _packaged_installation(self):
+        from cli.application.state import load_installation
+
+        for parent in Path(__file__).resolve().parents:
+            if (parent / "release.json").is_file() and parent.parent.name == "versions":
+                return load_installation(parent.parent.parent)
+        return None
+
+    def _packaged(self) -> bool:
+        return any(
+            (parent / "release.json").is_file() for parent in Path(__file__).resolve().parents
+        )
+
+    def _write_marker(self, marker: Path) -> None:
+        temporary = marker.with_suffix(".tmp")
+        temporary.write_text(self._recipe_key(), encoding="utf-8")
+        os.replace(temporary, marker)
 
     def _fail(self, code: str) -> None:
         self._state, self._error = "failed", code
@@ -280,7 +381,13 @@ class LocalSpeechSetup:
             progress=True,
         )
 
-    async def _command(self, arguments: Sequence[str], *, progress: bool = False) -> int:
+    async def _command(
+        self,
+        arguments: Sequence[str],
+        *,
+        progress: bool = False,
+        environment: dict[str, str] | None = None,
+    ) -> int:
         from core.utils.processes import kill_process_tree_async, subprocess_creation_flags
 
         process = await asyncio.create_subprocess_exec(
@@ -290,7 +397,13 @@ class LocalSpeechSetup:
             stderr=asyncio.subprocess.STDOUT,
             creationflags=subprocess_creation_flags(),
             start_new_session=os.name != "nt",
-            env={**os.environ, "PYTHONUTF8": "1", "PIP_NO_INPUT": "1"},
+            env=environment
+            or {
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "PIP_NO_INPUT": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
         )
         self._process = process
         try:

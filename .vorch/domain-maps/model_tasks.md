@@ -47,6 +47,7 @@ Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_
 - The binding/discovery layer never calls media APIs or shapes wires; execution modules resolve bindings only through `TaskModelService`, never reading `settings.json`.
 - Missing targets usually mean missing credentials or stale catalogs - refresh the Model DB after configuring keys instead of hand-editing generated files.
 - Video/Music currently require OpenRouter (details in their child maps). Runtime registers STT `local/qwen3-asr` / `local/parakeet` and TTS `local/qwen3-tts` / `local/chatterbox` from the optional speech executor's catalog. Descriptors require a live availability callback for `usable`; registration alone does not imply an executable target. Imports and preflight never load ML runtimes or weights. Covered by `test_model_tasks.py` and `test_speech_local.py`.
+- In packaged releases, optional local speech dependencies belong to managed data-directory environments and speech child processes, never the immutable release runtime. The source-install setup path remains a legacy separate behavior; see `model_tasks/speech.md`.
 - `audio_generation` is a capability, not a configurable binding - generic audio output must not route as TTS or Music.
 - Loaded `task_options` freeze into read-only views/tuples; schema builders accept both sequence forms.
 

@@ -6,6 +6,7 @@ write diagnostics to stderr; stdout carries only bounded JSON control frames.
 
 from __future__ import annotations
 
+import base64
 import importlib
 import io
 import json
@@ -227,6 +228,12 @@ def generate(model: Any, engine: str, text: str, options: dict[str, Any], output
 def main() -> None:
     wire = sys.stdout
     sys.stdout = sys.stderr
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-stt":
+        verify_stt(sys.argv[2])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--stt":
+        run_stt(wire, sys.argv[2], sys.argv[3])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--verify":
         verify(sys.argv[2], sys.argv[3])
         return
@@ -250,6 +257,48 @@ def main() -> None:
             progress("synthesizing")
             generate(model, engine, request["text"], request["options"], request["output"])
             emit({"done": True})
+        except Exception as error:
+            emit({"error": type(error).__name__})
+            return
+
+
+def _load_stt_source(app_root: str) -> Any:
+    root = str(Path(app_root).resolve())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module("core.model_tasks.speech_local")
+
+
+def verify_stt(app_root: str) -> None:
+    local = _load_stt_source(app_root)
+    assert local._dependencies_available()
+    importlib.import_module("av")
+
+
+def run_stt(wire: Any, engine_id: str, app_root: str) -> None:
+    local = _load_stt_source(app_root)
+    np = importlib.import_module("numpy")
+    definition = next(
+        item for item in local.builtin_speech_engines() if item.descriptor.id == engine_id
+    )
+    model = None
+
+    def emit(event: dict[str, Any]) -> None:
+        wire.write(json.dumps(event) + "\n")
+        wire.flush()
+
+    for line in sys.stdin:
+        try:
+            request = json.loads(line)
+            samples = np.frombuffer(
+                base64.b64decode(request["samples"], validate=True), dtype="<f4"
+            )
+            if model is None:
+                emit({"phase": "loading"})
+                model = definition.create(request["options"])
+            emit({"phase": "transcribing"})
+            result = model.transcribe(samples, request["options"])
+            emit({"result": result.to_dict()})
         except Exception as error:
             emit({"error": type(error).__name__})
             return

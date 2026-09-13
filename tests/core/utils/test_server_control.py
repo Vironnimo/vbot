@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
+
+import psutil  # type: ignore[import-untyped]
+import pytest
 
 from core.utils.server_control import (
     control_record_path,
@@ -11,6 +16,7 @@ from core.utils.server_control import (
     is_authorized_control_token,
     read_server_control,
     remove_server_control,
+    server_control_claim,
 )
 
 
@@ -78,3 +84,67 @@ def test_control_token_authorization_requires_exact_nonempty_secret() -> None:
     assert is_authorized_control_token("wrong", "secret") is False
     assert is_authorized_control_token(None, "secret") is False
     assert is_authorized_control_token("secret", None) is False
+
+
+def test_control_claim_prevents_replacing_current_authority(tmp_path: Path) -> None:
+    with server_control_claim(tmp_path, 8420):
+        original = create_server_control(tmp_path, 8420, token="original")
+        with (
+            pytest.raises(RuntimeError, match="control authority"),
+            server_control_claim(tmp_path, 8420),
+        ):
+            raise AssertionError("unreachable")
+        assert read_server_control(tmp_path, 8420) == original
+
+
+def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) -> None:
+    script = (
+        "import sys, time; from core.utils.server_control import server_control_claim, "
+        "create_server_control; root=sys.argv[1]; "
+        "claim=server_control_claim(root, 8420); claim.__enter__(); "
+        "create_server_control(root, 8420, token='child'); "
+        "print('ready', flush=True); time.sleep(60)"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[3],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout is not None and child.stdout.readline().strip() == "ready"
+        original = read_server_control(tmp_path, 8420)
+        assert original is not None and original.token == "child"
+        with (
+            pytest.raises(RuntimeError, match="control authority"),
+            server_control_claim(tmp_path, 8420),
+        ):
+            raise AssertionError("unreachable")
+        assert read_server_control(tmp_path, 8420) == original
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+    with server_control_claim(tmp_path, 8420):
+        replacement = create_server_control(tmp_path, 8420, token="replacement")
+    assert read_server_control(tmp_path, 8420) == replacement
+
+
+def test_claim_refuses_live_legacy_control_owner(tmp_path: Path) -> None:
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        create_server_control(
+            tmp_path,
+            8420,
+            pid=child.pid,
+            process_create_time=psutil.Process(child.pid).create_time(),
+            token="legacy",
+        )
+        with (
+            pytest.raises(RuntimeError, match="live server"),
+            server_control_claim(tmp_path, 8420),
+        ):
+            raise AssertionError("unreachable")
+        assert read_server_control(tmp_path, 8420).token == "legacy"  # type: ignore[union-attr]
+    finally:
+        child.kill()
+        child.wait(timeout=10)

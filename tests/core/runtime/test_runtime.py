@@ -80,6 +80,36 @@ HOME_ASSISTANT_TOOLS = [
 CANONICAL_REGISTERED_TOOLS = sorted(CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["computer"])
 
 
+@pytest.mark.parametrize("mode", ["verification", "test"])
+def test_safe_startup_modes_do_not_load_extensions_or_start_producers(
+    config: Config, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    from core.extensions import ExtensionRegistry
+
+    monkeypatch.setattr(
+        ExtensionRegistry,
+        "load",
+        Mock(side_effect=AssertionError("safe startup must not load executable extensions")),
+    )
+    runtime = Runtime(config, safe_startup_mode=mode)  # type: ignore[arg-type]
+    starts = [
+        "_start_channel_service",
+        "_start_cron_service",
+        "_start_calendar_service",
+        "_start_provider_usage_service",
+    ]
+    for name in starts:
+        monkeypatch.setattr(runtime, name, Mock(side_effect=AssertionError(name)))
+
+    runtime.start()
+    try:
+        extensions = runtime.extensions
+        assert extensions is not None
+        assert extensions.diagnostics() == []
+    finally:
+        runtime.stop()
+
+
 def _declared_hidden_session_tools(runtime: Runtime) -> set[str]:
     registry = runtime.extensions
     assert registry is not None

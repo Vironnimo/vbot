@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from core.attachments.attachments import (
     AttachmentNotFoundError,
@@ -189,6 +189,42 @@ async def _read_json_payload_with_limit(request: Request) -> object:
         raise ValueError("Request body must be valid JSON") from exc
 
 
+class _VerificationOnlyGuardMiddleware:
+    """Expose only startup health, static UI reads, and private shutdown."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: JsonObject, receive: Any, send: Any) -> None:
+        scope_type = scope.get("type")
+        if scope_type == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        if scope_type == "http":
+            path = str(scope.get("path") or "")
+            method = str(scope.get("method") or "")
+            allowed = (
+                path == "/health"
+                or path == CONTROL_SHUTDOWN_PATH
+                or (method in {"GET", "HEAD"} and (path == "/" or path.startswith("/assets/")))
+            )
+            if not allowed:
+                body = b'{"detail":"Server is verifying an application update"}'
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 503,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode("ascii")),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.app(scope, receive, send)
+
+
 def create_app(
     *,
     runtime: Any | None = None,
@@ -197,13 +233,19 @@ def create_app(
     shutdown_token: str | None = None,
     request_shutdown: Callable[[], None] | None = None,
     request_restart: Callable[[], None] | None = None,
+    safe_startup_mode: Literal["verification", "test"] | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state."""
     if FastAPI is None:
         raise RuntimeError(
             "FastAPI is required to create the server app"
         ) from _FASTAPI_IMPORT_ERROR
-    app_runtime = runtime if runtime is not None else _build_default_runtime(config)
+    app_runtime = (
+        runtime
+        if runtime is not None
+        else _build_default_runtime(config, safe_startup_mode=safe_startup_mode)
+    )
+    effective_safe_mode = getattr(app_runtime, "safe_startup_mode", safe_startup_mode)
     resolved_server_bind = _resolve_server_bind(
         config=config or _runtime_config(app_runtime),
         server_bind=server_bind,
@@ -213,14 +255,18 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        app.state.control_token = shutdown_token
         app.state.request_restart = request_restart
-        app.state.statistics_warmup_task = _start_statistics_warmup(app.state)
-        await _fire_extension_startup(app_runtime)
+        app.state.statistics_warmup_task = (
+            None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
+        )
+        if effective_safe_mode is None:
+            await _fire_extension_startup(app_runtime)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
         # in the background — never blocking startup; the method itself is
         # throttled and swallows failures. Guarded for stub runtimes in tests.
         maybe_refresh_local_catalogs = getattr(app_runtime, "maybe_refresh_local_catalogs", None)
-        if callable(maybe_refresh_local_catalogs):
+        if effective_safe_mode is None and callable(maybe_refresh_local_catalogs):
             app.state.local_catalog_refresh_task = asyncio.create_task(
                 maybe_refresh_local_catalogs()
             )
@@ -258,6 +304,8 @@ def create_app(
             await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
+    if effective_safe_mode == "verification":
+        app.add_middleware(_VerificationOnlyGuardMiddleware)
     app.add_middleware(
         _BrowserOriginGuardMiddleware,
         allowed_origins=_configured_browser_origins(resolved_server_bind),
@@ -838,10 +886,14 @@ def _speech_http_exception(error: SpeechError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
-def _build_default_runtime(config: Config | None) -> Any:
+def _build_default_runtime(
+    config: Config | None,
+    *,
+    safe_startup_mode: Literal["verification", "test"] | None = None,
+) -> Any:
     from core.runtime import Runtime
 
-    return Runtime(config or Config())
+    return Runtime(config or Config(), safe_startup_mode=safe_startup_mode)
 
 
 def _mount_webui(app: FastAPIType) -> None:

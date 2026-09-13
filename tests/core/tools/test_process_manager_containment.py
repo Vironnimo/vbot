@@ -53,6 +53,7 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000, raising=False)
+    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: True)
 
     assert subprocess_creation_flags(platform_name="nt") == 0x08000000
     assert (
@@ -76,6 +77,12 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
             platform_name="posix",
         )
         == 0
+    )
+
+    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: False)
+    assert (
+        subprocess_creation_flags(new_process_group=True, breakaway=True, platform_name="nt")
+        == 0x08000200
     )
 
 

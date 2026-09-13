@@ -3,7 +3,7 @@ name: Release
 # Runs the complete CI workflow against one release-candidate WebUI artifact
 # before creating the tag and published release. The exact gated artifact is
 # attached during creation, so an installable release is never publicly visible
-# without its tested frontend. Source-only repo: webui/dist stays untracked.
+# without its tested frontend and signed Windows packages. Built files stay untracked.
 on:
   workflow_dispatch:
     inputs:
@@ -23,8 +23,14 @@ jobs:
   quality:
     uses: ./.github/workflows/ci.yml
 
+  windows:
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      release_mode: true
+    secrets: inherit
+
   publish:
-    needs: quality
+    needs: [quality, windows]
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ inputs.version }}
@@ -67,7 +73,34 @@ jobs:
           test -s webui-dist.tar.gz
           tar -tzf webui-dist.tar.gz | grep -Fx 'webui/dist/index.html'
 
-      - name: Publish release with prebuilt WebUI
+      - name: Download signed Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vbot-windows-*
+          path: windows-artifacts
+          merge-multiple: true
+
+      - name: Validate complete Windows release assets
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path("windows-artifacts")
+          version = os.environ["RELEASE_VERSION"]
+          for shape in ("server", "server-desktop", "desktop-client"):
+              names = (
+                  f"vBot-{version}-windows-x86_64-{shape}.exe",
+                  f"vbot-windows-x86_64-{shape}.zip",
+                  f"vbot-windows-x86_64-{shape}.zip.sig",
+              )
+              for name in names:
+                  path = root / name
+                  if not path.is_file() or not path.stat().st_size:
+                      raise SystemExit(f"Required Windows release asset is missing: {name}")
+          PY
+
+      - name: Publish release with all verified installation assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
@@ -76,6 +109,10 @@ jobs:
           --title "${RELEASE_TAG}"
           --generate-notes
           webui-dist.tar.gz
+          windows-artifacts/*.exe
+          windows-artifacts/*.zip
+          windows-artifacts/*.sig
+          windows-artifacts/*-runtime-inventory.json
 
   smoke:
     needs: publish
