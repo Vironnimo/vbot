@@ -30,6 +30,8 @@ def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep Desktop navigation expectations deterministic outside the UUID-specific tests."""
 
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
+    monkeypatch.setattr(desktop_main._windows, "primary_scale", lambda: 1.0)
+    monkeypatch.setattr(desktop_main._windows, "bind_window_dpi", lambda *_: None)
 
 
 @dataclass

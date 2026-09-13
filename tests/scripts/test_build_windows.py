@@ -7,6 +7,7 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -21,6 +22,7 @@ def _source(tmp_path: Path) -> Path:
         path.mkdir(parents=True)
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
+    (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
     (source / "tests").mkdir()
@@ -50,8 +52,8 @@ def _runtime(tmp_path: Path) -> Path:
             ("server", "resources", "webui/dist", "desktop/icon.ico"),
             ("desktop/included.txt",),
         ),
-        ("server-desktop", ("server", "resources", "webui/dist", "desktop"), ()),
-        ("desktop-client", ("desktop",), ("server", "resources", "webui")),
+        ("server-desktop", ("server", "resources", "webui/dist", "desktop/windows.config"), ()),
+        ("desktop-client", ("desktop/windows.config",), ("server", "resources", "webui")),
     ],
 )
 def test_copy_application_respects_shape_and_exclusions(
@@ -312,6 +314,31 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
     assert "'server stop'" in script
     assert "SuppressibleMsgBox(" in script
     assert "MsgBox(" not in script.replace("SuppressibleMsgBox(", "")
+
+
+@pytest.mark.parametrize("role", ["desktop", "server", "python"])
+def test_native_host_manifest_matches_role(tmp_path: Path, monkeypatch, role: str) -> None:
+    commands = []
+    source = Path(build_windows.__file__).parent.parent
+    monkeypatch.setattr(build_windows, "_tool", lambda name: name)
+    monkeypatch.setattr(build_windows, "_run", lambda command: commands.append(list(command)))
+    build_windows.compile_host(source, tmp_path / "host.exe", role=role, version="1.0.0")
+    expected = "desktop.manifest" if role == "desktop" else "launcher.manifest"
+    manifest_path = (source / "scripts" / "windows" / expected).resolve()
+    assert f'/dVBOT_MANIFEST_PATH="{manifest_path}"' in commands[0]
+    manifest = ElementTree.parse(manifest_path)
+    settings = "{http://schemas.microsoft.com/SMI/2016/WindowsSettings}"
+    long_paths = manifest.find(f".//{settings}longPathAware")
+    assert long_paths is not None and long_paths.text == "true"
+    dpi = manifest.find(f".//{settings}dpiAwareness")
+    if role == "desktop":
+        assert dpi is not None and dpi.text == "PerMonitorV2"
+        compatibility = "{urn:schemas-microsoft-com:compatibility.v1}"
+        os_entry = manifest.find(f".//{compatibility}supportedOS")
+        assert os_entry is not None
+        assert os_entry.attrib["Id"] == "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"
+    else:
+        assert dpi is None
 
 
 def test_compile_host_constructs_msvc_abi_commands(
