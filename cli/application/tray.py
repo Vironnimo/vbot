@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import logging
 import queue
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -251,7 +252,7 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
 
     controller = TrayController(actions)
     image = Image.open(icon_path)
-    if __import__("os").name == "nt":
+    if sys.platform == "win32":
         from cli.application.windows_tray import WindowsTrayIcon
 
         icon = WindowsTrayIcon("vbot", image, "vBot")
