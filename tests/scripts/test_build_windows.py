@@ -451,3 +451,46 @@ def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_pa
     assert not stdout
     assert b"[ERROR]" in stderr
     assert str(output).encode("utf-8") in stderr
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
+    reason="Windows native compiler required",
+)
+@pytest.mark.parametrize("stable", [True, False])
+def test_native_redirected_output_preserves_unicode(tmp_path, stable):
+    import sysconfig
+
+    root = tmp_path / "native-encoding"
+    runtime = root / "versions" / "rel_test" / "runtime"
+    runtime.mkdir(parents=True)
+    python_root = Path(sys.base_prefix)
+    dll_name = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    shutil.copy2(python_root / dll_name, runtime / dll_name)
+    for dependency in python_root.glob("vcruntime*.dll"):
+        shutil.copy2(dependency, runtime / dependency.name)
+    shutil.copytree(
+        Path(sysconfig.get_path("stdlib")),
+        runtime / "Lib",
+        ignore=shutil.ignore_patterns(
+            "__pycache__", "site-packages", "test", "tests", "ensurepip", "idlelib", "tkinter"
+        ),
+    )
+    output = root / "vBot.exe" if stable else runtime / "vBot.Update.exe"
+    (root / "active-version").write_text("rel_test\n", encoding="ascii")
+    build_windows.compile_host(
+        Path(build_windows.__file__).parent.parent,
+        output,
+        role="host" if stable else "update",
+        version="0.4.3",
+        stable=stable,
+    )
+    expected = "caf\u00e9 \u2014 \u65e5\u672c"
+    result = subprocess.run(
+        [str(output), "-c", f"import sys; print(sys.flags.utf8_mode); print({expected!r})"],
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.decode("utf-8").splitlines() == ["1", expected]
