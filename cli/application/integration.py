@@ -409,8 +409,32 @@ def begin_removal(install: Installation) -> dict[str, Any]:
             raise ApplicationError("An update is still pending; wait before removing vBot")
         if install.owns_server and probe_health(processes.target(install)).reachable:
             raise ApplicationError("The application server must stop before removal")
+        uninstaller = registered_uninstaller(install.root)
         parent = psutil.Process(os.getppid())
-        exempt = {os.getpid(), parent.pid}
+        try:
+            second_phase = Path(parent.exe())
+            second_phase_arguments = parent.cmdline()
+            first_phase = parent.parent()
+            second_phase_targets = [
+                argument.partition("=")[2]
+                for argument in second_phase_arguments
+                if argument.upper().startswith("/SECONDPHASE=")
+            ]
+            owned_uninstaller = (
+                second_phase.name.casefold() == "_unins.tmp"
+                and len(second_phase_targets) == 1
+                and _same_path(Path(second_phase_targets[0]).resolve(), uninstaller.resolve())
+                and first_phase is not None
+                and _same_path(Path(first_phase.exe()).resolve(), uninstaller.resolve())
+            )
+        except (OSError, psutil.Error):
+            owned_uninstaller = False
+            first_phase = None
+        if not owned_uninstaller or first_phase is None:
+            raise ApplicationError(
+                "Application removal must be started by the registered vBot uninstaller"
+            )
+        exempt = {os.getpid(), parent.pid, first_phase.pid}
         for process in psutil.process_iter(["pid", "exe"]):
             executable = process.info.get("exe")
             if (
