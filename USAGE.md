@@ -525,7 +525,7 @@ vbot desktop
 vbot desktop --host 192.168.1.50 --port 8420
 ```
 
-On Windows, `-Desktop` and `-DesktopClient` installations also create a `vBot Desktop` Start-menu entry backed by the windowless `vbot-desktop` GUI launcher. `vbot desktop` remains the equivalent console command for terminal use.
+On Windows, `-Desktop` and `-DesktopClient` installations also create a `vBot Desktop` Start-menu entry that launches `vBot.exe desktop` without a console window. Explicit source installations use the windowless `vbot-desktop` GUI launcher. `vbot desktop` remains the equivalent command for terminal use.
 
 Without explicit host and port, Desktop opens its Connection screen and auto-connects only when a remembered last-used server exists. It does not silently assume localhost. Probe failures return to the same screen with the target prefilled, and the native Server menu can switch or reconnect at runtime.
 
