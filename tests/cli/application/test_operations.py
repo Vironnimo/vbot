@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -71,13 +72,17 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     captured: dict[str, object] = {}
     monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-secret")
     monkeypatch.setenv("PYTHONPATH", "caller-path")
+
+    def running(*, timeout):
+        raise subprocess.TimeoutExpired("updater", timeout)
+
     monkeypatch.setattr(operations, "subprocess_creation_flags", lambda **_kwargs: 73)
     monkeypatch.setattr(
         operations.subprocess,
         "Popen",
         lambda arguments, **kwargs: (
             captured.update(arguments=arguments, **kwargs)
-            or SimpleNamespace(poll=lambda: None, returncode=None, pid=123)
+            or SimpleNamespace(wait=running, poll=lambda: None, returncode=None, pid=123)
         ),
     )
     monkeypatch.setattr(
@@ -135,3 +140,23 @@ def test_operation_is_persisted_before_spawn_and_spawn_failure_is_saved(
     assert failed is not None
     assert failed.phase == "failed"
     assert failed.error == "spawn unavailable"
+
+
+@pytest.mark.parametrize("exit_code", [0, 111])
+def test_worker_failure_before_claim_is_saved_with_its_diagnostics(
+    tmp_path, monkeypatch, exit_code
+):
+    install = _install(tmp_path)
+
+    def spawn(args, **kwargs):
+        kwargs["stdout"].write(b"native-runtime-failure")
+        return SimpleNamespace(wait=lambda **kw: exit_code)
+
+    monkeypatch.setattr(operations.subprocess, "Popen", spawn)
+    with pytest.raises(ApplicationError):
+        operations.request_update(install)
+    failed = operations.status(install)
+    assert failed.phase == "failed"
+    startup_log = install.root / "logs" / f"{failed.id}-startup.log"
+    assert str(startup_log) in failed.error
+    assert startup_log.read_bytes() == b"native-runtime-failure"

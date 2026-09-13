@@ -1096,3 +1096,68 @@ def test_public_installer_can_configure_releases_from_before_setup_rename(
         assert "editable pip install" in script
     else:
         assert "function Install-PythonPackage" in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell installer")
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_native_installer_preserves_progress_labels_and_failure_log(tmp_path, exit_code):
+    harness = tmp_path / "native-output.ps1"
+    harness.write_text(
+        r"""param($Source, $ExitCode, $Target)
+$ErrorActionPreference = "Stop"
+$InstallDir = $Target
+$InstallLogPath = Join-Path $Target "output.log"
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$null)
+$node = $ast.FindAll({
+    param($item)
+    $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $item.Name -eq "Invoke-NativeCommand"
+}, $false) | Select-Object -First 1
+. ([scriptblock]::Create($node.Extent.Text))
+$script:statuses = @()
+function Write-Status { param($State, $Message) $script:statuses += "${State}:$Message" }
+# A function shadows only the executable in this disposable harness.
+$application = Join-Path $InstallDir "vBot.exe"
+Set-Item -LiteralPath "Function:$application" -Value {
+    "[WORK] prepare-sentinel"
+    "[WARN] warning-sentinel"
+    "[ERROR] diagnostic-sentinel"
+    "private-diagnostic-sentinel"
+    $global:LASTEXITCODE = [int]$ExitCode
+}
+try { Invoke-NativeCommand -Arguments @("autostart", "enable"); $ok = $true; $detail = "" }
+catch { $ok = $false; $detail = $_.Exception.Message }
+@{ok=$ok; detail=$detail; statuses=$script:statuses;
+  log=[string](Get-Content -Raw $InstallLogPath)} | ConvertTo-Json -Compress
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(harness),
+            str(PROJECT_ROOT / "scripts/install.ps1"),
+            str(exit_code),
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["statuses"] == [
+        "WORK:prepare-sentinel",
+        "WARN:warning-sentinel",
+        "ERROR:diagnostic-sentinel",
+    ]
+    assert "private-diagnostic-sentinel" in payload["log"]
+    assert payload["ok"] is (exit_code == 0)
+    if exit_code:
+        assert "autostart enable" in payload["detail"]
+        assert str(tmp_path / "output.log") in payload["detail"]
+        assert "retrying vbot update" not in payload["detail"]

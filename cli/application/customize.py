@@ -22,6 +22,7 @@ from cli.application.state import (
     write_json,
 )
 from core.utils.ids import new_id
+from core.utils.processes import subprocess_creation_flags
 
 _TEST_ENVIRONMENT_KEYS = frozenset(
     {
@@ -54,6 +55,7 @@ def _git(directory: Path, *args: str) -> str:
         encoding="utf-8",
         errors="replace",
         timeout=300,
+        creationflags=subprocess_creation_flags(),
     )
     if result.returncode:
         raise ApplicationError(
@@ -188,9 +190,10 @@ def _checked_command(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             timeout=3600,
+            creationflags=subprocess_creation_flags(),
         )
     if result.returncode:
-        raise ApplicationError(f"Customization validation failed. Inspect {log}")
+        raise ApplicationError(f"Application preparation failed. Details: {log}")
 
 
 def _ensure_candidate_environment(install: Installation, source: Path) -> Path:

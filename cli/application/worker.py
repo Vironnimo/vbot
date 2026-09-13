@@ -221,6 +221,7 @@ def execute(install: Installation, operation: Operation) -> None:
             require_ok(processes.stop(install))
         else:
             # Old code is not run against potentially changed state without a probe.
+            operation.error = verified.message
             previous = operation.previous_version
             old_check = processes.start(
                 install, version_id=previous, verification=True, breakaway=False
@@ -250,7 +251,9 @@ def execute(install: Installation, operation: Operation) -> None:
     operation.transition(
         install,
         "completed",
-        "Application update completed and startup verified"
+        "Desktop client updated; reopen Desktop to use the new version"
+        if not install.owns_server
+        else "Application update completed and startup verified"
         if operation.server_was_running
         else "Application update completed; server remains stopped",
     )

@@ -126,13 +126,33 @@ class ApplicationFacade:
         operations.request_update(self._install)
 
     def open_logs(self) -> None:
-        path = (
-            processes.target(self._install).data_dir / "logs"
-            if self._install.owns_server
-            else self._install.root / "logs"
-        )
+        path = self._install.root / "logs"
         path.mkdir(parents=True, exist_ok=True)
         _open_folder(path)
+
+    def open_server_logs(self) -> None:
+        self._require_server()
+        path = processes.target(self._install).data_dir / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        _open_folder(path)
+
+    def show_update(self) -> None:
+        operation = operations.status(self._install)
+        if operation is None:
+            message = "No update has been requested."
+        else:
+            message = operation.message
+            if operation.error:
+                message += f"\n\n{operation.error}"
+            message += f"\n\nDetails in the terminal:\nvbot update status {operation.id}"
+            if operation.phase == "prepared":
+                message += (
+                    f"\n\nActivate this prepared version:\nvbot update activate {operation.id}"
+                )
+        if os.name == "nt":
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, "vBot update", 0x40)
 
     def quit(self) -> None:
         if self._install.owns_server:

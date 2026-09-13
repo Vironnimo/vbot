@@ -75,6 +75,20 @@ def test_default_runner_decodes_utf8_and_preserves_invalid_bytes() -> None:
     assert invalid_result.stderr == r"\x81tail"
 
 
+def test_autostart_subprocess_does_not_allocate_a_console(monkeypatch):
+    captured = {}
+
+    def run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, b"registered", b"")
+
+    monkeypatch.setattr(autostart_management.subprocess, "run", run)
+    monkeypatch.setattr(autostart_management, "subprocess_creation_flags", lambda: 0x08000000)
+    assert _default_runner(["powershell.exe"]).stdout == "registered"
+    assert captured["creationflags"] == 0x08000000
+    assert captured["capture_output"] is True
+
+
 class ScriptedRunner:
     """Records command invocations and answers from a per-command handler."""
 

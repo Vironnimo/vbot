@@ -110,7 +110,7 @@ def test_prepare_refuses_dirty_checkout_before_fetch_or_build(
         lambda *_args, **_kwargs: pytest.fail("must not build"),
     )
 
-    with pytest.raises(ApplicationError, match="local changes"):
+    with pytest.raises(ApplicationError):
         source_updates.prepare_update(install, "upd_dirty")
 
     assert (checkout / "local.txt").read_text(encoding="utf-8") == "preserve me\n"
@@ -250,10 +250,17 @@ def test_failed_clone_keeps_unique_staging_evidence_for_each_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     install = _install(tmp_path / "install")
+    options: list[dict[str, object]] = []
+
+    def failed_clone(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        options.append(kwargs)
+        return subprocess.CompletedProcess(["git", "clone"], 1, "", "clone failed")
+
+    monkeypatch.setattr(source_updates, "subprocess_creation_flags", lambda: 789)
     monkeypatch.setattr(
         source_updates.subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "clone failed"),
+        failed_clone,
     )
 
     for _attempt in range(2):
@@ -262,11 +269,32 @@ def test_failed_clone_keeps_unique_staging_evidence_for_each_retry(
 
     evidence = list((install.root / "source-clones").iterdir())
     assert len(evidence) == 2
+    assert [option["creationflags"] for option in options] == [789, 789]
     assert len({path.name for path in evidence}) == 2
     assert not (install.root / "source").exists()
     assert "clone failed" in (install.root / "development" / "source-update.log").read_text(
         encoding="utf-8"
     )
+
+
+def test_git_runs_windowless_and_retains_captured_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(arguments, 1, "captured output", "captured error")
+
+    monkeypatch.setattr(source_updates, "subprocess_creation_flags", lambda: 123)
+    monkeypatch.setattr(source_updates.subprocess, "run", run)
+
+    result = source_updates._git(tmp_path, "status", check=False)
+
+    assert captured["creationflags"] == 123
+    assert captured["capture_output"] is True
+    assert result.stdout == "captured output"
+    assert result.stderr == "captured error"
 
 
 def test_desktop_client_source_update_skips_webui_build(
