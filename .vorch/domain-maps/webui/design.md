@@ -111,6 +111,8 @@ Inherited and disabled instructions remain readable. The component-local `.sp-bl
 
 Chat's current layout supports up to two retained areas, each containing Chat or an HTML preview. The split control sits with Sessions/New Session; HTML links can open the preview in the other area. Closing or switching areas retains drafts and scroll state. The preview has its own compact file toolbar, bounded iframe, and live-reload control. Source owners and interaction contracts are in `chat.md`.
 
+The context ring shows usage through a passive quick tooltip on hover or keyboard focus.
+
 User messages use right-aligned cards with an accent rail, capped to 75% of the reading measure. Assistant prose flows without a card. The composer overlays the bottom of the timeline on its own semantic surface; the timeline reserves corresponding space. A floating Jump to latest control restores follow mode. The Sessions drawer uses compact flat rows with a selection rail, an unread dot, metadata icons, and a contextual action menu. Chat Agent selection uses an underline independently of its running/unread/idle status dot.
 
 Session information opens from a small floating right-edge rail. It includes parent navigation where resolvable, stats, and grouped background work. Sub-Agent rows can navigate and cancel; Bash rows expose process cancellation; Reflection rows navigate without a cancel control. These differences express server-owned lifecycles, not interchangeable decorative row variants. The owners are `ChatActivityPanel.svelte`, `chatState.js`, and `chat.md`.
