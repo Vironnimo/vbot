@@ -1,8 +1,42 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.js';
+
+it('limits MCP typography to its panel and portaled dialogs', () => {
+  const style = document.createElement('style');
+  style.textContent = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../settings/mcp.css'),
+    'utf8',
+  );
+  document.head.appendChild(style);
+  try {
+    const rules = [...style.sheet.cssRules].filter(
+      (rule) => rule.selectorText && rule.style.getPropertyValue('font-size'),
+    );
+    for (const tag of ['p', 'h3', 'h4']) {
+      const chatText = document.createElement(tag);
+      expect(rules.some((rule) => chatText.matches(rule.selectorText))).toBe(
+        false,
+      );
+      for (const owner of ['mcp-panel', 'mcp-modal']) {
+        const container = document.createElement('div');
+        container.className = owner;
+        const text = document.createElement(tag);
+        container.appendChild(text);
+        expect(rules.some((rule) => text.matches(rule.selectorText))).toBe(
+          true,
+        );
+      }
+    }
+  } finally {
+    style.remove();
+  }
+});
 
 const rpc = vi.fn();
 vi.mock(

@@ -19,16 +19,16 @@
 .mcp-heading {
   flex-wrap: wrap;
 }
-h3 {
+:where(.mcp-panel, .mcp-modal) h3 {
   margin: 0;
   font-size: var(--fs-heading-sm);
 }
-h4 {
+:where(.mcp-panel, .mcp-modal) h4 {
   margin: 0;
   font-size: var(--fs-label-md);
   font-weight: 500;
 }
-p {
+:where(.mcp-panel, .mcp-modal) p {
   margin: 6px 0;
   color: var(--text-med);
   font-size: var(--fs-body-sm);

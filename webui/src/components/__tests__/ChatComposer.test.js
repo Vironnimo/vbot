@@ -19,56 +19,37 @@ import {
 describe('ChatComposer', () => {
   const suite = setupChatComposerSuite();
 
-  it('keeps the context card open across pointer travel and invokes compaction', async () => {
-    vi.useFakeTimers();
-    try {
-      const onForceCompaction = vi.fn();
-      suite.mountedComponent = mount(ChatComposer, {
-        target: document.body,
-        props: {
-          contextUsage: { tokens: 4000, estimated: true },
-          contextWindow: 10000,
-          compactionState: 'idle',
-          onForceCompaction,
-        },
-      });
-      flushSync();
-      const anchor = document.querySelector('.context-ring');
-      anchor.dispatchEvent(new Event('pointerenter'));
-      const card = document.querySelector('.context-hover-card');
-      expect(card.parentElement).toBe(document.body);
-      expect(card.dataset.floatingOpen).toBe('true');
-      anchor.dispatchEvent(new Event('pointerleave'));
-      card.dispatchEvent(new Event('pointerenter'));
-      await vi.advanceTimersByTimeAsync(500);
-      expect(card.dataset.floatingOpen).toBe('true');
-      card.querySelector('button').click();
-      expect(onForceCompaction).toHaveBeenCalledTimes(1);
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-      expect(card.dataset.floatingOpen).not.toBe('true');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it.each(['pending', 'running', 'unavailable'])(
-    'disables compaction while %s',
-    (compactionState) => {
-      const onForceCompaction = vi.fn();
-      suite.mountedComponent = mount(ChatComposer, {
-        target: document.body,
-        props: {
-          contextUsage: { tokens: 4000 },
-          contextWindow: 10000,
-          compactionState,
-          onForceCompaction,
-        },
-      });
-      flushSync();
-      const button = document.querySelector('.context-hover-card button');
-      expect(button.disabled).toBe(true);
-      button.click();
-      expect(onForceCompaction).not.toHaveBeenCalled();
+  it.each(['pointerenter', 'focus'])(
+    'shows context usage as a passive tooltip on %s',
+    async (eventType) => {
+      vi.useFakeTimers();
+      try {
+        suite.mountedComponent = mount(ChatComposer, {
+          target: document.body,
+          props: {
+            contextUsage: { tokens: 4000, estimated: true },
+            contextWindow: 10000,
+          },
+        });
+        flushSync();
+        const anchor = document.querySelector('.context-ring');
+        expect(anchor.getAttribute('role')).toBe('img');
+        expect(anchor.tabIndex).toBe(0);
+        expect(anchor.querySelector('button')).toBeNull();
+        anchor.dispatchEvent(new Event(eventType));
+        await vi.advanceTimersByTimeAsync(200);
+        const tooltip = document.querySelector('#app-tooltip');
+        expect(tooltip.classList.contains('app-tooltip--visible')).toBe(true);
+        expect(anchor.getAttribute('aria-describedby')).toBe(tooltip.id);
+        expect(tooltip.textContent).toContain('4,000');
+        expect(tooltip.querySelector('button')).toBeNull();
+        anchor.click();
+        expect(document.querySelector('.context-hover-card')).toBeNull();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        expect(tooltip.classList.contains('app-tooltip--visible')).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 

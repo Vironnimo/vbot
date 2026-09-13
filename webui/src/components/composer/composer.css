@@ -1,39 +1,3 @@
-.input-area .context-ring-trigger {
-  display: flex;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.input-area .context-hover-card {
-  position: fixed;
-  z-index: var(--z-floating);
-  max-width: min(520px, calc(100vw - 24px));
-  max-height: 60vh;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  color: var(--text-hi);
-  box-shadow: var(--dropdown-elevation);
-  font: 12px var(--font-ui);
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.input-area .context-hover-card[data-floating-open='true'] {
-  visibility: visible;
-  pointer-events: auto;
-}
-
-.input-area .context-hover-details {
-  white-space: pre-wrap;
-  margin-bottom: 12px;
-}
-
 .input-area {
   position: relative;
   width: 100%;

@@ -942,19 +942,6 @@
                 focusRequest={layout.composerFocusRequest}
                 availableSkills={chatState.availableSkills}
                 contextUsage={target.activeSessionState?.contextUsage}
-                compactionState={target.activeSessionState?.currentRun
-                  ?.status === 'running'
-                  ? (target.activeSessionState.currentRun.controls
-                      ?.compaction ?? 'unavailable')
-                  : 'unavailable'}
-                compactionSubmitting={Boolean(
-                  target.activeSessionState?.pendingRunControls?.compact,
-                )}
-                onForceCompaction={() =>
-                  chatController.controlRun(
-                    target.activeSessionState,
-                    'compact',
-                  )}
                 contextWindow={target.activeAgent?.context_window}
                 usage={target.activeSessionState?.usage}
                 sessionUsage={target.activeSessionState?.sessionUsage}
