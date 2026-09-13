@@ -3,13 +3,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from cli.application.install import install_payload
 from cli.application.integration import CheckoutTransition
-from cli.install_state import build_install_state
+from cli.application.state import ApplicationError
+from cli.install_state import build_install_state, write_install_state
 
 
 def _payload(root: Path, shape: str = "server") -> Path:
@@ -106,3 +108,65 @@ def test_checkout_transition_preserves_recorded_shape_and_target(
         str(data),
     )
     assert completed == [transition]
+
+
+def _checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    remote = tmp_path / "upstream.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    git("config", "user.email", "fixture@example.invalid")
+    git("config", "user.name", "Fixture")
+    (checkout / "pyproject.toml").write_text('[project]\nname="vbot"\nversion="1.0"\n')
+    (checkout / ".gitignore").write_text(".vbot-install.json\n.venv/\n")
+    git("add", ".")
+    git("commit", "-m", "fixture")
+    git("remote", "add", "origin", str(remote))
+    git("push", "-u", "origin", "main")
+    state = build_install_state(
+        checkout,
+        install_shape="server",
+        dependency_groups=("server", "cli"),
+        python_executable=str(checkout / ".venv/Scripts/python.exe"),
+        server_host="127.0.0.1",
+        server_port=9320,
+        server_data_directory=str(tmp_path / "source-data"),
+    )
+    write_install_state(checkout, state)
+    monkeypatch.setattr(
+        "cli.application.integration.prepare_checkout_transition",
+        lambda source, shape: CheckoutTransition(state),
+    )
+    monkeypatch.setattr(
+        "cli.application.integration.finish_checkout_transition", lambda *args: None
+    )
+    return checkout
+
+
+def test_transition_to_separate_native_root_preserves_main_tracking(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path, monkeypatch)
+    source = (checkout / "pyproject.toml").read_bytes()
+    state = (checkout / ".vbot-install.json").read_bytes()
+    install = install_payload(
+        tmp_path / "application", _payload(tmp_path), shape="server", from_checkout=checkout
+    )
+    assert install.server_port == 9320
+    assert (checkout / "pyproject.toml").read_bytes() == source
+    assert (checkout / ".vbot-install.json").read_bytes() == state
+    binding = json.loads((install.root / "source-update.json").read_text())
+    assert binding["branch"] == "main"
+    assert binding["remote"] == "origin"
+    assert Path(binding["checkout"]) == checkout.resolve()
+    assert not (checkout / "application.json").exists()
+
+
+def test_nonempty_checkout_remains_protected(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path, monkeypatch)
+    with pytest.raises(ApplicationError):
+        install_payload(checkout, _payload(tmp_path), shape="server", from_checkout=checkout)
+    assert not (checkout / "application.json").exists()

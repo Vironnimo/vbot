@@ -102,6 +102,17 @@ and retires its owned source Autostart only after package registration succeeds.
 It preserves the old checkout. Local source edits must first be preserved and
 reconciled into the managed development copy; no dirty checkout is discarded.
 
+Windows `-Dev` is also a native installation mode. The public PowerShell installer
+first installs the signed base with no startup task, selects main through
+`application source main`, waits for the normal durable update, and only then
+enables requested Autostart. The main Git checkout lives at `<install>/source`;
+`source-update.json` records its branch and remote. Explicit `--from-checkout`
+bindings preserve an existing checkout and its track. The running server uses a
+complete prepared version, so Git/build failures leave the active version intact.
+An initial build failure retains the base installation for an ordinary update retry.
+Host input fingerprints in `release.json` permit unchanged native hosts to be reused;
+changed native sources require the compiler/SDK inputs described above.
+
 For local features, Extension dependencies and isolated candidate testing, see
 [the user guide](../../USAGE.md#local-features-in-a-packaged-windows-application).
 Uninstall preserves server data by default and retains development copies so

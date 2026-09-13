@@ -79,7 +79,7 @@ As with any `curl | bash` or `irm | iex` command, inspect [install.sh](scripts/i
 
 The public entrypoints are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. Fresh Windows application installs use the package described above. The following checkout-based contract applies to Linux and explicit Windows source installations: select a release, clone it into `~/vbot`, create `~/vbot/.venv`, obtain the matching WebUI, install vBot into that isolated environment, expose `vbot`, configure Autostart, and start the server. Runtime state remains separate under `~/.vbot`.
 
-When the same Installer runs from inside a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. It never installs vBot into the system Python environment. The internal `scripts/setup.*` helpers configure a checkout only after the public Installer has established the checkout and environment; they are not end-user installation entrypoints.
+When the same Installer runs from inside a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. On Windows, explicit `-Dev` instead selects the native main installation. It never installs vBot into the system Python environment. The internal `scripts/setup.*` helpers configure a checkout only after the public Installer has established the checkout and environment; they are not end-user installation entrypoints.
 
 ### Install shapes
 
@@ -92,7 +92,7 @@ Choose an install shape by what you want to use:
 | Connect this computer to an existing vBot server | Desktop Client | No | Yes | Never |
 | Work on vBot itself | Development | Yes | Optional | Yes unless disabled |
 
-`--desktop`/`-Desktop` adds Desktop to a full local server installation. `--desktop-client`/`-DesktopClient` installs only the CLI and Desktop clients for an existing remote server; it is mutually exclusive with local Desktop server mode and development mode.
+`--desktop`/`-Desktop` adds Desktop to a full local server installation. `--desktop-client`/`-DesktopClient` installs only the CLI and Desktop clients for an existing remote server; it is mutually exclusive with local Desktop server mode. Windows Desktop Client can also follow main using `-Dev`; Linux keeps its separate development-mode restriction.
 
 ### Advanced Installer options
 
@@ -127,6 +127,28 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 </details>
 
 Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-SourceCheckout`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, and `-NoAutostart`. Native packages default to `%LOCALAPPDATA%/Programs/vBot`; source installations default to `~/vbot`. `-SkipWebuiBuild` and custom `-TaskName` apply to the source installation path. The standard PowerShell `-Verbose` switch shows technical setup output live. Use the ScriptBlock form to pass options. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
+
+On Windows, `-Dev` is the native installation that follows `main`: it has the same
+EXE, tray, update command and directory as a release installation. It keeps its
+editable Git checkout under `<install>/source`, prepares a complete version before
+startup and requires Git plus Node.js/npm for server assets. Native host source
+changes additionally require LLVM and the Windows SDK. `-SourceCheckout` explicitly
+selects the separate Python installation workflow.
+
+An existing native installation can select its update source without moving:
+
+```powershell
+vbot application source main
+vbot update
+vbot application status
+```
+
+Use `application source main --from-checkout <path>` to retain an existing clean
+branch checkout, or `application source release` followed by `vbot update` to select
+published releases. Source selection preserves Git files. Main updates retain local
+commits; uncommitted changes or divergent history require resolution before updating.
+Failed preparation leaves the running version intact. A failed initial main update
+leaves the complete base installation available for retry with `vbot update`.
 
 <details>
 <summary>Windows examples</summary>

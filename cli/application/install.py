@@ -86,7 +86,13 @@ def install_payload(
     transition = None
     if from_checkout is not None:
         from cli.application.integration import prepare_checkout_transition
+        from cli.install_state import read_install_state
 
+        source_state = read_install_state(from_checkout)
+        if source_state is not None and source_state.source_track == "dev":
+            from cli.application.source_updates import inspect_checkout
+
+            inspect_checkout(from_checkout)
         transition = prepare_checkout_transition(from_checkout, shape=shape)
         previous = transition.state
         if previous.server_data_directory:
@@ -123,6 +129,11 @@ def install_payload(
             initialize_data_directory(
                 resolved_data, resources_dir=destination / "app" / "resources"
             )
+        if transition is not None and transition.state.source_track == "dev":
+            from cli.application.source_updates import bind_checkout
+
+            assert from_checkout is not None
+            bind_checkout(install, from_checkout)
         install.save()
         install.activate(manifest["version_id"])
     if transition is not None:
