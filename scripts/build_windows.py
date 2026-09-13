@@ -276,7 +276,9 @@ def compile_host(
 ) -> None:
     windows = source / "scripts" / "windows"
     icon = (source / "desktop" / "icon.ico").resolve()
-    manifest = (windows / "launcher.manifest").resolve()
+    manifest = (
+        windows / ("desktop.manifest" if role == "desktop" else "launcher.manifest")
+    ).resolve()
     numeric, display = _version_resource_values(version)
     subsystem = "CONSOLE" if role in {"python", "host"} else "WINDOWS"
     output.parent.mkdir(parents=True, exist_ok=True)

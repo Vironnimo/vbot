@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
+from desktop import _windows
 from desktop.settings import (
     config_dir,
     read_wakeword_settings,
@@ -303,8 +304,11 @@ def probe_target(
 def load_webview() -> WebviewModule:
     """Import pywebview lazily so non-desktop test gates do not require it."""
 
+    _windows.configure_dpi()
     try:
-        return importlib.import_module("webview")
+        webview = importlib.import_module("webview")
+        _windows.configure_winforms()
+        return webview
     except ImportError as exc:
         raise RuntimeError(
             "pywebview is required to run vBot Desktop. "
@@ -374,6 +378,7 @@ def launch_desktop(
         min_size=(window_layout.minimum_width, window_layout.minimum_height),
         screen=window_layout.screen,
     )
+    _windows.bind_window_dpi(window, (window_layout.minimum_width, window_layout.minimum_height))
     controller.attach_window(window)
 
     start_kwargs: dict[str, Any] = {}
@@ -492,7 +497,7 @@ def _primary_screen(webview: WebviewModule) -> Any | None:
             cw = int(getattr(candidate, "width", 0))
             ch = int(getattr(candidate, "height", 0))
             if cx <= 0 < cx + cw and cy <= 0 < cy + ch:
-                return candidate
+                return _windows.logical_primary_screen(candidate)
         return screens[0]
     except (AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError):
         return None
