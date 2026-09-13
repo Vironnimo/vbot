@@ -37,6 +37,11 @@ from core.tools._bash_results import (
     _user_cancelled_failure_message,
     background_bash_statuses,
 )
+from core.tools._bash_update_handoff import (
+    HANDOFF_ENV,
+    acknowledge_update_handoff_ticket,
+    create_update_handoff_ticket,
+)
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
@@ -310,6 +315,7 @@ async def bash_handler(
             f"env_keys contains key(s) not granted to this Agent: {names}",
         )
     env = await get_shell_env()
+    env.pop(HANDOFF_ENV, None)
     resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
     for key in requested_env_keys:
         env[key] = resolve_credential(key)
@@ -319,6 +325,18 @@ async def bash_handler(
         env.pop(VBOT_RUN_PROJECT_ID_ENV, None)
     else:
         env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
+    handoff = None
+    if context.result_persisted_hook is not None:
+        handoff = create_update_handoff_ticket(
+            context.data_root,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call_id,
+            agent_id=context.agent_id,
+            project_id=context.project_id,
+            session_id=context.session_id,
+        )
+        env[HANDOFF_ENV] = str(handoff.path)
+        context.after_result_persisted(lambda: acknowledge_update_handoff_ticket(handoff))
     argv = _shell_argv(command)
 
     try:
@@ -342,6 +360,7 @@ async def bash_handler(
         )
         reset_shell_env_cache()
         env = await get_shell_env()
+        env.pop(HANDOFF_ENV, None)
         for key in requested_env_keys:
             env[key] = resolve_credential(key)
         env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
@@ -350,6 +369,8 @@ async def bash_handler(
             env.pop(VBOT_RUN_PROJECT_ID_ENV, None)
         else:
             env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
+        if handoff is not None:
+            env[HANDOFF_ENV] = str(handoff.path)
         try:
             process_id = await process_manager.spawn(
                 context.run_id,

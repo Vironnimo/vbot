@@ -8,6 +8,8 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 
 ## Interfaces
 
+- `cli/application/` owns packaged Windows install/version/operation records, the independent updater, tray facade and managed customization/dependency recipes. `cli.main.run` dispatches these before legacy lifecycle routing. Package discovery requires the native install environment or the exact `versions/<id>/app` layout; a development checkout nested under an install is not a packaged accessor. Linux and source-checkout commands retain their existing owners below. Read `cli/windows-application.md` before changing packaged lifecycle behavior.
+
 - `cli/parser.py` composes the `argparse` tree from internal `_parser_<area>.py` builders; `_parser_common.py` owns shared target arguments, value readers, choice constants and help vocabulary. Command descriptions carry argument guidance and examples. `cli/main.py` routes commands to `_dispatch_<area>.py` argument translators; `_input.py` owns shared text decoding and `_output.py` owns outcome rendering and exit-code mapping. Management modules retain their RPC and lifecycle ownership.
 - `cli/_server_target.py` owns target resolution, result records, HTTP health classification and local listener matching; `server_management.py` retains process/service lifecycle and re-exports the public target primitives. Update orchestration stays in `update_management.py`; `_update_assets.py` owns WebUI/Extension asset build and rollback, with internal result records in `_update_types.py`.
 - Commands follow `vbot <area> <command> [target] [options]`, including deeper subcommands. `cli/parser.py` normalizes explicit collection aliases (such as providers/models/agents) to canonical areas before dispatch, rejects abbreviated options, and gives concise syntax errors with help and command suggestions. Unknown spellings are never executed as corrections.
@@ -135,6 +137,7 @@ Extended Session inspection is documented in the bundled `vbot-cli/references/se
 Read these only when your task matches - not by default.
 
 - Changing installer, updater, uninstaller, autostart internals, install shapes, or `.vbot-install.json` handling -> `cli/lifecycle-management.md`
+- Changing native Windows packages, the tray, durable update operations, local customization or extra dependency environments -> `cli/windows-application.md`
 
 
 ## Extension management operations

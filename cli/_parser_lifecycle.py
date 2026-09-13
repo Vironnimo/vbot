@@ -73,6 +73,16 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         description=f"{AREA_HELP['update']}. Example: vbot update",
     )
     _add_target_arguments(update_parser, default_host=None)
+    update_parser.add_argument("update_action", nargs="?", choices=("status", "activate"))
+    update_parser.add_argument("operation_id", nargs="?")
+    update_parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Return after the independent updater accepts the operation",
+    )
+    update_parser.add_argument(
+        "--package", help="Use this deliberately selected local application package"
+    )
     local_changes = update_parser.add_mutually_exclusive_group()
     local_changes.add_argument(
         "--discard",
@@ -87,12 +97,20 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     update_parser.add_argument(
         "--no-restart",
         action="store_true",
-        help="Update the code without restarting the server afterward",
+        help="Prepare a packaged update without activation; source installs update without restart",
     )
     update_parser.add_argument(
         "--service-name",
         help="systemd user unit to restart when the install is unit-managed (default: vbot)",
     )
+
+
+def _add_application_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    from cli.application.command import add_parsers
+
+    add_parsers(subparsers)
 
 
 def _add_uninstall_parser(

@@ -758,6 +758,131 @@ def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None
     assert ready_guard < summary.index("http://${summaryHost}:$summaryPort/")
 
 
+@pytest.mark.parametrize("mode", ["success", "missing", "digest", "signature"])
+def test_windows_native_installer_release_routing_is_verified(tmp_path: Path, mode: str) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    harness = tmp_path / "native-harness.ps1"
+    harness.write_text(
+        r"""param($Source, $Root, $Mode)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ApiBase = "https://api.github.com/repos/Vironnimo/vbot"
+$ApiHeaders = @{}
+$InstallDir = $Root
+$DataDir = Join-Path $Root "data"
+$HostName = "127.0.0.1"
+$Port = 9134
+$NoAutostart = $false
+$ProgressPreference = "SilentlyContinue"
+$calls = @()
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $Source, [ref]$tokens, [ref]$errors
+)
+foreach ($name in @("Write-Status", "Write-Step", "Get-OfficialRelease", "Install-NativeRelease")) {
+    $node = $ast.FindAll({
+        param($item)
+        $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $item.Name -eq $name
+    }, $false) | Select-Object -First 1
+    . ([scriptblock]::Create($node.Extent.Text))
+}
+$bytes = [System.Text.Encoding]::UTF8.GetBytes("verified package")
+$hasher = New-Object System.Security.Cryptography.SHA256Managed
+$sha = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+$hasher.Dispose()
+function Invoke-RestMethod {
+    param($Uri, $Headers, $TimeoutSec)
+    if ($Uri -like "*/health") { return [pscustomobject]@{status="ok"} }
+    $assets = if ($Mode -eq "missing") { @() } else { @([pscustomobject]@{
+        name="vBot-1.2.3-windows-x86_64-server.exe"
+        digest="sha256:$sha"
+        browser_download_url=(
+            "https://github.com/Vironnimo/vbot/releases/download/v1.2.3/vbot.exe"
+        )
+    }) }
+    return [pscustomobject]@{tag_name="v1.2.3"; assets=$assets}
+}
+function Invoke-WebRequest {
+    param($Uri, $OutFile, $Headers)
+    [IO.File]::WriteAllBytes($OutFile, $bytes)
+}
+function Get-AuthenticodeSignature {
+    param($LiteralPath)
+    $status = if ($Mode -eq "signature") { "HashMismatch" } else { "NotSigned" }
+    return [pscustomobject]@{Status=$status}
+}
+function Get-FileHash {
+    param($LiteralPath, $Algorithm)
+    $value = if ($Mode -eq "digest") { "0" * 64 } else { $sha }
+    return [pscustomobject]@{Hash=$value.ToUpperInvariant()}
+}
+function Start-Process {
+    param($FilePath, $ArgumentList, $WindowStyle, [switch]$Wait, [switch]$PassThru)
+    $script:calls = @($ArgumentList)
+    if ($WindowStyle -ne "Hidden") { throw "installer window was not hidden" }
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    $state = @{
+        schema_version=1
+        install_shape="server"
+        server_host=$HostName
+        server_port=$Port
+        server_data_directory=$DataDir
+    }
+    $state | ConvertTo-Json | Set-Content (Join-Path $InstallDir "application.json")
+    Set-Content (Join-Path $InstallDir "active-version") "rel_test"
+    return [pscustomobject]@{ExitCode=0}
+}
+try {
+    Install-NativeRelease -Tag "v1.2.3" -Shape "server"
+    @{ok=$true; calls=$calls} | ConvertTo-Json -Compress
+}
+catch {
+    @{ok=$false; error=$_.Exception.Message; calls=$calls} | ConvertTo-Json -Compress
+}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(harness),
+            str(PROJECT_ROOT / "scripts/install.ps1"),
+            str(tmp_path / "install with spaces"),
+            mode,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    if mode == "success":
+        assert payload["ok"] is True
+        assert payload["calls"] == [
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            f'/DIR="{tmp_path / "install with spaces"}"',
+            f'/VBOTDATA="{tmp_path / "install with spaces" / "data"}"',
+            '/VBOTHOST="127.0.0.1"',
+            "/VBOTPORT=9134",
+            "/TASKS=startup",
+        ]
+    elif mode == "missing":
+        assert "not yet published" in payload["error"]
+        assert "-SourceCheckout" in payload["error"]
+    elif mode == "digest":
+        assert "digest does not match" in payload["error"]
+    else:
+        assert "invalid Authenticode signature" in payload["error"]
+
+
 @pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
 def test_public_installer_routes_setup_details_to_a_failure_log(
     script_name: str,

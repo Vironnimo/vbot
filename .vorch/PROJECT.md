@@ -10,6 +10,8 @@ The runtime and shared state live on the server. WebUI, Desktop, CLI, and Channe
 
 **Stack:** Python 3.11+ (hatchling), FastAPI + WebSocket + SSE, Svelte (JS, no TypeScript), pywebview. Kernel uses asyncio; threads only where native libraries require them.
 
+**Windows application:** `cli/application/` owns per-user packaged versions, independent durable updates, the native `vBot.exe` tray facade and local development candidates. Desktop remains an independent accessor; no Windows service. `scripts/build_windows.py` and `scripts/windows/` assemble private CPython 3.13 for all Windows shapes, readable runtime sources and built assets. Source-checkout/Linux lifecycle stays in its existing owners. Read `cli.md` and its Windows application reference before changing this boundary.
+
 **Layers:**
 ```
 core/          <- Kernel (async). No HTTP, no UI.
@@ -103,7 +105,7 @@ Use the current interpreter; do not assume a virtual environment for installs, g
 
 **Worktrees:** `python scripts/worktree.py create|list|merge|delete <task-name>`; also `repair-start|repair-finish`. `create` reports path, ports, data dir, URL. Non-force `delete` fails closed on Git removal errors unless `git worktree list` confirms deregistration; `delete --force` discards uncommitted work. `merge` lands the task branch on `main` and removes the worktree, with a merge lock and protected conflict-repair window. The agent must pass quality gates before merging; this tool never runs them. On failure/unexpected behavior, read `scripts/README-worktree.md`.
 
-**Dependencies:** `pyproject.toml` groups: `server`, `cli`, `desktop`, `local-speech`, `local-tts`, `dev`; frontend: `webui/package.json`. Optional server-native Transformers/PyTorch STT supports Qwen3 ASR, Parakeet, Nemotron 3.5 ASR. `core/model_tasks/speech_setup.py` owns in-app setup; Settings installs the shipped extra into the running server's interpreter. Core dependency `psutil` provides verified process-tree cleanup and server restart support. Local TTS uses isolated managed SDK environments for Qwen3-TTS and Chatterbox Multilingual V3, with standalone child entry point `speech_worker.py`. See `USAGE.md` -> Local speech recognition / synthesis.
+**Dependencies:** `pyproject.toml` groups include `server`, `cli`, `windows-app`, `desktop`, `local-speech`, `local-tts`, and `dev`; frontend: `webui/package.json`. `core/model_tasks/speech_setup.py` owns optional speech setup. Packaged Windows STT/TTS use managed user-data environments and child workers; source-checkout STT retains its server-interpreter recipe. No optional setup mutates a packaged release. `psutil` provides verified process-tree cleanup and server restart support. See `model_tasks/speech.md` and `USAGE.md` -> Local speech recognition / synthesis.
 
 **Run:**
 ```bash
@@ -118,6 +120,8 @@ A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Insta
 **Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. The frontend gate covers these external source/test paths with the shared dependency tree.
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
+
+Windows binary artifacts require configured release signing, and publication is separate from building/testing. Unsigned developer packages are explicitly selected with `--package`; they are never accepted as unsigned official downloads. Local customization needs Git and Node.js/npm only in its development copy, not during normal packaged operation. Tests of Windows application lifecycle use disposable install/data roots, never the existing installed instance.
 
 ## Testing
 

@@ -280,15 +280,21 @@ def bootstrap(runtime: Runtime) -> None:
         register_generate_music_tool(runtime._tools, runtime._music)
         extension_dirs = _extra_extension_directories(runtime.logger, settings)
         disabled_extensions, extension_config = _extension_load_options(runtime.logger, settings)
-        runtime._extensions = ExtensionRegistry.load(
-            runtime._storage.data_dir / "extensions",
-            extra_dirs=extension_dirs,
-            disabled=disabled_extensions,
-            config=extension_config,
-            bundled_dir=resources_path / "extensions",
-            config_provider=runtime._live_extension_config,
-            credential_resolver=runtime.resolve_environment_credential,
-        )
+        if runtime.safe_startup_mode is None:
+            from core.extensions.dependencies import activate as activate_extension_dependencies
+
+            activate_extension_dependencies(runtime._storage.data_dir)
+            runtime._extensions = ExtensionRegistry.load(
+                runtime._storage.data_dir / "extensions",
+                extra_dirs=extension_dirs,
+                disabled=disabled_extensions,
+                config=extension_config,
+                bundled_dir=resources_path / "extensions",
+                config_provider=runtime._live_extension_config,
+                credential_resolver=runtime.resolve_environment_credential,
+            )
+        else:
+            runtime._extensions = ExtensionRegistry()
         failed_extension_count = len(runtime._extensions.diagnostics())
         if failed_extension_count > 0:
             runtime.logger.warning(
@@ -515,7 +521,8 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )
-        runtime._start_channel_service()
+        if runtime.safe_startup_mode is None:
+            runtime._start_channel_service()
         runtime._sync_channel_tool_registration()
         runtime._cron_service = CronService(
             runtime._trigger_service,
@@ -524,12 +531,14 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
             tz=timezone_name,
         )
-        runtime._start_cron_service()
+        if runtime.safe_startup_mode is None:
+            runtime._start_cron_service()
         runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
         runtime._calendar_service.actions.configure(
             runtime._trigger_service, runtime._agent_resolver, runtime._chat_sessions
         )
-        runtime._start_calendar_service()
+        if runtime.safe_startup_mode is None:
+            runtime._start_calendar_service()
         register_cron_tool(runtime._tools, runtime._cron_service)
         register_calendar_tool(runtime._tools, runtime._calendar_service)
         register_bash_tool(
@@ -593,7 +602,8 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._skills,
         )
         runtime._started = True
-        runtime._start_provider_usage_service()
+        if runtime.safe_startup_mode is None:
+            runtime._start_provider_usage_service()
         runtime.logger.info("Runtime started")
     except Exception:
         runtime._cleanup_failed_startup()

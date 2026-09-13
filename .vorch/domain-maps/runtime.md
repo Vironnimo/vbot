@@ -23,6 +23,8 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 7. **Automation surface** - TriggerService (streaming loop for triggers, non-streaming for manual Compaction); TerminalManager; BootstrapService; only then the end-to-end CommandDispatcher receiving applied Extension Commands; ChannelService start + `channel_send`; `cron`/`bash` when dependencies exist. CalendarService's action owner receives TriggerService, AgentResolver, and Sessions; Runtime starts it and includes it in stop, asynchronous close, and failed-startup cleanup. Bootstrap registers no Tool and does not activate here.
 8. **Sub-agents & prompts** - SubAgentCoordinator, sub-agent tools and `status`, Extension Tools applied **last**, SystemPromptManager, one info startup-inventory summary.
 
+`safe_startup_mode` is only `verification` or `test`. It constructs the core graph but suppresses Extension dependency activation and Extension loading, plus Bootstrap, Channel, Cron, Calendar, and Provider-usage producers. Normal startup alone activates managed Extension dependencies before Extension discovery.
+
 ## Shutdown
 
 - `stop()` stops producers (Channels/Cron/Bootstrap), usage collector, Process/Terminal managers (killing every tracked process and Terminal tree), the temp-file sweeper, clears service references, closes logging. Safe pre-start.

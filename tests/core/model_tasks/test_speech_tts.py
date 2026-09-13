@@ -126,10 +126,12 @@ async def test_synthesis_substitution_cache_voice_changes_and_stt_switch():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
+@pytest.mark.parametrize("packaged", [False, True])
 async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_ready(
-    tmp_path, monkeypatch, engine
+    tmp_path, monkeypatch, engine, packaged
 ):
     setup = LocalSpeechSetup(engine=engine, directory=tmp_path / engine)
+    monkeypatch.setattr(setup, "_packaged", lambda: packaged)
     commands = []
 
     async def command(arguments, **kwargs):
@@ -145,8 +147,10 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
     await setup._task
     assert setup.status()["state"] == "ready" and setup.available()
     host_installs = [cmd for cmd in commands if cmd[:3] == [sys.executable, "-m", "pip"]]
-    assert len(host_installs) == 1
-    assert "uv==0.12.11" in host_installs[0]
+    assert len(host_installs) == (0 if packaged else 1)
+    if host_installs:
+        assert "uv==0.12.11" in host_installs[0]
+    assert any(cmd[:3] == [sys.executable, "-m", "uv"] for cmd in commands)
     assert commands[-1][0] == str(setup.python) and "--verify" in commands[-1]
     for cmd in commands:
         if "install" in cmd and "uv" in cmd:

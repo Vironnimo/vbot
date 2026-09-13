@@ -55,7 +55,11 @@ Open a normal, non-elevated PowerShell and run:
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 ```
 
-The Installer refuses a normal persistent installation from an elevated shell so the checkout, isolated environment, runtime data, Autostart task, and server process remain owned by your user account. It registers Windows Autostart as a low-privilege per-user Task Scheduler entry and does not require a UAC prompt.
+The Windows Installer downloads the matching native package, checks the release asset's SHA256 digest, and installs it for your user account. The application has its own `vBot.exe` tray and private Python runtime; it installs no Windows service and does not need a Git clone or Node.js. Server data remains separate at `~/.vbot`. Run it from a normal, non-elevated shell. The optional logon task belongs to your user account.
+
+The three packages are Server, Server with Desktop, and Desktop Client. Desktop is independently opened from the tray or `vbot desktop`; closing it never stops the server. Open Desktop windows keep their version until reopened after an update. WebView may still use several Windows processes.
+
+Fresh installs require a published matching Windows binary asset. If the selected release has none, the installer stops with an explanation; it does not silently clone the repository. Use `-SourceCheckout` for an explicit legacy source installation. `-Dev` and installation from an existing checkout retain their source-development workflow.
 
 ### Fresh Debian-like Linux install
 
@@ -73,7 +77,7 @@ As with any `curl | bash` or `irm | iex` command, inspect [install.sh](scripts/i
 
 ### Public Installer contract
 
-The complete public installers are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. A default install selects the latest release, clones it into `~/vbot`, creates `~/vbot/.venv`, downloads the matching WebUI, installs vBot into that isolated environment, exposes the `vbot` command, enables Autostart, and starts the server. Runtime state remains separate under `~/.vbot`.
+The public entrypoints are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. Fresh Windows application installs use the package described above. The following checkout-based contract applies to Linux and explicit Windows source installations: select a release, clone it into `~/vbot`, create `~/vbot/.venv`, obtain the matching WebUI, install vBot into that isolated environment, expose `vbot`, configure Autostart, and start the server. Runtime state remains separate under `~/.vbot`.
 
 When the same Installer runs from inside a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. It never installs vBot into the system Python environment. The internal `scripts/setup.*` helpers configure a checkout only after the public Installer has established the checkout and environment; they are not end-user installation entrypoints.
 
@@ -122,7 +126,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 
 </details>
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName`. The standard PowerShell `-Verbose` switch shows technical setup output live. Use the ScriptBlock form to pass options. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-SourceCheckout`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, and `-NoAutostart`. Native packages default to `%LOCALAPPDATA%/Programs/vBot`; source installations default to `~/vbot`. `-SkipWebuiBuild` and custom `-TaskName` apply to the source installation path. The standard PowerShell `-Verbose` switch shows technical setup output live. Use the ScriptBlock form to pass options. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
 
 <details>
 <summary>Windows examples</summary>
@@ -162,7 +166,9 @@ scripts/install.sh --no-autostart
 
 ## Requirements
 
-For a standard release installation on supported Windows and Debian-like Linux systems, the Installer handles the application environment and attempts to install missing prerequisites through `winget` or `apt`:
+Native Windows packages include their Python runtime, dependencies and built WebUI. Normal installation and updates require neither Git nor Node.js. Preparing local application changes additionally requires Git and Node.js/npm on the machine.
+
+For Linux and explicit Windows source installations, the Installer handles the application environment and attempts to install missing prerequisites through `winget` or `apt`:
 
 - Python 3.11 or newer and Git are required, but the Installer provisions them where the supported package manager is available.
 - Node.js and npm are required only for a development installation or a current-checkout WebUI build; release installs download a prebuilt WebUI.
@@ -174,17 +180,33 @@ If automatic prerequisite installation is unavailable, the Installer stops with 
 
 ### Updating
 
-Close every vBot Desktop window on Windows, then run:
+Run the same command from your terminal or choose Update in the packaged Windows tray:
 
 ```bash
 vbot update
 ```
 
-The updater reports each phase as it runs, including elapsed time during long steps. Its final summary distinguishes a verified server restart from a pending or skipped restart; failure details include recovery guidance. Output remains plain text when redirected, and `NO_COLOR=1` disables terminal color.
+For a packaged Windows application, a separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result and returns a failing exit code when the update fails. The tray displays the same saved state. No Agent is created for a human or tray update.
+
+```bash
+vbot update --detach           # return the saved operation id immediately
+vbot update status            # inspect the latest saved operation
+vbot update status OPERATION_ID
+vbot update --no-restart       # prepare a candidate without changing the active version
+vbot update activate OPERATION_ID
+```
+
+Official updates verify the signed package, preserve the selected shape and server target, prepare local changes and Extension dependencies, wait for accepted work to finish, and create a Session snapshot. They then verify the candidate before activating it and verify normal startup. Previous code remains available for recovery; vBot never automatically restores an old data snapshot over newer data. If recovery cannot establish a safe result, the operation reports that it needs attention. An open Desktop window can continue using its previous version until reopened.
+
+When called through Bash in a vBot Run, the command saves its operation before returning and automatically arranges a continuation in the same Session. The updater waits for the whole Tool batch to enter Session history, registers that continuation, and cancels and drains only the exact originating Run before draining other accepted work. The continuation checks the saved result; acceptance alone is not update success. Do not create an additional Bootstrap for this packaged update path.
+
+### Updates in a source checkout
+
+Close every vBot Desktop window on Windows before updating a source installation. The source updater reports each phase, including elapsed time during long steps. Its final summary distinguishes a verified server restart from a pending or skipped restart; failure details include recovery guidance. Output remains plain text when redirected, and `NO_COLOR=1` disables terminal color.
 
 The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates or verifies a compatible Session snapshot; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
 
-Use an explicit policy when the tracked checkout contains local changes or when the server should not restart:
+Use an explicit policy when the tracked checkout contains local changes or when the server should not restart. `--stash` and `--discard` apply only to source installations:
 
 ```bash
 vbot update --stash       # reapply tracked local changes after updating
@@ -193,7 +215,7 @@ vbot update --no-restart  # leave the server state unchanged
 ```
 
 <details>
-<summary>Windows update recovery details</summary>
+<summary>Windows source update recovery details</summary>
 
 The Windows public Installer's `vbot` command invokes the recorded Python module instead of pip's replaceable `vbot.exe`, so the running command does not lock its own launcher during dependency updates. The updater refuses to change the checkout while that installation's exact `vbot-desktop.exe` is running and checks again immediately before pip changes the environment. A Desktop installation also refreshes its Installer-owned Start-menu shortcut.
 
@@ -228,7 +250,7 @@ vbot uninstall --data-only --yes
 vbot uninstall --all --yes
 ```
 
-Automation must choose exactly one scope and confirm it with `--yes`. Use `--host`, `--port`, and `--data-dir` to override the recorded target. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux.
+Automation must choose exactly one scope and confirm it with `--yes`. A packaged application always uses its own recorded target and owned logon registration; conflicting lifecycle overrides are rejected. Source installations accept `--host`, `--port`, and `--data-dir` overrides, with custom Autostart names through `--task-name` on Windows or `--service-name` on Linux.
 
 </details>
 
@@ -709,8 +731,11 @@ downloads, installation and verification; a failed setup offers **Try again**.
 Once verification succeeds, choose **Restart server**. This interrupts active
 Runs, reconnects the interface and checks local speech availability again.
 
-Setup uses the server's Python environment and the shipped `local-speech` extra,
-without replacing the running Desktop launchers. It preserves a working compatible
+In a packaged Windows installation, setup creates a managed speech environment
+under the data directory and runs speech in a child worker; it never installs
+packages into the released runtime. In a source installation, setup uses the
+server's Python environment and the shipped `local-speech` extra, without replacing
+the running Desktop launchers. It preserves a working compatible
 PyTorch installation, prepares CUDA 12.8 support for a detected NVIDIA GPU, or
 uses the platform's CPU/Apple build. NVIDIA drivers must support that build;
 verification runs a small GPU calculation before offering restart. Other GPU
@@ -884,7 +909,7 @@ vbot bootstrap delete JOB_ID
 
 Creation requires `--mode once|always`. A job created, updated, or enabled is armed for a future startup and cannot fire immediately in the current process. `--current-session` is available only from Bash inside a vBot Run and uses that Run's exact Agent/Project/Session context; otherwise pass an Agent address and optional `--session` explicitly. A completed one-shot is immutable history. Failed one-shots may be rearmed with `enable`.
 
-Before `vbot update` when it will restart the server, create a one-shot Bootstrap with `--current-session`, verify its full prompt and target with `vbot bootstrap show JOB_ID`, and give it a prompt that runs `vbot server status`, `vbot log list`, and `vbot log read` on the latest log before reporting the result. `vbot update --no-restart` does not need a Bootstrap unless a later startup check is wanted.
+Packaged Windows updates called from a vBot Run automatically arrange their own once-Bootstrap in the same Session; do not add another. Human and tray updates do not create a Bootstrap or Agent. For a source-checkout update from a Run, create a one-shot Bootstrap with `--current-session` before a restart, verify its full prompt and target with `vbot bootstrap show JOB_ID`, and give it a prompt that runs `vbot server status`, `vbot log list`, and `vbot log read` on the latest log before reporting the result. `vbot update --no-restart` does not need a Bootstrap unless a later startup check is wanted.
 
 ## Extensions and Home Assistant
 
@@ -1070,6 +1095,55 @@ Invoke-RestMethod -Method Post -Uri "$base/api/rpc" -ContentType "application/js
 
 ## Development and verification
 
+### Local features in a packaged Windows application
+
+Prepare a separate development checkout of the exact installed revision:
+
+```bash
+vbot customize prepare
+vbot customize status
+```
+
+Edit only the returned source directory. Git and Node.js/npm must already be
+available for this explicit development workflow. Add tests for the intended
+behavior, then check and try the candidate:
+
+```bash
+vbot customize check --intent "Describe the fix or local feature"
+vbot customize test
+vbot customize activate
+```
+
+Checking runs the repository quality gates and WebUI build, records the source
+revision and contents, and prepares a candidate with its dependencies. Changes
+after checking require another check. The foreground test uses fresh data and a
+separate port, with Extensions, Channels, Cron, Calendar and Bootstrap disabled;
+it does not copy production credentials or Sessions. Activation uses the same
+durable operation as an update.
+
+Official updates carry local commits forward in a separate checkout. If changes
+conflict, the running version and conflict evidence remain intact. Resolve the
+files in the reported checkout, run `vbot customize rebase --intent "..."`, then
+activate the checked candidate. Never resolve this by editing a released version
+directory or discarding the user's local feature without their instruction.
+
+Extension source remains in `<data-dir>/extensions/` or its configured roots and
+keeps its normal reload behavior. Extra Python dependencies use a complete
+managed recipe instead of changing the base runtime:
+
+```bash
+vbot application dependencies install --requirements requirements.txt
+vbot application dependencies status
+vbot server restart
+```
+
+Each install command replaces the complete recipe. Requirements must remain
+compatible with the base runtime's packages. Updates prepare a compatible
+dependency generation before stopping the server; previous generations are
+retained for recovery.
+
+### Source checkout development
+
 Install the development dependencies and WebUI packages:
 
 ```bash
@@ -1106,6 +1180,10 @@ python scripts/quality-frontend.py
 ```
 
 The Playwright E2E suite under `tests/e2e/` is separate from the local quality scripts because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
+
+Windows release builders and maintainers should also read the
+[native packaging guide](scripts/windows/README.md). Building artifacts does not
+publish them or migrate an existing source installation.
 
 ## Operational notes
 

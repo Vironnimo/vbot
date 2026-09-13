@@ -47,6 +47,13 @@ def test_parse_args_accepts_data_dir_and_port() -> None:
     assert args.port == 9000
 
 
+def test_parse_args_accepts_safe_startup_modes() -> None:
+    assert parse_args(["--verification-only"]).verification_only is True
+    assert parse_args(["--test-instance"]).test_instance is True
+    with pytest.raises(SystemExit):
+        parse_args(["--verification-only", "--test-instance"])
+
+
 def test_resolve_port_priority_explicit_then_environment_then_settings(
     tmp_path: Path,
     monkeypatch,

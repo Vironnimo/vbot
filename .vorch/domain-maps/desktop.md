@@ -4,6 +4,8 @@ pywebview-based desktop accessor that embeds the normal WebUI and talks only to 
 
 ## Overview
 
+Packaged Windows distribution is owned by `cli/application/`, not Desktop. The native `vBot.exe` tray controls the local server and launches `vBot.Desktop.exe` independently. A combined package defaults that launch to its recorded server; explicit host/port and Desktop Client last-used behavior remain available. Closing Desktop does not stop the server. Package updates retain files needed by open Desktop processes; reopening selects the new active version. See `cli/windows-application.md`.
+
 Wakeword source routing: `worker.py` retains the detection/recording/transcription lifecycle. `_audio_capture.py` owns native-frame conversion and WAV encoding; `_microphones.py` owns device selection and enumeration; `_speech_detection.py` owns neural/fallback speech detection; `_worker_support.py` holds readiness and interruptible retry helpers; `_worker_modes.py` holds explicit mock/unavailable workers. `bridge.py` retains the synchronized WebUI/worker lifecycle, with pure configuration, profile-key and calibration calculations in `_bridge_values.py`. Calibration uses the standard-library median; public Worker and Bridge imports remain available from their original files.
 
 `desktop/` owns the native window shell around the existing WebUI. It does not import core/server business logic and it does not manage vBot server processes. Desktop stays intentionally thin: it loads the same server-served WebUI a browser would load from `/`, inside a pywebview window - and because that server can be remote (e.g. a Raspberry Pi), a Pi-server + Windows-client topology is a primary intended use.
