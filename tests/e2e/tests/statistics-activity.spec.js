@@ -23,7 +23,7 @@ test("Statistics aggregates persisted Run and Tool activity across its views", a
       .filter({
         has: page
           .locator(".stats-card__label")
-          .filter({ hasText: new RegExp(`^${label}$`) }),
+          .filter({ hasText: new RegExp(`^\\s*${label}\\s*\\??\\s*$`) }),
       })
       .locator(".stats-card__value");
   await expect(metricValue("Runs")).toHaveText(/^[1-9]\d*$/);
