@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
+import { fileURLToPath } from 'node:url';
+import { readStyleSheet } from '../../../__tests__/styles.support.js';
 import { init, t } from '../../../lib/i18n.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
 import {
@@ -131,6 +133,27 @@ async function render() {
 }
 
 describe('Skills manager', () => {
+  it('keeps the content beside source navigation with the application styles', async () => {
+    const styles = document.createElement('style');
+    styles.textContent = ['../skills.css', '../../../styles/app.css']
+      .map((path) =>
+        readStyleSheet(fileURLToPath(new URL(path, import.meta.url))),
+      )
+      .join('\n');
+    document.body.append(styles);
+    await render();
+
+    const view = document.querySelector('.skills-view');
+    expect(getComputedStyle(view).display).toBe('flex');
+    expect(getComputedStyle(view).flexDirection).toBe('row');
+    expect(view.querySelector('.skills-main [data-skill-id]')).not.toBeNull();
+    choose('private');
+    await settle();
+    expect(view.querySelector('.skills-content').textContent).toContain(
+      'content-private',
+    );
+  });
+
   it('puts global and bundled before shared skills and filters each source', async () => {
     await render();
     const names = [...document.querySelectorAll('.skills-collection-name')].map(
